@@ -36,4 +36,19 @@ class DiaryTextUtilsTest {
         assertEquals("$image\n\n第一段\n\n最后一段", DiaryTextUtils.moveStandaloneImage(original, image, -1))
         assertEquals("第一段\n\n最后一段\n\n$image", DiaryTextUtils.moveStandaloneImage(original, image, 1))
     }
+
+    @Test
+    fun movingSourceLinePreservesCrLfAndTrailingNewline() {
+        val original = "第一段\r\n![早餐](meal.jpg)\r\n最后一段\r\n"
+        assertEquals(
+            "第一段\r\n最后一段\r\n![早餐](meal.jpg)\r\n",
+            DiaryTextUtils.moveSourceLine(original, fromIndex = 1, toIndex = 2),
+        )
+    }
+
+    @Test
+    fun movingSourceLinePreservesMissingTrailingNewline() {
+        val original = "![图](photo.jpg)\n正文"
+        assertEquals("正文\n![图](photo.jpg)", DiaryTextUtils.moveSourceLine(original, fromIndex = 0, toIndex = 1))
+    }
 }

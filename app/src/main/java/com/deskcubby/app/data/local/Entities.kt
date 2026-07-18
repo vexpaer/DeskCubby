@@ -1,5 +1,6 @@
 package com.deskcubby.app.data.local
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -11,6 +12,7 @@ data class FlashThoughtEntity(
     val updatedAt: Long,
     val pinned: Boolean = false,
     val deletedAt: Long? = null,
+    @ColumnInfo(defaultValue = "0") val sortOrder: Long = 0,
 )
 
 @Entity(tableName = "browser_records")

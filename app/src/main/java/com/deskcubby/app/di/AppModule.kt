@@ -19,7 +19,9 @@ object AppModule {
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
-        Room.databaseBuilder(context, AppDatabase::class.java, "deskcubby.db").build()
+        Room.databaseBuilder(context, AppDatabase::class.java, "deskcubby.db")
+            .addMigrations(AppDatabase.MIGRATION_1_2)
+            .build()
 
     @Provides fun provideFlashThoughtDao(db: AppDatabase): FlashThoughtDao = db.flashThoughtDao()
     @Provides fun provideBrowserRecordDao(db: AppDatabase): BrowserRecordDao = db.browserRecordDao()

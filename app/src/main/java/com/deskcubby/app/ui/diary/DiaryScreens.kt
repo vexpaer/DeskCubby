@@ -7,11 +7,13 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -23,16 +25,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
@@ -45,25 +48,19 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.Redo
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Source
 import androidx.compose.material.icons.outlined.Today
 import androidx.compose.material.icons.outlined.Restore
-import androidx.compose.material.icons.outlined.Undo
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -72,39 +69,42 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.ParagraphStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.text.HtmlCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.deskcubby.app.data.model.DiaryDocument
-import com.deskcubby.app.data.model.DiaryEditorDocument
+import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.theme.GlassPanel
+import com.deskcubby.app.ui.theme.tr
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.HtmlRenderer
-import kotlin.math.abs
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -118,6 +118,8 @@ fun DiaryListScreen(
     val state by viewModel.listState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val trash by viewModel.trash.collectAsStateWithLifecycle()
+    val operationMessage by viewModel.message.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
     var expandedMonth by remember { mutableStateOf<String?>(null) }
     var createDialog by remember { mutableStateOf(false) }
     var selectedItem by remember { mutableStateOf<DiaryDocument?>(null) }
@@ -126,17 +128,24 @@ fun DiaryListScreen(
     var showTrash by remember { mutableStateOf(false) }
     var permanentlyDeleting by remember { mutableStateOf<com.deskcubby.app.data.model.DiaryTrashItem?>(null) }
 
+    LaunchedEffect(operationMessage) {
+        operationMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.consumeMessage()
+        }
+    }
+
     Scaffold(
         modifier = Modifier.padding(bottom = padding.calculateBottomPadding()).imePadding(),
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         topBar = {
             TopAppBar(
-                title = { Text("日记") },
+                title = { Text(tr("日记", "Diary")) },
                 actions = {
-                    IconButton(onClick = viewModel::refresh) { Icon(Icons.Outlined.Refresh, "刷新") }
-                    IconButton(onClick = { createDialog = true }) { Icon(Icons.Outlined.Add, "新建") }
-                    IconButton(onClick = { viewModel.refreshTrash(); showTrash = true }) { Icon(Icons.Outlined.DeleteSweep, "日记回收站") }
-                    IconButton(onClick = onOpenSettings) { Icon(Icons.Outlined.Settings, "设置") }
+                    IconButton(onClick = viewModel::refresh) { Icon(Icons.Outlined.Refresh, tr("刷新", "Refresh")) }
+                    IconButton(onClick = { createDialog = true }) { Icon(Icons.Outlined.Add, tr("新建", "New")) }
+                    IconButton(onClick = { viewModel.refreshTrash(); showTrash = true }) { Icon(Icons.Outlined.DeleteSweep, tr("日记回收站", "Diary trash")) }
+                    IconButton(onClick = onOpenSettings) { Icon(Icons.Outlined.Settings, tr("设置", "Settings")) }
                 },
             )
         },
@@ -144,15 +153,16 @@ fun DiaryListScreen(
             ExtendedFloatingActionButton(
                 onClick = onOpenToday,
                 icon = { Icon(Icons.Outlined.Today, null) },
-                text = { Text("进入今日日记") },
+                text = { Text(tr("进入今日日记", "Open today's diary")) },
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { inner ->
         when {
             settings.diaryTreeUri == null -> EmptyDiary(onOpenSettings, Modifier.padding(inner))
             state.loading && state.items.isEmpty() -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             state.items.isEmpty() -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) {
-                Text(state.error ?: "目录中还没有 Markdown 日记")
+                Text(state.error ?: tr("目录中还没有 Markdown 日记", "No Markdown diaries in this folder"))
             }
             else -> LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(inner),
@@ -191,10 +201,10 @@ fun DiaryListScreen(
                             ) {
                                 Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Column(Modifier.weight(1f)) {
-                                        Text(diary.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text("${diary.dateIso} · ${diary.wordCount} 字", style = MaterialTheme.typography.bodySmall)
+                                        Text(diary.name.removeSuffix(".md"), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(if (com.deskcubby.app.ui.theme.LocalAppLanguage.current == com.deskcubby.app.data.model.AppLanguage.ENGLISH) "${diary.wordCount} words" else "${diary.wordCount} 字", style = MaterialTheme.typography.bodySmall)
                                     }
-                                    IconButton(onClick = { selectedItem = diary }) { Icon(Icons.Outlined.MoreVert, "更多") }
+                                    IconButton(onClick = { selectedItem = diary }) { Icon(Icons.Outlined.MoreVert, tr("更多", "More")) }
                                 }
                             }
                         }
@@ -207,24 +217,24 @@ fun DiaryListScreen(
     selectedItem?.let { item ->
         AlertDialog(
             onDismissRequest = { selectedItem = null },
-            title = { Text(item.title) },
+            title = { Text(item.name.removeSuffix(".md")) },
             text = { Text(item.name) },
             confirmButton = {
                 TextButton(onClick = { renameItem = item; selectedItem = null }) {
-                    Icon(Icons.Outlined.Edit, null); Text("重命名")
+                    Icon(Icons.Outlined.Edit, null); Text(tr("重命名", "Rename"))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { deleteItem = item; selectedItem = null }) {
-                    Icon(Icons.Outlined.Delete, null); Text("删除")
+                    Icon(Icons.Outlined.Delete, null); Text(tr("删除", "Delete"))
                 }
             },
         )
     }
     renameItem?.let { item ->
         TextInputDialog(
-            title = "修改日记标题",
-            initial = item.title,
+            title = tr("重命名文件", "Rename file"),
+            initial = item.name.removeSuffix(".md"),
             onDismiss = { renameItem = null },
             onConfirm = { viewModel.rename(item.uri, it); renameItem = null },
         )
@@ -232,15 +242,15 @@ fun DiaryListScreen(
     deleteItem?.let { item ->
         AlertDialog(
             onDismissRequest = { deleteItem = null },
-            title = { Text("删除 ${item.title}？") },
-            text = { Text("文件会改名后移入 DeskCubby 回收状态，可从日记页右上角恢复。") },
-            confirmButton = { TextButton(onClick = { viewModel.delete(item.uri); deleteItem = null }) { Text("移入回收站") } },
-            dismissButton = { TextButton(onClick = { deleteItem = null }) { Text("取消") } },
+            title = { Text(tr("删除 ${item.name.removeSuffix(".md")}？", "Delete ${item.name.removeSuffix(".md")}?")) },
+            text = { Text(tr("文件将安全复制到日记目录内的回收站，校验成功后才删除原文件。", "The file is copied and verified in the diary trash before the original is removed.")) },
+            confirmButton = { TextButton(onClick = { viewModel.delete(item.uri); deleteItem = null }) { Text(tr("移入回收站", "Move to trash")) } },
+            dismissButton = { TextButton(onClick = { deleteItem = null }) { Text(tr("取消", "Cancel")) } },
         )
     }
     if (createDialog) {
         TextInputDialog(
-            title = "新建日记",
+            title = tr("新建日记", "New diary"),
             initial = "",
             onDismiss = { createDialog = false },
             onConfirm = { title -> viewModel.create(title) { createDialog = false; onOpen(viewModel.editorState.value.document?.uri.orEmpty()) } },
@@ -249,32 +259,32 @@ fun DiaryListScreen(
     if (showTrash) {
         AlertDialog(
             onDismissRequest = { showTrash = false },
-            title = { Text("日记回收站") },
+            title = { Text(tr("日记回收站", "Diary trash")) },
             text = {
-                if (trash.isEmpty()) Text("回收站为空") else LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                if (trash.isEmpty()) Text(tr("回收站为空", "Trash is empty")) else LazyColumn(Modifier.heightIn(max = 420.dp)) {
                     items(trash, key = { it.uri }) { item ->
                         Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                             Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(item.originalName, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                IconButton(onClick = { viewModel.restoreTrash(item.uri) }) { Icon(Icons.Outlined.Restore, "恢复") }
-                                IconButton(onClick = { permanentlyDeleting = item }) { Icon(Icons.Outlined.DeleteForever, "永久删除") }
+                                TextButton(onClick = { viewModel.restoreTrash(item.uri) }) { Icon(Icons.Outlined.Restore, null); Text(tr("恢复", "Restore")) }
+                                IconButton(onClick = { permanentlyDeleting = item; showTrash = false }) { Icon(Icons.Outlined.DeleteForever, tr("永久删除", "Delete forever")) }
                             }
                         }
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showTrash = false }) { Text("完成") } },
+            confirmButton = { TextButton(onClick = { showTrash = false }) { Text(tr("完成", "Done")) } },
         )
     }
     permanentlyDeleting?.let { item ->
         AlertDialog(
             onDismissRequest = { permanentlyDeleting = null },
-            title = { Text("永久删除？") },
-            text = { Text(item.originalName + " 将无法恢复。") },
+            title = { Text(tr("永久删除？", "Delete forever?")) },
+            text = { Text(tr(item.originalName + " 将无法恢复。", "${item.originalName} cannot be recovered.")) },
             confirmButton = {
-                TextButton(onClick = { viewModel.permanentlyDeleteTrash(item.uri); permanentlyDeleting = null }) { Text("永久删除") }
+                TextButton(onClick = { viewModel.permanentlyDeleteTrash(item.uri); permanentlyDeleting = null; showTrash = true }) { Text(tr("永久删除", "Delete forever")) }
             },
-            dismissButton = { TextButton(onClick = { permanentlyDeleting = null }) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { permanentlyDeleting = null; showTrash = true }) { Text(tr("取消", "Cancel")) } },
         )
     }
 }
@@ -284,9 +294,9 @@ private fun EmptyDiary(onSettings: () -> Unit, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(Icons.Outlined.CreateNewFolder, null, modifier = Modifier.width(64.dp).height(64.dp))
         Spacer(Modifier.height(16.dp))
-        Text("选择一个包含 Markdown 文件的日记目录", style = MaterialTheme.typography.titleMedium)
+        Text(tr("选择一个包含 Markdown 文件的日记目录", "Choose a folder containing Markdown diaries"), style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(12.dp))
-        Button(onClick = onSettings) { Text("前往设置") }
+        Button(onClick = onSettings) { Text(tr("前往设置", "Open settings")) }
     }
 }
 
@@ -302,7 +312,7 @@ fun DiaryEditorScreen(
     var pendingCategory by remember { mutableStateOf<String?>(null) }
     var captionTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let { viewModel.importImage(it, pendingCategory, editorValue.selection.start) }
+        uri?.let { viewModel.importImage(it, pendingCategory) }
         pendingCategory = null
     }
 
@@ -324,21 +334,19 @@ fun DiaryEditorScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text(state.document?.name ?: "日记编辑器", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(state.document?.name ?: tr("日记编辑器", "Diary editor"), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            when { state.conflict != null -> "发现外部修改"; state.saving -> "正在保存…"; state.dirty -> "未保存"; else -> "已保存" },
+                            when { state.conflict != null -> tr("发现外部修改", "External changes found"); state.saving -> tr("正在保存…", "Saving…"); state.dirty -> tr("未保存", "Unsaved"); else -> tr("已保存", "Saved") },
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
                 },
-                navigationIcon = { IconButton(onClick = { viewModel.saveNow(); onBack() }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") } },
+                navigationIcon = { IconButton(onClick = { viewModel.saveNow(); onBack() }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, tr("返回", "Back")) } },
                 actions = {
-                    IconButton(onClick = viewModel::undo) { Icon(Icons.Outlined.Undo, "撤销") }
-                    IconButton(onClick = viewModel::redo) { Icon(Icons.Outlined.Redo, "重做") }
                     IconButton(onClick = viewModel::togglePreview) {
-                        Icon(if (state.preview) Icons.Outlined.Source else Icons.Outlined.MenuBook, if (state.preview) "源码" else "预览")
+                        Icon(if (state.preview) Icons.Outlined.Source else Icons.Outlined.MenuBook, if (state.preview) tr("源码", "Source") else tr("预览", "Preview"))
                     }
-                    IconButton(onClick = { viewModel.saveNow() }) { Icon(Icons.Outlined.Save, "保存") }
+                    IconButton(onClick = { viewModel.saveNow() }) { Icon(Icons.Outlined.Save, tr("保存", "Save")) }
                 },
             )
         },
@@ -350,27 +358,35 @@ fun DiaryEditorScreen(
             ) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                     Box {
-                        FilledTonalButton(
-                            onClick = {
-                                pendingCategory = null
-                                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                            },
-                            modifier = Modifier.combinedClickable(
+                        Surface(
+                            shape = MaterialTheme.shapes.large,
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                        ) {
+                            Row(
+                                modifier = Modifier.combinedClickable(
                                 onClick = {
                                     pendingCategory = null
                                     photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                                 },
                                 onLongClick = { categoryMenu = true },
-                            ),
-                        ) {
-                            Icon(Icons.Outlined.CloudUpload, null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("上传媒体")
+                                ).padding(horizontal = 20.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Outlined.CloudUpload, null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(tr("上传媒体", "Upload media"))
+                            }
                         }
                         DropdownMenu(expanded = categoryMenu, onDismissRequest = { categoryMenu = false }) {
-                            listOf("早餐", "午餐", "晚餐", "水果", "夜宵").forEach { category ->
+                            listOf(
+                                "早餐" to "Breakfast",
+                                "午餐" to "Lunch",
+                                "晚餐" to "Dinner",
+                                "水果" to "Fruit",
+                                "夜宵" to "Late-night snack",
+                            ).forEach { (category, english) ->
                                 DropdownMenuItem(
-                                    text = { Text(category) },
+                                    text = { Text(tr(category, english)) },
                                     leadingIcon = { Icon(Icons.Outlined.Image, null) },
                                     onClick = {
                                         categoryMenu = false
@@ -381,7 +397,7 @@ fun DiaryEditorScreen(
                             }
                         }
                     }
-                    Text(if (state.preview) "阅读预览" else "Markdown 源码", style = MaterialTheme.typography.labelLarge)
+                    Text(if (state.preview) tr("阅读预览", "Preview") else tr("Markdown 源码", "Markdown source"), style = MaterialTheme.typography.labelLarge)
                 }
             }
         },
@@ -395,14 +411,11 @@ fun DiaryEditorScreen(
                     maxHeight = settings.imageMaxHeightDp,
                     resolveMedia = viewModel::resolveMedia,
                     onEditCaption = { markdown, caption -> captionTarget = markdown to caption },
-                    onMoveImage = viewModel::moveImageBlock,
                 )
-                else -> OutlinedTextField(
+                else -> MarkdownSourceEditor(
                     value = editorValue,
                     onValueChange = { value -> editorValue = value; viewModel.onContentChanged(value.text) },
-                    modifier = Modifier.fillMaxSize().padding(12.dp),
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
-                    placeholder = { Text("开始记录…") },
+                    onMoveMediaLine = viewModel::moveSourceLine,
                 )
             }
             if (state.saving) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
@@ -412,27 +425,145 @@ fun DiaryEditorScreen(
     state.conflict?.let { disk ->
         AlertDialog(
             onDismissRequest = {},
-            title = { Text("文件已在外部修改") },
-            text = { Text("${disk.name} 的磁盘内容与打开时不同。自动保存已暂停，避免覆盖 Obsidian 的修改。") },
-            confirmButton = { TextButton(onClick = viewModel::reloadConflict) { Text("加载磁盘版本") } },
-            dismissButton = { TextButton(onClick = { viewModel.saveNow(force = true) }) { Text("强制覆盖") } },
+            title = { Text(tr("文件已在外部修改", "File changed externally")) },
+            text = { Text(tr("${disk.name} 的磁盘内容与打开时不同。自动保存已暂停，避免覆盖 Obsidian 的修改。", "${disk.name} changed on disk. Autosave is paused to avoid overwriting changes from Obsidian.")) },
+            confirmButton = { TextButton(onClick = viewModel::reloadConflict) { Text(tr("加载磁盘版本", "Load disk version")) } },
+            dismissButton = { TextButton(onClick = { viewModel.saveNow(force = true) }) { Text(tr("强制覆盖", "Overwrite")) } },
         )
     }
     state.error?.let { error ->
         AlertDialog(
             onDismissRequest = viewModel::dismissError,
-            title = { Text("操作失败") },
+            title = { Text(tr("操作失败", "Operation failed")) },
             text = { Text(error) },
-            confirmButton = { TextButton(onClick = viewModel::dismissError) { Text("知道了") } },
+            confirmButton = { TextButton(onClick = viewModel::dismissError) { Text(tr("知道了", "OK")) } },
         )
     }
     captionTarget?.let { (markdown, caption) ->
         TextInputDialog(
-            title = "修改图片说明",
+            title = tr("修改图片说明", "Edit image caption"),
             initial = caption,
             onDismiss = { captionTarget = null },
             onConfirm = { viewModel.updateImageCaption(markdown, it); captionTarget = null },
         )
+    }
+}
+
+private data class MediaSourceLine(
+    val index: Int,
+    val startOffset: Int,
+    val endOffset: Int,
+)
+
+private val markdownMediaLinePattern = Regex("""^\s*!\[[^\]]*\]\((?:<[^>]+>|[^)]*)\)\s*$""")
+
+@Composable
+private fun MarkdownSourceEditor(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    onMoveMediaLine: (fromIndex: Int, toIndex: Int) -> Unit,
+) {
+    val scrollState = rememberScrollState()
+    val density = LocalDensity.current
+    var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val mediaLines = remember(value.text) { findMediaSourceLines(value.text) }
+    val topPadding = 16.dp
+    val handleSize = 48.dp
+    val mediaLineHeight = with(density) { handleSize.toSp() }
+    val mediaLineTransformation = remember(mediaLines, mediaLineHeight) {
+        VisualTransformation { source ->
+            val styled = buildAnnotatedString {
+                append(source)
+                mediaLines.forEach { line ->
+                    if (line.startOffset < line.endOffset) {
+                        addStyle(
+                            ParagraphStyle(lineHeight = mediaLineHeight),
+                            line.startOffset,
+                            line.endOffset,
+                        )
+                    }
+                }
+            }
+            TransformedText(styled, OffsetMapping.Identity)
+        }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxSize().padding(12.dp),
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        BoxWithConstraints {
+            val viewportHeight = maxHeight
+            Column(Modifier.fillMaxSize().verticalScroll(scrollState)) {
+                Box(Modifier.fillMaxWidth().heightIn(min = viewportHeight)) {
+                    BasicTextField(
+                        value = value,
+                        onValueChange = onValueChange,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = viewportHeight)
+                            .padding(start = 16.dp, top = topPadding, end = 62.dp, bottom = 16.dp),
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        ),
+                        visualTransformation = mediaLineTransformation,
+                        onTextLayout = { textLayout = it },
+                    )
+
+                    if (value.text.isEmpty()) {
+                        Text(
+                            text = tr("开始记录…", "Start writing…"),
+                            modifier = Modifier.padding(start = 16.dp, top = topPadding, end = 62.dp),
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            ),
+                        )
+                    }
+
+                    val currentLayout = textLayout
+                    if (currentLayout != null && currentLayout.layoutInput.text.text == value.text) {
+                        mediaLines.forEach { mediaLine ->
+                            val visualLine = currentLayout.getLineForOffset(mediaLine.startOffset)
+                            val lineTop = currentLayout.getLineTop(visualLine)
+                            val lineHeight = currentLayout.getLineBottom(visualLine) - lineTop
+                            val handleTopPx = with(density) { topPadding.toPx() } +
+                                lineTop +
+                                (lineHeight - with(density) { handleSize.toPx() }) / 2f
+
+                            FourDotDragHandle(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset { IntOffset(x = 0, y = handleTopPx.coerceAtLeast(0f).roundToInt()) },
+                                onDragFinished = { verticalDistance ->
+                                    val maxY = (currentLayout.size.height - 1).coerceAtLeast(0).toFloat()
+                                    val targetY = (lineTop + lineHeight / 2f + verticalDistance).coerceIn(0f, maxY)
+                                    val targetVisualLine = currentLayout.getLineForVerticalPosition(targetY)
+                                    val targetOffset = currentLayout.getLineStart(targetVisualLine)
+                                    val targetSourceLine = value.text
+                                        .take(targetOffset.coerceIn(0, value.text.length))
+                                        .count { it == '\n' }
+                                    onMoveMediaLine(mediaLine.index, targetSourceLine)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun findMediaSourceLines(source: String): List<MediaSourceLine> = buildList {
+    var startOffset = 0
+    source.split('\n').forEachIndexed { index, line ->
+        if (markdownMediaLinePattern.matches(line)) {
+            add(MediaSourceLine(index = index, startOffset = startOffset, endOffset = startOffset + line.length))
+        }
+        startOffset += line.length + 1
     }
 }
 
@@ -443,7 +574,6 @@ private fun MarkdownPreview(
     maxHeight: Int,
     resolveMedia: suspend (String) -> Uri?,
     onEditCaption: (String, String) -> Unit,
-    onMoveImage: (String, Int) -> Unit,
 ) {
     val imageRegex = remember { Regex("!\\[([^]]*)]\\((?:<([^>]+)>|([^\\s)]+))\\)") }
     val parser = remember { Parser.builder().build() }
@@ -473,33 +603,20 @@ private fun MarkdownPreview(
                 }
                 is PreviewPart.Image -> {
                     val uri by produceState<Uri?>(initialValue = null, part.target) { value = resolveMedia(part.target) }
-                    var dragOffset by remember(part.fullMarkdown) { mutableFloatStateOf(0f) }
                     GlassPanel(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer { translationY = dragOffset }
-                            .pointerInput(part.fullMarkdown) {
-                                detectDragGesturesAfterLongPress(
-                                    onDrag = { change, amount -> change.consume(); dragOffset += amount.y },
-                                    onDragCancel = { dragOffset = 0f },
-                                    onDragEnd = {
-                                        if (abs(dragOffset) > 28f) onMoveImage(part.fullMarkdown, if (dragOffset < 0f) -1 else 1)
-                                        dragOffset = 0f
-                                    },
-                                )
-                            },
+                        modifier = Modifier.fillMaxWidth(),
                         padding = PaddingValues(10.dp),
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             AsyncImage(
                                 model = uri,
                                 contentDescription = part.caption,
-                                modifier = Modifier.fillMaxWidth().widthIn(max = maxWidth.dp).heightIn(max = maxHeight.dp),
+                                modifier = Modifier.widthIn(max = maxWidth.dp).fillMaxWidth().heightIn(max = maxHeight.dp),
+                                contentScale = ContentScale.Fit,
                             )
                             TextButton(onClick = { onEditCaption(part.fullMarkdown, part.caption) }) {
-                                Text(part.caption.ifBlank { "点击添加图片说明" })
+                                Text(part.caption.ifBlank { tr("点击添加图片说明", "Tap to add a caption") })
                             }
-                            Text("长按图片并上下拖动可调整位置", style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
@@ -525,7 +642,7 @@ private fun TextInputDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = { OutlinedTextField(value = value, onValueChange = { value = it }, modifier = Modifier.fillMaxWidth()) },
-        confirmButton = { TextButton(onClick = { if (value.isNotBlank()) onConfirm(value.trim()) }) { Text("确定") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        confirmButton = { TextButton(onClick = { if (value.isNotBlank()) onConfirm(value.trim()) }) { Text(tr("确定", "OK")) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) } },
     )
 }

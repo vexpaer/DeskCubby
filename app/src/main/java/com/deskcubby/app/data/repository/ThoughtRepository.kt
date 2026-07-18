@@ -15,12 +15,13 @@ class ThoughtRepository @Inject constructor(
 
     suspend fun create(content: String) {
         val now = System.currentTimeMillis()
-        dao.insert(FlashThoughtEntity(content = content.trim(), createdAt = now, updatedAt = now))
+        dao.insertAtEnd(FlashThoughtEntity(content = content.trim(), createdAt = now, updatedAt = now))
     }
 
     suspend fun update(id: Long, content: String) = dao.updateContent(id, content.trim(), System.currentTimeMillis())
     suspend fun togglePinned(id: Long) = dao.togglePinned(id, System.currentTimeMillis())
     suspend fun delete(id: Long) = dao.softDelete(id, System.currentTimeMillis())
-    suspend fun restore(id: Long) = dao.restore(id, System.currentTimeMillis())
+    suspend fun restore(id: Long) = dao.restoreToActiveList(id, System.currentTimeMillis())
     suspend fun permanentlyDelete(id: Long) = dao.permanentlyDelete(id)
+    suspend fun move(id: Long, targetIndex: Int) = dao.moveActive(id, targetIndex)
 }

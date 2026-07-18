@@ -48,13 +48,7 @@ class DiaryFileRepository @Inject constructor(
             .map { document ->
                 val content = readText(document.uri)
                 val date = extractDate(document.name.orEmpty(), document.lastModified())
-                val title = content.lineSequence()
-                    .map(String::trim)
-                    .firstOrNull { it.startsWith("# ") }
-                    ?.removePrefix("# ")
-                    ?.trim()
-                    .orEmpty()
-                    .ifBlank { document.name.orEmpty().removeSuffix(".md") }
+                val title = document.name.orEmpty().removeSuffix(".md")
                 DiaryDocument(
                     uri = document.uri.toString(),
                     name = document.name.orEmpty(),
@@ -100,8 +94,8 @@ class DiaryFileRepository @Inject constructor(
             val existing = root.listFiles().firstOrNull { it.name.equals(fileName, ignoreCase = true) }
             if (existing != null) return@withContext load(existing.uri)
 
-            val title = formatDate(today, settings.titlePattern, "yyyy年M月d日 EEEE")
-            val dateText = formatDate(today, settings.datePattern, "yyyy-MM-dd")
+            val title = baseName.removeSuffix(".md")
+            val dateText = today.toString()
             val content = settings.markdownTemplate
                 .replace("{title}", title)
                 .replace("{date}", dateText)
@@ -114,7 +108,7 @@ class DiaryFileRepository @Inject constructor(
     suspend fun create(settings: AppSettings, title: String, date: LocalDate = LocalDate.now()): DiaryEditorDocument =
         withContext(Dispatchers.IO) {
             val root = settings.diaryTreeUri?.let(::tree) ?: error("请先选择日记目录")
-            val dateText = formatDate(date, settings.datePattern, "yyyy-MM-dd")
+            val dateText = date.toString()
             val safeTitle = DiaryTextUtils.sanitizeFileName(title.ifBlank { "新日记" })
             var candidate = "$dateText $safeTitle.md"
             var sequence = 2
@@ -147,20 +141,44 @@ class DiaryFileRepository @Inject constructor(
 
     suspend fun rename(uri: String, newTitle: String): Boolean = withContext(Dispatchers.IO) {
         val document = DocumentFile.fromSingleUri(context, Uri.parse(uri)) ?: return@withContext false
-        val currentName = document.name.orEmpty()
-        val datePrefix = DATE_REGEX.find(currentName)?.value?.plus(" ").orEmpty()
-        document.renameTo(datePrefix + DiaryTextUtils.sanitizeFileName(newTitle) + ".md")
+        val fileName = DiaryTextUtils.sanitizeFileName(newTitle.removeSuffix(".md")) + ".md"
+        document.renameTo(fileName)
     }
 
-    suspend fun delete(uri: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun delete(uri: String, settings: AppSettings): Boolean = withContext(Dispatchers.IO) {
+        val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext false
         val document = DocumentFile.fromSingleUri(context, Uri.parse(uri)) ?: return@withContext false
         val originalName = document.name ?: return@withContext false
-        document.renameTo("$originalName.$TRASH_SUFFIX")
+        val trashRoot = root.findFile(TRASH_DIRECTORY) ?: root.createDirectory(TRASH_DIRECTORY)
+            ?: error("无法创建日记回收站目录")
+        val storedName = "${System.currentTimeMillis()}__$originalName"
+        val backup = trashRoot.createFile("application/octet-stream", storedName)
+            ?: error("无法在回收站中创建备份")
+        runCatching {
+            val bytes = readBytes(document.uri)
+            resolver.openOutputStream(backup.uri, "w").use { output ->
+                requireNotNull(output) { "无法写入日记回收站" }
+                output.write(bytes)
+            }
+            require(readBytes(backup.uri).contentEquals(bytes)) { "回收站备份校验失败" }
+            require(document.delete()) { "原日记无法删除，文件已保持不变" }
+            true
+        }.onFailure { backup.delete() }.getOrThrow()
     }
 
     suspend fun scanTrash(settings: AppSettings): List<DiaryTrashItem> = withContext(Dispatchers.IO) {
         val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext emptyList()
-        root.listFiles()
+        val currentTrash = root.findFile(TRASH_DIRECTORY)?.listFiles().orEmpty()
+            .filter { it.isFile }
+            .map { file ->
+                val storedName = file.name.orEmpty()
+                DiaryTrashItem(
+                    uri = file.uri.toString(),
+                    originalName = storedName.substringAfter("__", storedName),
+                    deletedAt = storedName.substringBefore("__").toLongOrNull() ?: file.lastModified(),
+                )
+            }
+        val legacyTrash = root.listFiles()
             .filter { it.isFile && it.name?.endsWith(".$TRASH_SUFFIX", ignoreCase = true) == true }
             .map { file ->
                 DiaryTrashItem(
@@ -169,13 +187,15 @@ class DiaryFileRepository @Inject constructor(
                     deletedAt = file.lastModified(),
                 )
             }
-            .sortedByDescending { it.deletedAt }
+        (currentTrash + legacyTrash).sortedByDescending { it.deletedAt }
     }
 
     suspend fun restore(uri: String, settings: AppSettings): Boolean = withContext(Dispatchers.IO) {
         val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext false
         val document = DocumentFile.fromSingleUri(context, Uri.parse(uri)) ?: return@withContext false
-        val original = document.name.orEmpty().removeSuffix(".$TRASH_SUFFIX")
+        val storedName = document.name.orEmpty()
+        val legacy = storedName.endsWith(".$TRASH_SUFFIX", ignoreCase = true)
+        val original = if (legacy) storedName.removeSuffix(".$TRASH_SUFFIX") else storedName.substringAfter("__", storedName)
         var candidate = original
         var sequence = 2
         while (root.listFiles().any { it.name.equals(candidate, ignoreCase = true) }) {
@@ -184,12 +204,29 @@ class DiaryFileRepository @Inject constructor(
             candidate = "$stem (恢复 $sequence).$extension"
             sequence++
         }
-        document.renameTo(candidate)
+        if (legacy) {
+            document.renameTo(candidate)
+        } else {
+            val restored = root.createFile("text/markdown", candidate) ?: return@withContext false
+            runCatching {
+                val bytes = readBytes(document.uri)
+                resolver.openOutputStream(restored.uri, "w").use { output ->
+                    requireNotNull(output) { "无法恢复日记" }
+                    output.write(bytes)
+                }
+                require(readBytes(restored.uri).contentEquals(bytes)) { "恢复后的日记校验失败" }
+                require(document.delete()) { "日记已恢复，但回收站副本无法移除" }
+                true
+            }.onFailure { restored.delete() }.getOrThrow()
+        }
     }
 
     suspend fun permanentlyDelete(uri: String): Boolean = withContext(Dispatchers.IO) {
         val document = DocumentFile.fromSingleUri(context, Uri.parse(uri)) ?: return@withContext false
-        if (document.name?.endsWith(".$TRASH_SUFFIX", ignoreCase = true) != true) return@withContext false
+        val name = document.name.orEmpty()
+        val isTrash = name.endsWith(".$TRASH_SUFFIX", ignoreCase = true) ||
+            name.substringBefore("__").toLongOrNull() != null
+        if (!isTrash) return@withContext false
         document.delete()
     }
 
@@ -203,7 +240,7 @@ class DiaryFileRepository @Inject constructor(
         val mime = resolver.getType(sourceUri) ?: "image/jpeg"
         val extension = inferExtension(sourceUri, mime)
         val categoryText = category?.takeIf(String::isNotBlank) ?: "图片"
-        val dateText = formatDate(date, settings.datePattern, "yyyy-MM-dd")
+        val dateText = date.toString()
         val fileName = DiaryTextUtils.nextMediaFileName(
             pattern = settings.imageNamePattern,
             dateText = dateText,
@@ -224,12 +261,10 @@ class DiaryFileRepository @Inject constructor(
         }.onFailure { created.delete() }.getOrThrow()
 
         val actualName = created.name ?: fileName
-        val prefix = settings.mediaMarkdownPrefix.trim().trimEnd('/')
-        val target = if (prefix.isBlank()) actualName else "$prefix/$actualName"
         ImportedMedia(
             documentUri = created.uri.toString(),
             fileName = actualName,
-            markdown = "![$categoryText](<${target.replace(">", "%3E")}>)",
+            markdown = "![$categoryText](<${actualName.replace(">", "%3E")}>)",
         )
     }
 
@@ -310,5 +345,6 @@ class DiaryFileRepository @Inject constructor(
     companion object {
         private val DATE_REGEX = Regex("\\d{4}-\\d{2}-\\d{2}")
         private const val TRASH_SUFFIX = "deskcubby-trash"
+        private const val TRASH_DIRECTORY = ".DeskCubby Trash"
     }
 }

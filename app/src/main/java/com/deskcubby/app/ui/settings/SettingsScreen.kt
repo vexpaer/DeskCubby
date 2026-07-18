@@ -1,10 +1,13 @@
 package com.deskcubby.app.ui.settings
 
 import android.net.Uri
+import android.content.Context
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,15 +25,15 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.ArrowDownward
-import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.ViewWeek
@@ -57,39 +60,46 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.ui.iconFor
+import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.theme.GlassPanel
+import com.deskcubby.app.ui.theme.tr
 
-private enum class SettingsPage(val title: String) {
-    MAIN("设置"),
-    APPEARANCE("外观"),
-    DIARY("日记与媒体"),
-    BLOG("博客"),
-    NAVIGATION("底部导航"),
+private enum class SettingsPage {
+    MAIN,
+    APPEARANCE,
+    DIARY,
+    BLOG,
+    NAVIGATION,
 }
 
 private data class DiarySettingsDraft(
     val diaryTreeUri: String?,
     val mediaTreeUri: String?,
-    val mediaPrefix: String,
     val filePattern: String,
-    val titlePattern: String,
-    val datePattern: String,
     val template: String,
     val imagePattern: String,
     val imageWidth: Int?,
@@ -110,11 +120,11 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(page.title) },
+                title = { Text(pageTitle(page)) },
                 navigationIcon = {
                     if (page != SettingsPage.MAIN) {
                         IconButton(onClick = { page = SettingsPage.MAIN }) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回设置")
+                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = tr("返回设置", "Back to settings"))
                         }
                     }
                 },
@@ -135,9 +145,11 @@ fun SettingsScreen(
             SettingsPage.APPEARANCE -> AppearanceSettingsPage(
                 settings = settings,
                 contentPadding = inner,
-                onSave = { visualStyle, darkMode ->
+                onSave = { visualStyle, darkMode, language, themeColor ->
                     viewModel.setVisualStyle(visualStyle)
                     viewModel.setDarkMode(darkMode)
+                    viewModel.setAppLanguage(language)
+                    viewModel.setThemeColor(themeColor)
                     page = SettingsPage.MAIN
                 },
             )
@@ -152,10 +164,7 @@ fun SettingsScreen(
                     if (draft.mediaTreeUri != null && draft.mediaTreeUri != settings.mediaTreeUri) {
                         viewModel.persistFolder(Uri.parse(draft.mediaTreeUri), diary = false)
                     }
-                    viewModel.setMediaPrefix(draft.mediaPrefix)
                     viewModel.setFileNamePattern(draft.filePattern)
-                    viewModel.setTitlePattern(draft.titlePattern)
-                    viewModel.setDatePattern(draft.datePattern)
                     viewModel.setTemplate(draft.template)
                     viewModel.setImageNamePattern(draft.imagePattern)
                     draft.imageWidth?.let(viewModel::setImageMaxWidth)
@@ -192,6 +201,7 @@ private fun SettingsMainPage(
     contentPadding: PaddingValues,
     onOpen: (SettingsPage) -> Unit,
 ) {
+    val context = LocalContext.current
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
@@ -199,34 +209,43 @@ private fun SettingsMainPage(
     ) {
         item {
             SettingsMenuItem(
-                title = "外观",
-                description = "界面风格与明暗模式",
+                title = tr("外观与语言", "Appearance & language"),
+                description = tr("界面风格、主题色、明暗模式和语言", "Style, color, dark mode and language"),
                 icon = { Icon(Icons.Outlined.Palette, contentDescription = null) },
                 onClick = { onOpen(SettingsPage.APPEARANCE) },
             )
         }
         item {
             SettingsMenuItem(
-                title = "日记与媒体",
-                description = if (settings.diaryTreeUri == null) "目录、文件格式与图片规则" else "日记目录已配置",
+                title = tr("日记与媒体", "Diary & media"),
+                description = if (settings.diaryTreeUri == null) tr("目录、文件名与图片规则", "Folders, file names and image rules")
+                else tr("日记目录已配置", "Diary folder configured"),
                 icon = { Icon(Icons.Outlined.MenuBook, contentDescription = null) },
                 onClick = { onOpen(SettingsPage.DIARY) },
             )
         }
         item {
             SettingsMenuItem(
-                title = "博客",
-                description = "默认主页",
+                title = tr("浏览器", "Browser"),
+                description = tr("默认主页", "Default home page"),
                 icon = { Icon(Icons.Outlined.Language, contentDescription = null) },
                 onClick = { onOpen(SettingsPage.BLOG) },
             )
         }
         item {
             SettingsMenuItem(
-                title = "底部导航",
-                description = "默认页、排序、显隐、名称与图标",
+                title = tr("底部导航", "Bottom navigation"),
+                description = tr("默认页、排序、显隐、名称与图标", "Default page, order, visibility, labels and icons"),
                 icon = { Icon(Icons.Outlined.ViewWeek, contentDescription = null) },
                 onClick = { onOpen(SettingsPage.NAVIGATION) },
+            )
+        }
+        item {
+            SettingsMenuItem(
+                title = "About",
+                description = tr("查看 DeskCubby GitHub 仓库", "Open the DeskCubby GitHub repository"),
+                icon = { Icon(Icons.Outlined.Info, contentDescription = null) },
+                onClick = { openUrl(context, GITHUB_URL) },
             )
         }
     }
@@ -248,7 +267,7 @@ private fun SettingsMenuItem(
             supportingContent = { Text(description) },
             leadingContent = icon,
             trailingContent = {
-                Icon(Icons.Outlined.ChevronRight, contentDescription = "进入$title")
+                Icon(Icons.Outlined.ChevronRight, contentDescription = tr("进入$title", "Open $title"))
             },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         )
@@ -259,10 +278,14 @@ private fun SettingsMenuItem(
 private fun AppearanceSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
-    onSave: (VisualStyle, DarkMode) -> Unit,
+    onSave: (VisualStyle, DarkMode, AppLanguage, Int) -> Unit,
 ) {
     var visualStyle by remember(settings.visualStyle) { mutableStateOf(settings.visualStyle) }
     var darkMode by remember(settings.darkMode) { mutableStateOf(settings.darkMode) }
+    var language by remember(settings.appLanguage) { mutableStateOf(settings.appLanguage) }
+    var themeHex by remember(settings.themeColorArgb) { mutableStateOf(colorToHex(settings.themeColorArgb)) }
+    val parsedThemeColor = parseThemeColor(themeHex)
+    val presets = listOf(0xFF42664D, 0xFF4C63A6, 0xFFC44B75, 0xFFE57C23, 0xFF7B5EA7, 0xFF00897B)
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -270,20 +293,20 @@ private fun AppearanceSettingsPage(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            SettingsSection("界面风格") {
+            SettingsSection(tr("界面风格", "Visual style")) {
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                     VisualStyle.entries.forEachIndexed { index, style ->
                         SegmentedButton(
                             selected = visualStyle == style,
                             onClick = { visualStyle = style },
                             shape = SegmentedButtonDefaults.itemShape(index, VisualStyle.entries.size),
-                        ) { Text(if (style == VisualStyle.MATERIAL) "安卓原生" else "Liquid Glass") }
+                        ) { Text(if (style == VisualStyle.MATERIAL) tr("安卓原生", "Material") else "Liquid Glass") }
                     }
                 }
             }
         }
         item {
-            SettingsSection("明暗模式") {
+            SettingsSection(tr("明暗模式", "Dark mode")) {
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                     DarkMode.entries.forEachIndexed { index, mode ->
                         SegmentedButton(
@@ -293,9 +316,9 @@ private fun AppearanceSettingsPage(
                         ) {
                             Text(
                                 when (mode) {
-                                    DarkMode.SYSTEM -> "跟随"
-                                    DarkMode.LIGHT -> "浅色"
-                                    DarkMode.DARK -> "深色"
+                                    DarkMode.SYSTEM -> tr("跟随", "System")
+                                    DarkMode.LIGHT -> tr("浅色", "Light")
+                                    DarkMode.DARK -> tr("深色", "Dark")
                                 },
                             )
                         }
@@ -303,7 +326,48 @@ private fun AppearanceSettingsPage(
                 }
             }
         }
-        item { SaveButton { onSave(visualStyle, darkMode) } }
+        item {
+            SettingsSection(tr("软件语言", "App language")) {
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    AppLanguage.entries.forEachIndexed { index, item ->
+                        SegmentedButton(
+                            selected = language == item,
+                            onClick = { language = item },
+                            shape = SegmentedButtonDefaults.itemShape(index, AppLanguage.entries.size),
+                        ) { Text(if (item == AppLanguage.CHINESE) "中文" else "English") }
+                    }
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("主题色", "Theme color")) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    presets.forEach { value ->
+                        Box(
+                            Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(Color(value))
+                                .clickable { themeHex = colorToHex(value.toInt()) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = themeHex,
+                    onValueChange = { themeHex = it.take(7) },
+                    label = { Text(tr("自定义颜色", "Custom color")) },
+                    supportingText = { Text(tr("输入 #RRGGBB，例如 #42664D", "Enter #RRGGBB, for example #42664D")) },
+                    isError = parsedThemeColor == null,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        item {
+            SaveButton(enabled = parsedThemeColor != null) {
+                onSave(visualStyle, darkMode, language, requireNotNull(parsedThemeColor))
+            }
+        }
     }
 }
 
@@ -315,10 +379,7 @@ private fun DiarySettingsPage(
 ) {
     var diaryTreeUri by remember(settings.diaryTreeUri) { mutableStateOf(settings.diaryTreeUri) }
     var mediaTreeUri by remember(settings.mediaTreeUri) { mutableStateOf(settings.mediaTreeUri) }
-    var mediaPrefix by remember(settings.mediaMarkdownPrefix) { mutableStateOf(settings.mediaMarkdownPrefix) }
     var filePattern by remember(settings.fileNamePattern) { mutableStateOf(settings.fileNamePattern) }
-    var titlePattern by remember(settings.titlePattern) { mutableStateOf(settings.titlePattern) }
-    var datePattern by remember(settings.datePattern) { mutableStateOf(settings.datePattern) }
     var template by remember(settings.markdownTemplate) { mutableStateOf(settings.markdownTemplate) }
     var imagePattern by remember(settings.imageNamePattern) { mutableStateOf(settings.imageNamePattern) }
     var imageWidth by remember(settings.imageMaxWidthDp) { mutableStateOf(settings.imageMaxWidthDp.toString()) }
@@ -337,39 +398,29 @@ private fun DiarySettingsPage(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            SettingsSection("本地文件") {
+            SettingsSection(tr("本地文件", "Local files")) {
                 FolderButton(
-                    title = "日记目录",
+                    title = tr("日记目录", "Diary folder"),
                     uri = diaryTreeUri,
                     onClick = { diaryFolderPicker.launch(diaryTreeUri?.let(Uri::parse)) },
                 )
                 Spacer(Modifier.height(8.dp))
                 FolderButton(
-                    title = "媒体目录",
+                    title = tr("媒体目录", "Media folder"),
                     uri = mediaTreeUri,
                     onClick = { mediaFolderPicker.launch(mediaTreeUri?.let(Uri::parse)) },
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = mediaPrefix,
-                    onValueChange = { mediaPrefix = it },
-                    label = { Text("Markdown 媒体路径前缀") },
-                    supportingText = { Text("例如 ../Attachments；只影响写入的链接，不转换 content:// URI") },
-                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
         item {
-            SettingsSection("日记格式") {
-                SettingField(filePattern, { filePattern = it }, "文件名日期格式", "yyyy-MM-dd '日记'")
-                SettingField(titlePattern, { titlePattern = it }, "标题日期格式", "yyyy年M月d日 EEEE")
-                SettingField(datePattern, { datePattern = it }, "通用日期格式", "yyyy-MM-dd")
-                SettingField(imagePattern, { imagePattern = it }, "图片命名格式", "{date}_{category}_{seq}")
+            SettingsSection(tr("日记与图片格式", "Diary and image format")) {
+                SettingField(filePattern, { filePattern = it }, tr("今日日记文件名格式", "Today's diary filename format"), "yyyy-MM-dd")
+                SettingField(imagePattern, { imagePattern = it }, tr("图片命名格式", "Image filename format"), "{date}_{category}_{seq}")
                 OutlinedTextField(
                     value = template,
                     onValueChange = { template = it },
-                    label = { Text("默认 Markdown 模板") },
-                    supportingText = { Text("支持 {title} 与 {date}") },
+                    label = { Text(tr("默认 Markdown 模板", "Default Markdown template")) },
+                    supportingText = { Text(tr("支持 {title} 与 {date}", "Supports {title} and {date}")) },
                     minLines = 4,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -377,14 +428,14 @@ private fun DiarySettingsPage(
                     OutlinedTextField(
                         value = imageWidth,
                         onValueChange = { imageWidth = it.filter(Char::isDigit) },
-                        label = { Text("图片最大宽度 dp") },
+                        label = { Text(tr("图片最大宽度 dp", "Max image width (dp)")) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(1f),
                     )
                     OutlinedTextField(
                         value = imageHeight,
                         onValueChange = { imageHeight = it.filter(Char::isDigit) },
-                        label = { Text("图片最大高度 dp") },
+                        label = { Text(tr("图片最大高度 dp", "Max image height (dp)")) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(1f),
                     )
@@ -397,10 +448,7 @@ private fun DiarySettingsPage(
                     DiarySettingsDraft(
                         diaryTreeUri = diaryTreeUri,
                         mediaTreeUri = mediaTreeUri,
-                        mediaPrefix = mediaPrefix,
                         filePattern = filePattern,
-                        titlePattern = titlePattern,
-                        datePattern = datePattern,
                         template = template,
                         imagePattern = imagePattern,
                         imageWidth = imageWidth.toIntOrNull(),
@@ -426,11 +474,11 @@ private fun BlogSettingsPage(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            SettingsSection("默认主页") {
+            SettingsSection(tr("默认主页", "Default home page")) {
                 OutlinedTextField(
                     value = browserHome,
                     onValueChange = { browserHome = it },
-                    label = { Text("网址") },
+                    label = { Text(tr("网址", "URL")) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -448,6 +496,7 @@ private fun NavigationSettingsPage(
 ) {
     var defaultPage by remember(settings.defaultPage) { mutableStateOf(settings.defaultPage) }
     var navItems by remember(settings.navItems) { mutableStateOf(settings.navItems.map { it.copy() }) }
+    val navCenters = remember { mutableStateMapOf<NavItemId, Float>() }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -455,38 +504,46 @@ private fun NavigationSettingsPage(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            SettingsSection("默认启动页面") {
+            SettingsSection(tr("默认启动页面", "Default start page")) {
                 DefaultPagePicker(defaultPage, navItems) { defaultPage = it }
             }
         }
         item {
-            SettingsSection("导航项目") {
-                Text("设置入口始终保留；其余页面可隐藏、改名、换图标和排序。", style = MaterialTheme.typography.bodySmall)
+            SettingsSection(tr("导航项目", "Navigation items")) {
+                Text(
+                    tr("设置入口始终保留；其余页面可隐藏、改名、换图标和排序。", "Settings is always available; other items can be hidden, renamed, reordered or given new icons."),
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 Spacer(Modifier.height(4.dp))
                 navItems.forEachIndexed { index, item ->
-                    NavConfigRow(
-                        item = item,
-                        canMoveUp = index > 0,
-                        canMoveDown = index < navItems.lastIndex,
-                        onChange = { changed ->
-                            val changedItems = navItems.toMutableList().apply { set(index, changed) }
-                            navItems = changedItems
-                            if (defaultPage == changed.id && !changed.visible && changed.id != NavItemId.SETTINGS) {
-                                defaultPage = changedItems.firstOrNull { it.visible || it.id == NavItemId.SETTINGS }?.id
-                                    ?: NavItemId.SETTINGS
-                            }
-                        },
-                        onMove = { offset ->
-                            val target = index + offset
-                            if (target in navItems.indices) {
-                                navItems = navItems.toMutableList().apply {
-                                    val moved = removeAt(index)
-                                    add(target, moved)
+                    key(item.id) {
+                        NavConfigRow(
+                            item = item,
+                            onChange = { changed ->
+                                val changedItems = navItems.toMutableList().apply { set(index, changed) }
+                                navItems = changedItems
+                                if (defaultPage == changed.id && !changed.visible && changed.id != NavItemId.SETTINGS) {
+                                    defaultPage = changedItems.firstOrNull { it.visible || it.id == NavItemId.SETTINGS }?.id
+                                        ?: NavItemId.SETTINGS
                                 }
-                            }
-                        },
-                    )
-                    if (index != navItems.lastIndex) HorizontalDivider()
+                            },
+                            onCenterChanged = { navCenters[item.id] = it },
+                            onMove = { distance ->
+                                val start = navCenters[item.id]
+                                val targetId = start?.let { origin ->
+                                    navCenters.minByOrNull { (_, center) -> kotlin.math.abs(center - (origin + distance)) }?.key
+                                }
+                                val target = navItems.indexOfFirst { it.id == targetId }
+                                if (target in navItems.indices && target != index) {
+                                    navItems = navItems.toMutableList().apply {
+                                        val moved = removeAt(index)
+                                        add(target, moved)
+                                    }
+                                }
+                            },
+                        )
+                        if (index != navItems.lastIndex) HorizontalDivider()
+                    }
                 }
             }
         }
@@ -505,8 +562,8 @@ private fun SettingsSection(title: String, content: @Composable ColumnScope.() -
 }
 
 @Composable
-private fun SaveButton(onClick: () -> Unit) {
-    Button(onClick = onClick, modifier = Modifier.fillMaxWidth()) { Text("保存") }
+private fun SaveButton(enabled: Boolean = true, onClick: () -> Unit) {
+    Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) { Text(tr("保存", "Save")) }
 }
 
 @Composable
@@ -516,7 +573,7 @@ private fun FolderButton(title: String, uri: String?, onClick: () -> Unit) {
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Text(title)
-            Text(uri?.substringAfterLast('%')?.take(42) ?: "尚未选择", style = MaterialTheme.typography.bodySmall, maxLines = 1)
+            Text(uri?.substringAfterLast('%')?.take(42) ?: tr("尚未选择", "Not selected"), style = MaterialTheme.typography.bodySmall, maxLines = 1)
         }
     }
 }
@@ -540,17 +597,18 @@ private fun DefaultPagePicker(current: NavItemId, items: List<NavItemConfig>, on
     val visible = items.filter { it.visible || it.id == NavItemId.SETTINGS }
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
         OutlinedTextField(
-            value = visible.firstOrNull { it.id == current }?.label ?: current.defaultLabel,
+            value = visible.firstOrNull { it.id == current }?.let { localizedNavLabel(it) }
+                ?: tr(current.defaultLabel, current.englishLabel),
             onValueChange = {},
             readOnly = true,
-            label = { Text("默认启动页面") },
+            label = { Text(tr("默认启动页面", "Default start page")) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier.menuAnchor().fillMaxWidth(),
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             visible.forEach { item ->
                 DropdownMenuItem(
-                    text = { Text(item.label) },
+                    text = { Text(localizedNavLabel(item)) },
                     leadingIcon = { Icon(iconFor(item.iconKey), contentDescription = null) },
                     onClick = {
                         onSelected(item.id)
@@ -565,18 +623,22 @@ private fun DefaultPagePicker(current: NavItemId, items: List<NavItemConfig>, on
 @Composable
 private fun NavConfigRow(
     item: NavItemConfig,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
     onChange: (NavItemConfig) -> Unit,
-    onMove: (Int) -> Unit,
+    onCenterChanged: (Float) -> Unit,
+    onMove: (Float) -> Unit,
 ) {
     var iconMenu by remember { mutableStateOf(false) }
     val icons = listOf("home", "book", "language", "bolt", "settings", "calendar", "star", "write", "sparkle", "day")
 
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { onCenterChanged(it.boundsInRoot().center.y) }
+            .padding(vertical = 8.dp),
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box {
-                IconButton(onClick = { iconMenu = true }) { Icon(iconFor(item.iconKey), "选择图标") }
+                IconButton(onClick = { iconMenu = true }) { Icon(iconFor(item.iconKey), tr("选择图标", "Choose icon")) }
                 DropdownMenu(expanded = iconMenu, onDismissRequest = { iconMenu = false }) {
                     icons.chunked(5).forEach { row ->
                         Row {
@@ -596,13 +658,8 @@ private fun NavConfigRow(
                 value = item.label,
                 onValueChange = { onChange(item.copy(label = it.take(8))) },
                 singleLine = true,
-                label = { Text(item.id.defaultLabel) },
+                label = { Text(tr(item.id.defaultLabel, item.id.englishLabel)) },
                 modifier = Modifier.weight(1f),
-            )
-            Switch(
-                checked = item.visible || item.id == NavItemId.SETTINGS,
-                enabled = item.id != NavItemId.SETTINGS,
-                onCheckedChange = { onChange(item.copy(visible = it)) },
             )
         }
         Row(
@@ -610,12 +667,48 @@ private fun NavConfigRow(
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = { onMove(-1) }, enabled = canMoveUp) {
-                Icon(Icons.Outlined.ArrowUpward, "上移")
-            }
-            IconButton(onClick = { onMove(1) }, enabled = canMoveDown) {
-                Icon(Icons.Outlined.ArrowDownward, "下移")
-            }
+            Text(tr("显示", "Visible"), style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.width(8.dp))
+            Switch(
+                checked = item.visible || item.id == NavItemId.SETTINGS,
+                enabled = item.id != NavItemId.SETTINGS,
+                onCheckedChange = { onChange(item.copy(visible = it)) },
+            )
+            FourDotDragHandle(onDragFinished = onMove)
         }
     }
 }
+
+@Composable
+private fun pageTitle(page: SettingsPage): String = when (page) {
+    SettingsPage.MAIN -> tr("设置", "Settings")
+    SettingsPage.APPEARANCE -> tr("外观与语言", "Appearance & language")
+    SettingsPage.DIARY -> tr("日记与媒体", "Diary & media")
+    SettingsPage.BLOG -> tr("浏览器", "Browser")
+    SettingsPage.NAVIGATION -> tr("底部导航", "Bottom navigation")
+}
+
+private fun parseThemeColor(raw: String): Int? {
+    val hex = raw.trim().removePrefix("#")
+    if (hex.length != 6 || hex.any { !it.isDigit() && it.lowercaseChar() !in 'a'..'f' }) return null
+    return (0xFF000000L or hex.toLong(16)).toInt()
+}
+
+private fun colorToHex(color: Int): String = "#%06X".format(color and 0xFFFFFF)
+
+private fun openUrl(context: Context, url: String) {
+    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+}
+
+private const val GITHUB_URL = "https://github.com/vexpaer/DeskCubby"
+
+@Composable
+private fun localizedNavLabel(item: NavItemConfig): String =
+    if (com.deskcubby.app.ui.theme.LocalAppLanguage.current == AppLanguage.ENGLISH && item.label.isDefaultLabelFor(item.id)) {
+        item.id.englishLabel
+    } else {
+        item.label
+    }
+
+private fun String.isDefaultLabelFor(id: NavItemId): Boolean =
+    this == id.defaultLabel || (id == NavItemId.BLOG && this == "博客") || (id == NavItemId.THOUGHT && this == "闪思")

@@ -16,6 +16,28 @@ internal object DiaryTextUtils {
     fun sha256(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
+    fun preferredLineEnding(source: String): String = when {
+        source.contains("\r\n") -> "\r\n"
+        source.contains('\n') -> "\n"
+        source.contains('\r') -> "\r"
+        else -> "\n"
+    }
+
+    fun moveSourceLine(source: String, fromIndex: Int, toIndex: Int): String {
+        val lineEnding = preferredLineEnding(source)
+        val normalized = source.replace("\r\n", "\n").replace('\r', '\n')
+        val hadTrailingLineEnding = normalized.endsWith('\n')
+        val body = if (hadTrailingLineEnding) normalized.dropLast(1) else normalized
+        val lines = body.split('\n').toMutableList()
+        if (fromIndex !in lines.indices || lines.size < 2) return source
+        val destination = toIndex.coerceIn(0, lines.lastIndex)
+        if (destination == fromIndex) return source
+
+        val line = lines.removeAt(fromIndex)
+        lines.add(destination.coerceIn(0, lines.size), line)
+        return lines.joinToString(lineEnding) + if (hadTrailingLineEnding) lineEnding else ""
+    }
+
     fun nextMediaFileName(
         pattern: String,
         dateText: String,

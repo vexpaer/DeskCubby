@@ -1,12 +1,14 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.deskcubby.app.ui
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -47,6 +49,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.ui.blog.BlogScreen
 import com.deskcubby.app.ui.blog.BlogViewModel
@@ -59,6 +62,7 @@ import com.deskcubby.app.ui.settings.SettingsScreen
 import com.deskcubby.app.ui.settings.SettingsViewModel
 import com.deskcubby.app.ui.theme.DeskCubbyTheme
 import com.deskcubby.app.ui.theme.GlassPanel
+import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.thought.ThoughtScreen
 import com.deskcubby.app.ui.thought.ThoughtTrashScreen
@@ -91,7 +95,7 @@ fun DeskCubbyRoot(
         val backStack by navController.currentBackStackEntryAsState()
         val route = backStack?.destination?.route
         val visibleTabs = settings.navItems.filter { it.visible || it.id == NavItemId.SETTINGS }
-        val showBottomBar = route in NavItemId.entries.map { it.route }
+        val showBottomBar = route in NavItemId.entries.map { it.route } && !WindowInsets.isImeVisible
         val navigateMain: (String) -> Unit = { destination ->
             navController.navigate(destination) {
                 // Keep only the graph itself, so no tab can restore another tab's nested page.
@@ -105,7 +109,7 @@ fun DeskCubbyRoot(
             modifier = Modifier.fillMaxSize(),
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
-                AnimatedVisibility(showBottomBar, modifier = Modifier.fillMaxWidth()) {
+                if (showBottomBar) {
                     DeskBottomBar(
                         items = visibleTabs,
                         selectedRoute = route,
@@ -173,6 +177,7 @@ private fun DeskBottomBar(
     onSelected: (NavItemConfig) -> Unit,
 ) {
     val glass = LocalVisualStyle.current == VisualStyle.LIQUID_GLASS
+    val language = LocalAppLanguage.current
     val content: @Composable () -> Unit = {
         NavigationBar(
             modifier = Modifier.fillMaxWidth(),
@@ -181,11 +186,16 @@ private fun DeskBottomBar(
             windowInsets = if (glass) WindowInsets(0, 0, 0, 0) else NavigationBarDefaults.windowInsets,
         ) {
             items.forEach { item ->
+                val label = if (language == AppLanguage.ENGLISH && item.label.isDefaultLabelFor(item.id)) {
+                    item.id.englishLabel
+                } else {
+                    item.label
+                }
                 NavigationBarItem(
                     selected = selectedRoute == item.id.route,
                     onClick = { onSelected(item) },
-                    icon = { Icon(iconFor(item.iconKey), item.label) },
-                    label = { Text(item.label, maxLines = 1) },
+                    icon = { Icon(iconFor(item.iconKey), label) },
+                    label = { Text(label, maxLines = 1) },
                     colors = NavigationBarItemDefaults.colors(
                         indicatorColor = if (glass) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
                         else MaterialTheme.colorScheme.secondaryContainer,
@@ -212,6 +222,9 @@ private fun DeskBottomBar(
         content()
     }
 }
+
+private fun String.isDefaultLabelFor(id: NavItemId): Boolean =
+    this == id.defaultLabel || (id == NavItemId.BLOG && this == "博客") || (id == NavItemId.THOUGHT && this == "闪思")
 
 fun iconFor(key: String): ImageVector = when (key) {
     "home" -> Icons.Outlined.Home

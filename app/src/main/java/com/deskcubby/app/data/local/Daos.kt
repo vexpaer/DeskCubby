@@ -11,8 +11,11 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface FlashThoughtDao {
-    @Query("SELECT * FROM flash_thoughts WHERE deletedAt IS NULL ORDER BY pinned DESC, createdAt ASC")
+    @Query("SELECT * FROM flash_thoughts WHERE deletedAt IS NULL ORDER BY sortOrder ASC, pinned DESC, createdAt ASC, id ASC")
     fun observeActive(): Flow<List<FlashThoughtEntity>>
+
+    @Query("SELECT id FROM flash_thoughts WHERE deletedAt IS NULL ORDER BY sortOrder ASC, pinned DESC, createdAt ASC, id ASC")
+    suspend fun getActiveIdsInOrder(): List<Long>
 
     @Query("SELECT * FROM flash_thoughts WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC")
     fun observeTrash(): Flow<List<FlashThoughtEntity>>
@@ -23,17 +26,63 @@ interface FlashThoughtDao {
     @Insert
     suspend fun insert(item: FlashThoughtEntity): Long
 
+    @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM flash_thoughts WHERE deletedAt IS NULL")
+    suspend fun nextActiveSortOrder(): Long
+
+    @Transaction
+    suspend fun insertAtEnd(item: FlashThoughtEntity): Long =
+        insert(item.copy(sortOrder = nextActiveSortOrder()))
+
     @Query("UPDATE flash_thoughts SET content = :content, updatedAt = :now WHERE id = :id")
     suspend fun updateContent(id: Long, content: String, now: Long)
 
-    @Query("UPDATE flash_thoughts SET pinned = NOT pinned, updatedAt = :now WHERE id = :id")
-    suspend fun togglePinned(id: Long, now: Long)
+    @Query("SELECT pinned FROM flash_thoughts WHERE id = :id LIMIT 1")
+    suspend fun isPinned(id: Long): Boolean?
+
+    @Query("SELECT COALESCE(MIN(sortOrder), 0) - 1 FROM flash_thoughts WHERE deletedAt IS NULL")
+    suspend fun sortOrderBeforeFirst(): Long
+
+    @Query("UPDATE flash_thoughts SET pinned = :pinned, sortOrder = :sortOrder, updatedAt = :now WHERE id = :id")
+    suspend fun setPinned(id: Long, pinned: Boolean, sortOrder: Long, now: Long)
+
+    @Transaction
+    suspend fun togglePinned(id: Long, now: Long) {
+        val pinned = !(isPinned(id) ?: return)
+        val sortOrder = if (pinned) sortOrderBeforeFirst() else nextActiveSortOrder()
+        setPinned(id, pinned, sortOrder, now)
+    }
 
     @Query("UPDATE flash_thoughts SET deletedAt = :now, updatedAt = :now WHERE id = :id")
     suspend fun softDelete(id: Long, now: Long)
 
-    @Query("UPDATE flash_thoughts SET deletedAt = NULL, updatedAt = :now WHERE id = :id")
-    suspend fun restore(id: Long, now: Long)
+    @Query("UPDATE flash_thoughts SET deletedAt = NULL, sortOrder = :sortOrder, updatedAt = :now WHERE id = :id")
+    suspend fun restore(id: Long, now: Long, sortOrder: Long)
+
+    @Transaction
+    suspend fun restoreToActiveList(id: Long, now: Long) {
+        val pinned = isPinned(id) ?: return
+        val sortOrder = if (pinned) sortOrderBeforeFirst() else nextActiveSortOrder()
+        restore(id, now, sortOrder)
+    }
+
+    @Query("UPDATE flash_thoughts SET sortOrder = :sortOrder WHERE id = :id AND deletedAt IS NULL")
+    suspend fun updateSortOrder(id: Long, sortOrder: Long)
+
+    @Transaction
+    suspend fun replaceActiveOrder(orderedIds: List<Long>) {
+        orderedIds.forEachIndexed { index, id -> updateSortOrder(id, index.toLong()) }
+    }
+
+    @Transaction
+    suspend fun moveActive(id: Long, targetIndex: Int) {
+        val orderedIds = getActiveIdsInOrder().toMutableList()
+        val sourceIndex = orderedIds.indexOf(id)
+        if (sourceIndex < 0) return
+        val destination = targetIndex.coerceIn(0, orderedIds.lastIndex)
+        if (sourceIndex == destination) return
+        orderedIds.add(destination, orderedIds.removeAt(sourceIndex))
+        replaceActiveOrder(orderedIds)
+    }
 
     @Query("DELETE FROM flash_thoughts WHERE id = :id AND deletedAt IS NOT NULL")
     suspend fun permanentlyDelete(id: Long)

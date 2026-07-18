@@ -25,16 +25,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.VisualStyle
 import androidx.core.view.WindowCompat
 
 val LocalVisualStyle: ProvidableCompositionLocal<VisualStyle> =
     staticCompositionLocalOf { VisualStyle.MATERIAL }
+
+val LocalAppLanguage: ProvidableCompositionLocal<AppLanguage> =
+    staticCompositionLocalOf { AppLanguage.CHINESE }
 
 private val MaterialLight = lightColorScheme(
     primary = Color(0xFF42664D),
@@ -87,10 +93,19 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
         DarkMode.LIGHT -> false
         DarkMode.DARK -> true
     }
-    val scheme = when (settings.visualStyle) {
+    val baseScheme = when (settings.visualStyle) {
         VisualStyle.MATERIAL -> if (dark) MaterialDark else MaterialLight
         VisualStyle.LIQUID_GLASS -> if (dark) GlassDark else GlassLight
     }
+    val accent = Color(settings.themeColorArgb)
+    val onAccent = if (accent.luminance() > 0.48f) Color.Black else Color.White
+    val scheme = baseScheme.copy(
+        primary = accent,
+        onPrimary = onAccent,
+        primaryContainer = lerp(accent, if (dark) Color.Black else Color.White, if (dark) 0.48f else 0.72f),
+        onPrimaryContainer = if (dark) Color.White else Color.Black,
+        secondary = lerp(accent, baseScheme.onSurface, 0.35f),
+    )
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
@@ -106,10 +121,17 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
             }
         }
     }
-    androidx.compose.runtime.CompositionLocalProvider(LocalVisualStyle provides settings.visualStyle) {
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalVisualStyle provides settings.visualStyle,
+        LocalAppLanguage provides settings.appLanguage,
+    ) {
         MaterialTheme(colorScheme = scheme, typography = AppTypography, content = content)
     }
 }
+
+@Composable
+fun tr(chinese: String, english: String): String =
+    if (LocalAppLanguage.current == AppLanguage.ENGLISH) english else chinese
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this

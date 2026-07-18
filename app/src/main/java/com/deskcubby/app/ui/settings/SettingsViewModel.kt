@@ -7,6 +7,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
@@ -47,10 +48,9 @@ class SettingsViewModel @Inject constructor(
 
     fun setVisualStyle(value: VisualStyle) = launch { repository.setVisualStyle(value) }
     fun setDarkMode(value: DarkMode) = launch { repository.setDarkMode(value) }
-    fun setMediaPrefix(value: String) = launch { repository.setMediaMarkdownPrefix(value) }
+    fun setAppLanguage(value: AppLanguage) = launch { repository.setAppLanguage(value) }
+    fun setThemeColor(value: Int) = launch { repository.setThemeColor(value) }
     fun setFileNamePattern(value: String) = launch { repository.setFileNamePattern(value) }
-    fun setTitlePattern(value: String) = launch { repository.setTitlePattern(value) }
-    fun setDatePattern(value: String) = launch { repository.setDatePattern(value) }
     fun setTemplate(value: String) = launch { repository.setMarkdownTemplate(value) }
     fun setImageNamePattern(value: String) = launch { repository.setImageNamePattern(value) }
     fun setImageMaxWidth(value: Int) = launch { repository.setImageMaxWidth(value) }

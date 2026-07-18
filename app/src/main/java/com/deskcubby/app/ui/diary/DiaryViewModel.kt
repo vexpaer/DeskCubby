@@ -4,15 +4,15 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.DiaryDocument
 import com.deskcubby.app.data.model.DiaryEditorDocument
 import com.deskcubby.app.data.model.DiaryTrashItem
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
-import com.deskcubby.app.data.repository.ExternalFileConflictException
 import com.deskcubby.app.data.repository.DiaryTextUtils
+import com.deskcubby.app.data.repository.ExternalFileConflictException
 import dagger.hilt.android.lifecycle.HiltViewModel
-import java.time.LocalDate
 import javax.inject.Inject
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -69,6 +69,9 @@ class DiaryViewModel @Inject constructor(
 
     private val _trash = MutableStateFlow<List<DiaryTrashItem>>(emptyList())
     val trash: StateFlow<List<DiaryTrashItem>> = _trash.asStateFlow()
+
+    private val _message = MutableStateFlow<String?>(null)
+    val message: StateFlow<String?> = _message.asStateFlow()
 
     private val saveRequests = MutableSharedFlow<Unit>(
         extraBufferCapacity = 1,
@@ -212,16 +215,17 @@ class DiaryViewModel @Inject constructor(
         _listState.value = _listState.value.copy(error = null)
     }
 
-    fun importImage(uri: Uri, category: String?, cursor: Int) {
+    fun importImage(uri: Uri, category: String?) {
         viewModelScope.launch {
             runCatching { repository.importImage(uri, category, settings.value) }
                 .onSuccess { media ->
                     val state = _editorState.value
-                    val index = cursor.coerceIn(0, state.content.length)
-                    val beforeBreak = if (index > 0 && state.content[index - 1] != '\n') "\n" else ""
-                    val afterBreak = if (index < state.content.length && state.content[index] != '\n') "\n" else ""
-                    val inserted = state.content.substring(0, index) + beforeBreak + media.markdown + afterBreak + state.content.substring(index)
-                    onContentChanged(inserted)
+                    val lineBreak = if (state.content.isEmpty() || state.content.endsWith('\n') || state.content.endsWith('\r')) {
+                        ""
+                    } else {
+                        DiaryTextUtils.preferredLineEnding(state.content)
+                    }
+                    onContentChanged(state.content + lineBreak + media.markdown)
                 }
                 .onFailure { _editorState.value = _editorState.value.copy(error = it.userMessage()) }
         }
@@ -233,9 +237,9 @@ class DiaryViewModel @Inject constructor(
         onContentChanged(state.content.replaceFirst(fullMarkdown, replacement))
     }
 
-    fun moveImageBlock(fullMarkdown: String, direction: Int) {
-        val moved = DiaryTextUtils.moveStandaloneImage(_editorState.value.content, fullMarkdown, direction)
-        if (moved != _editorState.value.content) onContentChanged(moved)
+    fun moveSourceLine(fromIndex: Int, toIndex: Int) {
+        val source = _editorState.value.content
+        onContentChanged(DiaryTextUtils.moveSourceLine(source, fromIndex, toIndex))
     }
 
     suspend fun resolveMedia(target: String): Uri? = repository.resolveMedia(target, settings.value)
@@ -250,9 +254,15 @@ class DiaryViewModel @Inject constructor(
 
     fun delete(uri: String) {
         viewModelScope.launch {
-            runCatching { repository.delete(uri) }
-                .onSuccess { refresh(); refreshTrash() }
-                .onFailure { _listState.value = _listState.value.copy(error = it.userMessage()) }
+            runCatching {
+                require(repository.delete(uri, settings.value)) { localized("无法移入回收站", "Could not move diary to trash") }
+            }
+                .onSuccess {
+                    _message.value = localized("已移入日记回收站", "Moved to diary trash")
+                    refresh()
+                    refreshTrash()
+                }
+                .onFailure { _message.value = it.userMessage() }
         }
     }
 
@@ -266,19 +276,37 @@ class DiaryViewModel @Inject constructor(
 
     fun restoreTrash(uri: String) {
         viewModelScope.launch {
-            runCatching { repository.restore(uri, settings.value) }
-                .onSuccess { refresh(); refreshTrash() }
-                .onFailure { _listState.value = _listState.value.copy(error = it.userMessage()) }
+            runCatching {
+                require(repository.restore(uri, settings.value)) { localized("无法恢复日记", "Could not restore diary") }
+            }
+                .onSuccess {
+                    _message.value = localized("日记已恢复", "Diary restored")
+                    refresh()
+                    refreshTrash()
+                }
+                .onFailure { _message.value = it.userMessage() }
         }
     }
 
     fun permanentlyDeleteTrash(uri: String) {
         viewModelScope.launch {
-            runCatching { repository.permanentlyDelete(uri) }
-                .onSuccess { refreshTrash() }
-                .onFailure { _listState.value = _listState.value.copy(error = it.userMessage()) }
+            runCatching {
+                require(repository.permanentlyDelete(uri)) { localized("无法永久删除", "Could not permanently delete diary") }
+            }
+                .onSuccess {
+                    _message.value = localized("已永久删除", "Permanently deleted")
+                    refreshTrash()
+                }
+                .onFailure { _message.value = it.userMessage() }
         }
     }
+
+    fun consumeMessage() {
+        _message.value = null
+    }
+
+    private fun localized(chinese: String, english: String): String =
+        if (settings.value.appLanguage == AppLanguage.ENGLISH) english else chinese
 
     private fun Throwable.userMessage(): String = message ?: "操作失败，请检查目录授权"
 }

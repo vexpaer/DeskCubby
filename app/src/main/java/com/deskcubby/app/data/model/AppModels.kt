@@ -4,12 +4,14 @@ enum class VisualStyle { MATERIAL, LIQUID_GLASS }
 
 enum class DarkMode { SYSTEM, LIGHT, DARK }
 
-enum class NavItemId(val route: String, val defaultLabel: String, val defaultIcon: String) {
-    HOME("home", "首页", "home"),
-    DIARY("diary", "日记", "book"),
-    BLOG("blog", "博客", "language"),
-    THOUGHT("thought", "闪思", "bolt"),
-    SETTINGS("settings", "设置", "settings"),
+enum class AppLanguage { CHINESE, ENGLISH }
+
+enum class NavItemId(val route: String, val defaultLabel: String, val englishLabel: String, val defaultIcon: String) {
+    HOME("home", "首页", "Home", "home"),
+    DIARY("diary", "日记", "Diary", "book"),
+    BLOG("blog", "浏览器", "Browser", "language"),
+    THOUGHT("thought", "小巧思", "Thoughts", "bolt"),
+    SETTINGS("settings", "设置", "Settings", "settings"),
 }
 
 data class NavItemConfig(
@@ -22,12 +24,11 @@ data class NavItemConfig(
 data class AppSettings(
     val visualStyle: VisualStyle = VisualStyle.MATERIAL,
     val darkMode: DarkMode = DarkMode.SYSTEM,
+    val appLanguage: AppLanguage = AppLanguage.CHINESE,
+    val themeColorArgb: Int = 0xFF42664D.toInt(),
     val diaryTreeUri: String? = null,
     val mediaTreeUri: String? = null,
-    val mediaMarkdownPrefix: String = "../Attachments",
-    val fileNamePattern: String = "yyyy-MM-dd '日记'",
-    val titlePattern: String = "yyyy年M月d日 EEEE",
-    val datePattern: String = "yyyy-MM-dd",
+    val fileNamePattern: String = "yyyy-MM-dd",
     val markdownTemplate: String = "# {title}\n\n",
     val imageNamePattern: String = "{date}_{category}_{seq}",
     val imageMaxWidthDp: Int = 720,
@@ -39,6 +40,7 @@ data class AppSettings(
     val defaultPage: NavItemId = NavItemId.HOME,
     val homeWidgets: List<String> = listOf(
         "today",
+        "poem",
         "year_progress",
         "month_diaries",
         "recent_diary",

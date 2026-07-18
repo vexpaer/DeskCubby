@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
@@ -29,12 +30,11 @@ class SettingsRepository @Inject constructor(
     private object Keys {
         val visualStyle = stringPreferencesKey("visual_style")
         val darkMode = stringPreferencesKey("dark_mode")
+        val appLanguage = stringPreferencesKey("app_language")
+        val themeColorArgb = intPreferencesKey("theme_color_argb")
         val diaryTreeUri = stringPreferencesKey("diary_tree_uri")
         val mediaTreeUri = stringPreferencesKey("media_tree_uri")
-        val mediaMarkdownPrefix = stringPreferencesKey("media_markdown_prefix")
         val fileNamePattern = stringPreferencesKey("file_name_pattern")
-        val titlePattern = stringPreferencesKey("title_pattern")
-        val datePattern = stringPreferencesKey("date_pattern")
         val markdownTemplate = stringPreferencesKey("markdown_template")
         val imageNamePattern = stringPreferencesKey("image_name_pattern")
         val imageMaxWidthDp = intPreferencesKey("image_max_width_dp")
@@ -57,12 +57,12 @@ class SettingsRepository @Inject constructor(
         return AppSettings(
             visualStyle = prefs[Keys.visualStyle].enumValueOr(defaults.visualStyle),
             darkMode = prefs[Keys.darkMode].enumValueOr(defaults.darkMode),
+            appLanguage = prefs[Keys.appLanguage].enumValueOr(defaults.appLanguage),
+            themeColorArgb = prefs[Keys.themeColorArgb] ?: defaults.themeColorArgb,
             diaryTreeUri = prefs[Keys.diaryTreeUri],
             mediaTreeUri = prefs[Keys.mediaTreeUri],
-            mediaMarkdownPrefix = prefs[Keys.mediaMarkdownPrefix] ?: defaults.mediaMarkdownPrefix,
-            fileNamePattern = prefs[Keys.fileNamePattern] ?: defaults.fileNamePattern,
-            titlePattern = prefs[Keys.titlePattern] ?: defaults.titlePattern,
-            datePattern = prefs[Keys.datePattern] ?: defaults.datePattern,
+            fileNamePattern = (prefs[Keys.fileNamePattern] ?: defaults.fileNamePattern)
+                .let { if (it == "yyyy-MM-dd '日记'") defaults.fileNamePattern else it },
             markdownTemplate = prefs[Keys.markdownTemplate] ?: defaults.markdownTemplate,
             imageNamePattern = prefs[Keys.imageNamePattern] ?: defaults.imageNamePattern,
             imageMaxWidthDp = (prefs[Keys.imageMaxWidthDp] ?: defaults.imageMaxWidthDp).coerceIn(120, 2400),
@@ -78,12 +78,11 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setVisualStyle(value: VisualStyle) = set(Keys.visualStyle, value.name)
     suspend fun setDarkMode(value: DarkMode) = set(Keys.darkMode, value.name)
+    suspend fun setAppLanguage(value: AppLanguage) = set(Keys.appLanguage, value.name)
+    suspend fun setThemeColor(value: Int) = set(Keys.themeColorArgb, value or 0xFF000000.toInt())
     suspend fun setDiaryTreeUri(value: String) = set(Keys.diaryTreeUri, value)
     suspend fun setMediaTreeUri(value: String) = set(Keys.mediaTreeUri, value)
-    suspend fun setMediaMarkdownPrefix(value: String) = set(Keys.mediaMarkdownPrefix, value.trim().trimEnd('/'))
     suspend fun setFileNamePattern(value: String) = set(Keys.fileNamePattern, value)
-    suspend fun setTitlePattern(value: String) = set(Keys.titlePattern, value)
-    suspend fun setDatePattern(value: String) = set(Keys.datePattern, value)
     suspend fun setMarkdownTemplate(value: String) = set(Keys.markdownTemplate, value)
     suspend fun setImageNamePattern(value: String) = set(Keys.imageNamePattern, value)
     suspend fun setImageMaxWidth(value: Int) = set(Keys.imageMaxWidthDp, value.coerceIn(120, 2400))
@@ -118,7 +117,10 @@ class SettingsRepository @Inject constructor(
                 add(
                     NavItemConfig(
                         id = id,
-                        label = item.optString("label", id.defaultLabel).ifBlank { id.defaultLabel },
+                        label = migrateLegacyDefaultLabel(
+                            id,
+                            item.optString("label", id.defaultLabel).ifBlank { id.defaultLabel },
+                        ),
                         iconKey = item.optString("icon", id.defaultIcon),
                         visible = item.optBoolean("visible", true) || id == NavItemId.SETTINGS,
                     ),
@@ -144,6 +146,12 @@ class SettingsRepository @Inject constructor(
     private fun decodeWidgets(raw: String?, fallback: List<String>): List<String> =
         raw?.split(',')?.map(String::trim)?.filter(String::isNotBlank)?.distinct()?.takeIf(List<String>::isNotEmpty)
             ?: fallback
+
+    private fun migrateLegacyDefaultLabel(id: NavItemId, label: String): String = when {
+        id == NavItemId.BLOG && label == "博客" -> id.defaultLabel
+        id == NavItemId.THOUGHT && label == "闪思" -> id.defaultLabel
+        else -> label
+    }
 
     private inline fun <reified T : Enum<T>> String?.enumValueOr(fallback: T): T =
         this?.let { value -> enumValues<T>().firstOrNull { it.name == value } } ?: fallback

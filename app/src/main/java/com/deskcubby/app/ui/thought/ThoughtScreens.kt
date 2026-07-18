@@ -1,4 +1,7 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+)
 
 package com.deskcubby.app.ui.thought
 
@@ -17,13 +20,16 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.imeNestedScroll
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -54,7 +60,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,9 +70,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.local.FlashThoughtEntity
-import java.text.DateFormat
-import java.util.Date
-import kotlinx.coroutines.launch
+import com.deskcubby.app.ui.components.FourDotDragHandle
+import com.deskcubby.app.ui.theme.tr
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import kotlin.math.abs
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -76,7 +84,8 @@ fun ThoughtScreen(
     viewModel: ThoughtViewModel,
     onTrash: () -> Unit,
 ) {
-    val items by viewModel.active.collectAsStateWithLifecycle()
+    val activeState by viewModel.activeState.collectAsStateWithLifecycle()
+    val items = activeState.items
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     var selected by remember { mutableStateOf<FlashThoughtEntity?>(null) }
     var editor by remember { mutableStateOf("") }
@@ -84,27 +93,34 @@ fun ThoughtScreen(
     var actionItem by remember { mutableStateOf<FlashThoughtEntity?>(null) }
     val listState = rememberLazyListState()
     val clipboard = LocalClipboardManager.current
+    val thoughtDateFormatter = remember { DateTimeFormatter.ofPattern("M/d") }
 
-    LaunchedEffect(items.size) {
-        if (items.isNotEmpty()) listState.animateScrollToItem(items.lastIndex)
+    LaunchedEffect(activeState.pendingScrollItemId, items) {
+        activeState.pendingScrollItemId?.let { itemId ->
+            val itemIndex = items.indexOfFirst { it.id == itemId }
+            if (itemIndex >= 0) {
+                listState.animateScrollToItem(itemIndex)
+                viewModel.consumeScrollRequest(itemId)
+            }
+        }
     }
 
     Scaffold(
-        modifier = Modifier.padding(bottom = padding.calculateBottomPadding()).imePadding(),
+        modifier = Modifier.padding(bottom = padding.calculateBottomPadding()),
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         topBar = {
             TopAppBar(
-                title = { Text("闪思") },
-                actions = { IconButton(onClick = onTrash) { Icon(Icons.Outlined.Unarchive, "回收站") } },
+                title = { Text(tr("小巧思", "Thoughts")) },
+                actions = { IconButton(onClick = onTrash) { Icon(Icons.Outlined.Unarchive, tr("回收站", "Trash")) } },
             )
         },
     ) { inner ->
-        BoxWithConstraints(Modifier.fillMaxSize().padding(inner)) {
+        BoxWithConstraints(Modifier.fillMaxSize().padding(inner).imePadding().imeNestedScroll()) {
             val totalHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxWidth().weight(ratio)) {
                     if (items.isEmpty()) {
-                        Text("还没有闪思，在下方快速写一条吧。", Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(tr("还没有小巧思，在下方快速写一条吧。", "No thoughts yet. Write one below."), Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else {
                         LazyColumn(
                             state = listState,
@@ -112,7 +128,7 @@ fun ThoughtScreen(
                             contentPadding = PaddingValues(12.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            items(items, key = { it.id }) { item ->
+                            itemsIndexed(items, key = { _, item -> item.id }) { _, item ->
                                 Card(
                                     modifier = Modifier.fillMaxWidth().combinedClickable(
                                         onClick = { selected = item; editor = item.content },
@@ -124,7 +140,7 @@ fun ThoughtScreen(
                                         if (item.pinned) Spacer(Modifier.width(8.dp))
                                         Text(item.content, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                                         Text(
-                                            DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.updatedAt)),
+                                            Instant.ofEpochMilli(item.updatedAt).atZone(ZoneId.systemDefault()).format(thoughtDateFormatter),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
@@ -136,7 +152,25 @@ fun ThoughtScreen(
                                                 }
                                                 viewModel.delete(item.id)
                                             },
-                                        ) { Icon(Icons.Outlined.Delete, "删除") }
+                                        ) { Icon(Icons.Outlined.Delete, tr("删除", "Delete")) }
+                                        FourDotDragHandle(
+                                            enabled = items.size > 1,
+                                            onDragFinished = { distance ->
+                                                val visibleItems = listState.layoutInfo.visibleItemsInfo
+                                                val sourceInfo = visibleItems.firstOrNull { it.key == item.id }
+                                                if (sourceInfo != null) {
+                                                    val targetCenter = sourceInfo.offset + sourceInfo.size / 2f + distance
+                                                    val targetInfo = visibleItems.firstOrNull { info ->
+                                                        targetCenter >= info.offset && targetCenter <= info.offset + info.size
+                                                    } ?: visibleItems.minByOrNull { info ->
+                                                        abs(targetCenter - (info.offset + info.size / 2f))
+                                                    }
+                                                    if (targetInfo != null && targetInfo.index != sourceInfo.index) {
+                                                        viewModel.move(item.id, targetInfo.index)
+                                                    }
+                                                }
+                                            },
+                                        )
                                     }
                                 }
                             }
@@ -160,16 +194,16 @@ fun ThoughtScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     HorizontalDivider()
-                    Icon(Icons.Outlined.DragHandle, "拖动调整分界线", tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Outlined.DragHandle, tr("拖动调整分界线", "Drag to resize"), tint = MaterialTheme.colorScheme.primary)
                 }
 
-                Column(Modifier.fillMaxWidth().weight(1f - ratio).padding(12.dp)) {
+                Column(Modifier.fillMaxWidth().weight(1f - ratio).heightIn(min = 160.dp).padding(12.dp)) {
                     if (selected != null) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("正在编辑一条旧闪思", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                            Text(tr("正在编辑一条小巧思", "Editing an existing thought"), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                             Spacer(Modifier.weight(1f))
                             TextButton(onClick = { selected = null; editor = "" }) {
-                                Icon(Icons.Outlined.Cancel, null); Text("取消")
+                                Icon(Icons.Outlined.Cancel, null); Text(tr("取消", "Cancel"))
                             }
                         }
                     }
@@ -177,7 +211,7 @@ fun ThoughtScreen(
                         value = editor,
                         onValueChange = { editor = it },
                         modifier = Modifier.fillMaxWidth().weight(1f),
-                        placeholder = { Text("此刻在想什么？") },
+                        placeholder = { Text(tr("此刻在想什么？", "What's on your mind?")) },
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         FilledIconButton(
@@ -188,7 +222,7 @@ fun ThoughtScreen(
                                 }
                             },
                             enabled = editor.isNotBlank(),
-                        ) { Icon(Icons.Outlined.Send, "发送") }
+                        ) { Icon(Icons.Outlined.Send, tr("发送", "Send")) }
                     }
                 }
             }
@@ -202,17 +236,17 @@ fun ThoughtScreen(
             text = {
                 Column {
                     TextButton(onClick = { viewModel.togglePinned(item.id); actionItem = null }) {
-                        Icon(Icons.Outlined.PushPin, null); Spacer(Modifier.width(8.dp)); Text(if (item.pinned) "取消置顶" else "置顶")
+                        Icon(Icons.Outlined.PushPin, null); Spacer(Modifier.width(8.dp)); Text(if (item.pinned) tr("取消置顶", "Unpin") else tr("置顶", "Pin"))
                     }
                     TextButton(onClick = { clipboard.setText(AnnotatedString(item.content)); actionItem = null }) {
-                        Icon(Icons.Outlined.ContentCopy, null); Spacer(Modifier.width(8.dp)); Text("复制")
+                        Icon(Icons.Outlined.ContentCopy, null); Spacer(Modifier.width(8.dp)); Text(tr("复制", "Copy"))
                     }
                     TextButton(onClick = { viewModel.delete(item.id); actionItem = null }) {
-                        Icon(Icons.Outlined.Delete, null); Spacer(Modifier.width(8.dp)); Text("移入回收站")
+                        Icon(Icons.Outlined.Delete, null); Spacer(Modifier.width(8.dp)); Text(tr("移入回收站", "Move to trash"))
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { actionItem = null }) { Text("关闭") } },
+            confirmButton = { TextButton(onClick = { actionItem = null }) { Text(tr("关闭", "Close")) } },
         )
     }
 }
@@ -224,13 +258,13 @@ fun ThoughtTrashScreen(viewModel: ThoughtViewModel, onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("闪思回收站") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") } },
+                title = { Text(tr("小巧思回收站", "Thought trash")) },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, tr("返回", "Back")) } },
             )
         },
     ) { inner ->
         if (items.isEmpty()) {
-            Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) { Text("回收站为空") }
+            Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) { Text(tr("回收站为空", "Trash is empty")) }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(inner),
@@ -241,8 +275,8 @@ fun ThoughtTrashScreen(viewModel: ThoughtViewModel, onBack: () -> Unit) {
                     Card(Modifier.fillMaxWidth()) {
                         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(item.content, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                            IconButton(onClick = { viewModel.restore(item.id) }) { Icon(Icons.Outlined.Restore, "恢复") }
-                            IconButton(onClick = { deleting = item }) { Icon(Icons.Outlined.DeleteForever, "永久删除") }
+                            IconButton(onClick = { viewModel.restore(item.id) }) { Icon(Icons.Outlined.Restore, tr("恢复", "Restore")) }
+                            IconButton(onClick = { deleting = item }) { Icon(Icons.Outlined.DeleteForever, tr("永久删除", "Delete forever")) }
                         }
                     }
                 }
@@ -252,10 +286,10 @@ fun ThoughtTrashScreen(viewModel: ThoughtViewModel, onBack: () -> Unit) {
     deleting?.let { item ->
         AlertDialog(
             onDismissRequest = { deleting = null },
-            title = { Text("永久删除？") },
-            text = { Text("此操作无法恢复。") },
-            confirmButton = { TextButton(onClick = { viewModel.permanentlyDelete(item.id); deleting = null }) { Text("永久删除") } },
-            dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } },
+            title = { Text(tr("永久删除？", "Delete forever?")) },
+            text = { Text(tr("此操作无法恢复。", "This cannot be undone.")) },
+            confirmButton = { TextButton(onClick = { viewModel.permanentlyDelete(item.id); deleting = null }) { Text(tr("永久删除", "Delete forever")) } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text(tr("取消", "Cancel")) } },
         )
     }
 }
