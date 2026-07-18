@@ -7,6 +7,24 @@ internal object DiaryTextUtils {
     fun sanitizeFileName(value: String): String =
         value.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001F]"), "_").trim().ifBlank { "未命名" }
 
+    /**
+     * Converts user input into one Markdown file name.
+     *
+     * The extension is deliberately stripped in a loop so inputs such as
+     * `note.MD.md` cannot become `note.MD.md.md`. Trailing dots are removed
+     * because several SAF providers reject them even though Android itself
+     * does not expose a single provider-independent invalid-character list.
+    */
+    fun normalizeMarkdownFileName(value: String): String {
+        var stem = value.trim().trimEnd(' ', '.')
+        while (stem.endsWith(".md", ignoreCase = true)) {
+            stem = stem.dropLast(3).trimEnd(' ', '.')
+        }
+        stem = sanitizeFileName(stem).trimEnd(' ', '.')
+        if (stem.isBlank()) stem = "未命名"
+        return "$stem.md"
+    }
+
     fun wordCount(text: String): Int {
         val latin = Regex("[\\p{L}\\p{N}_'-]+").findAll(text.replace(Regex("[\\u4E00-\\u9FFF]"), " ")).count()
         val han = Regex("[\\u4E00-\\u9FFF]").findAll(text).count()

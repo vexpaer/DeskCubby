@@ -244,11 +244,23 @@ class DiaryViewModel @Inject constructor(
 
     suspend fun resolveMedia(target: String): Uri? = repository.resolveMedia(target, settings.value)
 
-    fun rename(uri: String, title: String) {
+    fun rename(uri: String, fileName: String) {
         viewModelScope.launch {
-            runCatching { repository.rename(uri, title) }
-                .onSuccess { refresh() }
-                .onFailure { _listState.value = _listState.value.copy(error = it.userMessage()) }
+            runCatching { repository.rename(uri, fileName, settings.value) }
+                .onSuccess { renamed ->
+                    val editor = _editorState.value
+                    if (editor.document?.uri == uri) {
+                        _editorState.value = editor.copy(
+                            document = renamed.copy(content = editor.content),
+                        )
+                    }
+                    _message.value = localized(
+                        "已重命名为 ${renamed.name}",
+                        "Renamed to ${renamed.name}",
+                    )
+                    refresh()
+                }
+                .onFailure { _message.value = it.userMessage() }
         }
     }
 

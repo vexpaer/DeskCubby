@@ -3,6 +3,7 @@ package com.deskcubby.app.data.repository
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
@@ -48,7 +49,7 @@ class DiaryFileRepository @Inject constructor(
             .map { document ->
                 val content = readText(document.uri)
                 val date = extractDate(document.name.orEmpty(), document.lastModified())
-                val title = document.name.orEmpty().removeSuffix(".md")
+                val title = markdownStem(document.name.orEmpty())
                 DiaryDocument(
                     uri = document.uri.toString(),
                     name = document.name.orEmpty(),
@@ -139,10 +140,73 @@ class DiaryFileRepository @Inject constructor(
         }
     }
 
-    suspend fun rename(uri: String, newTitle: String): Boolean = withContext(Dispatchers.IO) {
-        val document = DocumentFile.fromSingleUri(context, Uri.parse(uri)) ?: return@withContext false
-        val fileName = DiaryTextUtils.sanitizeFileName(newTitle.removeSuffix(".md")) + ".md"
-        document.renameTo(fileName)
+    suspend fun rename(uri: String, newFileName: String, settings: AppSettings): DiaryEditorDocument =
+        writeMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val root = settings.diaryTreeUri?.let(::tree)
+                    ?: error("请先在设置中选择日记目录")
+                val sourceUri = Uri.parse(uri)
+                val source = DocumentFile.fromSingleUri(context, sourceUri)
+                    ?: error("找不到要重命名的日记文件")
+                val currentName = source.name ?: error("无法读取当前日记文件名")
+                val targetName = DiaryTextUtils.normalizeMarkdownFileName(newFileName)
+
+                if (currentName == targetName) {
+                    return@withContext load(sourceUri)
+                }
+
+                val duplicate = root.listFiles().firstOrNull { candidate ->
+                    candidate.uri != sourceUri && candidate.name.equals(targetName, ignoreCase = true)
+                }
+                require(duplicate == null) { "目录中已存在同名日记：$targetName" }
+
+                var directFailure: Throwable? = null
+                val renamedUri = try {
+                    DocumentsContract.renameDocument(resolver, sourceUri, targetName)
+                } catch (error: Exception) {
+                    directFailure = error
+                    null
+                } ?: run {
+                    val fallbackSucceeded = runCatching { source.renameTo(targetName) }
+                        .onFailure { directFailure = it }
+                        .getOrDefault(false)
+                    if (!fallbackSucceeded) {
+                        throw IllegalStateException(
+                            "重命名失败，存储服务拒绝了文件名：$targetName",
+                            directFailure,
+                        )
+                    }
+                    root.listFiles().firstOrNull { it.name == targetName }?.uri ?: source.uri
+                }
+
+                // Some providers return a new document URI after rename, while others retain the
+                // original URI. Resolve the document from both places before reporting success.
+                val renamedFile = DocumentFile.fromSingleUri(context, renamedUri)
+                    ?.takeIf { it.exists() && it.name.equals(targetName, ignoreCase = true) }
+                    ?: root.listFiles().firstOrNull { it.name.equals(targetName, ignoreCase = true) }
+                    ?: error("文件可能已重命名，但存储服务没有返回可访问的新文件")
+                val renamedDocument = load(renamedFile.uri)
+                updateIndexAfterRename(uri, renamedDocument)
+                renamedDocument
+            }
+        }
+
+    private suspend fun updateIndexAfterRename(oldUri: String, document: DiaryEditorDocument) {
+        val date = extractDate(document.name, document.lastModified)
+        val renamedIndex = DiaryIndexEntity(
+            uri = document.uri,
+            name = document.name,
+            title = markdownStem(document.name),
+            dateIso = date.toString(),
+            monthKey = "%04d.%02d".format(Locale.ROOT, date.year, date.monthValue),
+            lastModified = document.lastModified,
+            size = document.size,
+            wordCount = DiaryTextUtils.wordCount(document.content),
+            sha256 = document.sha256,
+            indexedAt = System.currentTimeMillis(),
+        )
+        val preserved = indexDao.getAll().filterNot { it.uri == oldUri || it.uri == document.uri }
+        indexDao.replaceAfterSuccessfulScan(preserved + renamedIndex)
     }
 
     suspend fun delete(uri: String, settings: AppSettings): Boolean = withContext(Dispatchers.IO) {
@@ -333,6 +397,9 @@ class DiaryFileRepository @Inject constructor(
         val instant = if (modified > 0) Instant.ofEpochMilli(modified) else Instant.now()
         return instant.atZone(ZoneId.systemDefault()).toLocalDate()
     }
+
+    private fun markdownStem(name: String): String =
+        if (name.endsWith(".md", ignoreCase = true)) name.dropLast(3) else name
 
     private fun formatDate(date: LocalDate, pattern: String, fallback: String): String = try {
         date.format(DateTimeFormatter.ofPattern(pattern, Locale.getDefault()))

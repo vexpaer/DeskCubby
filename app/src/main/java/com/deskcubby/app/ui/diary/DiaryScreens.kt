@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
@@ -86,12 +87,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.ParagraphStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.input.TransformedText
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -468,25 +464,9 @@ private fun MarkdownSourceEditor(
     var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val mediaLines = remember(value.text) { findMediaSourceLines(value.text) }
     val topPadding = 16.dp
-    val handleSize = 48.dp
-    val mediaLineHeight = with(density) { handleSize.toSp() }
-    val mediaLineTransformation = remember(mediaLines, mediaLineHeight) {
-        VisualTransformation { source ->
-            val styled = buildAnnotatedString {
-                append(source)
-                mediaLines.forEach { line ->
-                    if (line.startOffset < line.endOffset) {
-                        addStyle(
-                            ParagraphStyle(lineHeight = mediaLineHeight),
-                            line.startOffset,
-                            line.endOffset,
-                        )
-                    }
-                }
-            }
-            TransformedText(styled, OffsetMapping.Identity)
-        }
-    }
+    // The handle is an overlay and must never participate in text measurement. Keeping it
+    // close to the editor's normal line height also prevents adjacent media rows overlapping.
+    val handleSize = 24.dp
 
     Surface(
         modifier = Modifier.fillMaxSize().padding(12.dp),
@@ -504,19 +484,18 @@ private fun MarkdownSourceEditor(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = viewportHeight)
-                            .padding(start = 16.dp, top = topPadding, end = 62.dp, bottom = 16.dp),
+                            .padding(start = 16.dp, top = topPadding, end = 40.dp, bottom = 16.dp),
                         textStyle = MaterialTheme.typography.bodyLarge.copy(
                             color = MaterialTheme.colorScheme.onSurface,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                         ),
-                        visualTransformation = mediaLineTransformation,
                         onTextLayout = { textLayout = it },
                     )
 
                     if (value.text.isEmpty()) {
                         Text(
                             text = tr("开始记录…", "Start writing…"),
-                            modifier = Modifier.padding(start = 16.dp, top = topPadding, end = 62.dp),
+                            modifier = Modifier.padding(start = 16.dp, top = topPadding, end = 40.dp),
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
@@ -537,6 +516,7 @@ private fun MarkdownSourceEditor(
                             FourDotDragHandle(
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
+                                    .size(handleSize)
                                     .offset { IntOffset(x = 0, y = handleTopPx.coerceAtLeast(0f).roundToInt()) },
                                 onDragFinished = { verticalDistance ->
                                     val maxY = (currentLayout.size.height - 1).coerceAtLeast(0).toFloat()

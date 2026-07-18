@@ -25,6 +25,23 @@ class DiaryTextUtilsTest {
     }
 
     @Test
+    fun markdownFileNameAddsOneExtensionAndSanitizesInput() {
+        assertEquals("旅行_武汉_记录_.md", DiaryTextUtils.normalizeMarkdownFileName(" 旅行/武汉:记录?.MD.md "))
+    }
+
+    @Test
+    fun markdownFileNameDoesNotDuplicateMixedCaseExtension() {
+        assertEquals("周记.md", DiaryTextUtils.normalizeMarkdownFileName("周记.Md"))
+        assertEquals("周记.md", DiaryTextUtils.normalizeMarkdownFileName("周记.md.md"))
+        assertEquals("周记.md", DiaryTextUtils.normalizeMarkdownFileName("周记.MD..."))
+    }
+
+    @Test
+    fun markdownFileNameUsesSafeFallbackForExtensionOnlyInput() {
+        assertEquals("未命名.md", DiaryTextUtils.normalizeMarkdownFileName(".md"))
+    }
+
+    @Test
     fun wordCountHandlesChineseAndLatinTokens() {
         assertEquals(7, DiaryTextUtils.wordCount("今天 hello world 2026 真好"))
     }

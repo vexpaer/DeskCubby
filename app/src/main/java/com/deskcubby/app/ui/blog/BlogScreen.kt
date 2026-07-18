@@ -80,6 +80,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -91,6 +92,8 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.local.BrowserRecordEntity
 import com.deskcubby.app.ui.theme.tr
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 
 @Composable
 fun BlogScreen(
@@ -130,8 +133,10 @@ fun BlogScreen(
     }
 
     val tabs = tabsState.tabs
+    val tabIds = tabs.map { it.id }
     val initialPage = tabs.indexOfFirst { it.id == currentTab.id }.coerceAtLeast(0)
-    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { tabsState.tabs.size })
+    val latestPageCount by rememberUpdatedState(tabIds.size)
+    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { latestPageCount })
     val currentWebView = webViews[currentTab.id]
     val isFavorite = favorites.any { it.url == currentTab.url }
 
@@ -158,17 +163,34 @@ fun BlogScreen(
         tabsMenu = false
     }
 
-    LaunchedEffect(tabsState.currentTabId, tabs.map { it.id }) {
-        val target = tabs.indexOfFirst { it.id == tabsState.currentTabId }
-        if (target >= 0 && pagerState.currentPage != target) {
-            pagerState.animateScrollToPage(target)
+    // First apply view-model selections after the dynamic page count has caught up,
+    // then listen for real user swipes. Keeping both directions in this single effect
+    // prevents a stale settledPage from selecting the old tab while a new page is added.
+    LaunchedEffect(pagerState, tabIds, tabsState.currentTabId) {
+        val target = tabIds.indexOf(tabsState.currentTabId)
+        if (target >= 0) {
+            snapshotFlow { pagerState.pageCount }.first { count -> count > target }
+            if (pagerState.currentPage != target) {
+                pagerState.scrollToPage(target)
+            }
         }
         toolbarMenu = false
         tabsMenu = false
-    }
 
-    LaunchedEffect(pagerState.settledPage) {
-        tabs.getOrNull(pagerState.settledPage)?.id?.let(viewModel::selectTab)
+        var scrollStarted = false
+        snapshotFlow { pagerState.isScrollInProgress to pagerState.settledPage }
+            .collect { (scrolling, settledPage) ->
+                if (scrolling) {
+                    scrollStarted = true
+                } else if (scrollStarted) {
+                    scrollStarted = false
+                    tabIds.getOrNull(settledPage)?.let { settledTabId ->
+                        if (settledTabId != tabsState.currentTabId) {
+                            viewModel.selectTab(settledTabId)
+                        }
+                    }
+                }
+            }
     }
 
     BackHandler(enabled = currentTab.canGoBack) { currentWebView?.goBack() }
@@ -185,7 +207,7 @@ fun BlogScreen(
                 Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     HorizontalPager(
                         state = pagerState,
-                        key = { tabs[it].id },
+                        key = { page -> tabIds.getOrNull(page) ?: -(page + 1L) },
                         modifier = Modifier.weight(1f),
                     ) { page ->
                         val tab = tabs.getOrNull(page) ?: return@HorizontalPager
@@ -465,7 +487,6 @@ private fun BrowserWebPage(
 
                     override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
                         handler.cancel()
-                        Toast.makeText(ctx, "证书验证失败，已停止加载", Toast.LENGTH_SHORT).show()
                     }
                 }
                 webChromeClient = object : WebChromeClient() {
