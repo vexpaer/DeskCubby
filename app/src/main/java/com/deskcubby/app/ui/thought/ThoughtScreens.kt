@@ -35,9 +35,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Cancel
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteForever
+import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PushPin
@@ -80,7 +82,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.local.FlashThoughtEntity
+import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.FourDotDragHandle
+import com.deskcubby.app.ui.theme.LocalVisualStyle
+import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.tr
 import java.time.Instant
 import java.time.ZoneId
@@ -107,6 +113,8 @@ fun ThoughtScreen(
     }
     val categoriesById = remember(categories) { categories.associateBy { it.id } }
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    val visuals = deskCubbyVisuals
     var selected by remember { mutableStateOf<FlashThoughtEntity?>(null) }
     var editor by remember { mutableStateOf("") }
     var actionItem by remember { mutableStateOf<FlashThoughtEntity?>(null) }
@@ -200,14 +208,19 @@ fun ThoughtScreen(
                 Column(Modifier.fillMaxSize()) {
                     Box(Modifier.fillMaxWidth().weight(1f)) {
                         if (items.isEmpty()) {
-                            Text(
-                                if (selectedCategory == ThoughtCategoryFilter.All) {
-                                    tr("还没有小巧思，在下方快速写一条吧。", "No thoughts yet. Write one below.")
+                            AppEmptyState(
+                                icon = Icons.Outlined.Bolt,
+                                title = if (selectedCategory == ThoughtCategoryFilter.All) {
+                                    tr("记录此刻的想法", "Capture what is on your mind")
                                 } else {
-                                    tr("这个分类里还没有小巧思。", "There are no thoughts in this category yet.")
+                                    tr("这个分类还是空的", "This category is empty")
                                 },
-                                Modifier.align(Alignment.Center).padding(24.dp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                description = if (selectedCategory == ThoughtCategoryFilter.All) {
+                                    tr("在下方快速写一条小巧思。", "Write a quick thought below.")
+                                } else {
+                                    tr("可以在下方输入，长按发送按钮选择分类。", "Write below, then hold Send to choose a category.")
+                                },
+                                modifier = Modifier.fillMaxSize(),
                             )
                         } else {
                             LazyColumn(
@@ -304,7 +317,7 @@ fun ThoughtScreen(
                             placeholder = { Text(tr("此刻在想什么？", "What's on your mind?")) },
                             minLines = 1,
                             maxLines = 6,
-                            shape = RoundedCornerShape(28.dp),
+                            shape = if (organic) visuals.featureShape else RoundedCornerShape(28.dp),
                             trailingIcon = {
                                 ThoughtSendButton(
                                     enabled = editor.isNotBlank(),
@@ -433,11 +446,13 @@ internal fun ThoughtSendButton(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    val visuals = deskCubbyVisuals
     Surface(
         modifier = Modifier
             .size(48.dp)
             .combinedClickable(enabled = enabled, onClick = onClick, onLongClick = onLongClick),
-        shape = CircleShape,
+        shape = if (organic) visuals.badgeShape else CircleShape,
         color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
         contentColor = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
     ) {
@@ -460,7 +475,12 @@ fun ThoughtTrashScreen(viewModel: ThoughtViewModel, onBack: () -> Unit) {
         },
     ) { inner ->
         if (items.isEmpty()) {
-            Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) { Text(tr("回收站为空", "Trash is empty")) }
+            AppEmptyState(
+                icon = Icons.Outlined.DeleteSweep,
+                title = tr("回收站为空", "Trash is empty"),
+                description = tr("删除的小巧思会暂时保存在这里。", "Deleted thoughts will be kept here temporarily."),
+                modifier = Modifier.fillMaxSize().padding(inner),
+            )
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(inner),

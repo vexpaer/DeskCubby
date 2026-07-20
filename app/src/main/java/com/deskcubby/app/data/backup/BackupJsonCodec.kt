@@ -9,6 +9,7 @@ import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.preferences.migrateMealPhotosWidget
 import java.math.BigDecimal
 import java.time.LocalDate
@@ -19,7 +20,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 6,
+    val formatVersion: Int = 7,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -39,7 +40,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 6
+    const val FORMAT_VERSION: Int = 7
 
     private const val FORMAT_NAME = "DeskCubby"
     private const val MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -209,7 +210,7 @@ object BackupJsonCodec {
             decodedTitles
         }
         return AppSettings(
-            visualStyle = json.requiredEnum("visualStyle"),
+            visualStyle = decodeVisualStyle(json, version),
             darkMode = json.requiredEnum("darkMode"),
             appLanguage = json.requiredEnum("appLanguage"),
             themeColorArgb = json.requiredInt("themeColorArgb"),
@@ -272,6 +273,14 @@ object BackupJsonCodec {
             homeWidgets = homeWidgets,
             homeWidgetTitles = homeWidgetTitles,
         )
+    }
+
+    private fun decodeVisualStyle(json: JSONObject, version: Int): VisualStyle {
+        val visualStyle = json.requiredEnum<VisualStyle>("visualStyle")
+        require(version >= 7 || visualStyle != VisualStyle.ORGANIC_FUTURE) {
+            "visualStyle ${visualStyle.name} requires backup version 7 or newer"
+        }
+        return visualStyle
     }
 
     private fun decodeMealButtonIcons(json: JSONArray, expectedCount: Int): List<String> {

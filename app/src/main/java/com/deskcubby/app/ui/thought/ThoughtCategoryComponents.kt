@@ -50,12 +50,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
+import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.ThoughtRepository
+import com.deskcubby.app.ui.theme.LocalVisualStyle
+import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.tr
 
 private val categoryColors = listOf(
@@ -68,6 +72,18 @@ private val categoryColors = listOf(
     0xFF8166C2.toInt(),
     0xFFC45E91.toInt(),
     0xFF7B716A.toInt(),
+)
+
+private val organicCategoryColors = listOf(
+    0xFF2E7D4B.toInt(),
+    0xFF5C7A3E.toInt(),
+    0xFF3D7665.toInt(),
+    0xFF7E8352.toInt(),
+    0xFF5F7467.toInt(),
+    0xFF8A6F50.toInt(),
+    0xFF456B50.toInt(),
+    0xFF6B7E62.toInt(),
+    0xFF756F5E.toInt(),
 )
 
 internal val defaultThoughtCategoryColor: Int = categoryColors.first()
@@ -143,12 +159,19 @@ private fun ThoughtCategoryDrawerItem(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
-    val background = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    val visuals = deskCubbyVisuals
+    val background = if (selected) {
+        if (organic) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.secondaryContainer
+    } else {
+        Color.Transparent
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(24.dp))
+            .clip(if (organic) visuals.listShape else RoundedCornerShape(24.dp))
             .background(background)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -173,9 +196,11 @@ internal fun ThoughtCategoryEditorDialog(
     onSave: (String, Int, (Boolean) -> Unit) -> Unit,
     onDelete: ((ThoughtCategoryEntity) -> Unit)? = null,
 ) {
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    val palette = if (organic) organicCategoryColors else categoryColors
     var name by remember(category?.id) { mutableStateOf(category?.name.orEmpty()) }
-    var colorArgb by remember(category?.id) {
-        mutableIntStateOf(category?.colorArgb ?: defaultThoughtCategoryColor)
+    var colorArgb by remember(category?.id, organic) {
+        mutableIntStateOf(category?.colorArgb ?: palette.first())
     }
     var duplicateName by remember(category?.id) { mutableStateOf(false) }
     var confirmingDelete by remember(category?.id) { mutableStateOf(false) }
@@ -214,8 +239,8 @@ internal fun ThoughtCategoryEditorDialog(
         existing.id != category?.id && existing.name.equals(normalizedName, ignoreCase = true)
     }
     val canSave = normalizedName.isNotBlank() && !duplicateInUi
-    val availableColors = remember(category?.colorArgb) {
-        listOfNotNull(category?.colorArgb).plus(categoryColors).distinct()
+    val availableColors = remember(category?.colorArgb, organic) {
+        listOfNotNull(category?.colorArgb).plus(palette).distinct()
     }
 
     AlertDialog(
@@ -264,7 +289,14 @@ internal fun ThoughtCategoryEditorDialog(
                                 .combinedClickable(onClick = { colorArgb = choice }),
                             contentAlignment = Alignment.Center,
                         ) {
-                            if (choice == colorArgb) Icon(Icons.Outlined.Check, null, tint = Color.White)
+                            if (choice == colorArgb) {
+                                val swatch = Color(choice)
+                                Icon(
+                                    Icons.Outlined.Check,
+                                    null,
+                                    tint = if (swatch.luminance() > 0.42f) Color.Black else Color.White,
+                                )
+                            }
                         }
                     }
                 }

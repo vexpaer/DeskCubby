@@ -37,6 +37,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
@@ -58,7 +59,6 @@ import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -85,6 +85,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
@@ -96,8 +98,14 @@ import androidx.core.text.HtmlCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.deskcubby.app.data.model.DiaryDocument
+import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.ui.components.AppEmptyState
+import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.theme.GlassPanel
+import com.deskcubby.app.ui.theme.LocalVisualStyle
+import com.deskcubby.app.ui.theme.PanelRole
+import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.tr
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.HtmlRenderer
@@ -118,6 +126,8 @@ fun DiaryListScreen(
     val expandedMonth by viewModel.expandedMonth.collectAsStateWithLifecycle()
     val operationMessage by viewModel.message.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    val visuals = deskCubbyVisuals
     var createDialog by remember { mutableStateOf(false) }
     var selectedItem by remember { mutableStateOf<DiaryDocument?>(null) }
     var renameItem by remember { mutableStateOf<DiaryDocument?>(null) }
@@ -157,10 +167,23 @@ fun DiaryListScreen(
     ) { inner ->
         when {
             settings.diaryTreeUri == null -> EmptyDiary(onOpenSettings, Modifier.padding(inner))
-            state.loading && state.items.isEmpty() -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-            state.items.isEmpty() -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) {
-                Text(state.error ?: tr("目录中还没有 Markdown 日记", "No Markdown diaries in this folder"))
-            }
+            state.loading && state.items.isEmpty() -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) { AppLoadingIndicator() }
+            state.items.isEmpty() -> AppEmptyState(
+                icon = Icons.Outlined.MenuBook,
+                title = if (state.error == null) {
+                    tr("这里还没有日记", "No diaries here yet")
+                } else {
+                    tr("无法读取日记", "Could not load diaries")
+                },
+                description = state.error ?: tr(
+                    "可以从今日日记开始记录。",
+                    "Start writing with today's diary.",
+                ),
+                actionLabel = if (state.error == null) tr("进入今日日记", "Open today's diary")
+                else tr("重试", "Retry"),
+                onAction = if (state.error == null) onOpenToday else viewModel::refresh,
+                modifier = Modifier.fillMaxSize().padding(inner),
+            )
             else -> LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(inner),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 100.dp),
@@ -195,6 +218,7 @@ fun DiaryListScreen(
                                     onClick = { onOpen(diary.uri) },
                                     onLongClick = { selectedItem = diary },
                                 ),
+                                shape = if (organic) visuals.listShape else MaterialTheme.shapes.medium,
                             ) {
                                 Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Column(Modifier.weight(1f)) {
@@ -260,7 +284,10 @@ fun DiaryListScreen(
             text = {
                 if (trash.isEmpty()) Text(tr("回收站为空", "Trash is empty")) else LazyColumn(Modifier.heightIn(max = 420.dp)) {
                     items(trash, key = { it.uri }) { item ->
-                        Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            shape = if (organic) visuals.listShape else MaterialTheme.shapes.medium,
+                        ) {
                             Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(item.originalName, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 TextButton(onClick = { viewModel.restoreTrash(item.uri) }) { Icon(Icons.Outlined.Restore, null); Text(tr("恢复", "Restore")) }
@@ -288,13 +315,18 @@ fun DiaryListScreen(
 
 @Composable
 private fun EmptyDiary(onSettings: () -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(Icons.Outlined.CreateNewFolder, null, modifier = Modifier.width(64.dp).height(64.dp))
-        Spacer(Modifier.height(16.dp))
-        Text(tr("选择一个包含 Markdown 文件的日记目录", "Choose a folder containing Markdown diaries"), style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = onSettings) { Text(tr("前往设置", "Open settings")) }
-    }
+    AppEmptyState(
+        icon = Icons.Outlined.CreateNewFolder,
+        title = tr("选择日记目录", "Choose a diary folder"),
+        description = tr(
+            "选择一个包含 Markdown 文件的目录，日记会按月份整理。",
+            "Choose a folder containing Markdown files; diaries will be organized by month.",
+        ),
+        actionLabel = tr("前往设置", "Open settings"),
+        onAction = onSettings,
+        modifier = modifier.fillMaxSize(),
+        iconSize = 64.dp,
+    )
 }
 
 @Composable
@@ -304,6 +336,8 @@ fun DiaryEditorScreen(
 ) {
     val state by viewModel.editorState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    val visuals = deskCubbyVisuals
     var editorValue by remember { mutableStateOf(TextFieldValue(state.content)) }
     var categoryMenu by remember { mutableStateOf(false) }
     var pendingCategory by remember { mutableStateOf<String?>(null) }
@@ -351,12 +385,13 @@ fun DiaryEditorScreen(
             GlassPanel(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding().imePadding(),
                 cornerRadius = 0.dp,
+                role = PanelRole.TOOLBAR,
                 padding = PaddingValues(8.dp),
             ) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                     Box {
                         Surface(
-                            shape = MaterialTheme.shapes.large,
+                            shape = if (organic) visuals.badgeShape else MaterialTheme.shapes.large,
                             color = MaterialTheme.colorScheme.secondaryContainer,
                         ) {
                             Row(
@@ -401,7 +436,7 @@ fun DiaryEditorScreen(
     ) { inner ->
         Box(Modifier.fillMaxSize().padding(inner)) {
             when {
-                state.loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                state.loading -> AppLoadingIndicator(Modifier.align(Alignment.Center))
                 state.preview -> MarkdownPreview(
                     content = state.content,
                     maxWidth = settings.imageMaxWidthDp,
@@ -471,7 +506,9 @@ private fun MarkdownSourceEditor(
 
     Surface(
         modifier = Modifier.fillMaxSize().padding(12.dp),
-        shape = MaterialTheme.shapes.small,
+        // Keep the writing plane geometrically regular in every visual style so decoration never
+        // changes cursor, selection, scrolling, or media-line drag behavior.
+        shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     ) {
@@ -518,6 +555,7 @@ private fun MarkdownSourceEditor(
                             color = MaterialTheme.colorScheme.onSurface,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                         ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         onTextLayout = { textLayout = it },
                     )
 
@@ -584,6 +622,8 @@ private fun MarkdownPreview(
     resolveMedia: suspend (String) -> Uri?,
     onEditCaption: (String, String) -> Unit,
 ) {
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    val visuals = deskCubbyVisuals
     val imageRegex = remember { Regex("!\\[([^]]*)]\\((?:<([^>]+)>|([^\\s)]+))\\)") }
     val parser = remember { Parser.builder().build() }
     val renderer = remember { HtmlRenderer.builder().build() }
@@ -614,13 +654,18 @@ private fun MarkdownPreview(
                     val uri by produceState<Uri?>(initialValue = null, part.target) { value = resolveMedia(part.target) }
                     GlassPanel(
                         modifier = Modifier.fillMaxWidth(),
+                        role = PanelRole.MEDIA,
                         padding = PaddingValues(10.dp),
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             AsyncImage(
                                 model = uri,
                                 contentDescription = part.caption,
-                                modifier = Modifier.widthIn(max = maxWidth.dp).fillMaxWidth().heightIn(max = maxHeight.dp),
+                                modifier = Modifier
+                                    .widthIn(max = maxWidth.dp)
+                                    .fillMaxWidth()
+                                    .heightIn(max = maxHeight.dp)
+                                    .then(if (organic) Modifier.clip(visuals.mediaShape) else Modifier),
                                 contentScale = ContentScale.Fit,
                             )
                             TextButton(onClick = { onEditCaption(part.fullMarkdown, part.caption) }) {

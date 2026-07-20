@@ -24,7 +24,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.view.ContextThemeWrapper
 import android.view.ViewGroup
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -69,7 +68,6 @@ import androidx.compose.material.icons.outlined.OpenInBrowser
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -78,6 +76,8 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -88,13 +88,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -110,9 +113,15 @@ import androidx.webkit.WebViewFeature
 import com.deskcubby.app.R
 import com.deskcubby.app.data.local.BrowserRecordEntity
 import com.deskcubby.app.data.model.BrowserTheme
+import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.ui.components.AppEmptyState
+import com.deskcubby.app.ui.components.AppLoadingIndicator
+import com.deskcubby.app.ui.theme.LocalVisualStyle
+import com.deskcubby.app.ui.theme.organicFutureColorScheme
 import com.deskcubby.app.ui.theme.tr
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 @Composable
 fun BlogScreen(
@@ -131,6 +140,15 @@ fun BlogScreen(
     var toolbarMenu by remember { mutableStateOf(false) }
     var tabsMenu by remember { mutableStateOf(false) }
     var pendingFileRequest by remember { mutableStateOf<PendingFileRequest?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+    val noExternalBrowserMessage = tr("没有可用的外部浏览器", "No external browser is available")
+    val downloadQueuedMessage = tr("已加入下载队列", "Added to downloads")
+    val downloadFailedMessage = tr("下载失败", "Download failed")
+
+    fun showBrowserMessage(message: String) {
+        coroutineScope.launch { snackbarHostState.showSnackbar(message) }
+    }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val request = pendingFileRequest
@@ -152,7 +170,7 @@ fun BlogScreen(
                 .padding(bottom = padding.calculateBottomPadding()),
             contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
-            CircularProgressIndicator()
+            AppLoadingIndicator()
         }
         return
     }
@@ -232,6 +250,7 @@ fun BlogScreen(
     Scaffold(
         modifier = Modifier.padding(bottom = padding.calculateBottomPadding()).imePadding(),
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             Column(
                 Modifier
@@ -409,7 +428,12 @@ fun BlogScreen(
                                 text = { Text(tr("用外部浏览器打开", "Open externally")) },
                                 leadingIcon = { Icon(Icons.Outlined.OpenInBrowser, null) },
                                 enabled = !isBlankPage,
-                                onClick = { toolbarMenu = false; openExternal(context, currentTab.url) },
+                                onClick = {
+                                    toolbarMenu = false
+                                    if (!openExternal(context, currentTab.url)) {
+                                        showBrowserMessage(noExternalBrowserMessage)
+                                    }
+                                },
                             )
                         }
                     }
@@ -493,6 +517,18 @@ fun BlogScreen(
                                     false
                                 }
                             },
+                            onDownloadResult = { result ->
+                                val detail = result.exceptionOrNull()?.localizedMessage
+                                showBrowserMessage(
+                                    if (result.isSuccess) {
+                                        downloadQueuedMessage
+                                    } else if (detail.isNullOrBlank()) {
+                                        downloadFailedMessage
+                                    } else {
+                                        "$downloadFailedMessage：$detail"
+                                    },
+                                )
+                            },
                         )
                     }
                 }
@@ -572,25 +608,44 @@ private fun BrowserStartPage(
     modifier: Modifier = Modifier,
     onOpen: (String) -> Unit,
 ) {
-    val background = if (dark) Color(0xFF121212) else Color(0xFFF8FAF8)
-    val foreground = if (dark) Color(0xFFEAEAEA) else Color(0xFF202320)
-    val secondary = if (dark) Color(0xFFB8B8B8) else Color(0xFF5D625D)
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    val content: @Composable () -> Unit = {
+        val palette = browserChromePalette(dark)
 
-    Box(modifier.background(background)) {
-        Image(
-            painter = painterResource(R.drawable.ic_launcher_art),
-            contentDescription = null,
-            alpha = if (dark) 0.12f else 0.08f,
-            modifier = Modifier
-                .size(260.dp)
-                .align(androidx.compose.ui.Alignment.Center),
-        )
-        if (favorites.isEmpty()) {
-            Text(
-                text = tr("暂无书签", "No bookmarks yet"),
-                color = secondary,
-                modifier = Modifier.align(androidx.compose.ui.Alignment.Center),
+        Box(modifier.background(palette.background)) {
+        if (!organic || favorites.isNotEmpty()) {
+            Image(
+                painter = painterResource(R.drawable.ic_launcher_art),
+                contentDescription = null,
+                alpha = if (dark) 0.12f else 0.08f,
+                colorFilter = if (organic) {
+                    ColorFilter.tint(organicFutureColorScheme(dark).primary)
+                } else {
+                    null
+                },
+                modifier = Modifier
+                    .size(260.dp)
+                    .align(androidx.compose.ui.Alignment.Center),
             )
+        }
+        if (favorites.isEmpty()) {
+            if (organic) {
+                AppEmptyState(
+                    icon = Icons.Outlined.BookmarkBorder,
+                    title = tr("收藏夹还是空的", "Your favorites are empty"),
+                    description = tr(
+                        "收藏常用网页后，可以从这里快速打开。",
+                        "Favorite useful pages to open them quickly from here.",
+                    ),
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Text(
+                    text = tr("暂无书签", "No bookmarks yet"),
+                    color = palette.secondary,
+                    modifier = Modifier.align(androidx.compose.ui.Alignment.Center),
+                )
+            }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -599,7 +654,7 @@ private fun BrowserStartPage(
                 item {
                     Text(
                         text = tr("书签", "Bookmarks"),
-                        color = foreground,
+                        color = palette.foreground,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     )
@@ -612,12 +667,12 @@ private fun BrowserStartPage(
                         Column(Modifier.fillMaxWidth()) {
                             Text(
                                 text = favorite.title.ifBlank { favorite.url },
-                                color = foreground,
+                                color = palette.foreground,
                                 maxLines = 1,
                             )
                             Text(
                                 text = favorite.url,
-                                color = secondary,
+                                color = palette.secondary,
                                 style = MaterialTheme.typography.bodySmall,
                                 maxLines = 1,
                             )
@@ -627,6 +682,13 @@ private fun BrowserStartPage(
             }
         }
     }
+    }
+
+    if (organic) {
+        MaterialTheme(colorScheme = organicFutureColorScheme(dark)) { content() }
+    } else {
+        content()
+    }
 }
 
 @Composable
@@ -635,37 +697,82 @@ private fun BrowserRendererGonePage(
     modifier: Modifier = Modifier,
     onReload: () -> Unit,
 ) {
-    val background = if (dark) Color(0xFF121212) else Color(0xFFF8FAF8)
-    val foreground = if (dark) Color(0xFFEAEAEA) else Color(0xFF202320)
-    val secondary = if (dark) Color(0xFFB8B8B8) else Color(0xFF5D625D)
+    val palette = browserChromePalette(dark)
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
 
-    Box(
-        modifier = modifier.background(background),
-        contentAlignment = androidx.compose.ui.Alignment.Center,
-    ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+    if (organic) {
+        MaterialTheme(colorScheme = organicFutureColorScheme(dark)) {
+            AppEmptyState(
+                icon = Icons.Outlined.Refresh,
+                title = tr("网页渲染进程已停止", "The page renderer stopped"),
+                description = tr(
+                    "应用仍可继续使用，准备好后重新加载此网页。",
+                    "The app can continue. Reload this page when ready.",
+                ),
+                actionLabel = tr("重新加载", "Reload"),
+                onAction = onReload,
+                modifier = modifier.background(palette.background),
+            )
+        }
+    } else {
+        Box(
+            modifier = modifier.background(palette.background),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
-            Text(
-                text = tr("网页渲染进程已停止", "The page renderer stopped"),
-                color = foreground,
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = tr("应用仍可继续使用，点击后再重新加载此网页。", "The app can continue. Reload this page when ready."),
-                color = secondary,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-            TextButton(
-                onClick = onReload,
-                modifier = Modifier.padding(top = 8.dp),
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
             ) {
-                Icon(Icons.Outlined.Refresh, null)
-                Text(tr("重新加载", "Reload"))
+                Text(
+                    text = tr("网页渲染进程已停止", "The page renderer stopped"),
+                    color = palette.foreground,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = tr("应用仍可继续使用，点击后再重新加载此网页。", "The app can continue. Reload this page when ready."),
+                    color = palette.secondary,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                TextButton(
+                    onClick = onReload,
+                    modifier = Modifier.padding(top = 8.dp),
+                ) {
+                    Icon(Icons.Outlined.Refresh, null)
+                    Text(tr("重新加载", "Reload"))
+                }
             }
         }
+    }
+}
+
+private data class BrowserChromePalette(
+    val background: Color,
+    val foreground: Color,
+    val secondary: Color,
+)
+
+@Composable
+private fun browserChromePalette(dark: Boolean): BrowserChromePalette {
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    return when {
+        organic -> organicFutureColorScheme(dark).let { scheme ->
+            BrowserChromePalette(
+                background = scheme.background,
+                foreground = scheme.onBackground,
+                secondary = scheme.onSurfaceVariant,
+            )
+        }
+        dark -> BrowserChromePalette(
+            background = Color(0xFF121212),
+            foreground = Color(0xFFEAEAEA),
+            secondary = Color(0xFFB8B8B8),
+        )
+        else -> BrowserChromePalette(
+            background = Color(0xFFF8FAF8),
+            foreground = Color(0xFF202320),
+            secondary = Color(0xFF5D625D),
+        )
     }
 }
 
@@ -688,15 +795,26 @@ private fun BrowserWebPage(
     onStateChanged: (Long, String, String, Int, Boolean, Boolean) -> Unit,
     onPageFinished: (Long, String, String, Boolean, Boolean) -> Unit,
     onChooseFile: (Long, ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams) -> Boolean,
+    onDownloadResult: (Result<Long>) -> Unit,
 ) {
     val baseContext = LocalContext.current
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     val latestOnCreated by rememberUpdatedState(onWebViewCreated)
     val latestOnDisposed by rememberUpdatedState(onWebViewDisposed)
     val latestOnRenderProcessGone by rememberUpdatedState(onRenderProcessGone)
     val latestOnStateChanged by rememberUpdatedState(onStateChanged)
     val latestOnPageFinished by rememberUpdatedState(onPageFinished)
     val latestOnChooseFile by rememberUpdatedState(onChooseFile)
-    val renderConfig = BrowserRenderingConfig(dark = dark, desktopMode = desktopMode)
+    val latestOnDownloadResult by rememberUpdatedState(onDownloadResult)
+    val renderConfig = BrowserRenderingConfig(
+        dark = dark,
+        desktopMode = desktopMode,
+        backgroundColor = if (organic) {
+            organicFutureColorScheme(dark).background.toArgb()
+        } else {
+            browserWebBackground(dark)
+        },
+    )
     val releaseGuard = remember(tabId) { WebViewReleaseGuard() }
 
     AndroidView(
@@ -775,7 +893,9 @@ private fun BrowserWebPage(
                     ): Boolean = latestOnChooseFile(tabId, filePathCallback, fileChooserParams)
                 }
                 setDownloadListener(DownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-                    enqueueDownload(ctx, url, userAgent, contentDisposition, mimeType)
+                    latestOnDownloadResult(
+                        enqueueDownload(ctx, url, userAgent, contentDisposition, mimeType),
+                    )
                 })
                 loadUrl(initialUrl)
             }
@@ -828,7 +948,13 @@ private fun releaseWebView(
 private data class BrowserRenderingConfig(
     val dark: Boolean,
     val desktopMode: Boolean,
+    val backgroundColor: Int,
 )
+
+private fun browserWebBackground(dark: Boolean): Int = when {
+    dark -> 0xFF121212.toInt()
+    else -> 0xFFFFFFFF.toInt()
+}
 
 private fun browserThemedContext(base: Context, dark: Boolean): Context {
     val overrideConfiguration = Configuration(base.resources.configuration).apply {
@@ -866,7 +992,7 @@ private fun applyBrowserRenderingConfig(view: WebView, config: BrowserRenderingC
     }
     webSettings.useWideViewPort = config.desktopMode
     webSettings.loadWithOverviewMode = config.desktopMode
-    view.setBackgroundColor(if (config.dark) 0xFF121212.toInt() else 0xFFFFFFFF.toInt())
+    view.setBackgroundColor(config.backgroundColor)
 }
 
 private fun desktopUserAgent(context: Context): String = WebSettings.getDefaultUserAgent(context)
@@ -926,23 +1052,25 @@ private fun BrowserRecordsDialog(
     )
 }
 
-private fun openExternal(context: Context, url: String) {
-    if (url.isBlank()) return
-    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-        .onFailure { Toast.makeText(context, "没有可用的外部浏览器", Toast.LENGTH_SHORT).show() }
+private fun openExternal(context: Context, url: String): Boolean {
+    if (url.isBlank()) return false
+    return runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.isSuccess
 }
 
-private fun enqueueDownload(context: Context, url: String, userAgent: String?, disposition: String?, mimeType: String?) {
-    runCatching {
-        val safeName = URLUtil.guessFileName(url, disposition, mimeType).replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        val request = DownloadManager.Request(Uri.parse(url))
-            .setMimeType(mimeType)
-            .setTitle(safeName)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, safeName)
-        userAgent?.takeIf(String::isNotBlank)?.let { request.addRequestHeader("User-Agent", it) }
-        CookieManager.getInstance().getCookie(url)?.takeIf(String::isNotBlank)?.let { request.addRequestHeader("Cookie", it) }
-        (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-        Toast.makeText(context, "已加入下载队列", Toast.LENGTH_SHORT).show()
-    }.onFailure { Toast.makeText(context, "下载失败：${it.message}", Toast.LENGTH_SHORT).show() }
+private fun enqueueDownload(
+    context: Context,
+    url: String,
+    userAgent: String?,
+    disposition: String?,
+    mimeType: String?,
+): Result<Long> = runCatching {
+    val safeName = URLUtil.guessFileName(url, disposition, mimeType).replace(Regex("[\\\\/:*?\"<>|]"), "_")
+    val request = DownloadManager.Request(Uri.parse(url))
+        .setMimeType(mimeType)
+        .setTitle(safeName)
+        .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, safeName)
+    userAgent?.takeIf(String::isNotBlank)?.let { request.addRequestHeader("User-Agent", it) }
+    CookieManager.getInstance().getCookie(url)?.takeIf(String::isNotBlank)?.let { request.addRequestHeader("Cookie", it) }
+    (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
 }

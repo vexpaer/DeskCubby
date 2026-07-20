@@ -1,6 +1,6 @@
 package com.deskcubby.app.data.model
 
-enum class VisualStyle { MATERIAL, LIQUID_GLASS }
+enum class VisualStyle { MATERIAL, LIQUID_GLASS, ORGANIC_FUTURE }
 
 enum class DarkMode { SYSTEM, LIGHT, DARK }
 

@@ -7,6 +7,7 @@ import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.VisualStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.fail
@@ -20,6 +21,7 @@ class BackupJsonCodecTest {
     @Test
     fun roundTripPreservesContentButNotDeviceBackupFolder() {
         val settings = AppSettings(
+            visualStyle = VisualStyle.ORGANIC_FUTURE,
             backupTreeUri = "content://device-only-backup-folder",
             diaryTreeUri = "content://diaries",
             mediaTreeUri = "content://media",
@@ -101,7 +103,8 @@ class BackupJsonCodecTest {
         assertEquals(listOf("🥐", "🍜", "🍲", "🍓", "🍢"), decoded.settings.mealButtonIcons)
         assertEquals(false, decoded.settings.mealImageCompressionEnabled)
         assertEquals(65, decoded.settings.mealImageCompressionQuality)
-        assertEquals(6, decoded.formatVersion)
+        assertEquals(VisualStyle.ORGANIC_FUTURE, decoded.settings.visualStyle)
+        assertEquals(7, decoded.formatVersion)
         assertEquals(40L, decoded.exportedAt)
     }
 
@@ -319,6 +322,27 @@ class BackupJsonCodecTest {
         assertEquals("旧版用户", decoded.settings.userName)
         assertEquals(defaults.mealImageCompressionEnabled, decoded.settings.mealImageCompressionEnabled)
         assertEquals(defaults.mealImageCompressionQuality, decoded.settings.mealImageCompressionQuality)
+    }
+
+    @Test
+    fun importsVersionSixBackupWithLegacyVisualStyle() {
+        val versionSix = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 6,
+                    settings = AppSettings(visualStyle = VisualStyle.LIQUID_GLASS),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        ).apply {
+            put("version", 6)
+        }.toString()
+
+        val decoded = BackupJsonCodec.decode(versionSix)
+
+        assertEquals(6, decoded.formatVersion)
+        assertEquals(VisualStyle.LIQUID_GLASS, decoded.settings.visualStyle)
     }
 
     @Test

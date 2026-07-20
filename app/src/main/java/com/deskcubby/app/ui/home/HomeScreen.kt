@@ -8,6 +8,7 @@ package com.deskcubby.app.ui.home
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -84,9 +85,12 @@ import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.DailyPoem
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.theme.GlassPanel
+import com.deskcubby.app.ui.theme.LocalVisualStyle
+import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.tr
 import com.deskcubby.app.ui.thought.ThoughtCategoryFilter
 import com.deskcubby.app.ui.thought.ThoughtCategoryPickerDialog
@@ -155,6 +159,7 @@ fun HomeScreen(
     onMealButtonIconsChanged: (List<String>) -> Unit,
 ) {
     val context = LocalContext.current
+    val organic = settings.visualStyle == VisualStyle.ORGANIC_FUTURE
     val diaries by viewModel.diaries.collectAsStateWithLifecycle()
     val thoughts by viewModel.thoughts.collectAsStateWithLifecycle()
     val thoughtCategories by viewModel.thoughtCategories.collectAsStateWithLifecycle()
@@ -297,6 +302,8 @@ fun HomeScreen(
                     Column {
                         Text(
                             text = homeGreeting(settings),
+                            style = if (organic) MaterialTheme.typography.headlineSmall
+                            else MaterialTheme.typography.titleLarge,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -538,11 +545,16 @@ private fun WidgetCard(
     showBorder: Boolean,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     if (showBorder) {
         GlassPanel(modifier = Modifier.fillMaxWidth(), padding = PaddingValues(16.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (showTitle) {
-                    Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (organic) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
+                    )
                 }
                 content()
             }
@@ -555,7 +567,11 @@ private fun WidgetCard(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (showTitle) {
-                    Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (organic) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
+                    )
                 }
                 content()
             }
@@ -712,6 +728,8 @@ private fun MealPhotosWidget(
     onUseIconsChanged: (Boolean) -> Unit,
     onIconsChanged: (List<String>) -> Unit,
 ) {
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    val visuals = deskCubbyVisuals
     var editingIconIndex by rememberSaveable { mutableStateOf<Int?>(null) }
     var iconDraft by rememberSaveable { mutableStateOf("") }
     val displayedIcons = mealQuickActions.mapIndexed { index, action ->
@@ -765,7 +783,7 @@ private fun MealPhotosWidget(
                             },
                             onLongClick = if (editing) null else ({ onTakePhoto(action) }),
                         ),
-                    shape = MaterialTheme.shapes.medium,
+                    shape = if (organic) visuals.badgeShape else MaterialTheme.shapes.medium,
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                 ) {
@@ -850,6 +868,8 @@ private fun homeGreeting(settings: AppSettings): String {
 
 @Composable
 private fun MonthCalendar(today: LocalDate) {
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    val visuals = deskCubbyVisuals
     val month = YearMonth.from(today)
     val firstOffset = month.atDay(1).dayOfWeek.value - 1
     val cells = List(firstOffset) { 0 } + (1..month.lengthOfMonth()).toList()
@@ -863,9 +883,25 @@ private fun MonthCalendar(today: LocalDate) {
             week.forEach { day ->
                 Text(
                     text = if (day == 0) "" else day.toString(),
-                    modifier = Modifier.weight(1f).padding(5.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(5.dp)
+                        .then(
+                            if (organic && day == today.dayOfMonth) {
+                                Modifier.background(
+                                    MaterialTheme.colorScheme.primaryContainer,
+                                    visuals.badgeShape,
+                                )
+                            } else {
+                                Modifier
+                            },
+                        ),
                     textAlign = TextAlign.Center,
-                    color = if (day == today.dayOfMonth) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    color = when {
+                        organic && day == today.dayOfMonth -> MaterialTheme.colorScheme.onPrimaryContainer
+                        day == today.dayOfMonth -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurface
+                    },
                 )
             }
             repeat(7 - week.size) { Spacer(Modifier.weight(1f)) }

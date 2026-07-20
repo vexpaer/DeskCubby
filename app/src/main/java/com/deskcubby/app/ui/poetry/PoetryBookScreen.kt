@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.local.SavedPoemEntity
+import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.tr
 
@@ -192,29 +193,17 @@ fun PoetryBookScreen(
 
 @Composable
 private fun EmptyPoetryBook(modifier: Modifier, onAdd: () -> Unit) {
-    Box(modifier, contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = Icons.Outlined.MenuBook,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(52.dp),
-            )
-            Spacer(Modifier.height(12.dp))
-            Text(tr("诗词本还是空的", "Your poetry book is empty"), style = MaterialTheme.typography.titleMedium)
-            Text(
-                tr("收藏每日诗词，或手动写下喜欢的句子", "Save the daily poem or add a favorite verse"),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp),
-            )
-            Button(onClick = onAdd) {
-                Icon(Icons.Outlined.Add, null)
-                Spacer(Modifier.width(8.dp))
-                Text(tr("添加诗词", "Add poem"))
-            }
-        }
-    }
+    AppEmptyState(
+        icon = Icons.Outlined.MenuBook,
+        title = tr("诗词本还是空的", "Your poetry book is empty"),
+        description = tr(
+            "收藏每日诗词，或手动写下喜欢的句子",
+            "Save the daily poem or add a favorite verse",
+        ),
+        actionLabel = tr("添加诗词", "Add poem"),
+        onAction = onAdd,
+        modifier = modifier,
+    )
 }
 
 @Composable

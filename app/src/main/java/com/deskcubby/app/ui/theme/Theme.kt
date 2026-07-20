@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -23,8 +25,11 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalView
@@ -86,6 +91,8 @@ private val GlassDark = darkColorScheme(
     surfaceVariant = Color(0xFF444654),
 )
 
+private val DefaultShapes = Shapes()
+
 @Composable
 fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
     val dark = when (settings.darkMode) {
@@ -93,19 +100,18 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
         DarkMode.LIGHT -> false
         DarkMode.DARK -> true
     }
-    val baseScheme = when (settings.visualStyle) {
-        VisualStyle.MATERIAL -> if (dark) MaterialDark else MaterialLight
-        VisualStyle.LIQUID_GLASS -> if (dark) GlassDark else GlassLight
+    val scheme = resolveColorScheme(settings.visualStyle, dark, settings.themeColorArgb)
+    val typography = if (settings.visualStyle == VisualStyle.ORGANIC_FUTURE) {
+        OrganicFutureTypography
+    } else {
+        AppTypography
     }
-    val accent = Color(settings.themeColorArgb)
-    val onAccent = if (accent.luminance() > 0.48f) Color.Black else Color.White
-    val scheme = baseScheme.copy(
-        primary = accent,
-        onPrimary = onAccent,
-        primaryContainer = lerp(accent, if (dark) Color.Black else Color.White, if (dark) 0.48f else 0.72f),
-        onPrimaryContainer = if (dark) Color.White else Color.Black,
-        secondary = lerp(accent, baseScheme.onSurface, 0.35f),
-    )
+    val shapes = if (settings.visualStyle == VisualStyle.ORGANIC_FUTURE) {
+        OrganicFutureShapes
+    } else {
+        DefaultShapes
+    }
+    val visualTokens = visualTokensFor(settings.visualStyle)
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
@@ -124,9 +130,45 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
     androidx.compose.runtime.CompositionLocalProvider(
         LocalVisualStyle provides settings.visualStyle,
         LocalAppLanguage provides settings.appLanguage,
+        LocalDeskCubbyVisuals provides visualTokens,
     ) {
-        MaterialTheme(colorScheme = scheme, typography = AppTypography, content = content)
+        MaterialTheme(
+            colorScheme = scheme,
+            typography = typography,
+            shapes = shapes,
+            content = content,
+        )
     }
+}
+
+internal fun resolveColorScheme(
+    visualStyle: VisualStyle,
+    dark: Boolean,
+    themeColorArgb: Int,
+): ColorScheme {
+    val baseScheme = when (visualStyle) {
+        VisualStyle.MATERIAL -> if (dark) MaterialDark else MaterialLight
+        VisualStyle.LIQUID_GLASS -> if (dark) GlassDark else GlassLight
+        VisualStyle.ORGANIC_FUTURE -> organicFutureColorScheme(dark)
+    }
+    if (visualStyle == VisualStyle.ORGANIC_FUTURE) {
+        // Organic Future keeps a deliberate emerald identity instead of inheriting a previously
+        // selected blue, pink, or purple accent from the other visual styles.
+        return baseScheme
+    }
+    val accent = Color(themeColorArgb)
+    val onAccent = if (accent.luminance() > 0.48f) Color.Black else Color.White
+    return baseScheme.copy(
+        primary = accent,
+        onPrimary = onAccent,
+        primaryContainer = lerp(
+            accent,
+            if (dark) Color.Black else Color.White,
+            if (dark) 0.48f else 0.72f,
+        ),
+        onPrimaryContainer = if (dark) Color.White else Color.Black,
+        secondary = lerp(accent, baseScheme.onSurface, 0.35f),
+    )
 }
 
 @Composable
@@ -143,39 +185,66 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 fun GlassPanel(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 24.dp,
+    role: PanelRole = PanelRole.STANDARD,
     padding: PaddingValues = PaddingValues(0.dp),
     content: @Composable BoxScope.() -> Unit,
 ) {
-    val glass = LocalVisualStyle.current == VisualStyle.LIQUID_GLASS
-    val shape = RoundedCornerShape(cornerRadius)
-    val scheme = MaterialTheme.colorScheme
-    val panelModifier = if (glass) {
-        modifier
-            .shadow(10.dp, shape, ambientColor = scheme.primary.copy(alpha = 0.16f))
-            .clip(shape)
-            .background(
-                Brush.linearGradient(
-                    listOf(
-                        scheme.surface.copy(alpha = 0.86f),
-                        scheme.primaryContainer.copy(alpha = 0.52f),
-                        scheme.surface.copy(alpha = 0.72f),
-                    ),
-                ),
-            )
-            .border(
-                BorderStroke(
-                    1.dp,
-                    Brush.linearGradient(
-                        listOf(Color.White.copy(alpha = 0.58f), scheme.primary.copy(alpha = 0.18f)),
-                    ),
-                ),
-                shape,
-            )
+    val style = LocalVisualStyle.current
+    val visuals = LocalDeskCubbyVisuals.current
+    val shape = if (style == VisualStyle.ORGANIC_FUTURE) {
+        organicPanelShape(cornerRadius, role)
     } else {
-        modifier
-            .shadow(1.dp, shape)
-            .clip(shape)
-            .background(scheme.surfaceContainer)
+        RoundedCornerShape(cornerRadius)
+    }
+    val scheme = MaterialTheme.colorScheme
+    val panelModifier = when (style) {
+        VisualStyle.LIQUID_GLASS -> modifier
+                .shadow(10.dp, shape, ambientColor = scheme.primary.copy(alpha = 0.16f))
+                .clip(shape)
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            scheme.surface.copy(alpha = 0.86f),
+                            scheme.primaryContainer.copy(alpha = 0.52f),
+                            scheme.surface.copy(alpha = 0.72f),
+                        ),
+                    ),
+                )
+                .border(
+                    BorderStroke(
+                        1.dp,
+                        Brush.linearGradient(
+                            listOf(Color.White.copy(alpha = 0.58f), scheme.primary.copy(alpha = 0.18f)),
+                        ),
+                    ),
+                    shape,
+                )
+
+        VisualStyle.ORGANIC_FUTURE -> modifier
+                .shadow(
+                    elevation = visuals.panelElevation,
+                    shape = shape,
+                    ambientColor = scheme.primary.copy(alpha = 0.08f),
+                    spotColor = scheme.primary.copy(alpha = 0.05f),
+                )
+                .clip(shape)
+                .background(scheme.surfaceContainer)
+                .drawBehind {
+                    drawOval(
+                        color = scheme.primary.copy(alpha = 0.035f),
+                        topLeft = Offset(size.width * 0.64f, -size.height * 0.22f),
+                        size = Size(size.width * 0.48f, size.height * 0.72f),
+                    )
+                }
+                .border(
+                    BorderStroke(visuals.borderWidth, scheme.outlineVariant.copy(alpha = 0.82f)),
+                    shape,
+                )
+
+        VisualStyle.MATERIAL -> modifier
+                .shadow(1.dp, shape)
+                .clip(shape)
+                .background(scheme.surfaceContainer)
     }
     Box(panelModifier.padding(padding), content = content)
 }

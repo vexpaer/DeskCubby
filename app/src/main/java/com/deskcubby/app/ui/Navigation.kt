@@ -2,6 +2,16 @@
 
 package com.deskcubby.app.ui
 
+import android.animation.ValueAnimator
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -35,7 +45,6 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -55,6 +64,7 @@ import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.ui.blog.BlogScreen
 import com.deskcubby.app.ui.blog.BlogViewModel
+import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.diary.DiaryEditorScreen
 import com.deskcubby.app.ui.diary.DiaryListScreen
 import com.deskcubby.app.ui.diary.DiaryViewModel
@@ -70,6 +80,8 @@ import com.deskcubby.app.ui.theme.DeskCubbyTheme
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.LocalVisualStyle
+import com.deskcubby.app.ui.theme.PanelRole
+import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.thought.ThoughtScreen
 import com.deskcubby.app.ui.thought.ThoughtTrashScreen
 import com.deskcubby.app.ui.thought.ThoughtViewModel
@@ -94,12 +106,15 @@ fun DeskCubbyRoot(
     DeskCubbyTheme(settings) {
         if (!ready) {
             Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                CircularProgressIndicator()
+                AppLoadingIndicator()
             }
             return@DeskCubbyTheme
         }
         val navController = rememberNavController()
         val initialStartDestination = remember { settings.defaultPage.route }
+        val systemAnimationsEnabled = remember { ValueAnimator.areAnimatorsEnabled() }
+        val organicMotionEnabled = settings.visualStyle == VisualStyle.ORGANIC_FUTURE &&
+            systemAnimationsEnabled
         val backStack by navController.currentBackStackEntryAsState()
         val route = backStack?.destination?.route
         val visibleTabs = settings.navItems.filter { it.visible || it.id == NavItemId.SETTINGS }
@@ -132,6 +147,42 @@ fun DeskCubbyRoot(
                     navController = navController,
                     startDestination = initialStartDestination,
                     modifier = Modifier.fillMaxSize(),
+                    enterTransition = {
+                        when {
+                            organicMotionEnabled -> fadeIn(tween(340)) +
+                                slideInHorizontally(tween(340)) { it / 20 } +
+                                scaleIn(tween(340), initialScale = 0.992f)
+                            settings.visualStyle == VisualStyle.ORGANIC_FUTURE -> EnterTransition.None
+                            else -> fadeIn(tween(700))
+                        }
+                    },
+                    exitTransition = {
+                        when {
+                            organicMotionEnabled -> fadeOut(tween(300)) +
+                                slideOutHorizontally(tween(340)) { -it / 28 } +
+                                scaleOut(tween(340), targetScale = 1.008f)
+                            settings.visualStyle == VisualStyle.ORGANIC_FUTURE -> ExitTransition.None
+                            else -> fadeOut(tween(700))
+                        }
+                    },
+                    popEnterTransition = {
+                        when {
+                            organicMotionEnabled -> fadeIn(tween(340)) +
+                                slideInHorizontally(tween(340)) { -it / 20 } +
+                                scaleIn(tween(340), initialScale = 0.992f)
+                            settings.visualStyle == VisualStyle.ORGANIC_FUTURE -> EnterTransition.None
+                            else -> fadeIn(tween(700))
+                        }
+                    },
+                    popExitTransition = {
+                        when {
+                            organicMotionEnabled -> fadeOut(tween(300)) +
+                                slideOutHorizontally(tween(340)) { it / 28 } +
+                                scaleOut(tween(340), targetScale = 1.008f)
+                            settings.visualStyle == VisualStyle.ORGANIC_FUTURE -> ExitTransition.None
+                            else -> fadeOut(tween(700))
+                        }
+                    },
                 ) {
                     composable(NavItemId.HOME.route) {
                         HomeScreen(
@@ -195,15 +246,19 @@ private fun DeskBottomBar(
     showLabels: Boolean,
     onSelected: (NavItemConfig) -> Unit,
 ) {
-    val glass = LocalVisualStyle.current == VisualStyle.LIQUID_GLASS
+    val style = LocalVisualStyle.current
+    val glass = style == VisualStyle.LIQUID_GLASS
+    val organic = style == VisualStyle.ORGANIC_FUTURE
+    val floatingPanel = glass || organic
     val language = LocalAppLanguage.current
+    val visuals = deskCubbyVisuals
     val content: @Composable () -> Unit = {
         NavigationBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(if (showLabels) Modifier else Modifier.height(56.dp)),
-            containerColor = if (glass) Color.Transparent else MaterialTheme.colorScheme.surfaceContainer,
-            tonalElevation = if (glass) 0.dp else 3.dp,
+            containerColor = if (floatingPanel) Color.Transparent else MaterialTheme.colorScheme.surfaceContainer,
+            tonalElevation = if (floatingPanel) 0.dp else 3.dp,
             windowInsets = WindowInsets(0, 0, 0, 0),
         ) {
             items.forEach { item ->
@@ -223,24 +278,41 @@ private fun DeskBottomBar(
                     },
                     alwaysShowLabel = showLabels,
                     colors = NavigationBarItemDefaults.colors(
-                        indicatorColor = if (glass) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
-                        else MaterialTheme.colorScheme.secondaryContainer,
+                        selectedIconColor = if (organic) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSecondaryContainer,
+                        selectedTextColor = if (organic) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+                        indicatorColor = when {
+                            glass -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+                            organic -> MaterialTheme.colorScheme.primaryContainer
+                            else -> MaterialTheme.colorScheme.secondaryContainer
+                        },
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     ),
                 )
             }
         }
     }
 
-    if (glass) {
+    if (floatingPanel) {
         Box(
             Modifier
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-                .padding(horizontal = 12.dp, vertical = if (showLabels) 8.dp else 4.dp),
+                .padding(
+                    horizontal = if (organic) 10.dp else 12.dp,
+                    vertical = if (showLabels) {
+                        if (organic) 6.dp else 8.dp
+                    } else {
+                        4.dp
+                    },
+                ),
         ) {
             GlassPanel(
                 modifier = Modifier.fillMaxWidth(),
                 cornerRadius = 28.dp,
+                role = if (organic) PanelRole.FEATURE else PanelRole.STANDARD,
                 padding = PaddingValues(0.dp),
             ) { content() }
         }

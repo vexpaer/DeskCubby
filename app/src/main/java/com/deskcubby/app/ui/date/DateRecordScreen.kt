@@ -65,8 +65,12 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.local.DateRecordEntity
 import com.deskcubby.app.data.model.AppLanguage
+import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
+import com.deskcubby.app.ui.theme.LocalVisualStyle
+import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.tr
 import java.time.Instant
 import java.time.LocalDate
@@ -188,29 +192,17 @@ fun DateRecordScreen(
 
 @Composable
 private fun EmptyDates(modifier: Modifier, onAdd: () -> Unit) {
-    Box(modifier, contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = Icons.Outlined.CalendarMonth,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(52.dp),
-            )
-            Spacer(Modifier.height(12.dp))
-            Text(tr("还没有日期记录", "No dates yet"), style = MaterialTheme.typography.titleMedium)
-            Text(
-                tr("添加纪念日、目标日或其他重要日期", "Add an anniversary, goal, or important date"),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp),
-            )
-            Button(onClick = onAdd) {
-                Icon(Icons.Outlined.Add, null)
-                Spacer(Modifier.width(8.dp))
-                Text(tr("添加日期", "Add date"))
-            }
-        }
-    }
+    AppEmptyState(
+        icon = Icons.Outlined.CalendarMonth,
+        title = tr("还没有日期记录", "No dates yet"),
+        description = tr(
+            "添加纪念日、目标日或其他重要日期",
+            "Add an anniversary, goal, or important date",
+        ),
+        actionLabel = tr("添加日期", "Add date"),
+        onAction = onAdd,
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -219,6 +211,8 @@ private fun DateRecordCard(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    val visuals = deskCubbyVisuals
     val target = remember(record.dateIso) { runCatching { LocalDate.parse(record.dateIso) }.getOrNull() }
     val today = LocalDate.now()
     val language = LocalAppLanguage.current
@@ -237,7 +231,7 @@ private fun DateRecordCard(
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Surface(
-                shape = MaterialTheme.shapes.large,
+                shape = if (organic) visuals.badgeShape else MaterialTheme.shapes.large,
                 color = MaterialTheme.colorScheme.primaryContainer,
                 modifier = Modifier.size(52.dp),
             ) {

@@ -43,7 +43,6 @@ import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.ViewWeek
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -98,9 +97,11 @@ import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.iconFor
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.theme.GlassPanel
+import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.tr
 import java.text.DateFormat
 import java.text.SimpleDateFormat
@@ -578,7 +579,7 @@ private fun BackupSettingsPage(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        AppLoadingIndicator(size = 20.dp, strokeWidth = 2.dp)
                         Text(tr("正在处理…", "Working…"))
                     }
                 }
@@ -645,9 +646,37 @@ private fun AppearanceSettingsPage(
                             selected = visualStyle == style,
                             onClick = { visualStyle = style },
                             shape = SegmentedButtonDefaults.itemShape(index, VisualStyle.entries.size),
-                        ) { Text(if (style == VisualStyle.MATERIAL) tr("安卓原生", "Material") else "Liquid Glass") }
+                        ) {
+                            Text(
+                                when (style) {
+                                    VisualStyle.MATERIAL -> tr("原生", "Material")
+                                    VisualStyle.LIQUID_GLASS -> tr("玻璃", "Glass")
+                                    VisualStyle.ORGANIC_FUTURE -> tr("有机未来", "Organic")
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                            )
+                        }
                     }
                 }
+                Text(
+                    when (visualStyle) {
+                        VisualStyle.MATERIAL -> tr(
+                            "安卓原生 · 清晰、直接的 Material 界面",
+                            "Material · Clear, direct Android UI",
+                        )
+                        VisualStyle.LIQUID_GLASS -> tr(
+                            "透明玻璃 · 轻盈的半透明层次",
+                            "Liquid Glass · Light translucent layers",
+                        )
+                        VisualStyle.ORGANIC_FUTURE -> tr(
+                            "有机未来 · 森林色、哑光有机面板与杂志式层级",
+                            "Organic Future · Forest tones, matte organic panels, and editorial type",
+                        )
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         item {
@@ -686,31 +715,55 @@ private fun AppearanceSettingsPage(
         }
         item {
             SettingsSection(tr("主题色", "Theme color")) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    presets.forEach { value ->
+                if (visualStyle == VisualStyle.ORGANIC_FUTURE) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Box(
                             Modifier
                                 .size(38.dp)
                                 .clip(CircleShape)
-                                .background(Color(value))
-                                .clickable { themeHex = colorToHex(value.toInt()) },
+                                .background(Color(0xFF72F28F)),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            tr(
+                                "Organic Future 使用专属祖母绿强调色；自定义颜色会保留给另外两套主题。",
+                                "Organic Future uses its own emerald accent; your custom color is kept for the other styles.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
                         )
                     }
+                } else {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        presets.forEach { value ->
+                            Box(
+                                Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(value))
+                                    .clickable { themeHex = colorToHex(value.toInt()) },
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = themeHex,
+                        onValueChange = { themeHex = it.take(7) },
+                        label = { Text(tr("自定义颜色", "Custom color")) },
+                        supportingText = { Text(tr("输入 #RRGGBB，例如 #42664D", "Enter #RRGGBB, for example #42664D")) },
+                        isError = parsedThemeColor == null,
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
-                OutlinedTextField(
-                    value = themeHex,
-                    onValueChange = { themeHex = it.take(7) },
-                    label = { Text(tr("自定义颜色", "Custom color")) },
-                    supportingText = { Text(tr("输入 #RRGGBB，例如 #42664D", "Enter #RRGGBB, for example #42664D")) },
-                    isError = parsedThemeColor == null,
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
             }
         }
         item {
-            SaveButton(enabled = parsedThemeColor != null) {
-                onSave(visualStyle, darkMode, language, requireNotNull(parsedThemeColor))
+            SaveButton(enabled = visualStyle == VisualStyle.ORGANIC_FUTURE || parsedThemeColor != null) {
+                onSave(visualStyle, darkMode, language, parsedThemeColor ?: settings.themeColorArgb)
             }
         }
     }
@@ -1127,9 +1180,14 @@ private fun NavigationSettingsPage(
 
 @Composable
 private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     GlassPanel(modifier = Modifier.fillMaxWidth(), padding = PaddingValues(16.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (organic) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
+            )
             content()
         }
     }
