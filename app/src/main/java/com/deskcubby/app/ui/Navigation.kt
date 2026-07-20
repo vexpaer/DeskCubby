@@ -2,12 +2,14 @@
 
 package com.deskcubby.app.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -19,6 +21,7 @@ import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Create
+import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.MenuBook
@@ -28,7 +31,6 @@ import androidx.compose.material.icons.outlined.ViewDay
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
@@ -56,8 +58,12 @@ import com.deskcubby.app.ui.blog.BlogViewModel
 import com.deskcubby.app.ui.diary.DiaryEditorScreen
 import com.deskcubby.app.ui.diary.DiaryListScreen
 import com.deskcubby.app.ui.diary.DiaryViewModel
+import com.deskcubby.app.ui.date.DateRecordScreen
+import com.deskcubby.app.ui.date.DateRecordViewModel
 import com.deskcubby.app.ui.home.HomeScreen
 import com.deskcubby.app.ui.home.HomeViewModel
+import com.deskcubby.app.ui.poetry.PoetryBookScreen
+import com.deskcubby.app.ui.poetry.PoetryBookViewModel
 import com.deskcubby.app.ui.settings.SettingsScreen
 import com.deskcubby.app.ui.settings.SettingsViewModel
 import com.deskcubby.app.ui.theme.DeskCubbyTheme
@@ -80,6 +86,8 @@ fun DeskCubbyRoot(
     thoughtViewModel: ThoughtViewModel = hiltViewModel(),
     blogViewModel: BlogViewModel = hiltViewModel(),
     homeViewModel: HomeViewModel = hiltViewModel(),
+    dateRecordViewModel: DateRecordViewModel = hiltViewModel(),
+    poetryBookViewModel: PoetryBookViewModel = hiltViewModel(),
 ) {
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val ready by settingsViewModel.ready.collectAsStateWithLifecycle()
@@ -113,6 +121,7 @@ fun DeskCubbyRoot(
                     DeskBottomBar(
                         items = visibleTabs,
                         selectedRoute = route,
+                        showLabels = settings.bottomNavShowLabels,
                         onSelected = { item -> navigateMain(item.id.route) },
                     )
                 }
@@ -132,8 +141,11 @@ fun DeskCubbyRoot(
                             onOpenDiary = { uri -> diaryViewModel.open(uri); navController.navigate(Routes.EDITOR) },
                             onOpenThoughts = { navController.navigate(NavItemId.THOUGHT.route) },
                             onOpenWebsite = { navController.navigate(NavItemId.BLOG.route) },
-                            onQuickThought = { text -> thoughtViewModel.submit(null, text) {} },
+                            onOpenDateRecords = { navController.navigate(NavItemId.DATE.route) },
                             onWidgetsChanged = settingsViewModel::setHomeWidgets,
+                            onWidgetTitlesChanged = settingsViewModel::setHomeWidgetTitles,
+                            onMealButtonsUseIconsChanged = settingsViewModel::setMealButtonsUseIcons,
+                            onMealButtonIconsChanged = settingsViewModel::setMealButtonIcons,
                         )
                     }
                     composable(NavItemId.DIARY.route) {
@@ -155,6 +167,12 @@ fun DeskCubbyRoot(
                             onTrash = { navController.navigate(Routes.THOUGHT_TRASH) },
                         )
                     }
+                    composable(NavItemId.DATE.route) {
+                        DateRecordScreen(padding = padding, viewModel = dateRecordViewModel)
+                    }
+                    composable(NavItemId.POETRY.route) {
+                        PoetryBookScreen(padding = padding, viewModel = poetryBookViewModel)
+                    }
                     composable(NavItemId.SETTINGS.route) {
                         SettingsScreen(padding = padding, viewModel = settingsViewModel)
                     }
@@ -174,16 +192,19 @@ fun DeskCubbyRoot(
 private fun DeskBottomBar(
     items: List<NavItemConfig>,
     selectedRoute: String?,
+    showLabels: Boolean,
     onSelected: (NavItemConfig) -> Unit,
 ) {
     val glass = LocalVisualStyle.current == VisualStyle.LIQUID_GLASS
     val language = LocalAppLanguage.current
     val content: @Composable () -> Unit = {
         NavigationBar(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (showLabels) Modifier else Modifier.height(56.dp)),
             containerColor = if (glass) Color.Transparent else MaterialTheme.colorScheme.surfaceContainer,
             tonalElevation = if (glass) 0.dp else 3.dp,
-            windowInsets = if (glass) WindowInsets(0, 0, 0, 0) else NavigationBarDefaults.windowInsets,
+            windowInsets = WindowInsets(0, 0, 0, 0),
         ) {
             items.forEach { item ->
                 val label = if (language == AppLanguage.ENGLISH && item.label.isDefaultLabelFor(item.id)) {
@@ -195,7 +216,12 @@ private fun DeskBottomBar(
                     selected = selectedRoute == item.id.route,
                     onClick = { onSelected(item) },
                     icon = { Icon(iconFor(item.iconKey), label) },
-                    label = { Text(label, maxLines = 1) },
+                    label = if (showLabels) {
+                        { Text(label, maxLines = 1) }
+                    } else {
+                        null
+                    },
+                    alwaysShowLabel = showLabels,
                     colors = NavigationBarItemDefaults.colors(
                         indicatorColor = if (glass) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
                         else MaterialTheme.colorScheme.secondaryContainer,
@@ -210,7 +236,7 @@ private fun DeskBottomBar(
             Modifier
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = if (showLabels) 8.dp else 4.dp),
         ) {
             GlassPanel(
                 modifier = Modifier.fillMaxWidth(),
@@ -219,7 +245,16 @@ private fun DeskBottomBar(
             ) { content() }
         }
     } else {
-        content()
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
+                ),
+        ) {
+            content()
+        }
     }
 }
 
@@ -231,8 +266,10 @@ fun iconFor(key: String): ImageVector = when (key) {
     "book" -> Icons.Outlined.Book
     "language" -> Icons.Outlined.Language
     "bolt" -> Icons.Outlined.Bolt
+    "poetry" -> Icons.Outlined.MenuBook
     "settings" -> Icons.Outlined.Settings
     "calendar" -> Icons.Outlined.CalendarMonth
+    "event" -> Icons.Outlined.Event
     "star" -> Icons.Outlined.Star
     "write" -> Icons.Outlined.Create
     "sparkle" -> Icons.Outlined.AutoAwesome

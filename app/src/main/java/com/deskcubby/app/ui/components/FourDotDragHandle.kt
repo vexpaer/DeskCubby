@@ -26,9 +26,11 @@ import com.deskcubby.app.ui.theme.tr
 fun FourDotDragHandle(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    onDragStarted: () -> Unit = {},
     onDragFinished: (verticalDistancePx: Float) -> Unit,
 ) {
     val description = tr("拖动排序", "Drag to reorder")
+    val currentOnDragStarted by rememberUpdatedState(onDragStarted)
     val currentOnDragFinished by rememberUpdatedState(onDragFinished)
     var distance by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
@@ -55,6 +57,7 @@ fun FourDotDragHandle(
                         onDragStart = {
                             distance = 0f
                             dragging = true
+                            currentOnDragStarted()
                         },
                         onDragCancel = {
                             distance = 0f

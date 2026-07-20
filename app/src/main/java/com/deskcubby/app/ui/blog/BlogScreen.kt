@@ -5,11 +5,15 @@ package com.deskcubby.app.ui.blog
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
+import android.content.MutableContextWrapper
+import android.content.res.Configuration
 import android.net.Uri
-import android.os.Environment
+import android.net.http.SslError
 import android.os.Build
+import android.os.Environment
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
@@ -18,11 +22,14 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.net.http.SslError
+import android.view.ContextThemeWrapper
+import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -53,6 +60,8 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.FindInPage
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Home
@@ -83,14 +92,24 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
+import com.deskcubby.app.R
 import com.deskcubby.app.data.local.BrowserRecordEntity
+import com.deskcubby.app.data.model.BrowserTheme
 import com.deskcubby.app.ui.theme.tr
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -101,6 +120,7 @@ fun BlogScreen(
     viewModel: BlogViewModel,
 ) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
     val settingsOrNull by viewModel.settings.collectAsStateWithLifecycle()
     val tabsState by viewModel.tabsState.collectAsStateWithLifecycle()
     val history by viewModel.history.collectAsStateWithLifecycle()
@@ -115,7 +135,12 @@ fun BlogScreen(
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val request = pendingFileRequest
         pendingFileRequest = null
-        request?.callback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data))
+        request?.let {
+            val selectedFiles = runCatching {
+                WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+            }.getOrNull()
+            runCatching { it.callback.onReceiveValue(selectedFiles) }
+        }
     }
 
     val settings = settingsOrNull
@@ -134,33 +159,42 @@ fun BlogScreen(
 
     val tabs = tabsState.tabs
     val tabIds = tabs.map { it.id }
+    val systemUsesDarkTheme =
+        configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    val browserUsesDarkTheme = when (settings.browserTheme) {
+        BrowserTheme.SYSTEM -> systemUsesDarkTheme
+        BrowserTheme.LIGHT -> false
+        BrowserTheme.DARK -> true
+    }
     val initialPage = tabs.indexOfFirst { it.id == currentTab.id }.coerceAtLeast(0)
     val latestPageCount by rememberUpdatedState(tabIds.size)
     val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { latestPageCount })
     val currentWebView = webViews[currentTab.id]
-    val isFavorite = favorites.any { it.url == currentTab.url }
+    val isBlankPage = currentTab.url.equals(BROWSER_BLANK_URL, ignoreCase = true)
+    val isFavorite = !isBlankPage && favorites.any { it.url == currentTab.url }
 
     fun cancelFileRequest(tabId: Long) {
         pendingFileRequest?.takeIf { it.tabId == tabId }?.let {
             pendingFileRequest = null
-            it.callback.onReceiveValue(null)
+            runCatching { it.callback.onReceiveValue(null) }
         }
     }
 
     fun loadInTab(tabId: Long, rawAddress: String) {
         val normalized = viewModel.commitAddress(tabId, rawAddress)
-        webViews[tabId]?.loadUrl(normalized)
+        if (!normalized.equals(BROWSER_BLANK_URL, ignoreCase = true)) {
+            webViews[tabId]?.loadUrl(normalized)
+        }
     }
 
     fun addTab() {
-        viewModel.addTab(settings.browserHomeUrl)
+        viewModel.addTab()
         tabsMenu = false
     }
 
-    fun closeCurrentTab() {
-        cancelFileRequest(currentTab.id)
-        viewModel.closeTab(currentTab.id)
-        tabsMenu = false
+    fun closeTab(tabId: Long) {
+        cancelFileRequest(tabId)
+        viewModel.closeTab(tabId)
     }
 
     // First apply view-model selections after the dynamic page count has caught up,
@@ -211,13 +245,12 @@ fun BlogScreen(
                         modifier = Modifier.weight(1f),
                     ) { page ->
                         val tab = tabs.getOrNull(page) ?: return@HorizontalPager
-                        OutlinedTextField(
-                            value = tab.addressDraft,
-                            onValueChange = { value -> viewModel.updateAddressDraft(tab.id, value) },
-                            singleLine = true,
+                        BrowserAddressField(
+                            tabId = tab.id,
+                            address = tab.addressDraft,
                             modifier = Modifier.fillMaxWidth(),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                            keyboardActions = KeyboardActions(onGo = { loadInTab(tab.id, tab.addressDraft) }),
+                            onAddressChanged = { value -> viewModel.updateAddressDraft(tab.id, value) },
+                            onGo = { value -> loadInTab(tab.id, value) },
                         )
                     }
                     Box {
@@ -239,12 +272,6 @@ fun BlogScreen(
                                 enabled = tabs.size < MAX_BROWSER_TABS,
                                 onClick = ::addTab,
                             )
-                            DropdownMenuItem(
-                                text = { Text(tr("关闭当前网页", "Close current tab")) },
-                                leadingIcon = { Icon(Icons.Outlined.Close, null) },
-                                enabled = tabs.size > 1,
-                                onClick = ::closeCurrentTab,
-                            )
                             tabs.forEachIndexed { index, tab ->
                                 DropdownMenuItem(
                                     text = {
@@ -254,10 +281,21 @@ fun BlogScreen(
                                         }
                                     },
                                     leadingIcon = { Text((index + 1).toString()) },
-                                    trailingIcon = if (tab.id == currentTab.id) {
-                                        { Icon(Icons.Outlined.Check, tr("当前网页", "Current tab")) }
-                                    } else {
-                                        null
+                                    trailingIcon = {
+                                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                            if (tab.id == currentTab.id) {
+                                                Icon(Icons.Outlined.Check, tr("当前网页", "Current tab"))
+                                            }
+                                            IconButton(
+                                                onClick = { closeTab(tab.id) },
+                                                modifier = Modifier.size(40.dp),
+                                            ) {
+                                                Icon(
+                                                    Icons.Outlined.Close,
+                                                    tr("关闭网页 ${index + 1}", "Close tab ${index + 1}"),
+                                                )
+                                            }
+                                        }
                                     },
                                     onClick = {
                                         tabsMenu = false
@@ -297,11 +335,13 @@ fun BlogScreen(
                             DropdownMenuItem(
                                 text = { Text(tr("刷新", "Refresh")) },
                                 leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
+                                enabled = currentWebView != null,
                                 onClick = { toolbarMenu = false; currentWebView?.reload() },
                             )
                             DropdownMenuItem(
                                 text = { Text(if (isFavorite) tr("取消收藏", "Remove favorite") else tr("收藏当前网页", "Favorite this page")) },
                                 leadingIcon = { Icon(if (isFavorite) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder, null) },
+                                enabled = !isBlankPage,
                                 onClick = {
                                     toolbarMenu = false
                                     viewModel.toggleFavorite(currentTab.url, currentTab.title)
@@ -310,6 +350,7 @@ fun BlogScreen(
                             DropdownMenuItem(
                                 text = { Text(tr("页内查找", "Find in page")) },
                                 leadingIcon = { Icon(Icons.Outlined.FindInPage, null) },
+                                enabled = currentWebView != null,
                                 onClick = { toolbarMenu = false; findDialog = true },
                             )
                             DropdownMenuItem(
@@ -323,8 +364,51 @@ fun BlogScreen(
                                 onClick = { toolbarMenu = false; recordsDialog = RecordMode.FAVORITES },
                             )
                             DropdownMenuItem(
+                                text = {
+                                    val label = when (settings.browserTheme) {
+                                        BrowserTheme.SYSTEM -> tr("跟随系统", "System")
+                                        BrowserTheme.LIGHT -> tr("亮色", "Light")
+                                        BrowserTheme.DARK -> tr("暗色", "Dark")
+                                    }
+                                    Text(tr("网页主题：", "Page theme: ") + label)
+                                },
+                                leadingIcon = { Icon(Icons.Outlined.DarkMode, null) },
+                                onClick = {
+                                    toolbarMenu = false
+                                    viewModel.setBrowserTheme(
+                                        when (settings.browserTheme) {
+                                            BrowserTheme.SYSTEM -> BrowserTheme.LIGHT
+                                            BrowserTheme.LIGHT -> BrowserTheme.DARK
+                                            BrowserTheme.DARK -> BrowserTheme.SYSTEM
+                                        },
+                                    )
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (settings.browserDesktopMode) {
+                                            tr("电脑模式：已开启", "Desktop mode: on")
+                                        } else {
+                                            tr("电脑模式：已关闭", "Desktop mode: off")
+                                        },
+                                    )
+                                },
+                                leadingIcon = { Icon(Icons.Outlined.DesktopWindows, null) },
+                                trailingIcon = if (settings.browserDesktopMode) {
+                                    { Icon(Icons.Outlined.Check, null) }
+                                } else {
+                                    null
+                                },
+                                onClick = {
+                                    toolbarMenu = false
+                                    viewModel.setDesktopMode(!settings.browserDesktopMode)
+                                },
+                            )
+                            DropdownMenuItem(
                                 text = { Text(tr("用外部浏览器打开", "Open externally")) },
                                 leadingIcon = { Icon(Icons.Outlined.OpenInBrowser, null) },
+                                enabled = !isBlankPage,
                                 onClick = { toolbarMenu = false; openExternal(context, currentTab.url) },
                             )
                         }
@@ -342,52 +426,75 @@ fun BlogScreen(
         Box(Modifier.fillMaxSize().padding(inner)) {
             tabs.forEach { tab ->
                 key(tab.id) {
-                    BrowserWebPage(
-                        tabId = tab.id,
-                        initialUrl = tab.url,
-                        active = tab.id == currentTab.id,
-                        modifier = if (tab.id == currentTab.id) {
-                            Modifier.fillMaxSize().zIndex(1f)
-                        } else {
-                            Modifier.size(0.dp).graphicsLayer(alpha = 0f).zIndex(0f)
-                        },
-                        onWebViewCreated = { id, view -> webViews[id] = view },
-                        onWebViewDisposed = { id ->
-                            cancelFileRequest(id)
-                            webViews.remove(id)
-                        },
-                        onStateChanged = { id, url, title, progress, canGoBack, canGoForward ->
-                            viewModel.updateTabBrowserState(
-                                tabId = id,
-                                url = url,
-                                title = title,
-                                progress = progress,
-                                canGoBack = canGoBack,
-                                canGoForward = canGoForward,
-                            )
-                        },
-                        onPageFinished = { id, url, title, canGoBack, canGoForward ->
-                            viewModel.pageFinished(
-                                tabId = id,
-                                url = url,
-                                title = title,
-                                canGoBack = canGoBack,
-                                canGoForward = canGoForward,
-                            )
-                        },
-                        onChooseFile = { id, callback, params ->
-                            pendingFileRequest?.callback?.onReceiveValue(null)
-                            pendingFileRequest = PendingFileRequest(id, callback)
-                            runCatching {
-                                filePicker.launch(params.createIntent())
-                                true
-                            }.getOrElse {
-                                pendingFileRequest = null
-                                callback.onReceiveValue(null)
-                                false
-                            }
-                        },
-                    )
+                    val pageModifier = if (tab.id == currentTab.id) {
+                        Modifier.fillMaxSize().zIndex(1f)
+                    } else {
+                        Modifier.size(0.dp).graphicsLayer(alpha = 0f).zIndex(0f)
+                    }
+                    if (tab.renderProcessGone) {
+                        BrowserRendererGonePage(
+                            dark = browserUsesDarkTheme,
+                            modifier = pageModifier,
+                            onReload = { viewModel.reloadAfterRenderProcessGone(tab.id) },
+                        )
+                    } else if (tab.url.equals(BROWSER_BLANK_URL, ignoreCase = true)) {
+                        BrowserStartPage(
+                            favorites = favorites,
+                            dark = browserUsesDarkTheme,
+                            modifier = pageModifier,
+                            onOpen = { url -> loadInTab(tab.id, url) },
+                        )
+                    } else {
+                        BrowserWebPage(
+                            tabId = tab.id,
+                            initialUrl = tab.url,
+                            active = tab.id == currentTab.id,
+                            dark = browserUsesDarkTheme,
+                            desktopMode = settings.browserDesktopMode,
+                            modifier = pageModifier,
+                            onWebViewCreated = { id, view -> webViews[id] = view },
+                            onWebViewDisposed = { id, view ->
+                                if (webViews[id] === view) {
+                                    cancelFileRequest(id)
+                                    webViews.remove(id)
+                                }
+                            },
+                            onRenderProcessGone = viewModel::markRenderProcessGone,
+                            onStateChanged = { id, url, title, progress, canGoBack, canGoForward ->
+                                viewModel.updateTabBrowserState(
+                                    tabId = id,
+                                    url = url,
+                                    title = title,
+                                    progress = progress,
+                                    canGoBack = canGoBack,
+                                    canGoForward = canGoForward,
+                                )
+                            },
+                            onPageFinished = { id, url, title, canGoBack, canGoForward ->
+                                viewModel.pageFinished(
+                                    tabId = id,
+                                    url = url,
+                                    title = title,
+                                    canGoBack = canGoBack,
+                                    canGoForward = canGoForward,
+                                )
+                            },
+                            onChooseFile = { id, callback, params ->
+                                pendingFileRequest?.callback?.let { previous ->
+                                    runCatching { previous.onReceiveValue(null) }
+                                }
+                                pendingFileRequest = PendingFileRequest(id, callback)
+                                runCatching {
+                                    filePicker.launch(params.createIntent())
+                                    true
+                                }.getOrElse {
+                                    pendingFileRequest = null
+                                    runCatching { callback.onReceiveValue(null) }
+                                    false
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -395,7 +502,9 @@ fun BlogScreen(
 
     DisposableEffect(Unit) {
         onDispose {
-            pendingFileRequest?.callback?.onReceiveValue(null)
+            pendingFileRequest?.callback?.let { callback ->
+                runCatching { callback.onReceiveValue(null) }
+            }
             pendingFileRequest = null
         }
     }
@@ -419,6 +528,147 @@ fun BlogScreen(
     }
 }
 
+@Composable
+private fun BrowserAddressField(
+    tabId: Long,
+    address: String,
+    modifier: Modifier = Modifier,
+    onAddressChanged: (String) -> Unit,
+    onGo: (String) -> Unit,
+) {
+    var fieldValue by remember(tabId) {
+        mutableStateOf(TextFieldValue(address, selection = TextRange(address.length)))
+    }
+    var wasFocused by remember(tabId) { mutableStateOf(false) }
+
+    LaunchedEffect(address) {
+        if (address != fieldValue.text) {
+            fieldValue = TextFieldValue(address, selection = TextRange(address.length))
+        }
+    }
+
+    OutlinedTextField(
+        value = fieldValue,
+        onValueChange = { value ->
+            fieldValue = value
+            onAddressChanged(value.text)
+        },
+        singleLine = true,
+        modifier = modifier.onFocusChanged { focusState ->
+            if (focusState.isFocused && !wasFocused) {
+                fieldValue = fieldValue.copy(selection = TextRange(0, fieldValue.text.length))
+            }
+            wasFocused = focusState.isFocused
+        },
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+        keyboardActions = KeyboardActions(onGo = { onGo(fieldValue.text) }),
+    )
+}
+
+@Composable
+private fun BrowserStartPage(
+    favorites: List<BrowserRecordEntity>,
+    dark: Boolean,
+    modifier: Modifier = Modifier,
+    onOpen: (String) -> Unit,
+) {
+    val background = if (dark) Color(0xFF121212) else Color(0xFFF8FAF8)
+    val foreground = if (dark) Color(0xFFEAEAEA) else Color(0xFF202320)
+    val secondary = if (dark) Color(0xFFB8B8B8) else Color(0xFF5D625D)
+
+    Box(modifier.background(background)) {
+        Image(
+            painter = painterResource(R.drawable.ic_launcher_art),
+            contentDescription = null,
+            alpha = if (dark) 0.12f else 0.08f,
+            modifier = Modifier
+                .size(260.dp)
+                .align(androidx.compose.ui.Alignment.Center),
+        )
+        if (favorites.isEmpty()) {
+            Text(
+                text = tr("暂无书签", "No bookmarks yet"),
+                color = secondary,
+                modifier = Modifier.align(androidx.compose.ui.Alignment.Center),
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                item {
+                    Text(
+                        text = tr("书签", "Bookmarks"),
+                        color = foreground,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                }
+                items(favorites, key = { it.url }) { favorite ->
+                    TextButton(
+                        onClick = { onOpen(favorite.url) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(Modifier.fillMaxWidth()) {
+                            Text(
+                                text = favorite.title.ifBlank { favorite.url },
+                                color = foreground,
+                                maxLines = 1,
+                            )
+                            Text(
+                                text = favorite.url,
+                                color = secondary,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BrowserRendererGonePage(
+    dark: Boolean,
+    modifier: Modifier = Modifier,
+    onReload: () -> Unit,
+) {
+    val background = if (dark) Color(0xFF121212) else Color(0xFFF8FAF8)
+    val foreground = if (dark) Color(0xFFEAEAEA) else Color(0xFF202320)
+    val secondary = if (dark) Color(0xFFB8B8B8) else Color(0xFF5D625D)
+
+    Box(
+        modifier = modifier.background(background),
+        contentAlignment = androidx.compose.ui.Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = tr("网页渲染进程已停止", "The page renderer stopped"),
+                color = foreground,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = tr("应用仍可继续使用，点击后再重新加载此网页。", "The app can continue. Reload this page when ready."),
+                color = secondary,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            TextButton(
+                onClick = onReload,
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
+                Icon(Icons.Outlined.Refresh, null)
+                Text(tr("重新加载", "Reload"))
+            }
+        }
+    }
+}
+
 private data class PendingFileRequest(
     val tabId: Long,
     val callback: ValueCallback<Array<Uri>>,
@@ -429,24 +679,31 @@ private fun BrowserWebPage(
     tabId: Long,
     initialUrl: String,
     active: Boolean,
+    dark: Boolean,
+    desktopMode: Boolean,
     modifier: Modifier,
     onWebViewCreated: (Long, WebView) -> Unit,
-    onWebViewDisposed: (Long) -> Unit,
+    onWebViewDisposed: (Long, WebView) -> Unit,
+    onRenderProcessGone: (Long, Boolean) -> Unit,
     onStateChanged: (Long, String, String, Int, Boolean, Boolean) -> Unit,
     onPageFinished: (Long, String, String, Boolean, Boolean) -> Unit,
     onChooseFile: (Long, ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams) -> Boolean,
 ) {
+    val baseContext = LocalContext.current
     val latestOnCreated by rememberUpdatedState(onWebViewCreated)
     val latestOnDisposed by rememberUpdatedState(onWebViewDisposed)
+    val latestOnRenderProcessGone by rememberUpdatedState(onRenderProcessGone)
     val latestOnStateChanged by rememberUpdatedState(onStateChanged)
     val latestOnPageFinished by rememberUpdatedState(onPageFinished)
     val latestOnChooseFile by rememberUpdatedState(onChooseFile)
+    val renderConfig = BrowserRenderingConfig(dark = dark, desktopMode = desktopMode)
+    val releaseGuard = remember(tabId) { WebViewReleaseGuard() }
 
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
-            WebView(ctx).apply {
-                latestOnCreated(tabId, this)
+            releaseGuard.released = false
+            WebView(MutableContextWrapper(browserThemedContext(ctx, dark))).apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.databaseEnabled = true
@@ -458,6 +715,9 @@ private fun BrowserWebPage(
                 settings.setSupportZoom(true)
                 settings.builtInZoomControls = true
                 settings.displayZoomControls = false
+                applyBrowserRenderingConfig(this, renderConfig)
+                tag = renderConfig
+                latestOnCreated(tabId, this)
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                     WebView.startSafeBrowsing(ctx, null)
@@ -488,6 +748,13 @@ private fun BrowserWebPage(
                     override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
                         handler.cancel()
                     }
+
+                    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                        latestOnDisposed(tabId, view)
+                        releaseWebView(view, releaseGuard, rendererProcessGone = true)
+                        latestOnRenderProcessGone(tabId, detail.didCrash())
+                        return true
+                    }
                 }
                 webChromeClient = object : WebChromeClient() {
                     override fun onProgressChanged(view: WebView, newProgress: Int) {
@@ -514,21 +781,99 @@ private fun BrowserWebPage(
             }
         },
         update = { view ->
+            val previousConfig = view.tag as? BrowserRenderingConfig
+            if (previousConfig != renderConfig) {
+                val shouldReload = !view.url.isNullOrBlank()
+                if (shouldReload) view.stopLoading()
+                if (previousConfig?.dark != renderConfig.dark) {
+                    (view.context as? MutableContextWrapper)?.baseContext =
+                        browserThemedContext(baseContext, renderConfig.dark)
+                }
+                applyBrowserRenderingConfig(view, renderConfig)
+                view.tag = renderConfig
+                if (shouldReload) view.reload()
+            }
             if (active) view.onResume() else view.onPause()
         },
         onRelease = { view ->
-            latestOnDisposed(tabId)
-            view.apply {
-                stopLoading()
-                webChromeClient = null
-                webViewClient = WebViewClient()
-                clearHistory()
-                removeAllViews()
-                destroy()
-            }
+            latestOnDisposed(tabId, view)
+            releaseWebView(view, releaseGuard)
         },
     )
 }
+
+private class WebViewReleaseGuard(var released: Boolean = false)
+
+private fun releaseWebView(
+    view: WebView,
+    guard: WebViewReleaseGuard,
+    rendererProcessGone: Boolean = false,
+) {
+    if (guard.released) return
+    guard.released = true
+
+    (view.parent as? ViewGroup)?.removeView(view)
+    if (!rendererProcessGone) {
+        view.stopLoading()
+        view.onPause()
+        view.setDownloadListener(null)
+        view.webChromeClient = null
+        view.webViewClient = WebViewClient()
+        view.clearHistory()
+        view.removeAllViews()
+    }
+    view.destroy()
+}
+
+private data class BrowserRenderingConfig(
+    val dark: Boolean,
+    val desktopMode: Boolean,
+)
+
+private fun browserThemedContext(base: Context, dark: Boolean): Context {
+    val overrideConfiguration = Configuration(base.resources.configuration).apply {
+        val nightMode = if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+        uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or nightMode
+    }
+    val configuredContext = base.createConfigurationContext(overrideConfiguration)
+    val theme = if (dark) {
+        android.R.style.Theme_Material_NoActionBar
+    } else {
+        android.R.style.Theme_Material_Light_NoActionBar
+    }
+    return ContextThemeWrapper(configuredContext, theme)
+}
+
+@Suppress("DEPRECATION")
+private fun applyBrowserRenderingConfig(view: WebView, config: BrowserRenderingConfig) {
+    val webSettings = view.settings
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+        WebSettingsCompat.setAlgorithmicDarkeningAllowed(webSettings, config.dark)
+    } else if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
+        WebSettingsCompat.setForceDark(
+            webSettings,
+            if (config.dark) WebSettingsCompat.FORCE_DARK_ON else WebSettingsCompat.FORCE_DARK_OFF,
+        )
+    }
+
+    val desiredUserAgent = if (config.desktopMode) {
+        desktopUserAgent(view.context)
+    } else {
+        WebSettings.getDefaultUserAgent(view.context)
+    }
+    if (webSettings.userAgentString != desiredUserAgent) {
+        webSettings.userAgentString = desiredUserAgent
+    }
+    webSettings.useWideViewPort = config.desktopMode
+    webSettings.loadWithOverviewMode = config.desktopMode
+    view.setBackgroundColor(if (config.dark) 0xFF121212.toInt() else 0xFFFFFFFF.toInt())
+}
+
+private fun desktopUserAgent(context: Context): String = WebSettings.getDefaultUserAgent(context)
+    .replace(Regex("\\(Linux; Android[^)]*\\)"), "(X11; Linux x86_64)")
+    .replace("; wv", "")
+    .replace(" Version/4.0", "")
+    .replace(" Mobile ", " ")
 
 private enum class RecordMode { HISTORY, FAVORITES }
 

@@ -82,6 +82,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
@@ -114,9 +115,9 @@ fun DiaryListScreen(
     val state by viewModel.listState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val trash by viewModel.trash.collectAsStateWithLifecycle()
+    val expandedMonth by viewModel.expandedMonth.collectAsStateWithLifecycle()
     val operationMessage by viewModel.message.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    var expandedMonth by remember { mutableStateOf<String?>(null) }
     var createDialog by remember { mutableStateOf(false) }
     var selectedItem by remember { mutableStateOf<DiaryDocument?>(null) }
     var renameItem by remember { mutableStateOf<DiaryDocument?>(null) }
@@ -169,7 +170,7 @@ fun DiaryListScreen(
                     item(key = month) {
                         GlassPanel(
                             modifier = Modifier.fillMaxWidth().combinedClickable(
-                                onClick = { expandedMonth = if (expandedMonth == month) null else month },
+                                onClick = { viewModel.toggleExpandedMonth(month) },
                                 onLongClick = {},
                             ),
                             cornerRadius = 18.dp,
@@ -476,6 +477,34 @@ private fun MarkdownSourceEditor(
     ) {
         BoxWithConstraints {
             val viewportHeight = maxHeight
+            val viewportHeightPx = constraints.maxHeight.toFloat()
+            val topPaddingPx = with(density) { topPadding.toPx() }
+            val cursorMarginPx = with(density) { 24.dp.toPx() }
+
+            LaunchedEffect(value.selection, value.text, textLayout, constraints.maxHeight) {
+                withFrameNanos { }
+                val layout = textLayout?.takeIf { it.layoutInput.text.text == value.text }
+                    ?: return@LaunchedEffect
+                if (viewportHeightPx <= 0f) return@LaunchedEffect
+
+                val cursorOffset = value.selection.end.coerceIn(0, value.text.length)
+                val cursorRect = layout.getCursorRect(cursorOffset)
+                val cursorTop = topPaddingPx + cursorRect.top
+                val cursorBottom = topPaddingPx + cursorRect.bottom
+                val visibleTop = scrollState.value.toFloat()
+                val visibleBottom = visibleTop + viewportHeightPx
+                val target = when {
+                    cursorBottom + cursorMarginPx > visibleBottom ->
+                        cursorBottom + cursorMarginPx - viewportHeightPx
+                    cursorTop - cursorMarginPx < visibleTop ->
+                        cursorTop - cursorMarginPx
+                    else -> null
+                }
+                target?.let {
+                    scrollState.scrollTo(it.roundToInt().coerceIn(0, scrollState.maxValue))
+                }
+            }
+
             Column(Modifier.fillMaxSize().verticalScroll(scrollState)) {
                 Box(Modifier.fillMaxWidth().heightIn(min = viewportHeight)) {
                     BasicTextField(
@@ -484,7 +513,7 @@ private fun MarkdownSourceEditor(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = viewportHeight)
-                            .padding(start = 16.dp, top = topPadding, end = 40.dp, bottom = 16.dp),
+                            .padding(start = 16.dp, top = topPadding, end = 40.dp, bottom = 40.dp),
                         textStyle = MaterialTheme.typography.bodyLarge.copy(
                             color = MaterialTheme.colorScheme.onSurface,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,

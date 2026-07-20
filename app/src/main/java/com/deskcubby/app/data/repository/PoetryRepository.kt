@@ -17,6 +17,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -32,6 +34,7 @@ data class DailyPoem(
 class PoetryRepository @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
+    private val refreshMutex = Mutex()
     private object Keys {
         val token = stringPreferencesKey("jinrishici_token")
         val content = stringPreferencesKey("content")
@@ -47,24 +50,26 @@ class PoetryRepository @Inject constructor(
         )
     }
 
-    suspend fun refresh(force: Boolean = false) = withContext(Dispatchers.IO) {
-        val existing = context.poetryDataStore.data.first()
-        val cachedAt = existing[Keys.updatedAt] ?: 0L
-        if (!force && cachedAt > 0 && dateOf(cachedAt) == LocalDate.now()) return@withContext
+    suspend fun refresh(force: Boolean = false) = refreshMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val existing = context.poetryDataStore.data.first()
+            val cachedAt = existing[Keys.updatedAt] ?: 0L
+            if (!force && cachedAt > 0 && dateOf(cachedAt) == LocalDate.now()) return@withContext
 
-        var token = existing[Keys.token] ?: fetchToken()
-        val response = runCatching { request(SENTENCE_URL, token) }.getOrElse { firstError ->
-            if (existing[Keys.token] == null) throw firstError
-            token = fetchToken()
-            request(SENTENCE_URL, token)
-        }
-        val parsed = parseSentence(response)
-        val returnedToken = JSONObject(response).optString("token").takeIf(String::isNotBlank) ?: token
-        context.poetryDataStore.edit { prefs ->
-            prefs[Keys.token] = returnedToken
-            prefs[Keys.content] = parsed.content
-            prefs[Keys.source] = parsed.source
-            prefs[Keys.updatedAt] = System.currentTimeMillis()
+            var token = existing[Keys.token] ?: fetchToken()
+            val response = runCatching { request(SENTENCE_URL, token) }.getOrElse { firstError ->
+                if (existing[Keys.token] == null) throw firstError
+                token = fetchToken()
+                request(SENTENCE_URL, token)
+            }
+            val parsed = parseSentence(response)
+            val returnedToken = JSONObject(response).optString("token").takeIf(String::isNotBlank) ?: token
+            context.poetryDataStore.edit { prefs ->
+                prefs[Keys.token] = returnedToken
+                prefs[Keys.content] = parsed.content
+                prefs[Keys.source] = parsed.source
+                prefs[Keys.updatedAt] = System.currentTimeMillis()
+            }
         }
     }
 

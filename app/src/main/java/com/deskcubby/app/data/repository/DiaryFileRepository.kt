@@ -2,6 +2,12 @@ package com.deskcubby.app.data.repository
 
 import android.content.ContentResolver
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
@@ -16,6 +22,7 @@ import com.deskcubby.app.data.model.DiaryTrashItem
 import com.deskcubby.app.data.model.ImportedMedia
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -24,10 +31,14 @@ import java.time.format.DateTimeParseException
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 class ExternalFileConflictException(
     val diskDocument: DiaryEditorDocument,
@@ -40,6 +51,7 @@ class DiaryFileRepository @Inject constructor(
 ) {
     private val resolver: ContentResolver = context.contentResolver
     private val writeMutex = Mutex()
+    private val mediaMutex = Mutex()
 
     suspend fun scan(settings: AppSettings): List<DiaryDocument> = withContext(Dispatchers.IO) {
         val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext emptyList()
@@ -86,7 +98,17 @@ class DiaryFileRepository @Inject constructor(
         load(Uri.parse(uri))
     }
 
-    suspend fun enterToday(settings: AppSettings, today: LocalDate = LocalDate.now()): DiaryEditorDocument =
+    suspend fun enterToday(
+        settings: AppSettings,
+        today: LocalDate = LocalDate.now(),
+    ): DiaryEditorDocument = writeMutex.withLock {
+        enterTodayUnlocked(settings, today)
+    }
+
+    private suspend fun enterTodayUnlocked(
+        settings: AppSettings,
+        today: LocalDate,
+    ): DiaryEditorDocument =
         withContext(Dispatchers.IO) {
             val root = settings.diaryTreeUri?.let(::tree)
                 ?: error("请先在设置中选择日记目录")
@@ -102,8 +124,19 @@ class DiaryFileRepository @Inject constructor(
                 .replace("{date}", dateText)
             val created = root.createFile("text/markdown", fileName)
                 ?: error("无法在所选目录中创建日记")
-            writeText(created.uri, content)
-            load(created.uri)
+            try {
+                writeText(created.uri, content)
+                load(created.uri)
+            } catch (error: Exception) {
+                val committed = runCatching { readText(created.uri) == content }.getOrDefault(false)
+                if (committed && error !is CancellationException) return@withContext load(created.uri)
+                if (!committed) {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        runCatching { created.delete() }
+                    }
+                }
+                throw error
+            }
         }
 
     suspend fun create(settings: AppSettings, title: String, date: LocalDate = LocalDate.now()): DiaryEditorDocument =
@@ -299,37 +332,125 @@ class DiaryFileRepository @Inject constructor(
         category: String?,
         settings: AppSettings,
         date: LocalDate = LocalDate.now(),
-    ): ImportedMedia = withContext(Dispatchers.IO) {
-        val root = settings.mediaTreeUri?.let(::tree) ?: error("请先在设置中选择媒体目录")
-        val mime = resolver.getType(sourceUri) ?: "image/jpeg"
-        val extension = inferExtension(sourceUri, mime)
-        val categoryText = category?.takeIf(String::isNotBlank) ?: "图片"
-        val dateText = date.toString()
-        val fileName = DiaryTextUtils.nextMediaFileName(
-            pattern = settings.imageNamePattern,
-            dateText = dateText,
-            category = categoryText,
-            extension = extension,
-            existingNames = root.listFiles().mapNotNull { it.name },
-        )
+    ): ImportedMedia = mediaMutex.withLock {
+        var created: DocumentFile? = null
+        var compressedFile: File? = null
+        try {
+            withContext(Dispatchers.IO) {
+                val root = settings.mediaTreeUri?.let(::tree) ?: error("请先在设置中选择媒体目录")
+                val sourceMime = resolver.getType(sourceUri) ?: "image/jpeg"
+                val sourceExtension = inferExtension(sourceUri, sourceMime)
+                val shouldCompress = settings.mealImageCompressionEnabled && !category.isNullOrBlank()
+                compressedFile = if (shouldCompress && isCompressibleImage(sourceMime, sourceExtension)) {
+                    compressMealImageToCache(sourceUri, settings.mealImageCompressionQuality)
+                } else {
+                    null
+                }
+                val mime = if (compressedFile != null) "image/jpeg" else sourceMime
+                val extension = if (compressedFile != null) "jpg" else sourceExtension
+                val categoryText = category?.takeIf(String::isNotBlank) ?: "图片"
+                val dateText = date.toString()
+                val fileName = DiaryTextUtils.nextMediaFileName(
+                    pattern = settings.imageNamePattern,
+                    dateText = dateText,
+                    category = categoryText,
+                    extension = extension,
+                    existingNames = root.listFiles().mapNotNull { it.name },
+                )
 
-        val created = root.createFile(mime, fileName) ?: error("无法创建媒体文件")
-        runCatching {
-            resolver.openInputStream(sourceUri).use { input ->
-                requireNotNull(input) { "无法读取所选图片" }
-                resolver.openOutputStream(created.uri, "w").use { output ->
-                    requireNotNull(output) { "无法写入媒体目录" }
-                    input.copyTo(output)
+                val destination = root.createFile(mime, fileName) ?: error("无法创建媒体文件")
+                created = destination
+                val inputStream = compressedFile?.inputStream() ?: resolver.openInputStream(sourceUri)
+                inputStream.use { input ->
+                    requireNotNull(input) { "无法读取所选图片" }
+                    resolver.openOutputStream(destination.uri, "w").use { output ->
+                        requireNotNull(output) { "无法写入媒体目录" }
+                        input.copyTo(output)
+                        output.flush()
+                    }
+                }
+
+                val actualName = destination.name ?: fileName
+                ImportedMedia(
+                    documentUri = destination.uri.toString(),
+                    fileName = actualName,
+                    markdown = "![$categoryText](<${actualName.replace(">", "%3E")}>)",
+                )
+            }
+        } catch (error: Exception) {
+            withContext(NonCancellable + Dispatchers.IO) {
+                runCatching { created?.delete() }
+            }
+            throw error
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) {
+                runCatching { compressedFile?.delete() }
+            }
+        }
+    }
+
+    suspend fun appendImageToToday(
+        sourceUri: Uri,
+        category: String,
+        settings: AppSettings,
+        date: LocalDate = LocalDate.now(),
+    ): ImportedMedia {
+        val media = importImage(sourceUri, category, settings, date)
+        var diaryUri: Uri? = null
+        var originalContent: String? = null
+        var updatedContent: String? = null
+        return try {
+            writeMutex.withLock {
+                withContext(Dispatchers.IO) {
+                    val document = enterTodayUnlocked(settings, date)
+                    diaryUri = Uri.parse(document.uri)
+                    originalContent = document.content
+                    val lineBreak = if (
+                        document.content.isEmpty() ||
+                        document.content.endsWith('\n') ||
+                        document.content.endsWith('\r')
+                    ) {
+                        ""
+                    } else {
+                        DiaryTextUtils.preferredLineEnding(document.content)
+                    }
+                    updatedContent = document.content + lineBreak + media.markdown
+                    writeText(requireNotNull(diaryUri), requireNotNull(updatedContent))
+                    check(readText(requireNotNull(diaryUri)) == updatedContent) {
+                        "图片写入今日日记后的校验失败"
+                    }
+                    media
                 }
             }
-        }.onFailure { created.delete() }.getOrThrow()
-
-        val actualName = created.name ?: fileName
-        ImportedMedia(
-            documentUri = created.uri.toString(),
-            fileName = actualName,
-            markdown = "![$categoryText](<${actualName.replace(">", "%3E")}>)",
-        )
+        } catch (error: Exception) {
+            var committed = false
+            var safeToDeleteMedia = diaryUri == null
+            withContext(NonCancellable + Dispatchers.IO) {
+                val target = diaryUri
+                val desired = updatedContent
+                val original = originalContent
+                if (target != null && desired != null && original != null) {
+                    val diskContent = runCatching { readText(target) }.getOrNull()
+                    if (diskContent == desired) {
+                        committed = true
+                    } else {
+                        val rollback = runCatching {
+                            writeText(target, original)
+                            check(readText(target) == original) { "今日日记原文恢复校验失败" }
+                        }
+                        safeToDeleteMedia = rollback.isSuccess
+                        rollback.exceptionOrNull()?.let(error::addSuppressed)
+                    }
+                }
+                if (safeToDeleteMedia) {
+                    runCatching {
+                        DocumentFile.fromSingleUri(context, Uri.parse(media.documentUri))?.delete()
+                    }.exceptionOrNull()?.let(error::addSuppressed)
+                }
+            }
+            if (committed && error !is CancellationException) return media
+            throw error
+        }
     }
 
     suspend fun resolveMedia(markdownTarget: String, settings: AppSettings): Uri? = withContext(Dispatchers.IO) {
@@ -381,6 +502,135 @@ class DiaryFileRepository @Inject constructor(
         }
     }
 
+    private fun isCompressibleImage(mime: String, extension: String): Boolean {
+        val normalizedMime = mime.lowercase(Locale.ROOT)
+        val normalizedExtension = extension.lowercase(Locale.ROOT)
+        return normalizedMime in COMPRESSIBLE_IMAGE_MIMES ||
+            normalizedExtension in COMPRESSIBLE_IMAGE_EXTENSIONS
+    }
+
+    private fun compressMealImageToCache(sourceUri: Uri, quality: Int): File? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        runCatching {
+            resolver.openInputStream(sourceUri).use { input ->
+                requireNotNull(input) { "无法读取所选图片" }
+                BitmapFactory.decodeStream(input, null, bounds)
+            }
+        }.getOrElse { return null }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+        val target = compressedImageSize(bounds.outWidth, bounds.outHeight, COMPRESSED_IMAGE_MAX_EDGE_PX)
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = imageSampleSize(bounds.outWidth, bounds.outHeight, target)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val decoded = runCatching {
+            resolver.openInputStream(sourceUri).use { input ->
+                requireNotNull(input) { "无法读取所选图片" }
+                BitmapFactory.decodeStream(input, null, options)
+            }
+        }.getOrNull() ?: return null
+
+        var bitmap = decoded
+        var tempFile: File? = null
+        return try {
+            // Scale before applying EXIF rotation so a large source and a same-sized rotated copy
+            // are never held at the same time. This keeps peak memory bounded on camera photos.
+            val scaledTarget = compressedImageSize(bitmap.width, bitmap.height, COMPRESSED_IMAGE_MAX_EDGE_PX)
+            if (bitmap.width != scaledTarget.width || bitmap.height != scaledTarget.height) {
+                val scaled = Bitmap.createScaledBitmap(
+                    bitmap,
+                    scaledTarget.width,
+                    scaledTarget.height,
+                    true,
+                )
+                if (scaled !== bitmap) {
+                    bitmap.recycle()
+                    bitmap = scaled
+                }
+            }
+
+            val oriented = applyExifOrientation(bitmap, readExifOrientation(sourceUri))
+            if (oriented !== bitmap) {
+                bitmap.recycle()
+                bitmap = oriented
+            }
+
+            if (bitmap.hasAlpha()) {
+                val flattened = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+                Canvas(flattened).apply {
+                    drawColor(Color.WHITE)
+                    drawBitmap(bitmap, 0f, 0f, null)
+                }
+                bitmap.recycle()
+                bitmap = flattened
+            }
+
+            val directory = File(context.cacheDir, "meal-image-compression").apply {
+                check(exists() || mkdirs()) { "无法创建图片压缩缓存" }
+            }
+            val compressed = File.createTempFile("meal-", ".jpg", directory)
+            tempFile = compressed
+            compressed.outputStream().buffered().use { output ->
+                check(bitmap.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(30, 95), output)) {
+                    "无法压缩饮食图片"
+                }
+                output.flush()
+            }
+
+            val sourceSize = sourceByteSize(sourceUri)
+            if (compressed.length() <= 0L || (sourceSize > 0L && compressed.length() >= sourceSize)) {
+                compressed.delete()
+                null
+            } else {
+                compressed
+            }
+        } catch (_: OutOfMemoryError) {
+            tempFile?.delete()
+            null
+        } catch (_: Exception) {
+            tempFile?.delete()
+            null
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    private fun readExifOrientation(uri: Uri): Int = runCatching {
+        resolver.openInputStream(uri).use { input ->
+            requireNotNull(input)
+            ExifInterface(input).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL,
+            )
+        }
+    }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+
+    private fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.setScale(-1f, 1f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.setRotate(180f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.setScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.setRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f)
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.setRotate(-90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(-90f)
+            else -> return bitmap
+        }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    }
+
+    private fun sourceByteSize(uri: Uri): Long = runCatching {
+        resolver.openAssetFileDescriptor(uri, "r")?.use { descriptor -> descriptor.length } ?: -1L
+    }.getOrDefault(-1L)
+
     private fun inferExtension(uri: Uri, mime: String): String {
         val byMime = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime)
         if (!byMime.isNullOrBlank()) return byMime.lowercase(Locale.ROOT)
@@ -411,7 +661,61 @@ class DiaryFileRepository @Inject constructor(
 
     companion object {
         private val DATE_REGEX = Regex("\\d{4}-\\d{2}-\\d{2}")
+        private val COMPRESSIBLE_IMAGE_MIMES = setOf(
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
+            "image/heic",
+            "image/heif",
+            "image/webp",
+            "image/avif",
+        )
+        private val COMPRESSIBLE_IMAGE_EXTENSIONS = setOf(
+            "jpg",
+            "jpeg",
+            "png",
+            "heic",
+            "heif",
+            "webp",
+            "avif",
+        )
+        private const val COMPRESSED_IMAGE_MAX_EDGE_PX = 2_560
         private const val TRASH_SUFFIX = "deskcubby-trash"
         private const val TRASH_DIRECTORY = ".DeskCubby Trash"
     }
+}
+
+internal data class CompressedImageSize(val width: Int, val height: Int)
+
+internal fun compressedImageSize(
+    width: Int,
+    height: Int,
+    maxEdge: Int = 2_560,
+): CompressedImageSize {
+    require(width > 0 && height > 0 && maxEdge > 0)
+    val longestEdge = max(width, height)
+    if (longestEdge <= maxEdge) return CompressedImageSize(width, height)
+    val scale = maxEdge.toDouble() / longestEdge.toDouble()
+    return CompressedImageSize(
+        width = (width * scale).roundToInt().coerceAtLeast(1),
+        height = (height * scale).roundToInt().coerceAtLeast(1),
+    )
+}
+
+internal fun imageSampleSize(
+    width: Int,
+    height: Int,
+    target: CompressedImageSize,
+): Int {
+    require(width > 0 && height > 0 && target.width > 0 && target.height > 0)
+    // BitmapFactory samples most efficiently in powers of two. Allowing the decoded edge to be
+    // at most 20% above the output target avoids 40-100 MiB intermediate bitmaps; landing a little
+    // below the target is preferable to risking an OOM on common 12-48 MP camera photos.
+    val targetEdge = max(target.width, target.height)
+    val decodedEdgeLimit = (targetEdge * 1.2).roundToInt().coerceAtLeast(targetEdge)
+    var sample = 1
+    while (max(width, height) / sample > decodedEdgeLimit && sample <= Int.MAX_VALUE / 2) {
+        sample *= 2
+    }
+    return sample
 }

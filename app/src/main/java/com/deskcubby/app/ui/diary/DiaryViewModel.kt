@@ -64,6 +64,9 @@ class DiaryViewModel @Inject constructor(
     private val _listState = MutableStateFlow(DiaryListState())
     val listState: StateFlow<DiaryListState> = _listState.asStateFlow()
 
+    private val _expandedMonth = MutableStateFlow<String?>(null)
+    val expandedMonth: StateFlow<String?> = _expandedMonth.asStateFlow()
+
     private val _editorState = MutableStateFlow(EditorState())
     val editorState: StateFlow<EditorState> = _editorState.asStateFlow()
 
@@ -88,6 +91,7 @@ class DiaryViewModel @Inject constructor(
         }
         viewModelScope.launch {
             settings.map { it.diaryTreeUri }.distinctUntilChanged().collect {
+                _expandedMonth.value = null
                 if (it != null) refresh() else _listState.value = DiaryListState()
             }
         }
@@ -98,9 +102,18 @@ class DiaryViewModel @Inject constructor(
         refreshJob = viewModelScope.launch {
             _listState.value = _listState.value.copy(loading = true, error = null)
             runCatching { repository.scan(settings.value) }
-                .onSuccess { _listState.value = DiaryListState(items = it) }
+                .onSuccess { items ->
+                    _listState.value = DiaryListState(items = items)
+                    if (_expandedMonth.value !in items.map(DiaryDocument::monthKey)) {
+                        _expandedMonth.value = null
+                    }
+                }
                 .onFailure { _listState.value = DiaryListState(error = it.userMessage()) }
         }
+    }
+
+    fun toggleExpandedMonth(month: String) {
+        _expandedMonth.value = if (_expandedMonth.value == month) null else month
     }
 
     fun open(uri: String) {
