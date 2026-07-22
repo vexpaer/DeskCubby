@@ -17,3 +17,7 @@ captures/
 app/build/
 *.apk
 *.aab
+
+# Local AI context
+/AGENTS.md
+/overview.md

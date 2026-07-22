@@ -94,6 +94,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.local.FlashThoughtEntity
+import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.FourDotDragHandle
@@ -290,7 +291,13 @@ fun ThoughtScreen(
                                             Row(
                                                 Modifier
                                                     .fillMaxWidth()
-                                                    .height(settings.thoughtRowHeightDp.dp)
+                                                    .then(
+                                                        if (settings.thoughtDisplayMode == ThoughtDisplayMode.FULL) {
+                                                            Modifier.heightIn(min = settings.thoughtRowHeightDp.dp)
+                                                        } else {
+                                                            Modifier.height(settings.thoughtRowHeightDp.dp)
+                                                        },
+                                                    )
                                                     .padding(start = 10.dp),
                                                 verticalAlignment = Alignment.CenterVertically,
                                             ) {
@@ -304,8 +311,16 @@ fun ThoughtScreen(
                                                 }
                                                 Text(
                                                     item.content,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
+                                                    maxLines = if (settings.thoughtDisplayMode == ThoughtDisplayMode.FULL) {
+                                                        Int.MAX_VALUE
+                                                    } else {
+                                                        1
+                                                    },
+                                                    overflow = if (settings.thoughtDisplayMode == ThoughtDisplayMode.FULL) {
+                                                        TextOverflow.Clip
+                                                    } else {
+                                                        TextOverflow.Ellipsis
+                                                    },
                                                     modifier = Modifier.weight(1f),
                                                 )
                                                 IconButton(

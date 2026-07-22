@@ -1,5 +1,7 @@
 package com.deskcubby.app.data.preferences
 
+import com.deskcubby.app.data.model.AiModelConfig
+import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
@@ -8,6 +10,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SettingsRepositoryTest {
+    @Test
+    fun resolveAiConfigIdHonorsRequestedTypeAndMigratesEnabledConfig() {
+        val text = AiModelConfig("text", "文字", AiModelType.TEXT, "https://example.com", "t", enabled = false)
+        val image = AiModelConfig("image", "图片", AiModelType.IMAGE, "https://example.com", "i", enabled = true)
+        assertEquals("text", resolveAiConfigId(listOf(text, image), "text", AiModelType.TEXT))
+        assertEquals(null, resolveAiConfigId(listOf(text, image), "image", AiModelType.TEXT))
+        assertEquals("image", resolveAiConfigId(listOf(text, image), null, AiModelType.IMAGE))
+        assertEquals("text", resolveAiConfigId(listOf(text, image), null, AiModelType.TEXT, fallbackToAny = true))
+    }
     @Test
     fun normalizeUrlAddsHttpsWhenSchemeMissing() {
         assertEquals("https://example.com/path", SettingsRepository.normalizeUrl(" example.com/path "))
@@ -138,6 +149,27 @@ class SettingsRepositoryTest {
     }
 
     @Test
+    fun dailyRecordsMigrationInsertsAfterQuickInputOnce() {
+        val migrated = migrateDailyRecordsWidget(
+            items = listOf("today", "quick_input", "meal_photos", "website"),
+            migrated = false,
+        )
+
+        assertEquals(
+            listOf("today", "quick_input", "daily_records", "meal_photos", "website"),
+            migrated,
+        )
+        assertEquals(migrated, migrateDailyRecordsWidget(migrated, migrated = false))
+        assertEquals(
+            listOf("today", "quick_input", "website"),
+            migrateDailyRecordsWidget(
+                items = listOf("today", "quick_input", "website"),
+                migrated = true,
+            ),
+        )
+    }
+
+    @Test
     fun normalizeUserNameTrimsAndLimitsLength() {
         assertEquals("Ada", normalizeUserName("  Ada  "))
         assertEquals(32, normalizeUserName("a".repeat(40)).length)
@@ -147,7 +179,7 @@ class SettingsRepositoryTest {
     @Test
     fun normalizeMealButtonIconsFillsMissingOrBlankEntriesWithDefaults() {
         assertEquals(
-            listOf("🥐", "🥗", "🍚", "🍎", "🌙"),
+            listOf("🥐", "🍱", "🍹", "🍜", "🍊", "🍤"),
             normalizeMealButtonIcons(listOf(" 🥐 ", "")),
         )
     }

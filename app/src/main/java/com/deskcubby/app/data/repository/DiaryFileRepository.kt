@@ -20,6 +20,7 @@ import com.deskcubby.app.data.model.DiaryDocument
 import com.deskcubby.app.data.model.DiaryEditorDocument
 import com.deskcubby.app.data.model.DiaryTrashItem
 import com.deskcubby.app.data.model.ImportedMedia
+import com.deskcubby.app.data.model.MealCategory
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -47,12 +48,16 @@ class ExternalFileConflictException(
 data class MealCalendarPhoto(
     val uri: Uri,
     val caption: String,
+    val category: MealCategory,
+    val diaryUri: Uri,
+    val markdown: String,
+    val energyKj: Int? = null,
 )
 
 data class MealCalendarDay(
     val dateIso: String,
     val photos: List<MealCalendarPhoto>,
-)
+) { val totalEnergyKj: Int? get() = photos.mapNotNull { it.energyKj }.takeIf(List<Int>::isNotEmpty)?.sum() }
 
 @Singleton
 class DiaryFileRepository @Inject constructor(
@@ -156,20 +161,42 @@ class DiaryFileRepository @Inject constructor(
             for (match in MARKDOWN_IMAGE_REGEX.findAll(content)) {
                 val caption = match.groupValues[1].trim()
                 val target = match.groupValues[2].ifBlank { match.groupValues[3] }
-                if (!isMealCaption(caption) && !hasMealCategoryInFileName(target)) continue
+                val category = mealCategoryFromCaption(caption)
+                    ?: mealCategoryFromFileName(target)
+                    ?: continue
                 val mediaUri = resolveMealMediaUri(target, mediaByName) ?: continue
                 photosByDate.getOrPut(dateIso) { mutableListOf() }
-                    .add(MealCalendarPhoto(uri = mediaUri, caption = caption))
+                    .add(MealCalendarPhoto(uri = mediaUri, caption = caption, category = category,
+                        diaryUri = diary.uri, markdown = match.value, energyKj = energyFromCaption(caption)))
             }
         }
 
         photosByDate
-            .map { (dateIso, photos) -> MealCalendarDay(dateIso = dateIso, photos = photos) }
+            .map { (dateIso, photos) ->
+                MealCalendarDay(
+                    dateIso = dateIso,
+                    photos = photos.sortedBy { it.category.sortOrder },
+                )
+            }
             .sortedByDescending(MealCalendarDay::dateIso)
     }
 
     suspend fun load(uri: String): DiaryEditorDocument = withContext(Dispatchers.IO) {
         load(Uri.parse(uri))
+    }
+
+    suspend fun setMealPhotoEnergy(photo: MealCalendarPhoto, energyKj: Int) = writeMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val content = readText(photo.diaryUri)
+            require(content.contains(photo.markdown)) { "日记中的图片记录已发生变化，请刷新后重试" }
+            val baseCaption = photo.caption.replace(ENERGY_SUFFIX_REGEX, "").trimEnd('-', ' ')
+            val replacement = photo.markdown.replaceFirst(
+                Regex("!\\[[^]]*]"), "![${baseCaption.replace("]", "")}-${energyKj}kJ]",
+            )
+            val updated = content.replaceFirst(photo.markdown, replacement)
+            writeText(photo.diaryUri, updated)
+            check(readText(photo.diaryUri) == updated) { "热量写回日记后的校验失败" }
+        }
     }
 
     suspend fun enterToday(
@@ -527,6 +554,44 @@ class DiaryFileRepository @Inject constructor(
         }
     }
 
+    /** Appends one exact, standalone text line to today's Markdown diary. */
+    suspend fun appendTextToToday(
+        text: String,
+        settings: AppSettings,
+        date: LocalDate = LocalDate.now(),
+    ): DiaryEditorDocument = writeMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val line = text.trim().replace('\r', ' ').replace('\n', ' ')
+            require(line.isNotBlank()) { "日常记录不能为空" }
+            val document = enterTodayUnlocked(settings, date)
+            val uri = Uri.parse(document.uri)
+            val separator = when {
+                document.content.isEmpty() || document.content.endsWith('\n') || document.content.endsWith('\r') -> ""
+                else -> DiaryTextUtils.preferredLineEnding(document.content)
+            }
+            val updated = document.content + separator + line
+            val immediatelyBeforeWrite = load(uri)
+            if (immediatelyBeforeWrite.sha256 != document.sha256) {
+                throw ExternalFileConflictException(immediatelyBeforeWrite)
+            }
+            try {
+                writeText(uri, updated)
+                check(readText(uri) == updated) { "日常记录写入今日日记后的校验失败" }
+                load(uri)
+            } catch (error: Exception) {
+                val committed = runCatching { readText(uri) == updated }.getOrDefault(false)
+                if (committed && error !is CancellationException) return@withContext load(uri)
+                withContext(NonCancellable + Dispatchers.IO) {
+                    runCatching {
+                        writeText(uri, document.content)
+                        check(readText(uri) == document.content) { "今日日记原文恢复校验失败" }
+                    }.exceptionOrNull()?.let(error::addSuppressed)
+                }
+                throw error
+            }
+        }
+    }
+
     suspend fun resolveMedia(markdownTarget: String, settings: AppSettings): Uri? = withContext(Dispatchers.IO) {
         val root = settings.mediaTreeUri?.let(::tree) ?: return@withContext null
         val fileName = Uri.decode(markdownTarget.trim('<', '>').substringAfterLast('/'))
@@ -714,15 +779,28 @@ class DiaryFileRepository @Inject constructor(
         return displayName?.substringAfterLast('.', "jpg")?.lowercase(Locale.ROOT) ?: "jpg"
     }
 
-    private fun isMealCaption(caption: String): Boolean {
+    private fun mealCategoryFromCaption(caption: String): MealCategory? {
         val normalized = caption.trim().lowercase(Locale.ROOT).replace(WHITESPACE_REGEX, " ")
-        return normalized in MEAL_CAPTIONS
+        return MealCategory.entries.firstOrNull { category ->
+            normalized.removeSuffixEnergy() == category.chineseLabel ||
+                normalized.removeSuffixEnergy() == category.englishLabel.lowercase(Locale.ROOT)
+        } ?: MealCategory.LATE_SNACK.takeIf { normalized == "late-night snack" }
     }
 
-    private fun hasMealCategoryInFileName(target: String): Boolean {
-        val fileName = decodedTargetFileName(target)?.lowercase(Locale.ROOT) ?: return false
-        return CHINESE_MEAL_CAPTIONS.any(fileName::contains) ||
-            ENGLISH_MEAL_FILE_NAME_REGEX.containsMatchIn(fileName)
+    private fun energyFromCaption(caption: String): Int? = ENERGY_SUFFIX_REGEX.find(caption)?.groupValues?.get(1)?.toIntOrNull()
+    private fun String.removeSuffixEnergy(): String = replace(ENERGY_SUFFIX_REGEX, "").trimEnd('-', ' ')
+
+    private fun mealCategoryFromFileName(target: String): MealCategory? {
+        val fileName = decodedTargetFileName(target)?.lowercase(Locale.ROOT) ?: return null
+        return MealCategory.entries.firstOrNull { category ->
+            fileName.contains(category.chineseLabel) ||
+                Regex(
+                    "(?:^|[^a-z])" + when (category) {
+                        MealCategory.LATE_SNACK -> "late[ _-]+(?:night[ _-]+)?snack"
+                        else -> Regex.escape(category.englishLabel.lowercase(Locale.ROOT))
+                    } + "(?:[^a-z]|$)",
+                ).containsMatchIn(fileName)
+        }
     }
 
     private fun resolveMealMediaUri(target: String, mediaByName: Map<String, Uri>): Uri? {
@@ -790,24 +868,7 @@ class DiaryFileRepository @Inject constructor(
         private val MARKDOWN_IMAGE_REGEX = Regex(
             """!\[([^\]\r\n]*)]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:\s+(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\([^\)\r\n]*\)))?\s*\)""",
         )
-        private val MEAL_CAPTIONS = setOf(
-            "早餐",
-            "午餐",
-            "晚餐",
-            "水果",
-            "夜宵",
-            "breakfast",
-            "lunch",
-            "dinner",
-            "fruit",
-            "late snack",
-            // Kept for compatibility with the label used by older DeskCubby versions.
-            "late-night snack",
-        )
-        private val CHINESE_MEAL_CAPTIONS = setOf("早餐", "午餐", "晚餐", "水果", "夜宵")
-        private val ENGLISH_MEAL_FILE_NAME_REGEX = Regex(
-            """(?:^|[^a-z])(?:breakfast|lunch|dinner|fruit|late[ _-]+(?:night[ _-]+)?snack)(?:[^a-z]|$)""",
-        )
+        private val ENERGY_SUFFIX_REGEX = Regex("[-–—]\\s*(\\d+)\\s*kJ\\s*$", RegexOption.IGNORE_CASE)
         private val COMPRESSIBLE_IMAGE_MIMES = setOf(
             "image/jpeg",
             "image/jpg",

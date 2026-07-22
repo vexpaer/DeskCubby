@@ -45,12 +45,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.EventNote
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.MoreVert
@@ -109,10 +113,13 @@ import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.FourDotDragHandle
+import com.deskcubby.app.ui.components.OrganicSplitActionRow
+import com.deskcubby.app.ui.components.OrganicSplitActionRowSize
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.PanelRole
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
+import com.deskcubby.app.ui.theme.organicFutureAccentColors
 import com.deskcubby.app.ui.theme.tr
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.HtmlRenderer
@@ -169,6 +176,8 @@ fun DiaryListScreen(
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = onOpenToday,
+                containerColor = MaterialTheme.colorScheme.tertiary,
+                contentColor = MaterialTheme.colorScheme.onTertiary,
                 icon = { Icon(Icons.Outlined.Today, null) },
                 text = { Text(tr("进入今日日记", "Open today's diary")) },
             )
@@ -199,25 +208,55 @@ fun DiaryListScreen(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 100.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                state.byMonth.forEach { (month, diaries) ->
+                state.byMonth.entries.forEachIndexed { monthIndex, (month, diaries) ->
                     item(key = month) {
-                        GlassPanel(
-                            modifier = Modifier.fillMaxWidth().combinedClickable(
-                                onClick = { viewModel.toggleExpandedMonth(month) },
-                                onLongClick = {},
-                            ),
-                            cornerRadius = 18.dp,
-                            padding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                        ) {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text(month, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                                Text(
-                                    diaries.size.toString(),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Icon(Icons.Outlined.MenuBook, null, tint = MaterialTheme.colorScheme.primary)
+                        if (organic) {
+                            val accentColors = organicFutureAccentColors
+                            val accent = accentColors[monthIndex.mod(accentColors.size)]
+                            OrganicSplitActionRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                size = OrganicSplitActionRowSize.COMPACT,
+                                bodyColor = accent,
+                                actionColor = MaterialTheme.colorScheme.primary,
+                                onBodyClick = { viewModel.toggleExpandedMonth(month) },
+                                onActionClick = { viewModel.toggleExpandedMonth(month) },
+                                bodyClickLabel = tr("展开或收起 $month", "Expand or collapse $month"),
+                                actionClickLabel = tr("展开或收起 $month", "Expand or collapse $month"),
+                                body = {
+                                    Text(month, style = MaterialTheme.typography.titleMedium)
+                                    Spacer(Modifier.weight(1f))
+                                    Text(
+                                        tr("${diaries.size} 篇", "${diaries.size} entries"),
+                                        style = MaterialTheme.typography.titleSmall,
+                                    )
+                                },
+                                action = {
+                                    Icon(
+                                        if (expandedMonth == month) Icons.Outlined.ExpandLess
+                                        else Icons.Outlined.ExpandMore,
+                                        contentDescription = null,
+                                    )
+                                },
+                            )
+                        } else {
+                            GlassPanel(
+                                modifier = Modifier.fillMaxWidth().combinedClickable(
+                                    onClick = { viewModel.toggleExpandedMonth(month) },
+                                    onLongClick = {},
+                                ),
+                                cornerRadius = 18.dp,
+                                padding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                            ) {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(month, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                    Text(
+                                        diaries.size.toString(),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Icon(Icons.Outlined.MenuBook, null, tint = MaterialTheme.colorScheme.primary)
+                                }
                             }
                         }
                     }
@@ -345,8 +384,11 @@ fun MealCalendarScreen(
     onBack: () -> Unit,
 ) {
     val state by viewModel.mealCalendarState.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     val visuals = deskCubbyVisuals
+    var calculateAllDialog by remember { mutableStateOf(false) }
+    var calculateDateDialog by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(viewModel) {
         viewModel.refreshMealCalendar()
@@ -363,6 +405,11 @@ fun MealCalendarScreen(
                     }
                 },
                 actions = {
+                    if (settings.calorieEstimationEnabled) {
+                        IconButton(onClick = { calculateAllDialog = true }) {
+                            Icon(Icons.Outlined.Calculate, tr("计算未计算的热量", "Calculate missing calories"))
+                        }
+                    }
                     IconButton(onClick = viewModel::refreshMealCalendar) {
                         Icon(Icons.Outlined.Refresh, tr("刷新", "Refresh"))
                     }
@@ -418,12 +465,16 @@ fun MealCalendarScreen(
                         }
                         items(state.items, key = { it.dateIso }) { day ->
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    text = day.dateIso,
-                                    modifier = Modifier.padding(horizontal = 16.dp),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
+                                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    Text(day.dateIso, style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onSurface)
+                                    day.totalEnergyKj?.let { Text("  ·  $it kJ", color = MaterialTheme.colorScheme.primary) }
+                                    Spacer(Modifier.weight(1f))
+                                    if (settings.calorieEstimationEnabled) IconButton(onClick = { calculateDateDialog = day.dateIso }) {
+                                        Icon(Icons.Outlined.Calculate, tr("重新计算 ${day.dateIso} 的热量", "Recalculate ${day.dateIso}"))
+                                    }
+                                }
                                 LazyRow(
                                     contentPadding = PaddingValues(horizontal = 16.dp),
                                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -432,23 +483,30 @@ fun MealCalendarScreen(
                                         items = day.photos,
                                         key = { index, photo -> "${photo.uri}#$index" },
                                     ) { _, photo ->
+                                        val displayCaption = photo.caption.ifBlank {
+                                            tr(photo.category.chineseLabel, photo.category.englishLabel)
+                                        }
                                         Card(
                                             modifier = Modifier.width(148.dp),
                                             shape = if (organic) visuals.mediaShape else MaterialTheme.shapes.medium,
                                         ) {
                                             AsyncImage(
                                                 model = photo.uri,
-                                                contentDescription = photo.caption,
-                                                modifier = Modifier.fillMaxWidth().height(124.dp),
+                                                contentDescription = displayCaption,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(max = settings.mealCalendarImageMaxHeightDp.dp),
                                                 contentScale = ContentScale.Crop,
                                             )
-                                            Text(
-                                                text = photo.caption,
-                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                                style = MaterialTheme.typography.labelMedium,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
+                                            if (settings.mealCalendarShowCaptions) {
+                                                Text(
+                                                    text = displayCaption,
+                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -462,12 +520,27 @@ fun MealCalendarScreen(
             }
         }
     }
+    if (calculateAllDialog) AlertDialog(
+        onDismissRequest = { calculateAllDialog = false },
+        title = { Text(tr("计算热量", "Calculate calories")) },
+        text = { Text(tr("是否计算所有未计算过的热量", "Calculate all calories not calculated yet?")) },
+        confirmButton = { TextButton(onClick = { calculateAllDialog = false; viewModel.calculateUncalculatedCalories() }) { Text(tr("计算", "Calculate")) } },
+        dismissButton = { TextButton(onClick = { calculateAllDialog = false }) { Text(tr("取消", "Cancel")) } },
+    )
+    calculateDateDialog?.let { date -> AlertDialog(
+        onDismissRequest = { calculateDateDialog = null },
+        title = { Text(tr("重新计算热量", "Recalculate calories")) },
+        text = { Text(tr("是否重新计算${date}的食物热量", "Recalculate food calories for $date?")) },
+        confirmButton = { TextButton(onClick = { calculateDateDialog = null; viewModel.calculateUncalculatedCalories(date, true) }) { Text(tr("重新计算", "Recalculate")) } },
+        dismissButton = { TextButton(onClick = { calculateDateDialog = null }) { Text(tr("取消", "Cancel")) } },
+    ) }
 }
 
 @Composable
 fun DiaryEditorScreen(
     viewModel: DiaryViewModel,
     onBack: () -> Unit,
+    onOpenDailyRecords: () -> Unit,
 ) {
     val state by viewModel.editorState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -502,8 +575,19 @@ fun DiaryEditorScreen(
                     Column {
                         Text(state.document?.name ?: tr("日记编辑器", "Diary editor"), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            when { state.conflict != null -> tr("发现外部修改", "External changes found"); state.saving -> tr("正在保存…", "Saving…"); state.dirty -> tr("未保存", "Unsaved"); else -> tr("已保存", "Saved") },
+                            listOf(
+                                when {
+                                    state.conflict != null -> tr("发现外部修改", "External changes found")
+                                    state.saving -> tr("正在保存…", "Saving…")
+                                    state.dirty -> tr("未保存", "Unsaved")
+                                    else -> tr("已保存", "Saved")
+                                },
+                                if (state.preview) tr("阅读预览", "Preview")
+                                else tr("Markdown 源码", "Markdown source"),
+                            ).joinToString(" - "),
                             style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 },
@@ -548,6 +632,7 @@ fun DiaryEditorScreen(
                             listOf(
                                 "早餐" to "Breakfast",
                                 "午餐" to "Lunch",
+                                "下午茶" to "Afternoon tea",
                                 "晚餐" to "Dinner",
                                 "水果" to "Fruit",
                                 "夜宵" to "Late-night snack",
@@ -564,7 +649,18 @@ fun DiaryEditorScreen(
                             }
                         }
                     }
-                    Text(if (state.preview) tr("阅读预览", "Preview") else tr("Markdown 源码", "Markdown source"), style = MaterialTheme.typography.labelLarge)
+                    Surface(
+                        onClick = onOpenDailyRecords,
+                        shape = if (organic) visuals.badgeShape else MaterialTheme.shapes.large,
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                    ) {
+                        Row(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.EventNote, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(tr("日常记录", "Daily records"))
+                        }
+                    }
                 }
             }
         },

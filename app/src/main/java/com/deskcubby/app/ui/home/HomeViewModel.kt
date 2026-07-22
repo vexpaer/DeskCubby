@@ -13,6 +13,7 @@ import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.repository.DailyPoem
 import com.deskcubby.app.data.repository.DateRecordRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
+import com.deskcubby.app.data.repository.CalorieEstimationRepository
 import com.deskcubby.app.data.repository.PoetryRepository
 import com.deskcubby.app.data.repository.PoetryBookRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
@@ -36,6 +37,7 @@ class HomeViewModel @Inject constructor(
     private val poetryRepository: PoetryRepository,
     private val poetryBookRepository: PoetryBookRepository,
     private val diaryFileRepository: DiaryFileRepository,
+    private val calorieRepository: CalorieEstimationRepository,
 ) : ViewModel() {
     val diaries: StateFlow<List<DiaryIndexEntity>> = diaryIndexDao.observeAll().stateIn(
         viewModelScope,
@@ -68,6 +70,8 @@ class HomeViewModel @Inject constructor(
     private val mealUploadMutex = Mutex()
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
+    private val _dailyRecordInProgress = MutableStateFlow<Set<String>>(emptySet())
+    val dailyRecordInProgress: StateFlow<Set<String>> = _dailyRecordInProgress.asStateFlow()
 
     fun refreshPoem(force: Boolean = true) {
         viewModelScope.launch {
@@ -138,7 +142,7 @@ class HomeViewModel @Inject constructor(
                 mealUploadMutex.withLock {
                     try {
                         _mealUploadInProgress.value = true
-                        diaryFileRepository.appendImageToToday(uri, category, settings)
+                        val media = diaryFileRepository.appendImageToToday(uri, category, settings)
                         // The camera source can be removed as soon as both durable writes finish;
                         // a later index scan must not keep the temporary photo alive.
                         releaseSource()
@@ -146,6 +150,18 @@ class HomeViewModel @Inject constructor(
                             "$category photo added to today's diary"
                         } else {
                             "$category 图片已加入今日日记"
+                        }
+                        if (settings.calorieEstimationEnabled) {
+                            try {
+                                val energy = calorieRepository.estimate(media.documentUri, settings)
+                                diaryFileRepository.scanMealCalendar(settings).asSequence()
+                                    .flatMap { it.photos.asSequence() }
+                                    .firstOrNull { it.uri.toString() == media.documentUri }
+                                    ?.let { diaryFileRepository.setMealPhotoEnergy(it, energy) }
+                                _message.value = "${_message.value} · ${energy}kJ"
+                            } catch (error: Exception) {
+                                _message.value = "${_message.value} · 热量估算失败：${error.message.orEmpty()}"
+                            }
                         }
                         // The image and Markdown are already durable at this point. Index refresh
                         // is best-effort so a scan failure never encourages a duplicate retry.
@@ -170,6 +186,46 @@ class HomeViewModel @Inject constructor(
                 }
             } finally {
                 releaseSource()
+            }
+        }
+    }
+
+    fun addDailyRecordToToday(
+        templateId: String,
+        entry: String,
+        settings: AppSettings,
+        onDone: (Boolean) -> Unit = {},
+    ) {
+        if (templateId in _dailyRecordInProgress.value || entry.isBlank()) return
+        _dailyRecordInProgress.value += templateId
+        viewModelScope.launch {
+            var success = false
+            try {
+                diaryFileRepository.appendTextToToday(entry, settings)
+                success = true
+                _message.value = if (settings.appLanguage == AppLanguage.ENGLISH) {
+                    "Added to today's diary: $entry"
+                } else {
+                    "已添加到今日日记：$entry"
+                }
+                try {
+                    diaryFileRepository.scan(settings)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // The durable Markdown write succeeded; a later scan can refresh the index.
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _message.value = error.message ?: if (settings.appLanguage == AppLanguage.ENGLISH) {
+                    "Could not add the daily record"
+                } else {
+                    "日常记录添加失败"
+                }
+            } finally {
+                _dailyRecordInProgress.value -= templateId
+                onDone(success)
             }
         }
     }

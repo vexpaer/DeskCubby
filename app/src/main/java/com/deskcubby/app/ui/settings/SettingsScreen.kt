@@ -7,19 +7,22 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -30,6 +33,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -42,13 +46,17 @@ import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Save
+import androidx.compose.material.icons.outlined.RssFeed
+import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.ViewWeek
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -75,47 +83,53 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Outline
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.takeCodePoints
 import com.deskcubby.app.data.backup.AutoBackupStatus
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AiModelConfig
+import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.BrowserTheme
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.ThoughtDisplayMode
+import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.repository.buildAiRequestPreviewJson
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.iconFor
 import com.deskcubby.app.ui.components.FourDotDragHandle
+import com.deskcubby.app.ui.components.OrganicSplitActionRow
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.tr
@@ -123,6 +137,7 @@ import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import kotlin.math.roundToInt
 
 private enum class SettingsPage {
@@ -134,7 +149,59 @@ private enum class SettingsPage {
     DIARY,
     BLOG,
     THOUGHT,
+    RSS,
+    AI,
+    AI_DETAIL,
     NAVIGATION,
+}
+
+enum class SettingsStartPage { MAIN, NAVIGATION, RSS, AI }
+
+private fun SettingsStartPage.toSettingsPage(): SettingsPage = when (this) {
+    SettingsStartPage.MAIN -> SettingsPage.MAIN
+    SettingsStartPage.NAVIGATION -> SettingsPage.NAVIGATION
+    SettingsStartPage.RSS -> SettingsPage.RSS
+    SettingsStartPage.AI -> SettingsPage.AI
+}
+
+private class SettingsSaveCoordinator {
+    var available by mutableStateOf(false)
+        private set
+    var dirty by mutableStateOf(false)
+        private set
+    var enabled by mutableStateOf(false)
+        private set
+    private var saveAction: (() -> Unit)? = null
+
+    fun register(dirty: Boolean, enabled: Boolean, action: () -> Unit) {
+        available = true
+        this.dirty = dirty
+        this.enabled = enabled
+        saveAction = action
+    }
+
+    fun clear() {
+        available = false
+        dirty = false
+        enabled = false
+        saveAction = null
+    }
+
+    fun save() {
+        if (available && dirty && enabled) saveAction?.invoke()
+    }
+}
+
+@Composable
+private fun RegisterSettingsSave(
+    coordinator: SettingsSaveCoordinator,
+    dirty: Boolean,
+    enabled: Boolean = true,
+    onSave: () -> Unit,
+) {
+    val currentOnSave by rememberUpdatedState(onSave)
+    val stableAction = remember(coordinator) { { currentOnSave() } }
+    SideEffect { coordinator.register(dirty = dirty, enabled = enabled, action = stableAction) }
 }
 
 private data class HomeWidgetOption(
@@ -170,6 +237,7 @@ private val homeWidgetOptions = listOf(
     HomeWidgetOption("recent_diary", "最近日记", "Recent diary"),
     HomeWidgetOption("recent_thought", "最近小巧思", "Recent thought"),
     HomeWidgetOption("quick_input", "快速输入", "Quick input"),
+    HomeWidgetOption("daily_records", "日常记录", "Daily records"),
     HomeWidgetOption("meal_photos", "饮食图片", "Meal photos"),
     HomeWidgetOption("random_diary", "随机旧日记", "Random old diary"),
     HomeWidgetOption("year_progress", "年度进度", "Year progress"),
@@ -177,11 +245,12 @@ private val homeWidgetOptions = listOf(
 )
 
 private val mealButtonOptions = listOf(
-    MealButtonOption("早餐", "Breakfast", "🍳"),
-    MealButtonOption("午餐", "Lunch", "🥗"),
-    MealButtonOption("晚餐", "Dinner", "🍚"),
-    MealButtonOption("水果", "Fruit", "🍎"),
-    MealButtonOption("夜宵", "Late snack", "🌙"),
+    MealButtonOption("早餐", "Breakfast", "🥪"),
+    MealButtonOption("午餐", "Lunch", "🍱"),
+    MealButtonOption("下午茶", "Afternoon tea", "🍹"),
+    MealButtonOption("晚餐", "Dinner", "🍜"),
+    MealButtonOption("水果", "Fruit", "🍊"),
+    MealButtonOption("夜宵", "Late snack", "🍤"),
 )
 
 private data class DiarySettingsDraft(
@@ -194,6 +263,13 @@ private data class DiarySettingsDraft(
     val imageHeight: Int?,
     val mealImageCompressionEnabled: Boolean,
     val mealImageCompressionQuality: Int,
+    val mealCalendarImageMaxHeightDp: Int,
+    val mealCalendarShowCaptions: Boolean,
+    val calorieEstimationEnabled: Boolean,
+    val calorieTextConfigId: String?,
+    val calorieImageConfigId: String?,
+    val calorieVisionPrompt: String,
+    val calorieTextPrompt: String,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -201,13 +277,54 @@ private data class DiarySettingsDraft(
 fun SettingsScreen(
     padding: PaddingValues,
     viewModel: SettingsViewModel,
+    startPage: SettingsStartPage = SettingsStartPage.MAIN,
+    onExit: (() -> Unit)? = null,
+    onSubpageOpenChanged: (Boolean) -> Unit = {},
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val backupOperation by viewModel.backupOperation.collectAsStateWithLifecycle()
     val autoBackupStatus by viewModel.autoBackupStatus.collectAsStateWithLifecycle()
     val settingsError by viewModel.settingsError.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    var page by rememberSaveable { mutableStateOf(SettingsPage.MAIN) }
+    val rootPage = remember(startPage) { startPage.toSettingsPage() }
+    var page by rememberSaveable(startPage) { mutableStateOf(rootPage) }
+    val saveCoordinator = remember { SettingsSaveCoordinator() }
+    var showUnsavedDialog by remember { mutableStateOf(false) }
+    var editingAiConfig by remember { mutableStateOf<AiModelConfig?>(null) }
+
+    LaunchedEffect(page) {
+        saveCoordinator.clear()
+        onSubpageOpenChanged(page != SettingsPage.MAIN)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onSubpageOpenChanged(false) }
+    }
+
+    fun exitOrOpenParent() {
+        saveCoordinator.clear()
+        if (startPage != SettingsStartPage.MAIN && page == rootPage && onExit != null) {
+            onExit()
+        } else {
+            page = parentSettingsPage(page)
+        }
+    }
+
+    fun completeSave(parent: SettingsPage) {
+        saveCoordinator.clear()
+        if (startPage != SettingsStartPage.MAIN && page == rootPage && onExit != null) {
+            onExit()
+        } else {
+            page = parent
+        }
+    }
+
+    fun leaveCurrentPage() {
+        if (saveCoordinator.dirty) {
+            showUnsavedDialog = true
+        } else {
+            exitOrOpenParent()
+        }
+    }
 
     LaunchedEffect(settingsError) {
         settingsError?.let { message ->
@@ -216,7 +333,7 @@ fun SettingsScreen(
         }
     }
 
-    BackHandler(enabled = page != SettingsPage.MAIN) { page = parentSettingsPage(page) }
+    BackHandler(enabled = page != SettingsPage.MAIN) { leaveCurrentPage() }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -225,7 +342,7 @@ fun SettingsScreen(
                 title = { Text(pageTitle(page)) },
                 navigationIcon = {
                     if (page != SettingsPage.MAIN) {
-                        IconButton(onClick = { page = parentSettingsPage(page) }) {
+                        IconButton(onClick = ::leaveCurrentPage) {
                             Icon(
                                 Icons.AutoMirrored.Outlined.ArrowBack,
                                 contentDescription = if (parentSettingsPage(page) == SettingsPage.SUBPAGES) {
@@ -234,6 +351,18 @@ fun SettingsScreen(
                                     tr("返回设置", "Back to settings")
                                 },
                             )
+                        }
+                    }
+                },
+                actions = {
+                    if (saveCoordinator.available) {
+                        TextButton(
+                            enabled = saveCoordinator.dirty && saveCoordinator.enabled,
+                            onClick = saveCoordinator::save,
+                        ) {
+                            Icon(Icons.Outlined.Save, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text(tr("保存", "Save"))
                         }
                     }
                 },
@@ -254,6 +383,7 @@ fun SettingsScreen(
             SettingsPage.APPEARANCE -> AppearanceSettingsPage(
                 settings = settings,
                 contentPadding = inner,
+                saveCoordinator = saveCoordinator,
                 onSave = { visualStyle, darkMode, language, themeColor, secondaryColors, fontScale ->
                     viewModel.setVisualStyle(visualStyle)
                     viewModel.setDarkMode(darkMode)
@@ -261,7 +391,7 @@ fun SettingsScreen(
                     viewModel.setThemeColor(themeColor)
                     viewModel.setThemeSecondaryColors(secondaryColors)
                     viewModel.setFontScale(fontScale)
-                    page = SettingsPage.MAIN
+                    completeSave(SettingsPage.MAIN)
                 },
             )
 
@@ -274,6 +404,7 @@ fun SettingsScreen(
             SettingsPage.HOME -> HomeSettingsPage(
                 settings = settings,
                 contentPadding = inner,
+                saveCoordinator = saveCoordinator,
                 onSave = { draft ->
                     viewModel.setHomePageSettings(
                         userName = draft.userName,
@@ -283,7 +414,7 @@ fun SettingsScreen(
                         mealButtonsUseIcons = draft.mealButtonsUseIcons,
                         mealButtonIcons = draft.mealButtonIcons,
                     )
-                    page = SettingsPage.SUBPAGES
+                    completeSave(SettingsPage.SUBPAGES)
                 },
             )
 
@@ -305,6 +436,7 @@ fun SettingsScreen(
             SettingsPage.DIARY -> DiarySettingsPage(
                 settings = settings,
                 contentPadding = inner,
+                saveCoordinator = saveCoordinator,
                 onSave = { draft ->
                     if (draft.diaryTreeUri != null && draft.diaryTreeUri != settings.diaryTreeUri) {
                         viewModel.persistFolder(Uri.parse(draft.diaryTreeUri), diary = true)
@@ -319,41 +451,120 @@ fun SettingsScreen(
                     draft.imageHeight?.let(viewModel::setImageMaxHeight)
                     viewModel.setMealImageCompressionEnabled(draft.mealImageCompressionEnabled)
                     viewModel.setMealImageCompressionQuality(draft.mealImageCompressionQuality)
-                    page = SettingsPage.SUBPAGES
+                    viewModel.setMealCalendarImageMaxHeight(draft.mealCalendarImageMaxHeightDp)
+                    viewModel.setMealCalendarShowCaptions(draft.mealCalendarShowCaptions)
+                    viewModel.setCalorieEstimationSettings(
+                        draft.calorieEstimationEnabled, draft.calorieTextConfigId,
+                        draft.calorieImageConfigId, draft.calorieVisionPrompt, draft.calorieTextPrompt,
+                    )
+                    completeSave(SettingsPage.SUBPAGES)
                 },
             )
 
             SettingsPage.BLOG -> BlogSettingsPage(
                 settings = settings,
                 contentPadding = inner,
+                saveCoordinator = saveCoordinator,
                 onSave = { browserHome, browserTheme, browserDesktopMode ->
                     viewModel.setBrowserHome(browserHome)
                     viewModel.setBrowserTheme(browserTheme)
                     viewModel.setBrowserDesktopMode(browserDesktopMode)
-                    page = SettingsPage.SUBPAGES
+                    completeSave(SettingsPage.SUBPAGES)
                 },
             )
 
             SettingsPage.THOUGHT -> ThoughtSettingsPage(
-                currentRowHeight = settings.thoughtRowHeightDp,
+                settings = settings,
                 contentPadding = inner,
-                onSave = { rowHeight ->
-                    viewModel.setThoughtRowHeight(rowHeight)
-                    page = SettingsPage.SUBPAGES
+                saveCoordinator = saveCoordinator,
+                onSave = { rowHeight, reopenMode, displayMode ->
+                    viewModel.setThoughtSettings(rowHeight, reopenMode, displayMode)
+                    completeSave(SettingsPage.SUBPAGES)
                 },
             )
+
+            SettingsPage.RSS -> RssSettingsPage(
+                settings = settings,
+                contentPadding = inner,
+                saveCoordinator = saveCoordinator,
+                onSave = { maxItems, showSummaries ->
+                    viewModel.setRssSettings(maxItems, showSummaries)
+                    completeSave(SettingsPage.SUBPAGES)
+                },
+            )
+
+            SettingsPage.AI -> AiConfigurationsSettingsPage(
+                settings = settings,
+                contentPadding = inner,
+                onAdd = {
+                    editingAiConfig = AiModelConfig(
+                        id = UUID.randomUUID().toString(), name = "", type = AiModelType.TEXT,
+                        endpointUrl = "https://api.openai.com/v1/chat/completions", model = "",
+                        systemPrompt = "你是一个有帮助的助手。",
+                    )
+                    page = SettingsPage.AI_DETAIL
+                },
+                onOpen = { config ->
+                    editingAiConfig = config
+                    page = SettingsPage.AI_DETAIL
+                },
+                onCopy = viewModel::copyAiConfig,
+                onDelete = viewModel::deleteAiConfig,
+            )
+
+            SettingsPage.AI_DETAIL -> editingAiConfig?.let { config ->
+                AiConfigurationDetailPage(
+                    initial = config,
+                    contentPadding = inner,
+                    saveCoordinator = saveCoordinator,
+                    onSave = { changed ->
+                        viewModel.saveAiConfig(changed) { success ->
+                            if (success) completeSave(SettingsPage.AI)
+                        }
+                    },
+                )
+            }
 
             SettingsPage.NAVIGATION -> NavigationSettingsPage(
                 settings = settings,
                 contentPadding = inner,
+                saveCoordinator = saveCoordinator,
                 onSave = { defaultPage, navItems, showLabels ->
-                    viewModel.setDefaultPage(defaultPage)
-                    viewModel.setNavItems(navItems)
-                    viewModel.setBottomNavShowLabels(showLabels)
-                    page = SettingsPage.MAIN
+                    viewModel.setNavigationSettings(defaultPage, navItems, showLabels)
+                    completeSave(SettingsPage.MAIN)
                 },
             )
         }
+    }
+
+    if (showUnsavedDialog) {
+        AlertDialog(
+            onDismissRequest = { showUnsavedDialog = false },
+            title = { Text(tr("设置尚未保存", "Unsaved settings")) },
+            text = { Text(tr("返回会丢失刚才的修改。", "Going back will discard your changes.")) },
+            confirmButton = {
+                TextButton(
+                    enabled = saveCoordinator.enabled,
+                    onClick = {
+                        showUnsavedDialog = false
+                        saveCoordinator.save()
+                    },
+                ) { Text(tr("保存", "Save")) }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { showUnsavedDialog = false }) {
+                        Text(tr("继续编辑", "Keep editing"))
+                    }
+                    TextButton(
+                        onClick = {
+                            showUnsavedDialog = false
+                            exitOrOpenParent()
+                        },
+                    ) { Text(tr("放弃", "Discard")) }
+                }
+            },
+        )
     }
 }
 
@@ -381,7 +592,7 @@ private fun SettingsMainPage(
         item {
             SettingsMenuItem(
                 title = tr("子页面设置", "Subpage settings"),
-                description = tr("主页、日记与媒体、浏览器和小巧思", "Home, diary & media, browser and thoughts"),
+                description = tr("主页、日记、浏览器、小巧思、RSS 与 AI", "Home, diary, browser, thoughts, RSS and AI"),
                 icon = { Icon(Icons.Outlined.Tune, contentDescription = null) },
                 accentColor = settings.menuAccentColor(1),
                 onClick = { onOpen(SettingsPage.SUBPAGES) },
@@ -466,10 +677,28 @@ private fun SubpageSettingsPage(
         item {
             SettingsMenuItem(
                 title = tr("小巧思", "Thoughts"),
-                description = tr("调节每一行的显示高度", "Adjust the height of each row"),
+                description = tr("打开位置、内容显示与行高", "Reopen page, content display and row height"),
                 icon = { Icon(Icons.Outlined.Bolt, contentDescription = null) },
                 accentColor = settings.menuAccentColor(3),
                 onClick = { onOpen(SettingsPage.THOUGHT) },
+            )
+        }
+        item {
+            SettingsMenuItem(
+                title = tr("RSS 订阅", "RSS"),
+                description = tr("每个订阅的文章数量与摘要显示", "Article limit and summary display"),
+                icon = { Icon(Icons.Outlined.RssFeed, contentDescription = null) },
+                accentColor = settings.menuAccentColor(4),
+                onClick = { onOpen(SettingsPage.RSS) },
+            )
+        }
+        item {
+            SettingsMenuItem(
+                title = tr("AI 配置", "AI configurations"),
+                description = tr("兼容接口、模型、系统提示词与 API 密钥", "Endpoint, model, system prompt and API key"),
+                icon = { Icon(Icons.Outlined.SmartToy, contentDescription = null) },
+                accentColor = settings.menuAccentColor(5),
+                onClick = { onOpen(SettingsPage.AI) },
             )
         }
     }
@@ -517,126 +746,44 @@ private fun OrganicSettingsMenuItem(
     accentColor: Color,
     onClick: () -> Unit,
 ) {
-    val bodyContentColor = readableContentColor(accentColor)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 80.dp)
-            .height(IntrinsicSize.Min)
-            .clickable(onClick = onClick),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        Surface(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-            shape = OrganicMenuBodyShape,
-            color = accentColor,
-            contentColor = bodyContentColor,
-        ) {
-            Row(
-                modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 28.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                icon()
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = description,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
-        Surface(
-            modifier = Modifier.width(64.dp).fillMaxHeight(),
-            shape = OrganicMenuTrailingShape,
-            color = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-        ) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(start = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Outlined.ChevronRight,
-                    contentDescription = tr("进入$title", "Open $title"),
+    OrganicSplitActionRow(
+        modifier = Modifier.fillMaxWidth(),
+        bodyColor = accentColor,
+        actionColor = MaterialTheme.colorScheme.primary,
+        bodyClickLabel = tr("进入$title", "Open $title"),
+        actionClickLabel = tr("进入$title", "Open $title"),
+        onBodyClick = onClick,
+        onActionClick = onClick,
+        body = {
+            icon()
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-        }
-    }
-}
-
-private object OrganicMenuBodyShape : Shape {
-    override fun createOutline(
-        size: androidx.compose.ui.geometry.Size,
-        layoutDirection: LayoutDirection,
-        density: Density,
-    ): Outline {
-        val radius = with(density) { 16.dp.toPx() }.coerceAtMost(size.height / 2f)
-        val cut = with(density) { 18.dp.toPx() }.coerceAtMost(size.width / 3f)
-        val joinRadius = with(density) { 4.dp.toPx() }.coerceAtMost(cut / 3f)
-        val path = Path().apply {
-            moveTo(radius, 0f)
-            lineTo(size.width - joinRadius, 0f)
-            quadraticBezierTo(size.width, 0f, size.width - joinRadius * 0.5f, joinRadius)
-            lineTo(size.width - cut + joinRadius * 0.5f, size.height - joinRadius)
-            quadraticBezierTo(size.width - cut, size.height, size.width - cut - joinRadius, size.height)
-            lineTo(radius, size.height)
-            quadraticBezierTo(0f, size.height, 0f, size.height - radius)
-            lineTo(0f, radius)
-            quadraticBezierTo(0f, 0f, radius, 0f)
-            close()
-        }
-        return Outline.Generic(path)
-    }
-}
-
-private object OrganicMenuTrailingShape : Shape {
-    override fun createOutline(
-        size: androidx.compose.ui.geometry.Size,
-        layoutDirection: LayoutDirection,
-        density: Density,
-    ): Outline {
-        val radius = with(density) { 16.dp.toPx() }.coerceAtMost(size.height / 2f)
-        val cut = with(density) { 18.dp.toPx() }.coerceAtMost(size.width / 2f)
-        val joinRadius = with(density) { 4.dp.toPx() }.coerceAtMost(cut / 3f)
-        val path = Path().apply {
-            moveTo(cut + joinRadius, 0f)
-            lineTo(size.width - radius, 0f)
-            quadraticBezierTo(size.width, 0f, size.width, radius)
-            lineTo(size.width, size.height - radius)
-            quadraticBezierTo(size.width, size.height, size.width - radius, size.height)
-            lineTo(joinRadius, size.height)
-            quadraticBezierTo(0f, size.height, joinRadius * 0.5f, size.height - joinRadius)
-            lineTo(cut - joinRadius * 0.5f, joinRadius)
-            quadraticBezierTo(cut, 0f, cut + joinRadius, 0f)
-            close()
-        }
-        return Outline.Generic(path)
-    }
+        },
+        action = {
+            Icon(
+                Icons.Outlined.ChevronRight,
+                contentDescription = tr("进入$title", "Open $title"),
+            )
+        },
+    )
 }
 
 private fun AppSettings.menuAccentColor(index: Int): Color {
     val colors = themeSecondaryColorsArgb.ifEmpty { listOf(themeColorArgb) }
     return Color(colors[index.mod(colors.size)])
-}
-
-private fun readableContentColor(background: Color): Color {
-    val dark = Color(0xFF151713)
-    val light = Color.White
-    fun contrast(foreground: Color): Float {
-        val lighter = maxOf(foreground.luminance(), background.luminance())
-        val darker = minOf(foreground.luminance(), background.luminance())
-        return (lighter + 0.05f) / (darker + 0.05f)
-    }
-    return if (contrast(dark) >= contrast(light)) dark else light
 }
 
 @Composable
@@ -789,8 +936,8 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "包含应用设置、小巧思及其分类、浏览器收藏夹、日期记录、诗词本，以及日记和媒体目录路径；不包含日记正文或媒体文件。",
-                        "Includes app settings, thoughts and categories, browser bookmarks, date records, the poetry book, and diary/media folder paths; diary entries and media files are not included.",
+                        "包含应用设置（含 AI API Key）、小巧思及其分类、浏览器收藏夹、日期记录、诗词本，以及日记和媒体目录路径；不包含日记正文或媒体文件。",
+                        "Includes app settings (including AI API keys), thoughts and categories, browser bookmarks, date records, the poetry book, and diary/media folder paths; diary entries and media files are not included.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -814,8 +961,8 @@ private fun BackupSettingsPage(
                 )
                 Text(
                     tr(
-                        "JSON 未加密，包含小巧思及其分类、收藏网址、日期记录和目录信息，请勿存入公开或共享目录。",
-                        "JSON is not encrypted and contains thoughts and categories, bookmarked URLs, date records and folder information. Do not store it in a public or shared folder.",
+                        "JSON 未加密，并包含明文 AI API Key、记录内容、收藏网址和目录信息，请勿存入公开或共享目录。",
+                        "JSON is not encrypted and includes plain-text AI API keys, recorded content, bookmarked URLs and folder information. Do not store it in a public or shared folder.",
                     ),
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
@@ -884,6 +1031,7 @@ private fun BackupSettingsPage(
 private fun AppearanceSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
     onSave: (VisualStyle, DarkMode, AppLanguage, Int, List<Int>, Float) -> Unit,
 ) {
     val presets = listOf(
@@ -919,6 +1067,25 @@ private fun AppearanceSettingsPage(
     val secondaryColorsUnique = validSecondaryValues.distinct().size == secondaryHexes.size
     val secondaryColorsValid = secondaryHexes.size in 2..5 &&
         parsedSecondaryColors.all { it != null } && secondaryColorsUnique
+    val appearanceDirty = visualStyle != settings.visualStyle ||
+        darkMode != settings.darkMode || language != settings.appLanguage ||
+        parsedThemeColor != settings.themeColorArgb ||
+        validSecondaryValues != settings.themeSecondaryColorsArgb ||
+        fontScale != settings.fontScale
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = appearanceDirty,
+        enabled = parsedThemeColor != null && secondaryColorsValid,
+    ) {
+        onSave(
+            visualStyle,
+            darkMode,
+            language,
+            parsedThemeColor ?: settings.themeColorArgb,
+            parsedSecondaryColors.filterNotNull(),
+            fontScale,
+        )
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -1126,18 +1293,6 @@ private fun AppearanceSettingsPage(
                 }
             }
         }
-        item {
-            SaveButton(enabled = parsedThemeColor != null && secondaryColorsValid) {
-                onSave(
-                    visualStyle,
-                    darkMode,
-                    language,
-                    parsedThemeColor ?: settings.themeColorArgb,
-                    parsedSecondaryColors.filterNotNull(),
-                    fontScale,
-                )
-            }
-        }
     }
 }
 
@@ -1145,6 +1300,7 @@ private fun AppearanceSettingsPage(
 private fun HomeSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
     onSave: (HomeSettingsDraft) -> Unit,
 ) {
     var userName by rememberSaveable(settings.userName) { mutableStateOf(settings.userName) }
@@ -1183,6 +1339,27 @@ private fun HomeSettingsPage(
             if (targetIndex > sourceIndex) targetIndex + 1 else targetIndex
         }
     }
+    val homeDraft = HomeSettingsDraft(
+        userName = trimmedName,
+        widgetBordersEnabled = widgetBordersEnabled,
+        widgets = widgets,
+        visibleWidgetTitles = visibleWidgetTitles,
+        mealButtonsUseIcons = mealButtonsUseIcons,
+        mealButtonIcons = mealButtonIcons.map(String::trim),
+    )
+    val homeDirty = homeDraft != HomeSettingsDraft(
+        userName = settings.userName,
+        widgetBordersEnabled = settings.homeWidgetBordersEnabled,
+        widgets = settings.homeWidgets.distinct(),
+        visibleWidgetTitles = settings.homeWidgetTitles.distinct(),
+        mealButtonsUseIcons = settings.mealButtonsUseIcons,
+        mealButtonIcons = settings.mealButtonIcons,
+    )
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = homeDirty,
+        enabled = mealButtonIcons.all { it.isNotBlank() },
+    ) { onSave(homeDraft) }
 
     fun widgetTargetIndex(distancePx: Float): Int? {
         val origin = widgetDragOriginY ?: return null
@@ -1414,20 +1591,6 @@ private fun HomeSettingsPage(
                 }
             }
         }
-        item {
-            SaveButton(enabled = mealButtonIcons.all { it.isNotBlank() }) {
-                onSave(
-                    HomeSettingsDraft(
-                        userName = trimmedName,
-                        widgetBordersEnabled = widgetBordersEnabled,
-                        widgets = widgets,
-                        visibleWidgetTitles = visibleWidgetTitles,
-                        mealButtonsUseIcons = mealButtonsUseIcons,
-                        mealButtonIcons = mealButtonIcons.map(String::trim),
-                    ),
-                )
-            }
-        }
     }
 }
 
@@ -1435,6 +1598,7 @@ private fun HomeSettingsPage(
 private fun DiarySettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
     onSave: (DiarySettingsDraft) -> Unit,
 ) {
     var diaryTreeUri by remember(settings.diaryTreeUri) { mutableStateOf(settings.diaryTreeUri) }
@@ -1450,6 +1614,25 @@ private fun DiarySettingsPage(
     var mealImageCompressionQuality by rememberSaveable(settings.mealImageCompressionQuality) {
         mutableIntStateOf(settings.mealImageCompressionQuality)
     }
+    var mealCalendarImageMaxHeight by rememberSaveable(settings.mealCalendarImageMaxHeightDp) {
+        mutableIntStateOf(settings.mealCalendarImageMaxHeightDp)
+    }
+    var mealCalendarShowCaptions by rememberSaveable(settings.mealCalendarShowCaptions) {
+        mutableStateOf(settings.mealCalendarShowCaptions)
+    }
+    val textConfigs = settings.aiConfigs.filter { it.type == AiModelType.TEXT }
+    val imageConfigs = settings.aiConfigs.filter { it.type == AiModelType.IMAGE }
+    var calorieEnabled by rememberSaveable(settings.calorieEstimationEnabled) {
+        mutableStateOf(settings.calorieEstimationEnabled)
+    }
+    var calorieTextConfigId by rememberSaveable(settings.calorieTextConfigId) {
+        mutableStateOf(settings.calorieTextConfigId)
+    }
+    var calorieImageConfigId by rememberSaveable(settings.calorieImageConfigId) {
+        mutableStateOf(settings.calorieImageConfigId)
+    }
+    var calorieVisionPrompt by remember(settings.calorieVisionPrompt) { mutableStateOf(settings.calorieVisionPrompt) }
+    var calorieTextPrompt by remember(settings.calorieTextPrompt) { mutableStateOf(settings.calorieTextPrompt) }
 
     val diaryFolderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let { diaryTreeUri = it.toString() }
@@ -1457,6 +1640,43 @@ private fun DiarySettingsPage(
     val mediaFolderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let { mediaTreeUri = it.toString() }
     }
+    val diaryDraft = DiarySettingsDraft(
+        diaryTreeUri = diaryTreeUri,
+        mediaTreeUri = mediaTreeUri,
+        filePattern = filePattern,
+        template = template,
+        imagePattern = imagePattern,
+        imageWidth = imageWidth.toIntOrNull(),
+        imageHeight = imageHeight.toIntOrNull(),
+        mealImageCompressionEnabled = mealImageCompressionEnabled,
+        mealImageCompressionQuality = mealImageCompressionQuality,
+        mealCalendarImageMaxHeightDp = mealCalendarImageMaxHeight,
+        mealCalendarShowCaptions = mealCalendarShowCaptions,
+        calorieEstimationEnabled = calorieEnabled,
+        calorieTextConfigId = calorieTextConfigId,
+        calorieImageConfigId = calorieImageConfigId,
+        calorieVisionPrompt = calorieVisionPrompt,
+        calorieTextPrompt = calorieTextPrompt,
+    )
+    val diaryDirty = diaryTreeUri != settings.diaryTreeUri || mediaTreeUri != settings.mediaTreeUri ||
+        filePattern != settings.fileNamePattern || template != settings.markdownTemplate ||
+        imagePattern != settings.imageNamePattern || diaryDraft.imageWidth != settings.imageMaxWidthDp ||
+        diaryDraft.imageHeight != settings.imageMaxHeightDp ||
+        mealImageCompressionEnabled != settings.mealImageCompressionEnabled ||
+        mealImageCompressionQuality != settings.mealImageCompressionQuality ||
+        mealCalendarImageMaxHeight != settings.mealCalendarImageMaxHeightDp ||
+        mealCalendarShowCaptions != settings.mealCalendarShowCaptions ||
+        calorieEnabled != settings.calorieEstimationEnabled ||
+        calorieTextConfigId != settings.calorieTextConfigId ||
+        calorieImageConfigId != settings.calorieImageConfigId ||
+        calorieVisionPrompt != settings.calorieVisionPrompt || calorieTextPrompt != settings.calorieTextPrompt
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = diaryDirty,
+        enabled = filePattern.isNotBlank() && imagePattern.isNotBlank() &&
+            diaryDraft.imageWidth != null && diaryDraft.imageHeight != null &&
+            (!calorieEnabled || textConfigs.any { it.id == calorieTextConfigId } && imageConfigs.any { it.id == calorieImageConfigId }),
+    ) { onSave(diaryDraft) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -1562,21 +1782,124 @@ private fun DiarySettingsPage(
             }
         }
         item {
-            SaveButton {
-                onSave(
-                    DiarySettingsDraft(
-                        diaryTreeUri = diaryTreeUri,
-                        mediaTreeUri = mediaTreeUri,
-                        filePattern = filePattern,
-                        template = template,
-                        imagePattern = imagePattern,
-                        imageWidth = imageWidth.toIntOrNull(),
-                        imageHeight = imageHeight.toIntOrNull(),
-                        mealImageCompressionEnabled = mealImageCompressionEnabled,
-                        mealImageCompressionQuality = mealImageCompressionQuality,
-                    ),
+            SettingsSection(tr("吃历显示", "Meal calendar display")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(tr("图片高度上限", "Maximum image height"))
+                    Text("$mealCalendarImageMaxHeight dp", color = MaterialTheme.colorScheme.primary)
+                }
+                Slider(
+                    value = mealCalendarImageMaxHeight.toFloat(),
+                    onValueChange = {
+                        mealCalendarImageMaxHeight = (it / 8f).roundToInt().times(8).coerceIn(80, 320)
+                    },
+                    valueRange = 80f..320f,
+                    steps = 29,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("显示餐别文字", "Show meal captions"))
+                        Text(
+                            tr("关闭后只显示图片，仍按早餐、午餐、晚餐的顺序排列。", "When off, only photos are shown; meal order stays fixed."),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = mealCalendarShowCaptions,
+                        onCheckedChange = { mealCalendarShowCaptions = it },
+                    )
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("AI 热量估算", "AI calorie estimation")) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("上传饮食图片后自动估算", "Estimate after uploading meal images"))
+                        Text(
+                            if (textConfigs.isEmpty() || imageConfigs.isEmpty()) tr(
+                                "需要先在 AI 配置中添加文字模型和图片模型。",
+                                "Add a text model and an image model in AI configurations first.",
+                            ) else tr("结果会写入图片标题并显示在吃历。", "Results are written to captions and shown in the meal calendar."),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = calorieEnabled,
+                        onCheckedChange = { calorieEnabled = it },
+                        enabled = textConfigs.isNotEmpty() && imageConfigs.isNotEmpty(),
+                    )
+                }
+                AiConfigurationPicker(
+                    label = tr("热量计算文字模型", "Calorie text model"),
+                    configs = textConfigs,
+                    selectedId = calorieTextConfigId,
+                    onSelected = { calorieTextConfigId = it },
+                )
+                AiConfigurationPicker(
+                    label = tr("食物图片识别模型", "Food image model"),
+                    configs = imageConfigs,
+                    selectedId = calorieImageConfigId,
+                    onSelected = { calorieImageConfigId = it },
+                )
+                OutlinedTextField(
+                    value = calorieVisionPrompt,
+                    onValueChange = { calorieVisionPrompt = it.take(20_000) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(tr("图片识别提示词", "Vision prompt")) },
+                    minLines = 4,
+                )
+                OutlinedTextField(
+                    value = calorieTextPrompt,
+                    onValueChange = { calorieTextPrompt = it.take(20_000) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(tr("热量计算提示词", "Calorie prompt")) },
+                    minLines = 4,
                 )
             }
+        }
+        item {
+            if (diaryDraft.imageWidth == null || diaryDraft.imageHeight == null) {
+                Text(
+                    tr("图片宽度和高度必须填写数字。", "Image width and height must be numbers."),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiConfigurationPicker(
+    label: String,
+    configs: List<AiModelConfig>,
+    selectedId: String?,
+    onSelected: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = configs.firstOrNull { it.id == selectedId }
+    Box(Modifier.fillMaxWidth()) {
+        OutlinedButton(onClick = { expanded = true }, enabled = configs.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
+                Text(label, style = MaterialTheme.typography.labelSmall)
+                Text(selected?.name ?: tr("请选择配置", "Select a configuration"), maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+            }
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            configs.forEach { config -> DropdownMenuItem(
+                text = { Text(config.name) },
+                onClick = { expanded = false; onSelected(config.id) },
+            ) }
         }
     }
 }
@@ -1585,11 +1908,18 @@ private fun DiarySettingsPage(
 private fun BlogSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
     onSave: (String, BrowserTheme, Boolean) -> Unit,
 ) {
     var browserHome by remember(settings.browserHomeUrl) { mutableStateOf(settings.browserHomeUrl) }
     var browserTheme by remember(settings.browserTheme) { mutableStateOf(settings.browserTheme) }
     var browserDesktopMode by remember(settings.browserDesktopMode) { mutableStateOf(settings.browserDesktopMode) }
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = browserHome != settings.browserHomeUrl || browserTheme != settings.browserTheme ||
+            browserDesktopMode != settings.browserDesktopMode,
+        enabled = browserHome.isNotBlank(),
+    ) { onSave(browserHome, browserTheme, browserDesktopMode) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -1648,25 +1978,76 @@ private fun BlogSettingsPage(
                 }
             }
         }
-        item { SaveButton { onSave(browserHome, browserTheme, browserDesktopMode) } }
     }
 }
 
 @Composable
 private fun ThoughtSettingsPage(
-    currentRowHeight: Int,
+    settings: AppSettings,
     contentPadding: PaddingValues,
-    onSave: (Int) -> Unit,
+    saveCoordinator: SettingsSaveCoordinator,
+    onSave: (Int, ThoughtReopenMode, ThoughtDisplayMode) -> Unit,
 ) {
-    var rowHeight by remember(currentRowHeight) {
-        mutableIntStateOf(currentRowHeight.coerceIn(48, 120))
+    var rowHeight by remember(settings.thoughtRowHeightDp) {
+        mutableIntStateOf(settings.thoughtRowHeightDp.coerceIn(48, 120))
     }
+    var reopenMode by remember(settings.thoughtReopenMode) { mutableStateOf(settings.thoughtReopenMode) }
+    var displayMode by remember(settings.thoughtDisplayMode) { mutableStateOf(settings.thoughtDisplayMode) }
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = rowHeight != settings.thoughtRowHeightDp || reopenMode != settings.thoughtReopenMode ||
+            displayMode != settings.thoughtDisplayMode,
+    ) { onSave(rowHeight, reopenMode, displayMode) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        item {
+            SettingsSection(tr("重新打开", "Reopen behavior")) {
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    ThoughtReopenMode.entries.forEachIndexed { index, mode ->
+                        SegmentedButton(
+                            selected = reopenMode == mode,
+                            onClick = { reopenMode = mode },
+                            shape = SegmentedButtonDefaults.itemShape(index, ThoughtReopenMode.entries.size),
+                        ) {
+                            Text(
+                                if (mode == ThoughtReopenMode.LAST_VISITED) {
+                                    tr("上次停留", "Last visited")
+                                } else {
+                                    tr("全部页面", "All page")
+                                },
+                            )
+                        }
+                    }
+                }
+                Text(
+                    tr("记住关闭前所在的分类页，或每次都从“全部”开始。", "Return to the last category, or always start from All."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            SettingsSection(tr("内容显示", "Content display")) {
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    ThoughtDisplayMode.entries.forEachIndexed { index, mode ->
+                        SegmentedButton(
+                            selected = displayMode == mode,
+                            onClick = { displayMode = mode },
+                            shape = SegmentedButtonDefaults.itemShape(index, ThoughtDisplayMode.entries.size),
+                        ) {
+                            Text(
+                                if (mode == ThoughtDisplayMode.SINGLE_LINE) tr("一行", "One line")
+                                else tr("完整", "Full"),
+                            )
+                        }
+                    }
+                }
+            }
+        }
         item {
             SettingsSection(tr("每行高度", "Row height")) {
                 Row(
@@ -1690,7 +2071,514 @@ private fun ThoughtSettingsPage(
                 }
             }
         }
-        item { SaveButton { onSave(rowHeight) } }
+    }
+}
+
+@Composable
+private fun RssSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onSave: (Int, Boolean) -> Unit,
+) {
+    var maxItems by rememberSaveable(settings.rssMaxItemsPerFeed) {
+        mutableIntStateOf(settings.rssMaxItemsPerFeed)
+    }
+    var showSummaries by rememberSaveable(settings.rssShowSummaries) {
+        mutableStateOf(settings.rssShowSummaries)
+    }
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = maxItems != settings.rssMaxItemsPerFeed || showSummaries != settings.rssShowSummaries,
+    ) { onSave(maxItems, showSummaries) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            SettingsSection(tr("文章数量", "Article count")) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(tr("每个订阅最多显示", "Maximum per feed"))
+                    Text(maxItems.toString(), color = MaterialTheme.colorScheme.primary)
+                }
+                Slider(
+                    value = maxItems.toFloat(),
+                    onValueChange = { maxItems = (it / 10f).roundToInt().times(10).coerceIn(10, 200) },
+                    valueRange = 10f..200f,
+                    steps = 18,
+                )
+            }
+        }
+        item {
+            SettingsSection(tr("文章列表", "Article list")) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("显示摘要", "Show summaries"))
+                        Text(
+                            tr("关闭后列表只保留标题、订阅名和时间。", "When off, the list keeps only titles, feed names and dates."),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = showSummaries, onCheckedChange = { showSummaries = it })
+                }
+            }
+        }
+        item {
+            Text(
+                tr("订阅地址请在 RSS 页面右上角添加和管理。", "Add and manage feed URLs from the RSS page."),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AiConfigurationsSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    onAdd: () -> Unit,
+    onOpen: (AiModelConfig) -> Unit,
+    onCopy: (AiModelConfig) -> Unit,
+    onDelete: (AiModelConfig) -> Unit,
+) {
+    var longPressed by remember { mutableStateOf<AiModelConfig?>(null) }
+    var pendingDelete by remember { mutableStateOf<AiModelConfig?>(null) }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (settings.aiConfigs.isEmpty()) item {
+            GlassPanel(Modifier.fillMaxWidth(), padding = PaddingValues(24.dp)) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Outlined.SmartToy, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
+                    Text(tr("还没有 AI 配置", "No AI configurations"), style = MaterialTheme.typography.titleMedium)
+                    Text(tr("添加文字模型或图片识别模型。", "Add a text or image-recognition model."),
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        items(settings.aiConfigs, key = AiModelConfig::id) { config ->
+            Surface(
+                modifier = Modifier.fillMaxWidth().combinedClickable(
+                    onClick = { onOpen(config) }, onLongClick = { longPressed = config },
+                ),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ) {
+                Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (config.type == AiModelType.TEXT) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.tertiaryContainer,
+                    ) {
+                        Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
+                            if (config.type == AiModelType.TEXT) {
+                                Text("文", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            } else {
+                                Icon(Icons.Outlined.Image, null, Modifier.size(21.dp),
+                                    tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Text(config.name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleMedium)
+                    Text(if (config.type == AiModelType.TEXT) tr("文字", "Text") else tr("图片", "Image"),
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        item {
+            Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(8.dp)); Text(tr("添加配置", "Add configuration"))
+            }
+        }
+    }
+    longPressed?.let { config -> AlertDialog(
+        onDismissRequest = { longPressed = null },
+        title = { Text(config.name) },
+        text = { Text(tr("选择要对这项配置执行的操作。", "Choose an action for this configuration.")) },
+        confirmButton = { TextButton(onClick = { longPressed = null; onCopy(config) }) { Text(tr("复制配置", "Duplicate")) } },
+        dismissButton = { TextButton(onClick = { longPressed = null; pendingDelete = config }) { Text(tr("删除配置", "Delete")) } },
+    ) }
+    pendingDelete?.let { config -> AlertDialog(
+        onDismissRequest = { pendingDelete = null },
+        title = { Text(tr("删除配置？", "Delete configuration?")) },
+        text = { Text(tr("将删除“${config.name}”及其 API Key。", "This deletes “${config.name}” and its API key.")) },
+        confirmButton = { TextButton(onClick = { pendingDelete = null; onDelete(config) }) { Text(tr("删除", "Delete")) } },
+        dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text(tr("取消", "Cancel")) } },
+    ) }
+}
+
+@Composable
+private fun AiConfigurationDetailPage(
+    initial: AiModelConfig,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onSave: (AiModelConfig) -> Unit,
+) {
+    var name by rememberSaveable(initial.id) { mutableStateOf(initial.name) }
+    var type by rememberSaveable(initial.id) { mutableStateOf(initial.type) }
+    var endpoint by rememberSaveable(initial.id) { mutableStateOf(initial.endpointUrl) }
+    var model by rememberSaveable(initial.id) { mutableStateOf(initial.model) }
+    var allowHttp by rememberSaveable(initial.id) { mutableStateOf(initial.allowInsecureHttp) }
+    var temperature by rememberSaveable(initial.id) { mutableStateOf(initial.temperature) }
+    var systemPrompt by rememberSaveable(initial.id) { mutableStateOf(initial.systemPrompt) }
+    var apiKey by rememberSaveable(initial.id) { mutableStateOf(initial.apiKey) }
+    var requestPreview by remember(initial.id) { mutableStateOf<String?>(null) }
+    val changed = initial.copy(name = name, type = type, endpointUrl = endpoint, model = model,
+        allowInsecureHttp = allowHttp, temperature = temperature, systemPrompt = systemPrompt,
+        apiKey = apiKey, enabled = true)
+    val endpointUri = remember(endpoint) { runCatching { Uri.parse(endpoint.trim()) }.getOrNull() }
+    val endpointValid = endpointUri?.host?.isNotBlank() == true && when (endpointUri.scheme?.lowercase()) {
+        "https" -> true; "http" -> allowHttp; else -> false
+    }
+    val dirty = changed != initial.copy(enabled = true)
+    RegisterSettingsSave(saveCoordinator, dirty, name.isNotBlank() && model.isNotBlank() && endpointValid) {
+        onSave(changed)
+    }
+    LazyColumn(
+        Modifier.fillMaxSize().padding(contentPadding), contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item { SettingsSection(tr("配置类型", "Configuration type")) {
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                AiModelType.entries.forEachIndexed { index, option -> SegmentedButton(
+                    selected = type == option, onClick = { type = option },
+                    shape = SegmentedButtonDefaults.itemShape(index, AiModelType.entries.size),
+                ) { Text(if (option == AiModelType.TEXT) tr("文字模型", "Text model") else tr("图片模型", "Image model")) } }
+            }
+        } }
+        item { SettingsSection(tr("模型配置", "Model configuration")) {
+            OutlinedTextField(name, { name = it.take(80) }, Modifier.fillMaxWidth(),
+                label = { Text(tr("配置名称", "Configuration name")) }, singleLine = true)
+            OutlinedTextField(endpoint, { endpoint = it.take(4096) }, Modifier.fillMaxWidth(),
+                label = { Text(tr("API 地址", "API endpoint")) }, singleLine = true, isError = !endpointValid)
+            OutlinedTextField(model, { model = it.take(512) }, Modifier.fillMaxWidth(),
+                label = { Text(tr("模型名称", "Model name")) }, singleLine = true)
+            OutlinedTextField(apiKey, { apiKey = it.take(8192) }, Modifier.fillMaxWidth(),
+                label = { Text("API Key") }, singleLine = true,
+                supportingText = { Text(tr(
+                    "明文显示并随配置保存，也会包含在设置备份中。",
+                    "Shown and stored as plain text, including in settings backups.",
+                )) })
+            if (type == AiModelType.TEXT) OutlinedTextField(
+                systemPrompt, { systemPrompt = it.take(20_000) }, Modifier.fillMaxWidth(),
+                label = { Text(tr("系统提示词", "System prompt")) }, minLines = 4,
+            )
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(tr("允许 HTTP", "Allow HTTP"))
+                    Text(tr("仅用于可信局域网接口。", "Only for trusted local endpoints."), style = MaterialTheme.typography.bodySmall)
+                }
+                Checkbox(allowHttp, { allowHttp = it })
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(tr("温度", "Temperature")); Text(String.format(Locale.ROOT, "%.1f", temperature))
+            }
+            Slider(temperature, { temperature = (it * 10).roundToInt() / 10f }, valueRange = 0f..2f, steps = 19)
+            OutlinedButton(
+                onClick = { requestPreview = buildAiRequestPreviewJson(changed) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(tr("预览请求 JSON", "Preview request JSON"))
+            }
+        } }
+    }
+
+    requestPreview?.let { preview ->
+        AlertDialog(
+            onDismissRequest = { requestPreview = null },
+            title = { Text(tr("请求 JSON 预览", "Request JSON preview")) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        tr(
+                            "占位内容会在实际调用时替换。API Key 位于请求头，不属于 JSON，因此不会显示在这里。",
+                            "Placeholders are replaced for real calls. The API key is sent in a header, not in JSON, so it is not shown here.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    SelectionContainer {
+                        Text(
+                            text = preview,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 420.dp)
+                                .verticalScroll(rememberScrollState())
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    MaterialTheme.shapes.small,
+                                )
+                                .padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { requestPreview = null }) { Text(tr("关闭", "Close")) }
+            },
+        )
+    }
+}
+
+@Composable
+private fun LegacyAiConfigurationsSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onSave: (List<AiModelConfig>, String, Boolean, String, String, Map<String, String>, Set<String>) -> Unit,
+) {
+    var configs by remember(settings.aiConfigs) { mutableStateOf(settings.aiConfigs.map { it.copy() }) }
+    var systemPrompt by remember(settings.aiSystemPrompt) { mutableStateOf(settings.aiSystemPrompt) }
+    var calorieEnabled by remember(settings.calorieEstimationEnabled) { mutableStateOf(settings.calorieEstimationEnabled) }
+    var visionPrompt by remember(settings.calorieVisionPrompt) { mutableStateOf(settings.calorieVisionPrompt) }
+    var textPrompt by remember(settings.calorieTextPrompt) { mutableStateOf(settings.calorieTextPrompt) }
+    val apiKeys = remember { mutableStateMapOf<String, String>() }
+    var deletedIds by remember { mutableStateOf(emptySet<String>()) }
+    val hasText = configs.any { it.enabled && it.type == AiModelType.TEXT }
+    val hasImage = configs.any { it.enabled && it.type == AiModelType.IMAGE }
+    val newConfigName = tr("新配置", "New configuration")
+    val dirty = configs != settings.aiConfigs || systemPrompt != settings.aiSystemPrompt ||
+        calorieEnabled != settings.calorieEstimationEnabled || visionPrompt != settings.calorieVisionPrompt ||
+        textPrompt != settings.calorieTextPrompt || apiKeys.values.any(String::isNotBlank) || deletedIds.isNotEmpty()
+    RegisterSettingsSave(saveCoordinator, dirty,
+        configs.all { it.name.isNotBlank() && it.endpointUrl.isNotBlank() && it.model.isNotBlank() } &&
+            (!calorieEnabled || hasText && hasImage)) {
+        onSave(configs, systemPrompt, calorieEnabled, visionPrompt, textPrompt, apiKeys.toMap(), deletedIds)
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            SettingsSection(tr("AI 配置", "AI configurations")) {
+                Text(tr("可分别添加文字与图片识别模型；同类型可保留多套配置并单独启用。",
+                    "Add separate text and vision models; each configuration can be enabled independently."),
+                    style = MaterialTheme.typography.bodySmall)
+                configs.forEachIndexed { index, config ->
+                    Surface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large,
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .45f)) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(config.name.ifBlank { tr("未命名配置", "Unnamed") }, Modifier.weight(1f),
+                                    style = MaterialTheme.typography.titleSmall)
+                                Switch(config.enabled, { enabled ->
+                                    configs = configs.mapIndexed { i, item ->
+                                        if (i == index) item.copy(enabled = enabled) else if (enabled && item.type == config.type) item.copy(enabled = false) else item
+                                    }
+                                })
+                                IconButton(onClick = {
+                                    deletedIds += config.id
+                                    configs = configs.filterIndexed { i, _ -> i != index }
+                                }) { Icon(Icons.Outlined.Close, tr("删除配置", "Delete configuration")) }
+                            }
+                            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                                AiModelType.entries.forEachIndexed { typeIndex, type ->
+                                    SegmentedButton(selected = config.type == type,
+                                        onClick = { configs = configs.toMutableList().apply { set(index, config.copy(type = type)) } },
+                                        shape = SegmentedButtonDefaults.itemShape(typeIndex, AiModelType.entries.size)) {
+                                        Text(if (type == AiModelType.TEXT) tr("文字", "Text") else tr("图片", "Image"))
+                                    }
+                                }
+                            }
+                            fun update(changed: AiModelConfig) { configs = configs.toMutableList().apply { set(index, changed) } }
+                            OutlinedTextField(config.name, { update(config.copy(name = it.take(80))) },
+                                Modifier.fillMaxWidth(), label = { Text(tr("配置名称", "Configuration name")) }, singleLine = true)
+                            OutlinedTextField(config.endpointUrl, { update(config.copy(endpointUrl = it.take(4096))) },
+                                Modifier.fillMaxWidth(), label = { Text(tr("API 地址", "API endpoint")) }, singleLine = true)
+                            OutlinedTextField(config.model, { update(config.copy(model = it.take(512))) },
+                                Modifier.fillMaxWidth(), label = { Text(tr("模型名称", "Model name")) }, singleLine = true)
+                            OutlinedTextField(apiKeys[config.id].orEmpty(), { apiKeys[config.id] = it.take(8192) },
+                                Modifier.fillMaxWidth(), label = { Text(tr("新 API Key（留空则保留）", "New API key (blank keeps existing)")) },
+                                singleLine = true)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(tr("允许 HTTP", "Allow HTTP"), Modifier.weight(1f))
+                                Checkbox(config.allowInsecureHttp, { update(config.copy(allowInsecureHttp = it)) })
+                            }
+                        }
+                    }
+                }
+                OutlinedButton(onClick = {
+                    configs = configs + AiModelConfig(UUID.randomUUID().toString(),
+                        newConfigName, AiModelType.TEXT,
+                        "https://api.openai.com/v1/chat/completions", "", enabled = false)
+                }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(8.dp)); Text(tr("添加配置", "Add configuration"))
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("对话与热量估算", "Chat and calorie estimation")) {
+                OutlinedTextField(systemPrompt, { systemPrompt = it.take(20_000) }, Modifier.fillMaxWidth(),
+                    label = { Text(tr("聊天系统提示词", "Chat system prompt")) }, minLines = 3)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("AI 估算热量", "AI calorie estimation"))
+                        Text(if (hasText && hasImage) tr("上传饮食图片后自动计算", "Calculate after a food image is uploaded")
+                            else tr("请先启用一套文字模型和图片模型", "Enable one text and one image model first"),
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(calorieEnabled, { calorieEnabled = it }, enabled = hasText && hasImage)
+                }
+                OutlinedTextField(visionPrompt, { visionPrompt = it.take(20_000) }, Modifier.fillMaxWidth(),
+                    label = { Text(tr("图片识别提示词", "Vision prompt")) }, minLines = 4)
+                OutlinedTextField(textPrompt, { textPrompt = it.take(20_000) }, Modifier.fillMaxWidth(),
+                    label = { Text(tr("热量计算提示词", "Calorie prompt")) }, minLines = 4)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LegacySingleAiSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onSave: (String, String, String, Float, Boolean, String, Boolean) -> Unit,
+) {
+    var endpoint by remember(settings.aiEndpointUrl) { mutableStateOf(settings.aiEndpointUrl) }
+    var model by remember(settings.aiModel) { mutableStateOf(settings.aiModel) }
+    var systemPrompt by remember(settings.aiSystemPrompt) { mutableStateOf(settings.aiSystemPrompt) }
+    var temperature by remember(settings.aiTemperature) { mutableStateOf(settings.aiTemperature) }
+    var allowInsecureHttp by remember(settings.aiAllowInsecureHttp) {
+        mutableStateOf(settings.aiAllowInsecureHttp)
+    }
+    var apiKey by remember { mutableStateOf("") }
+    var clearApiKey by remember { mutableStateOf(false) }
+    val endpointUri = remember(endpoint) { runCatching { Uri.parse(endpoint.trim()) }.getOrNull() }
+    val endpointValid = endpointUri?.host?.isNotBlank() == true && when (endpointUri.scheme?.lowercase()) {
+        "https" -> true
+        "http" -> allowInsecureHttp
+        else -> false
+    }
+    val dirty = endpoint.trim() != settings.aiEndpointUrl || model.trim() != settings.aiModel ||
+        systemPrompt != settings.aiSystemPrompt || temperature != settings.aiTemperature ||
+        allowInsecureHttp != settings.aiAllowInsecureHttp || apiKey.isNotBlank() || clearApiKey
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = dirty,
+        enabled = endpointValid && model.isNotBlank() && systemPrompt.length <= 20_000,
+    ) {
+        onSave(
+            endpoint.trim(),
+            model.trim(),
+            systemPrompt,
+            temperature,
+            allowInsecureHttp,
+            apiKey.trim(),
+            clearApiKey,
+        )
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            SettingsSection(tr("兼容 API", "Compatible API")) {
+                OutlinedTextField(
+                    value = endpoint,
+                    onValueChange = { endpoint = it.take(4_096) },
+                    label = { Text(tr("聊天接口地址", "Chat endpoint URL")) },
+                    supportingText = {
+                        Text(tr("填写完整的 /v1/chat/completions 地址", "Enter the full /v1/chat/completions URL"))
+                    },
+                    isError = !endpointValid,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = model,
+                    onValueChange = { model = it.take(512) },
+                    label = { Text(tr("模型", "Model")) },
+                    supportingText = { Text(tr("例如服务商提供的模型 ID", "Use the model ID from your provider")) },
+                    isError = model.isBlank(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("允许 HTTP", "Allow HTTP"))
+                        Text(
+                            tr("仅用于可信局域网服务；公网 API 应使用 HTTPS。", "Only for trusted local services; public APIs should use HTTPS."),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = allowInsecureHttp, onCheckedChange = { allowInsecureHttp = it })
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("API 密钥", "API key")) {
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = {
+                        apiKey = it.take(8_192)
+                        if (it.isNotEmpty()) clearApiKey = false
+                    },
+                    label = { Text(tr("新密钥", "New key")) },
+                    supportingText = {
+                        Text(
+                            tr(
+                                "接口地址不变时留空会保留密钥；更换地址时请重新输入。本地服务可以不设密钥。",
+                                "Leave blank to keep the key for the same endpoint; re-enter it after changing endpoints. Local services may not need one.",
+                            ),
+                        )
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = clearApiKey,
+                        onCheckedChange = {
+                            clearApiKey = it
+                            if (it) apiKey = ""
+                        },
+                    )
+                    Text(tr("清除已保存的密钥", "Clear saved key"))
+                }
+                Text(
+                    tr("密钥会以明文随配置保存，并写入 DeskCubby JSON 备份。", "The key is stored as plain text with the configuration and included in DeskCubby JSON backups."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            SettingsSection(tr("对话行为", "Chat behavior")) {
+                OutlinedTextField(
+                    value = systemPrompt,
+                    onValueChange = { systemPrompt = it.take(20_000) },
+                    label = { Text(tr("系统提示词", "System prompt")) },
+                    minLines = 5,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(tr("温度", "Temperature"))
+                    Text(String.format(Locale.ROOT, "%.1f", temperature), color = MaterialTheme.colorScheme.primary)
+                }
+                Slider(
+                    value = temperature,
+                    onValueChange = { temperature = (it * 10).roundToInt() / 10f },
+                    valueRange = 0f..2f,
+                    steps = 19,
+                )
+            }
+        }
     }
 }
 
@@ -1698,6 +2586,7 @@ private fun ThoughtSettingsPage(
 private fun NavigationSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
     onSave: (NavItemId, List<NavItemConfig>, Boolean) -> Unit,
 ) {
     var defaultPage by remember(settings.defaultPage) { mutableStateOf(settings.defaultPage) }
@@ -1719,7 +2608,7 @@ private fun NavigationSettingsPage(
 
     fun navTargetIndex(distancePx: Float): Int? {
         val origin = navDragOriginY ?: return null
-        val targetId = navCenters.entries.minByOrNull { (_, center) ->
+        val targetId = navCenters.entries.filterNot { it.key == draggingNavId }.minByOrNull { (_, center) ->
             kotlin.math.abs(center - (origin + distancePx))
         }?.key
         return navItems.indexOfFirst { it.id == targetId }.takeIf { it >= 0 }
@@ -1731,6 +2620,22 @@ private fun NavigationSettingsPage(
         navDragOriginY = null
         navDragTargetIndex = null
     }
+
+    fun moveNavItem(fromIndex: Int, toIndex: Int): Boolean {
+        if (fromIndex !in navItems.indices || toIndex !in navItems.indices || fromIndex == toIndex) {
+            return false
+        }
+        navItems = navItems.toMutableList().apply {
+            val moved = removeAt(fromIndex)
+            add(toIndex, moved)
+        }
+        return true
+    }
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = defaultPage != settings.defaultPage || navItems != settings.navItems ||
+            showLabels != settings.bottomNavShowLabels,
+    ) { onSave(defaultPage, navItems, showLabels) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -1801,15 +2706,12 @@ private fun NavigationSettingsPage(
                                     navDragTargetIndex = navTargetIndex(distance)
                                 },
                                 onDragCancelled = ::clearNavDrag,
+                                onMoveUp = { moveNavItem(index, index - 1) },
+                                onMoveDown = { moveNavItem(index, index + 1) },
                                 onMove = { distance ->
                                     val target = navTargetIndex(distance) ?: navDragTargetIndex
                                     clearNavDrag()
-                                    if (target != null && target in navItems.indices && target != index) {
-                                        navItems = navItems.toMutableList().apply {
-                                            val moved = removeAt(index)
-                                            add(target, moved)
-                                        }
-                                    }
+                                    if (target != null) moveNavItem(index, target)
                                 },
                             )
                             if (draggingNavId != null && navInsertionSlot == index) {
@@ -1832,7 +2734,6 @@ private fun NavigationSettingsPage(
                 }
             }
         }
-        item { SaveButton { onSave(defaultPage, navItems, showLabels) } }
     }
 }
 
@@ -1849,11 +2750,6 @@ private fun SettingsSection(title: String, content: @Composable ColumnScope.() -
             content()
         }
     }
-}
-
-@Composable
-private fun SaveButton(enabled: Boolean = true, onClick: () -> Unit) {
-    Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) { Text(tr("保存", "Save")) }
 }
 
 @Composable
@@ -1928,63 +2824,70 @@ private fun NavConfigRow(
     onDragStarted: () -> Unit,
     onDragChanged: (Float) -> Unit,
     onDragCancelled: () -> Unit,
+    onMoveUp: () -> Boolean,
+    onMoveDown: () -> Boolean,
     onMove: (Float) -> Unit,
 ) {
     var iconMenu by remember { mutableStateOf(false) }
-    val icons = listOf("home", "book", "poetry", "language", "bolt", "settings", "calendar", "star", "write", "sparkle", "day")
+    val icons = listOf(
+        "home", "book", "poetry", "language", "bolt", "settings", "calendar",
+        "event", "rss", "ai", "star", "write", "sparkle", "day",
+    )
+    val visibilityDescription = tr(
+        "${item.id.defaultLabel}是否显示",
+        "Show ${item.id.englishLabel}",
+    )
 
-    Column(
+    Row(
         modifier
             .fillMaxWidth()
             .onGloballyPositioned { onCenterChanged(it.boundsInRoot().center.y) }
-            .padding(vertical = 8.dp),
+            .padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box {
-                IconButton(onClick = { iconMenu = true }) { Icon(iconFor(item.iconKey), tr("选择图标", "Choose icon")) }
-                DropdownMenu(expanded = iconMenu, onDismissRequest = { iconMenu = false }) {
-                    icons.chunked(5).forEach { row ->
-                        Row {
-                            row.forEach { key ->
-                                IconButton(
-                                    onClick = {
-                                        onChange(item.copy(iconKey = key))
-                                        iconMenu = false
-                                    },
-                                ) { Icon(iconFor(key), key) }
-                            }
+        Box {
+            IconButton(onClick = { iconMenu = true }) {
+                Icon(iconFor(item.iconKey), tr("选择图标", "Choose icon"))
+            }
+            DropdownMenu(expanded = iconMenu, onDismissRequest = { iconMenu = false }) {
+                icons.chunked(5).forEach { row ->
+                    Row {
+                        row.forEach { key ->
+                            IconButton(
+                                onClick = {
+                                    onChange(item.copy(iconKey = key))
+                                    iconMenu = false
+                                },
+                            ) { Icon(iconFor(key), key) }
                         }
                     }
                 }
             }
-            OutlinedTextField(
-                value = item.label,
-                onValueChange = { onChange(item.copy(label = it.take(8))) },
-                singleLine = true,
-                label = { Text(tr(item.id.defaultLabel, item.id.englishLabel)) },
-                modifier = Modifier.weight(1f),
-            )
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(tr("显示", "Visible"), style = MaterialTheme.typography.labelMedium)
-            Spacer(Modifier.width(8.dp))
-            Switch(
-                checked = item.visible || item.id == NavItemId.SETTINGS,
-                enabled = item.id != NavItemId.SETTINGS,
-                onCheckedChange = { onChange(item.copy(visible = it)) },
-            )
-            FourDotDragHandle(
-                translateSelf = false,
-                onDragStarted = onDragStarted,
-                onDragChanged = onDragChanged,
-                onDragCancelled = onDragCancelled,
-                onDragFinished = onMove,
-            )
-        }
+        OutlinedTextField(
+            value = item.label,
+            onValueChange = { onChange(item.copy(label = it.take(8))) },
+            singleLine = true,
+            label = { Text(tr(item.id.defaultLabel, item.id.englishLabel)) },
+            modifier = Modifier.weight(1f),
+        )
+        Checkbox(
+            checked = item.visible || item.id == NavItemId.SETTINGS,
+            enabled = item.id != NavItemId.SETTINGS,
+            onCheckedChange = { onChange(item.copy(visible = it)) },
+            modifier = Modifier.semantics {
+                contentDescription = visibilityDescription
+            },
+        )
+        FourDotDragHandle(
+            translateSelf = false,
+            onDragStarted = onDragStarted,
+            onDragChanged = onDragChanged,
+            onDragCancelled = onDragCancelled,
+            onMoveUp = onMoveUp,
+            onMoveDown = onMoveDown,
+            onDragFinished = onMove,
+        )
     }
 }
 
@@ -1998,6 +2901,9 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.DIARY -> tr("日记与媒体", "Diary & media")
     SettingsPage.BLOG -> tr("浏览器", "Browser")
     SettingsPage.THOUGHT -> tr("小巧思", "Thoughts")
+    SettingsPage.RSS -> tr("RSS 订阅", "RSS")
+    SettingsPage.AI -> tr("AI 配置", "AI configurations")
+    SettingsPage.AI_DETAIL -> tr("AI 配置详情", "AI configuration")
     SettingsPage.NAVIGATION -> tr("底部导航", "Bottom navigation")
 }
 
@@ -2006,7 +2912,11 @@ private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
     SettingsPage.DIARY,
     SettingsPage.BLOG,
     SettingsPage.THOUGHT,
+    SettingsPage.RSS,
+    SettingsPage.AI,
     -> SettingsPage.SUBPAGES
+
+    SettingsPage.AI_DETAIL -> SettingsPage.AI
 
     SettingsPage.MAIN,
     SettingsPage.APPEARANCE,

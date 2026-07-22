@@ -10,6 +10,7 @@ import com.deskcubby.app.data.model.DiaryEditorDocument
 import com.deskcubby.app.data.model.DiaryTrashItem
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
+import com.deskcubby.app.data.repository.CalorieEstimationRepository
 import com.deskcubby.app.data.repository.DiaryTextUtils
 import com.deskcubby.app.data.repository.ExternalFileConflictException
 import com.deskcubby.app.data.repository.MealCalendarDay
@@ -61,6 +62,7 @@ data class EditorState(
 @HiltViewModel
 class DiaryViewModel @Inject constructor(
     private val repository: DiaryFileRepository,
+    private val calorieRepository: CalorieEstimationRepository,
     settingsRepository: SettingsRepository,
 ) : ViewModel() {
     val settings: StateFlow<AppSettings> = settingsRepository.settings.stateIn(
@@ -142,6 +144,25 @@ class DiaryViewModel @Inject constructor(
         }
     }
 
+    fun calculateUncalculatedCalories(dateIso: String? = null, force: Boolean = false) {
+        if (!settings.value.calorieEstimationEnabled || _mealCalendarState.value.loading) return
+        viewModelScope.launch {
+            _mealCalendarState.value = _mealCalendarState.value.copy(loading = true, error = null)
+            try {
+                val selected = repository.scanMealCalendar(settings.value)
+                    .filter { dateIso == null || it.dateIso == dateIso }
+                    .flatMap { it.photos }.filter { force || it.energyKj == null }
+                selected.forEach { photo ->
+                    val energy = calorieRepository.estimate(photo.uri.toString(), settings.value)
+                    repository.setMealPhotoEnergy(photo, energy)
+                }
+                _mealCalendarState.value = MealCalendarState(items = repository.scanMealCalendar(settings.value))
+                _message.value = if (selected.isEmpty()) "没有需要计算的饮食图片" else "已完成 ${selected.size} 张图片的热量估算"
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { _mealCalendarState.value = _mealCalendarState.value.copy(loading = false, error = error.userMessage()) }
+        }
+    }
+
     fun toggleExpandedMonth(month: String) {
         _expandedMonth.value = if (_expandedMonth.value == month) null else month
     }
@@ -216,34 +237,53 @@ class DiaryViewModel @Inject constructor(
         _editorState.value = _editorState.value.copy(preview = !_editorState.value.preview)
     }
 
+    fun appendDailyRecordToCurrent(text: String, onDone: (Boolean) -> Unit = {}) {
+        val line = text.trim().replace('\r', ' ').replace('\n', ' ')
+        val state = _editorState.value
+        if (line.isBlank() || state.document == null || state.loading || state.conflict != null) {
+            onDone(false)
+            return
+        }
+        val separator = when {
+            state.content.isEmpty() || state.content.endsWith('\n') || state.content.endsWith('\r') -> ""
+            else -> DiaryTextUtils.preferredLineEnding(state.content)
+        }
+        onContentChanged(state.content + separator + line)
+        viewModelScope.launch { onDone(saveCurrent()) }
+    }
+
     fun saveNow(force: Boolean = false) {
-        viewModelScope.launch {
-            saveMutex.withLock {
-                val snapshot = _editorState.value
-                val doc = snapshot.document ?: return@withLock
-                if (!snapshot.dirty && !force) return@withLock
-                if (snapshot.conflict != null && !force) return@withLock
-                _editorState.value = snapshot.copy(saving = true, error = null)
-                runCatching { repository.save(doc.uri, snapshot.content, doc.sha256, force) }
-                    .onSuccess { saved ->
-                        val changedDuringSave = _editorState.value.content != snapshot.content
-                        _editorState.value = _editorState.value.copy(
-                            document = saved,
-                            saving = false,
-                            dirty = changedDuringSave,
-                            conflict = null,
-                        )
-                        if (changedDuringSave) saveRequests.tryEmit(Unit)
-                        refresh()
-                    }
-                    .onFailure { error ->
-                        if (error is ExternalFileConflictException) {
-                            _editorState.value = _editorState.value.copy(saving = false, conflict = error.diskDocument)
-                        } else {
-                            _editorState.value = _editorState.value.copy(saving = false, error = error.userMessage())
-                        }
-                    }
+        viewModelScope.launch { saveCurrent(force) }
+    }
+
+    private suspend fun saveCurrent(force: Boolean = false): Boolean = saveMutex.withLock {
+        val snapshot = _editorState.value
+        val doc = snapshot.document ?: return@withLock false
+        if (!snapshot.dirty && !force) {
+            return@withLock snapshot.conflict == null && doc.content == snapshot.content
+        }
+        if (snapshot.conflict != null && !force) return@withLock false
+        _editorState.value = snapshot.copy(saving = true, error = null)
+        try {
+            val saved = repository.save(doc.uri, snapshot.content, doc.sha256, force)
+            val changedDuringSave = _editorState.value.content != snapshot.content
+            _editorState.value = _editorState.value.copy(
+                document = saved,
+                saving = false,
+                dirty = changedDuringSave,
+                conflict = null,
+            )
+            if (changedDuringSave) saveRequests.tryEmit(Unit)
+            refresh()
+            true
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            if (error is ExternalFileConflictException) {
+                _editorState.value = _editorState.value.copy(saving = false, conflict = error.diskDocument)
+            } else {
+                _editorState.value = _editorState.value.copy(saving = false, error = error.userMessage())
             }
+            false
         }
     }
 
@@ -270,6 +310,11 @@ class DiaryViewModel @Inject constructor(
                         DiaryTextUtils.preferredLineEnding(state.content)
                     }
                     onContentChanged(state.content + lineBreak + media.markdown)
+                    if (category != null && settings.value.calorieEstimationEnabled) {
+                        runCatching { calorieRepository.estimate(media.documentUri, settings.value) }
+                            .onSuccess { energy -> updateImageCaption(media.markdown, "$category-${energy}kJ") }
+                            .onFailure { _editorState.value = _editorState.value.copy(error = it.userMessage()) }
+                    }
                 }
                 .onFailure { _editorState.value = _editorState.value.copy(error = it.userMessage()) }
         }

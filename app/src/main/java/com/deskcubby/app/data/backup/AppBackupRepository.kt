@@ -17,6 +17,8 @@ import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryDao
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AiModelConfig
+import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.preferences.SettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
@@ -189,8 +191,13 @@ class AppBackupRepository @Inject constructor(
         // Apply the reversible DataStore edit first and make the Room transaction the final
         // commit. If the process dies between stores, existing user-created database content
         // is never destructively replaced before settings have been durably written.
+        val restoredSettings = mergeLegacyBackupAiApiKeys(
+            imported = backup.settings,
+            current = previousSettings,
+            formatVersion = backup.formatVersion,
+        )
         try {
-            settingsRepository.restoreFromBackup(backup.settings)
+            settingsRepository.restoreFromBackup(restoredSettings)
         } catch (error: CancellationException) {
             rollbackSettingsAfterImportFailure(previousSettings, error)
             throw error
@@ -624,3 +631,41 @@ class AppBackupRepository @Inject constructor(
         const val MAX_IMPORT_BYTES = 10 * 1024 * 1024
     }
 }
+
+/**
+ * Backups before v12 did not contain API keys. Preserve a local key only when both the
+ * configuration id and endpoint still match; v12+ backups explicitly own the key value.
+ */
+internal fun mergeLegacyBackupAiApiKeys(
+    imported: AppSettings,
+    current: AppSettings,
+    formatVersion: Int,
+): AppSettings {
+    if (formatVersion >= PLAINTEXT_AI_KEY_BACKUP_VERSION) return imported
+    val importedConfigs = imported.aiConfigs.ifEmpty {
+        imported.aiModel.takeIf(String::isNotBlank)?.let { legacyModel ->
+            listOf(
+                AiModelConfig(
+                    id = "legacy-text",
+                    name = "文字模型",
+                    type = AiModelType.TEXT,
+                    endpointUrl = imported.aiEndpointUrl,
+                    model = legacyModel,
+                    allowInsecureHttp = imported.aiAllowInsecureHttp,
+                    temperature = imported.aiTemperature,
+                    systemPrompt = imported.aiSystemPrompt,
+                ),
+            )
+        }.orEmpty()
+    }
+    val mergedConfigs = importedConfigs.map { importedConfig ->
+        val localKey = current.aiConfigs.firstOrNull { localConfig ->
+            localConfig.id == importedConfig.id &&
+                localConfig.endpointUrl.trim() == importedConfig.endpointUrl.trim()
+        }?.apiKey.orEmpty()
+        importedConfig.copy(apiKey = localKey)
+    }
+    return imported.copy(aiConfigs = mergedConfigs)
+}
+
+private const val PLAINTEXT_AI_KEY_BACKUP_VERSION = 12

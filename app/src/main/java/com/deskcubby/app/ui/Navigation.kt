@@ -35,19 +35,25 @@ import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.RssFeed
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.ViewDay
 import androidx.compose.material3.Icon
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -69,6 +75,8 @@ import com.deskcubby.app.ui.diary.DiaryEditorScreen
 import com.deskcubby.app.ui.diary.DiaryListScreen
 import com.deskcubby.app.ui.diary.DiaryViewModel
 import com.deskcubby.app.ui.diary.MealCalendarScreen
+import com.deskcubby.app.ui.daily.DailyRecordScreen
+import com.deskcubby.app.ui.daily.DailyRecordViewModel
 import com.deskcubby.app.ui.date.DateRecordScreen
 import com.deskcubby.app.ui.date.DateRecordViewModel
 import com.deskcubby.app.ui.home.HomeScreen
@@ -76,7 +84,12 @@ import com.deskcubby.app.ui.home.HomeViewModel
 import com.deskcubby.app.ui.poetry.PoetryBookScreen
 import com.deskcubby.app.ui.poetry.PoetryBookViewModel
 import com.deskcubby.app.ui.settings.SettingsScreen
+import com.deskcubby.app.ui.settings.SettingsStartPage
 import com.deskcubby.app.ui.settings.SettingsViewModel
+import com.deskcubby.app.ui.rss.RssScreen
+import com.deskcubby.app.ui.rss.RssViewModel
+import com.deskcubby.app.ui.ai.AiChatScreen
+import com.deskcubby.app.ui.ai.AiChatViewModel
 import com.deskcubby.app.ui.theme.DeskCubbyTheme
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
@@ -91,6 +104,10 @@ object Routes {
     const val EDITOR = "diary_editor"
     const val MEAL_CALENDAR = "meal_calendar"
     const val THOUGHT_TRASH = "thought_trash"
+    const val DAILY_RECORDS = "daily_records"
+    const val DAILY_RECORDS_TODAY = "daily_records/today"
+    const val NAVIGATION_SETTINGS = "settings/navigation"
+    const val AI_SETTINGS = "settings/ai"
 }
 
 @Composable
@@ -102,6 +119,9 @@ fun DeskCubbyRoot(
     homeViewModel: HomeViewModel = hiltViewModel(),
     dateRecordViewModel: DateRecordViewModel = hiltViewModel(),
     poetryBookViewModel: PoetryBookViewModel = hiltViewModel(),
+    rssViewModel: RssViewModel = hiltViewModel(),
+    aiChatViewModel: AiChatViewModel = hiltViewModel(),
+    dailyRecordViewModel: DailyRecordViewModel = hiltViewModel(),
 ) {
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val ready by settingsViewModel.ready.collectAsStateWithLifecycle()
@@ -113,6 +133,8 @@ fun DeskCubbyRoot(
             return@DeskCubbyTheme
         }
         val navController = rememberNavController()
+        var introDismissedForSession by remember { mutableStateOf(false) }
+        var settingsSubpageOpen by remember { mutableStateOf(false) }
         val initialStartDestination = remember { settings.defaultPage.route }
         val systemAnimationsEnabled = remember { ValueAnimator.areAnimatorsEnabled() }
         val organicMotionEnabled = settings.visualStyle == VisualStyle.ORGANIC_FUTURE &&
@@ -120,7 +142,9 @@ fun DeskCubbyRoot(
         val backStack by navController.currentBackStackEntryAsState()
         val route = backStack?.destination?.route
         val visibleTabs = settings.navItems.filter { it.visible || it.id == NavItemId.SETTINGS }
-        val showBottomBar = route in NavItemId.entries.map { it.route } && !WindowInsets.isImeVisible
+        val showBottomBar = route in NavItemId.entries.map { it.route } &&
+            !(route == NavItemId.SETTINGS.route && settingsSubpageOpen) &&
+            !WindowInsets.isImeVisible
         val navigateMain: (String) -> Unit = { destination ->
             navController.navigate(destination) {
                 // Keep only the graph itself, so no tab can restore another tab's nested page.
@@ -195,6 +219,7 @@ fun DeskCubbyRoot(
                             onOpenThoughts = { navController.navigate(NavItemId.THOUGHT.route) },
                             onOpenWebsite = { navController.navigate(NavItemId.BLOG.route) },
                             onOpenDateRecords = { navController.navigate(NavItemId.DATE.route) },
+                            onOpenDailyRecords = { navController.navigate(Routes.DAILY_RECORDS_TODAY) },
                         )
                     }
                     composable(NavItemId.DIARY.route) {
@@ -223,11 +248,44 @@ fun DeskCubbyRoot(
                     composable(NavItemId.POETRY.route) {
                         PoetryBookScreen(padding = padding, viewModel = poetryBookViewModel)
                     }
+                    composable(NavItemId.RSS.route) {
+                        RssScreen(padding = padding, viewModel = rssViewModel)
+                    }
+                    composable(NavItemId.AI_CHAT.route) {
+                        AiChatScreen(
+                            padding = padding,
+                            viewModel = aiChatViewModel,
+                            onOpenSettings = { navController.navigate(Routes.AI_SETTINGS) },
+                        )
+                    }
                     composable(NavItemId.SETTINGS.route) {
-                        SettingsScreen(padding = padding, viewModel = settingsViewModel)
+                        SettingsScreen(
+                            padding = padding,
+                            viewModel = settingsViewModel,
+                            onSubpageOpenChanged = { settingsSubpageOpen = it },
+                        )
                     }
                     composable(Routes.EDITOR) {
-                        DiaryEditorScreen(viewModel = diaryViewModel, onBack = { navController.popBackStack() })
+                        DiaryEditorScreen(
+                            viewModel = diaryViewModel,
+                            onBack = { navController.popBackStack() },
+                            onOpenDailyRecords = { navController.navigate(Routes.DAILY_RECORDS) },
+                        )
+                    }
+                    composable(Routes.DAILY_RECORDS) {
+                        DailyRecordScreen(
+                            padding = padding,
+                            viewModel = dailyRecordViewModel,
+                            onBack = { navController.popBackStack() },
+                            onRecordToCurrentDiary = diaryViewModel::appendDailyRecordToCurrent,
+                        )
+                    }
+                    composable(Routes.DAILY_RECORDS_TODAY) {
+                        DailyRecordScreen(
+                            padding = padding,
+                            viewModel = dailyRecordViewModel,
+                            onBack = { navController.popBackStack() },
+                        )
                     }
                     composable(Routes.MEAL_CALENDAR) {
                         MealCalendarScreen(viewModel = diaryViewModel, onBack = { navController.popBackStack() })
@@ -235,8 +293,59 @@ fun DeskCubbyRoot(
                     composable(Routes.THOUGHT_TRASH) {
                         ThoughtTrashScreen(viewModel = thoughtViewModel, onBack = { navController.popBackStack() })
                     }
+                    composable(Routes.NAVIGATION_SETTINGS) {
+                        SettingsScreen(
+                            padding = padding,
+                            viewModel = settingsViewModel,
+                            startPage = SettingsStartPage.NAVIGATION,
+                            onExit = { navController.popBackStack() },
+                        )
+                    }
+                    composable(Routes.AI_SETTINGS) {
+                        SettingsScreen(
+                            padding = padding,
+                            viewModel = settingsViewModel,
+                            startPage = SettingsStartPage.AI,
+                            onExit = { navController.popBackStack() },
+                        )
+                    }
                 }
             }
+        }
+
+        if (!settings.navigationIntroAcknowledged && !introDismissedForSession) {
+            AlertDialog(
+                onDismissRequest = {},
+                title = { Text(if (settings.appLanguage == AppLanguage.ENGLISH) "Choose your pages" else "选择你需要的页面") },
+                text = {
+                    Text(
+                        if (settings.appLanguage == AppLanguage.ENGLISH) {
+                            "DeskCubby has several pages. You can show, hide, rename, and reorder them from Bottom navigation settings."
+                        } else {
+                            "DeskCubby 包含多个页面，你可以在“底部导航”设置中手动开关、改名和排序。"
+                        },
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            introDismissedForSession = true
+                            settingsViewModel.acknowledgeNavigationIntro()
+                            navController.navigate(Routes.NAVIGATION_SETTINGS)
+                        },
+                    ) {
+                        Text(if (settings.appLanguage == AppLanguage.ENGLISH) "Navigation settings" else "跳转至底部导航设置")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            introDismissedForSession = true
+                            settingsViewModel.acknowledgeNavigationIntro()
+                        },
+                    ) { Text(if (settings.appLanguage == AppLanguage.ENGLISH) "OK" else "确认") }
+                },
+            )
         }
     }
 }
@@ -348,5 +457,7 @@ fun iconFor(key: String): ImageVector = when (key) {
     "write" -> Icons.Outlined.Create
     "sparkle" -> Icons.Outlined.AutoAwesome
     "day" -> Icons.Outlined.ViewDay
+    "rss" -> Icons.Outlined.RssFeed
+    "ai" -> Icons.Outlined.SmartToy
     else -> Icons.Outlined.MenuBook
 }

@@ -32,6 +32,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Refresh
@@ -76,9 +77,11 @@ import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.DailyPoem
 import com.deskcubby.app.ui.theme.GlassPanel
+import com.deskcubby.app.ui.daily.DailyEventRecorder
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.tr
@@ -107,11 +110,12 @@ private data class MealQuickAction(
 }
 
 private val mealQuickActions = listOf(
-    MealQuickAction("breakfast", "早餐", "Breakfast", "🍳"),
-    MealQuickAction("lunch", "午餐", "Lunch", "🥗"),
-    MealQuickAction("dinner", "晚餐", "Dinner", "🍚"),
-    MealQuickAction("fruit", "水果", "Fruit", "🍎"),
-    MealQuickAction("late_snack", "夜宵", "Late snack", "🌙"),
+    MealQuickAction("breakfast", "早餐", "Breakfast", "🥪"),
+    MealQuickAction("lunch", "午餐", "Lunch", "🍱"),
+    MealQuickAction("afternoon_tea", "下午茶", "Afternoon tea", "🍹"),
+    MealQuickAction("dinner", "晚餐", "Dinner", "🍜"),
+    MealQuickAction("fruit", "水果", "Fruit", "🍊"),
+    MealQuickAction("late_snack", "夜宵", "Late snack", "🍤"),
 )
 
 @Composable
@@ -123,6 +127,7 @@ fun HomeScreen(
     onOpenThoughts: () -> Unit,
     onOpenDateRecords: () -> Unit,
     onOpenWebsite: () -> Unit,
+    onOpenDailyRecords: () -> Unit,
 ) {
     val context = LocalContext.current
     val organic = settings.visualStyle == VisualStyle.ORGANIC_FUTURE
@@ -132,6 +137,7 @@ fun HomeScreen(
     val dateRecords by viewModel.dateRecords.collectAsStateWithLifecycle()
     val poem by viewModel.poem.collectAsStateWithLifecycle()
     val mealUploadInProgress by viewModel.mealUploadInProgress.collectAsStateWithLifecycle()
+    val dailyRecordInProgress by viewModel.dailyRecordInProgress.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingMealKey by rememberSaveable { mutableStateOf<String?>(null) }
@@ -303,6 +309,11 @@ fun HomeScreen(
                     mealUploadInProgress = mealInteractionBusy,
                     onChooseMealPhoto = chooseMealPhoto,
                     onCaptureMealPhoto = captureMealPhoto,
+                    dailyRecordInProgress = dailyRecordInProgress,
+                    onAddDailyRecord = { templateId, entry, onDone ->
+                        viewModel.addDailyRecordToToday(templateId, entry, settings, onDone)
+                    },
+                    onOpenDailyRecords = onOpenDailyRecords,
                 )
             }
             item { Spacer(Modifier.height(20.dp)) }
@@ -329,6 +340,9 @@ private fun HomeWidget(
     mealUploadInProgress: Boolean,
     onChooseMealPhoto: (MealQuickAction) -> Unit,
     onCaptureMealPhoto: (MealQuickAction) -> Unit,
+    dailyRecordInProgress: Set<String>,
+    onAddDailyRecord: (String, String, (Boolean) -> Unit) -> Unit,
+    onOpenDailyRecords: () -> Unit,
 ) {
     val today = LocalDate.now()
     val locale = if (settings.appLanguage == AppLanguage.ENGLISH) Locale.ENGLISH else Locale.SIMPLIFIED_CHINESE
@@ -396,6 +410,14 @@ private fun HomeWidget(
             showBorder = settings.homeWidgetBordersEnabled,
             categories = thoughtCategories,
             onSubmit = onQuickThought,
+        )
+        "daily_records" -> DailyRecordsWidget(
+            showTitle = showTitle,
+            showBorder = settings.homeWidgetBordersEnabled,
+            templates = settings.dailyEventTemplates,
+            sendingIds = dailyRecordInProgress,
+            onSubmit = onAddDailyRecord,
+            onOpenAll = onOpenDailyRecords,
         )
         "meal_photos" -> MealPhotosWidget(
             showTitle = showTitle,
@@ -606,6 +628,52 @@ private fun QuickInputWidget(
 }
 
 @Composable
+private fun DailyRecordsWidget(
+    showTitle: Boolean,
+    showBorder: Boolean,
+    templates: List<DailyEventTemplate>,
+    sendingIds: Set<String>,
+    onSubmit: (String, String, (Boolean) -> Unit) -> Unit,
+    onOpenAll: () -> Unit,
+) {
+    WidgetCard(tr("日常记录", "Daily records"), showTitle, showBorder) {
+        if (templates.isEmpty()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.EventNote, contentDescription = null)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    tr("还没有日常事件", "No daily events yet"),
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = onOpenAll) { Text(tr("添加", "Add")) }
+            }
+            return@WidgetCard
+        }
+
+        templates.take(HOME_DAILY_EVENT_LIMIT).forEach { template ->
+            var clearKey by rememberSaveable(template.id) { mutableStateOf(0L) }
+            DailyEventRecorder(
+                template = template,
+                isSending = template.id in sendingIds,
+                clearInputsKey = clearKey,
+                onRecord = { entry ->
+                    onSubmit(template.id, entry) { success ->
+                        if (success) clearKey += 1
+                    }
+                },
+            )
+        }
+        TextButton(onClick = onOpenAll, modifier = Modifier.align(Alignment.End)) {
+            Text(
+                if (templates.size > HOME_DAILY_EVENT_LIMIT) tr("查看全部", "View all")
+                else tr("管理日常事件", "Manage daily events"),
+            )
+        }
+    }
+}
+
+@Composable
 private fun MealPhotosWidget(
     showTitle: Boolean,
     showBorder: Boolean,
@@ -734,3 +802,4 @@ private fun streakDays(diaries: List<DiaryIndexEntity>, today: LocalDate): Int {
 }
 
 private const val CAMERA_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L
+private const val HOME_DAILY_EVENT_LIMIT = 4

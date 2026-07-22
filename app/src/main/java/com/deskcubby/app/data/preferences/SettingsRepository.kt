@@ -15,17 +15,23 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.deskcubby.app.takeCodePoints
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AiModelConfig
+import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.BrowserTheme
 import com.deskcubby.app.data.model.DEFAULT_MEAL_BUTTON_ICONS
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.RssSubscription
+import com.deskcubby.app.data.model.ThoughtDisplayMode
+import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -70,14 +76,37 @@ class SettingsRepository @Inject constructor(
         val browserDesktopMode = booleanPreferencesKey("browser_desktop_mode")
         val thoughtSplitRatio = floatPreferencesKey("thought_split_ratio")
         val thoughtRowHeightDp = intPreferencesKey("thought_row_height_dp")
+        val thoughtReopenMode = stringPreferencesKey("thought_reopen_mode")
+        val lastThoughtPageKey = stringPreferencesKey("last_thought_page_key")
+        val thoughtDisplayMode = stringPreferencesKey("thought_display_mode")
+        val mealCalendarImageMaxHeightDp = intPreferencesKey("meal_calendar_image_max_height_dp")
+        val mealCalendarShowCaptions = booleanPreferencesKey("meal_calendar_show_captions")
         val mealButtonsUseIcons = booleanPreferencesKey("meal_buttons_use_icons")
         val mealButtonIcons = stringPreferencesKey("meal_button_icons")
+        val dailyEventTemplates = stringPreferencesKey("daily_event_templates")
+        val rssSubscriptions = stringPreferencesKey("rss_subscriptions")
+        val rssMaxItemsPerFeed = intPreferencesKey("rss_max_items_per_feed")
+        val rssShowSummaries = booleanPreferencesKey("rss_show_summaries")
+        val aiEndpointUrl = stringPreferencesKey("ai_endpoint_url")
+        val aiModel = stringPreferencesKey("ai_model")
+        val aiSystemPrompt = stringPreferencesKey("ai_system_prompt")
+        val aiTemperature = floatPreferencesKey("ai_temperature")
+        val aiAllowInsecureHttp = booleanPreferencesKey("ai_allow_insecure_http")
+        val aiConfigs = stringPreferencesKey("ai_configs_v2")
+        val aiChatConfigId = stringPreferencesKey("ai_chat_config_id")
+        val calorieEstimationEnabled = booleanPreferencesKey("calorie_estimation_enabled")
+        val calorieTextConfigId = stringPreferencesKey("calorie_text_config_id")
+        val calorieImageConfigId = stringPreferencesKey("calorie_image_config_id")
+        val calorieVisionPrompt = stringPreferencesKey("calorie_vision_prompt")
+        val calorieTextPrompt = stringPreferencesKey("calorie_text_prompt")
+        val navigationIntroAcknowledged = booleanPreferencesKey("navigation_intro_acknowledged")
         val navItems = stringPreferencesKey("nav_items")
         val defaultPage = stringPreferencesKey("default_page")
         val bottomNavShowLabels = booleanPreferencesKey("bottom_nav_show_labels")
         val homeWidgetBordersEnabled = booleanPreferencesKey("home_widget_borders_enabled")
         val homeWidgets = stringPreferencesKey("home_widgets")
         val mealPhotosWidgetMigrated = booleanPreferencesKey("meal_photos_widget_migrated")
+        val dailyRecordsWidgetMigrated = booleanPreferencesKey("daily_records_widget_migrated")
         val homeWidgetTitles = stringPreferencesKey("home_widget_titles")
     }
 
@@ -92,6 +121,21 @@ class SettingsRepository @Inject constructor(
         val nav = decodeNav(prefs[Keys.navItems])
         val visibleIds = nav.filter { it.visible || it.id == NavItemId.SETTINGS }.map { it.id }.toSet()
         val requestedDefault = prefs[Keys.defaultPage].enumValueOr(defaults.defaultPage)
+        val decodedConfigs = decodeAiConfigs(prefs[Keys.aiConfigs]).ifEmpty {
+            prefs[Keys.aiModel]?.trim()?.takeIf(String::isNotEmpty)?.let { legacyModel ->
+                listOf(AiModelConfig("legacy-text", "文字模型", AiModelType.TEXT,
+                    prefs[Keys.aiEndpointUrl] ?: defaults.aiEndpointUrl, legacyModel, true,
+                    prefs[Keys.aiAllowInsecureHttp] ?: false, prefs[Keys.aiTemperature] ?: 0.7f,
+                    prefs[Keys.aiSystemPrompt] ?: defaults.aiSystemPrompt))
+            }.orEmpty()
+        }
+        val requestedChatId = prefs[Keys.aiChatConfigId]
+        val chatId = resolveAiConfigId(decodedConfigs, requestedChatId, AiModelType.TEXT, fallbackToAny = true)
+        val requestedCalorieTextId = prefs[Keys.calorieTextConfigId]
+        val calorieTextId = resolveAiConfigId(decodedConfigs, requestedCalorieTextId, AiModelType.TEXT)
+        val requestedCalorieImageId = prefs[Keys.calorieImageConfigId]
+        val calorieImageId = resolveAiConfigId(decodedConfigs, requestedCalorieImageId, AiModelType.IMAGE)
+        val normalizedConfigs = decodedConfigs.map { it.copy(enabled = true) }
         return AppSettings(
             visualStyle = prefs[Keys.visualStyle].enumValueOr(defaults.visualStyle),
             darkMode = prefs[Keys.darkMode].enumValueOr(defaults.darkMode),
@@ -122,18 +166,56 @@ class SettingsRepository @Inject constructor(
             browserDesktopMode = prefs[Keys.browserDesktopMode] ?: defaults.browserDesktopMode,
             thoughtSplitRatio = (prefs[Keys.thoughtSplitRatio] ?: defaults.thoughtSplitRatio).coerceIn(0.25f, 0.8f),
             thoughtRowHeightDp = (prefs[Keys.thoughtRowHeightDp] ?: defaults.thoughtRowHeightDp).coerceIn(48, 120),
+            thoughtReopenMode = prefs[Keys.thoughtReopenMode].enumValueOr(defaults.thoughtReopenMode),
+            lastThoughtPageKey = normalizeThoughtPageKey(
+                prefs[Keys.lastThoughtPageKey] ?: defaults.lastThoughtPageKey,
+            ),
+            thoughtDisplayMode = prefs[Keys.thoughtDisplayMode].enumValueOr(defaults.thoughtDisplayMode),
+            mealCalendarImageMaxHeightDp = (prefs[Keys.mealCalendarImageMaxHeightDp]
+                ?: defaults.mealCalendarImageMaxHeightDp).coerceIn(80, 320),
+            mealCalendarShowCaptions = prefs[Keys.mealCalendarShowCaptions]
+                ?: defaults.mealCalendarShowCaptions,
             mealButtonsUseIcons = prefs[Keys.mealButtonsUseIcons] ?: defaults.mealButtonsUseIcons,
             mealButtonIcons = decodeMealButtonIcons(prefs[Keys.mealButtonIcons], defaults.mealButtonIcons),
+            dailyEventTemplates = decodeDailyEventTemplates(prefs[Keys.dailyEventTemplates]),
+            rssSubscriptions = decodeRssSubscriptions(prefs[Keys.rssSubscriptions]),
+            rssMaxItemsPerFeed = (prefs[Keys.rssMaxItemsPerFeed]
+                ?: defaults.rssMaxItemsPerFeed).coerceIn(10, 200),
+            rssShowSummaries = prefs[Keys.rssShowSummaries] ?: defaults.rssShowSummaries,
+            aiEndpointUrl = prefs[Keys.aiEndpointUrl]?.trim()?.take(MAX_URL_CHARS)?.takeIf(String::isNotEmpty)
+                ?: defaults.aiEndpointUrl,
+            aiModel = prefs[Keys.aiModel]?.trim()?.take(MAX_AI_MODEL_CHARS).orEmpty(),
+            aiSystemPrompt = (prefs[Keys.aiSystemPrompt] ?: defaults.aiSystemPrompt)
+                .take(MAX_AI_SYSTEM_PROMPT_CHARS),
+            aiTemperature = (prefs[Keys.aiTemperature] ?: defaults.aiTemperature)
+                .takeIf(Float::isFinite)?.coerceIn(0f, 2f) ?: defaults.aiTemperature,
+            aiAllowInsecureHttp = prefs[Keys.aiAllowInsecureHttp] ?: defaults.aiAllowInsecureHttp,
+            aiConfigs = normalizedConfigs,
+            aiChatConfigId = chatId,
+            calorieEstimationEnabled = (prefs[Keys.calorieEstimationEnabled] ?: false) &&
+                calorieTextId != null && calorieImageId != null,
+            calorieTextConfigId = calorieTextId,
+            calorieImageConfigId = calorieImageId,
+            calorieVisionPrompt = prefs[Keys.calorieVisionPrompt] ?: defaults.calorieVisionPrompt,
+            calorieTextPrompt = prefs[Keys.calorieTextPrompt] ?: defaults.calorieTextPrompt,
+            navigationIntroAcknowledged = prefs[Keys.navigationIntroAcknowledged]
+                ?: defaults.navigationIntroAcknowledged,
             navItems = nav,
             defaultPage = requestedDefault.takeIf { it in visibleIds } ?: visibleIds.firstOrNull() ?: NavItemId.SETTINGS,
             bottomNavShowLabels = prefs[Keys.bottomNavShowLabels] ?: defaults.bottomNavShowLabels,
             homeWidgetBordersEnabled = prefs[Keys.homeWidgetBordersEnabled]
                 ?: defaults.homeWidgetBordersEnabled,
-            homeWidgets = migrateMealPhotosWidget(
-                items = decodeWidgets(prefs[Keys.homeWidgets], defaults.homeWidgets),
-                migrated = prefs[Keys.mealPhotosWidgetMigrated] == true,
+            homeWidgets = migrateDailyRecordsWidget(
+                items = migrateMealPhotosWidget(
+                    items = decodeWidgets(prefs[Keys.homeWidgets], defaults.homeWidgets),
+                    migrated = prefs[Keys.mealPhotosWidgetMigrated] == true,
+                ),
+                migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
             ),
-            homeWidgetTitles = decodeStringList(prefs[Keys.homeWidgetTitles], defaults.homeWidgetTitles),
+            homeWidgetTitles = migrateDailyRecordsWidget(
+                items = decodeStringList(prefs[Keys.homeWidgetTitles], defaults.homeWidgetTitles),
+                migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
+            ),
         )
     }
 
@@ -169,9 +251,79 @@ class SettingsRepository @Inject constructor(
     suspend fun setBrowserDesktopMode(value: Boolean) = set(Keys.browserDesktopMode, value)
     suspend fun setThoughtSplitRatio(value: Float) = set(Keys.thoughtSplitRatio, value.coerceIn(0.25f, 0.8f))
     suspend fun setThoughtRowHeight(value: Int) = set(Keys.thoughtRowHeightDp, value.coerceIn(48, 120))
+    suspend fun setThoughtReopenMode(value: ThoughtReopenMode) = set(Keys.thoughtReopenMode, value.name)
+    suspend fun setLastThoughtPageKey(value: String) =
+        set(Keys.lastThoughtPageKey, normalizeThoughtPageKey(value))
+    suspend fun setThoughtDisplayMode(value: ThoughtDisplayMode) = set(Keys.thoughtDisplayMode, value.name)
+    suspend fun setThoughtSettings(
+        rowHeightDp: Int,
+        reopenMode: ThoughtReopenMode,
+        displayMode: ThoughtDisplayMode,
+    ) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.thoughtRowHeightDp] = rowHeightDp.coerceIn(48, 120)
+            prefs[Keys.thoughtReopenMode] = reopenMode.name
+            prefs[Keys.thoughtDisplayMode] = displayMode.name
+        }
+    }
+    suspend fun setMealCalendarImageMaxHeight(value: Int) =
+        set(Keys.mealCalendarImageMaxHeightDp, value.coerceIn(80, 320))
+    suspend fun setMealCalendarShowCaptions(value: Boolean) = set(Keys.mealCalendarShowCaptions, value)
     suspend fun setMealButtonsUseIcons(value: Boolean) = set(Keys.mealButtonsUseIcons, value)
     suspend fun setMealButtonIcons(value: List<String>) =
         set(Keys.mealButtonIcons, encodeStringList(normalizeMealButtonIcons(value)))
+    suspend fun setDailyEventTemplates(value: List<DailyEventTemplate>) =
+        set(Keys.dailyEventTemplates, encodeDailyEventTemplates(normalizeDailyEventTemplates(value)))
+    suspend fun addDailyEventTemplate(value: DailyEventTemplate) {
+        context.settingsDataStore.edit { prefs ->
+            val current = decodeDailyEventTemplates(prefs[Keys.dailyEventTemplates])
+            prefs[Keys.dailyEventTemplates] = encodeDailyEventTemplates(
+                normalizeDailyEventTemplates(current + value),
+            )
+        }
+    }
+    suspend fun updateDailyEventTemplate(value: DailyEventTemplate) {
+        context.settingsDataStore.edit { prefs ->
+            val current = decodeDailyEventTemplates(prefs[Keys.dailyEventTemplates])
+            prefs[Keys.dailyEventTemplates] = encodeDailyEventTemplates(
+                normalizeDailyEventTemplates(current.map { if (it.id == value.id) value else it }),
+            )
+        }
+    }
+    suspend fun removeDailyEventTemplate(id: String) {
+        context.settingsDataStore.edit { prefs ->
+            val current = decodeDailyEventTemplates(prefs[Keys.dailyEventTemplates])
+            prefs[Keys.dailyEventTemplates] = encodeDailyEventTemplates(current.filterNot { it.id == id })
+        }
+    }
+    suspend fun setRssSubscriptions(value: List<RssSubscription>) =
+        set(Keys.rssSubscriptions, encodeRssSubscriptions(normalizeRssSubscriptions(value)))
+    suspend fun setRssSettings(maxItemsPerFeed: Int, showSummaries: Boolean) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.rssMaxItemsPerFeed] = maxItemsPerFeed.coerceIn(10, 200)
+            prefs[Keys.rssShowSummaries] = showSummaries
+        }
+    }
+    suspend fun setAiConfigs(configs: List<AiModelConfig>) =
+        set(Keys.aiConfigs, encodeAiConfigs(configs.map { it.copy(enabled = true) }))
+
+    suspend fun setAiChatConfigId(id: String?) {
+        context.settingsDataStore.edit { it.setOrRemove(Keys.aiChatConfigId, id?.takeIf(String::isNotBlank)) }
+    }
+
+    suspend fun setCalorieEstimationSettings(
+        enabled: Boolean, textConfigId: String?, imageConfigId: String?,
+        visionPrompt: String, textPrompt: String,
+    ) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.calorieEstimationEnabled] = enabled
+            prefs.setOrRemove(Keys.calorieTextConfigId, textConfigId?.takeIf(String::isNotBlank))
+            prefs.setOrRemove(Keys.calorieImageConfigId, imageConfigId?.takeIf(String::isNotBlank))
+            prefs[Keys.calorieVisionPrompt] = visionPrompt.take(MAX_AI_SYSTEM_PROMPT_CHARS)
+            prefs[Keys.calorieTextPrompt] = textPrompt.take(MAX_AI_SYSTEM_PROMPT_CHARS)
+        }
+    }
+    suspend fun acknowledgeNavigationIntro() = set(Keys.navigationIntroAcknowledged, true)
     suspend fun setDefaultPage(value: NavItemId) = set(Keys.defaultPage, value.name)
     suspend fun setBottomNavShowLabels(value: Boolean) = set(Keys.bottomNavShowLabels, value)
     suspend fun setHomeWidgetBordersEnabled(value: Boolean) = set(Keys.homeWidgetBordersEnabled, value)
@@ -188,6 +340,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.homeWidgetBordersEnabled] = widgetBordersEnabled
             prefs[Keys.homeWidgets] = encodeStringList(widgets.distinct())
             prefs[Keys.mealPhotosWidgetMigrated] = true
+            prefs[Keys.dailyRecordsWidgetMigrated] = true
             prefs[Keys.homeWidgetTitles] = encodeStringList(visibleWidgetTitles.distinct())
             prefs[Keys.mealButtonsUseIcons] = mealButtonsUseIcons
             prefs[Keys.mealButtonIcons] = encodeStringList(normalizeMealButtonIcons(mealButtonIcons))
@@ -197,6 +350,7 @@ class SettingsRepository @Inject constructor(
         context.settingsDataStore.edit { prefs ->
             prefs[Keys.homeWidgets] = encodeStringList(value.distinct())
             prefs[Keys.mealPhotosWidgetMigrated] = true
+            prefs[Keys.dailyRecordsWidgetMigrated] = true
         }
     }
     suspend fun setHomeWidgetTitles(value: List<String>) =
@@ -204,6 +358,21 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setNavItems(value: List<NavItemConfig>) {
         set(Keys.navItems, encodeNav(normalizeNavItems(value)))
+    }
+
+    suspend fun setNavigationSettings(
+        defaultPage: NavItemId,
+        items: List<NavItemConfig>,
+        showLabels: Boolean,
+    ) {
+        val normalized = normalizeNavItems(items)
+        val visibleIds = normalized.filter { it.visible || it.id == NavItemId.SETTINGS }.map { it.id }.toSet()
+        val safeDefault = defaultPage.takeIf { it in visibleIds } ?: visibleIds.firstOrNull() ?: NavItemId.SETTINGS
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.navItems] = encodeNav(normalized)
+            prefs[Keys.defaultPage] = safeDefault.name
+            prefs[Keys.bottomNavShowLabels] = showLabels
+        }
     }
 
     suspend fun restoreFromBackup(value: AppSettings) {
@@ -244,14 +413,40 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.browserDesktopMode] = value.browserDesktopMode
             prefs[Keys.thoughtSplitRatio] = value.thoughtSplitRatio.coerceIn(0.25f, 0.8f)
             prefs[Keys.thoughtRowHeightDp] = value.thoughtRowHeightDp.coerceIn(48, 120)
+            prefs[Keys.thoughtReopenMode] = value.thoughtReopenMode.name
+            prefs[Keys.thoughtDisplayMode] = value.thoughtDisplayMode.name
+            prefs[Keys.mealCalendarImageMaxHeightDp] = value.mealCalendarImageMaxHeightDp.coerceIn(80, 320)
+            prefs[Keys.mealCalendarShowCaptions] = value.mealCalendarShowCaptions
             prefs[Keys.mealButtonsUseIcons] = value.mealButtonsUseIcons
             prefs[Keys.mealButtonIcons] = encodeStringList(normalizeMealButtonIcons(value.mealButtonIcons))
+            prefs[Keys.dailyEventTemplates] = encodeDailyEventTemplates(
+                normalizeDailyEventTemplates(value.dailyEventTemplates),
+            )
+            prefs[Keys.rssSubscriptions] = encodeRssSubscriptions(
+                normalizeRssSubscriptions(value.rssSubscriptions),
+            )
+            prefs[Keys.rssMaxItemsPerFeed] = value.rssMaxItemsPerFeed.coerceIn(10, 200)
+            prefs[Keys.rssShowSummaries] = value.rssShowSummaries
+            prefs[Keys.aiEndpointUrl] = value.aiEndpointUrl.trim().take(MAX_URL_CHARS)
+            prefs[Keys.aiModel] = value.aiModel.trim().take(MAX_AI_MODEL_CHARS)
+            prefs[Keys.aiSystemPrompt] = value.aiSystemPrompt.take(MAX_AI_SYSTEM_PROMPT_CHARS)
+            prefs[Keys.aiTemperature] = value.aiTemperature.takeIf(Float::isFinite)
+                ?.coerceIn(0f, 2f) ?: 0.7f
+            prefs[Keys.aiAllowInsecureHttp] = value.aiAllowInsecureHttp
+            prefs[Keys.aiConfigs] = encodeAiConfigs(value.aiConfigs)
+            prefs.setOrRemove(Keys.aiChatConfigId, value.aiChatConfigId)
+            prefs[Keys.calorieEstimationEnabled] = value.calorieEstimationEnabled
+            prefs.setOrRemove(Keys.calorieTextConfigId, value.calorieTextConfigId)
+            prefs.setOrRemove(Keys.calorieImageConfigId, value.calorieImageConfigId)
+            prefs[Keys.calorieVisionPrompt] = value.calorieVisionPrompt.take(MAX_AI_SYSTEM_PROMPT_CHARS)
+            prefs[Keys.calorieTextPrompt] = value.calorieTextPrompt.take(MAX_AI_SYSTEM_PROMPT_CHARS)
             prefs[Keys.navItems] = encodeNav(normalizedNav)
             prefs[Keys.defaultPage] = normalizedDefaultPage.name
             prefs[Keys.bottomNavShowLabels] = value.bottomNavShowLabels
             prefs[Keys.homeWidgetBordersEnabled] = value.homeWidgetBordersEnabled
             prefs[Keys.homeWidgets] = encodeStringList(value.homeWidgets.distinct())
             prefs[Keys.mealPhotosWidgetMigrated] = true
+            prefs[Keys.dailyRecordsWidgetMigrated] = true
             prefs[Keys.homeWidgetTitles] = encodeStringList(value.homeWidgetTitles.distinct())
         }
     }
@@ -296,7 +491,7 @@ class SettingsRepository @Inject constructor(
                             item.optString("label", id.defaultLabel).ifBlank { id.defaultLabel },
                         ),
                         iconKey = item.optString("icon", id.defaultIcon),
-                        visible = item.optBoolean("visible", true) || id == NavItemId.SETTINGS,
+                        visible = item.optBoolean("visible", id.defaultVisible) || id == NavItemId.SETTINGS,
                     ),
                 )
             }
@@ -357,6 +552,94 @@ class SettingsRepository @Inject constructor(
             .getOrElse { normalizeThemeSecondaryColors(fallback) }
     }
 
+    private fun decodeDailyEventTemplates(raw: String?): List<DailyEventTemplate> = runCatching {
+        val array = JSONArray(raw ?: return@runCatching emptyList())
+        buildList(array.length()) {
+            for (index in 0 until array.length()) {
+                val item = array.getJSONObject(index)
+                add(
+                    DailyEventTemplate(
+                        id = item.optString("id"),
+                        text = item.optString("text"),
+                        firstUnit = item.optString("firstUnit"),
+                        secondUnit = item.optString("secondUnit"),
+                    ),
+                )
+            }
+        }.let(::normalizeDailyEventTemplates)
+    }.getOrDefault(emptyList())
+
+    private fun encodeDailyEventTemplates(items: List<DailyEventTemplate>): String = JSONArray().apply {
+        items.forEach { item ->
+            put(
+                JSONObject()
+                    .put("id", item.id)
+                    .put("text", item.text)
+                    .put("firstUnit", item.firstUnit)
+                    .put("secondUnit", item.secondUnit),
+            )
+        }
+    }.toString()
+
+    private fun decodeAiConfigs(raw: String?): List<AiModelConfig> = runCatching {
+        val array = JSONArray(raw ?: return@runCatching emptyList())
+        buildList(array.length()) {
+            for (index in 0 until array.length()) array.getJSONObject(index).let { item ->
+                add(AiModelConfig(
+                    id = item.getString("id"), name = item.optString("name"),
+                    type = runCatching { AiModelType.valueOf(item.getString("type")) }.getOrDefault(AiModelType.TEXT),
+                    endpointUrl = item.getString("endpointUrl"), model = item.getString("model"),
+                    enabled = item.optBoolean("enabled", true),
+                    allowInsecureHttp = item.optBoolean("allowInsecureHttp", false),
+                    temperature = item.optDouble("temperature", 0.7).toFloat().coerceIn(0f, 2f),
+                    systemPrompt = item.optString("systemPrompt").take(MAX_AI_SYSTEM_PROMPT_CHARS),
+                    apiKey = item.optString("apiKey").take(MAX_AI_API_KEY_CHARS),
+                ))
+            }
+        }.filter { it.id.isNotBlank() && it.endpointUrl.isNotBlank() && it.model.isNotBlank() }.take(20)
+    }.getOrDefault(emptyList())
+
+    private fun encodeAiConfigs(items: List<AiModelConfig>): String = JSONArray().apply {
+        items.distinctBy { it.id }.take(20).forEach { item ->
+            val json = JSONObject()
+                .put("id", item.id).put("name", item.name).put("type", item.type.name)
+                .put("endpointUrl", item.endpointUrl).put("model", item.model).put("enabled", item.enabled)
+                .put("allowInsecureHttp", item.allowInsecureHttp).put("temperature", item.temperature.toDouble())
+                .put("apiKey", item.apiKey.take(MAX_AI_API_KEY_CHARS))
+            if (item.systemPrompt.isNotEmpty()) json.put("systemPrompt", item.systemPrompt)
+            put(json)
+        }
+    }.toString()
+
+    private fun decodeRssSubscriptions(raw: String?): List<RssSubscription> = runCatching {
+        val array = JSONArray(raw ?: return@runCatching emptyList())
+        buildList(array.length()) {
+            for (index in 0 until array.length()) {
+                val item = array.getJSONObject(index)
+                add(
+                    RssSubscription(
+                        id = item.optString("id"),
+                        title = item.optString("title"),
+                        url = item.optString("url"),
+                        enabled = item.optBoolean("enabled", true),
+                    ),
+                )
+            }
+        }.let(::normalizeRssSubscriptions)
+    }.getOrDefault(emptyList())
+
+    private fun encodeRssSubscriptions(items: List<RssSubscription>): String = JSONArray().apply {
+        items.forEach { item ->
+            put(
+                JSONObject()
+                    .put("id", item.id)
+                    .put("title", item.title)
+                    .put("url", item.url)
+                    .put("enabled", item.enabled),
+            )
+        }
+    }.toString()
+
     private fun encodeThemeSecondaryColors(items: List<Int>): String = JSONArray().apply {
         items.forEach(::put)
     }.toString()
@@ -384,6 +667,15 @@ class SettingsRepository @Inject constructor(
 }
 
 internal fun normalizeUserName(value: String): String = value.trim().takeCodePoints(MAX_USER_NAME_CHARS)
+
+internal fun resolveAiConfigId(
+    configs: List<AiModelConfig>,
+    requestedId: String?,
+    type: AiModelType,
+    fallbackToAny: Boolean = false,
+): String? = configs.firstOrNull { it.id == requestedId && it.type == type }?.id
+    ?: configs.firstOrNull { it.enabled && it.type == type }?.id
+    ?: configs.firstOrNull { fallbackToAny && it.type == type }?.id
 
 internal fun normalizeMealButtonIcons(
     items: List<String>,
@@ -436,10 +728,67 @@ internal fun normalizeFontScale(value: Float?, fallback: Float = 1f): Float {
         ?: normalizedFallback
 }
 
+internal fun normalizeThoughtPageKey(value: String): String {
+    val normalized = value.trim()
+    return when {
+        normalized == "all" || normalized == "uncategorized" -> normalized
+        normalized.startsWith("category:") && normalized.substringAfter(':').toLongOrNull() != null -> normalized
+        else -> "all"
+    }
+}
+
+internal fun normalizeDailyEventTemplates(items: List<DailyEventTemplate>): List<DailyEventTemplate> =
+    items.asSequence()
+        .map { item ->
+            val migratedText = buildString {
+                append(item.text.trim().replaceLineBreaks())
+                item.firstUnit.trim().replaceLineBreaks().takeIf(String::isNotEmpty)?.let {
+                    append(" xx ").append(it)
+                }
+                item.secondUnit.trim().replaceLineBreaks().takeIf(String::isNotEmpty)?.let {
+                    append(" xx ").append(it)
+                }
+            }
+            item.copy(
+                id = item.id.trim().take(80),
+                text = migratedText.take(MAX_DAILY_EVENT_TEXT_CHARS),
+                firstUnit = "",
+                secondUnit = "",
+            )
+        }
+        .filter { it.id.isNotBlank() && it.text.isNotBlank() }
+        .distinctBy(DailyEventTemplate::id)
+        .take(MAX_DAILY_EVENT_TEMPLATES)
+        .toList()
+
+internal fun normalizeRssSubscriptions(items: List<RssSubscription>): List<RssSubscription> =
+    items.asSequence()
+        .map { item ->
+            item.copy(
+                id = item.id.trim().take(80),
+                title = item.title.trim().replace('\n', ' ').take(120),
+                url = item.url.trim().take(4_096),
+            )
+        }
+        .filter { it.id.isNotBlank() && it.url.isNotBlank() }
+        .distinctBy(RssSubscription::id)
+        .take(MAX_RSS_SUBSCRIPTIONS)
+        .toList()
+
 private fun opaqueArgb(value: Int): Int = value or 0xFF000000.toInt()
 
 private const val MAX_USER_NAME_CHARS = 32
 private const val MAX_MEAL_BUTTON_ICON_CHARS = 16
+private fun String.replaceLineBreaks(): String = replace('\r', ' ').replace('\n', ' ')
+
+private const val MAX_DAILY_EVENT_TEMPLATES = 100
+private const val MAX_DAILY_EVENT_TEXT_CHARS = 100
+private const val MAX_DAILY_EVENT_UNIT_CHARS = 12
+private const val MAX_RSS_SUBSCRIPTIONS = 100
+private const val MAX_AI_SYSTEM_PROMPT_CHARS = 20_000
+private const val MAX_AI_MODEL_CHARS = 512
+private const val MAX_AI_API_KEY_CHARS = 8_192
+private const val MAX_URL_CHARS = 4_096
 
 internal fun normalizeNavItems(items: List<NavItemConfig>): List<NavItemConfig> {
     val distinctItems = items.distinctBy(NavItemConfig::id).map { item ->
@@ -469,5 +818,16 @@ internal fun migrateMealPhotosWidget(items: List<String>, migrated: Boolean): Li
 
     return items.toMutableList().apply {
         add(quickInputIndex + 1, "meal_photos")
+    }
+}
+
+internal fun migrateDailyRecordsWidget(items: List<String>, migrated: Boolean): List<String> {
+    if (migrated || "daily_records" in items) return items
+
+    val quickInputIndex = items.indexOf("quick_input")
+    if (quickInputIndex == -1) return items + "daily_records"
+
+    return items.toMutableList().apply {
+        add(quickInputIndex + 1, "daily_records")
     }
 }

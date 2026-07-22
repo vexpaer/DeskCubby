@@ -7,17 +7,23 @@ import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AiModelConfig
+import com.deskcubby.app.data.model.AiModelType
+import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.preferences.migrateMealPhotosWidget
+import com.deskcubby.app.data.preferences.migrateDailyRecordsWidget
 import com.deskcubby.app.data.preferences.normalizeThemeSecondaryColors
 import java.math.BigDecimal
 import java.time.LocalDate
+import java.net.URI
 import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONException
@@ -25,7 +31,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 8,
+    val formatVersion: Int = 12,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -45,7 +51,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 8
+    const val FORMAT_VERSION: Int = 12
 
     private const val FORMAT_NAME = "DeskCubby"
     private const val MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -65,6 +71,9 @@ object BackupJsonCodec {
     private const val MAX_POEM_SOURCE_CHARS = 4_096
     private const val MAX_USERNAME_CHARS = 32
     private const val MAX_MEAL_BUTTON_ICON_CHARS = 16
+    private const val MAX_DAILY_EVENT_TEMPLATES = 100
+    private const val MAX_RSS_SUBSCRIPTIONS = 100
+    private const val MAX_AI_API_KEY_CHARS = 8_192
 
     fun encode(backup: AppBackup): String {
         require(backup.formatVersion == FORMAT_VERSION) {
@@ -184,10 +193,54 @@ object BackupJsonCodec {
         .put("browserDesktopMode", settings.browserDesktopMode)
         .put("thoughtSplitRatio", settings.thoughtSplitRatio)
         .put("thoughtRowHeightDp", settings.thoughtRowHeightDp)
+        .put("thoughtReopenMode", settings.thoughtReopenMode.name)
+        .put("thoughtDisplayMode", settings.thoughtDisplayMode.name)
+        .put("mealCalendarImageMaxHeightDp", settings.mealCalendarImageMaxHeightDp)
+        .put("mealCalendarShowCaptions", settings.mealCalendarShowCaptions)
         .put("mealButtonsUseIcons", settings.mealButtonsUseIcons)
         .put("userName", settings.userName)
         .put("homeWidgetBordersEnabled", settings.homeWidgetBordersEnabled)
         .put("mealButtonIcons", settings.mealButtonIcons.toJsonArray())
+        .put("dailyEventTemplates", JSONArray().apply {
+            settings.dailyEventTemplates.forEach { item ->
+                put(
+                    JSONObject()
+                        .put("id", item.id)
+                        .put("text", item.text)
+                        .put("firstUnit", item.firstUnit)
+                        .put("secondUnit", item.secondUnit),
+                )
+            }
+        })
+        .put("rssSubscriptions", JSONArray().apply {
+            settings.rssSubscriptions.forEach { item ->
+                put(
+                    JSONObject()
+                        .put("id", item.id)
+                        .put("title", item.title)
+                        .put("url", item.url)
+                        .put("enabled", item.enabled),
+                )
+            }
+        })
+        .put("rssMaxItemsPerFeed", settings.rssMaxItemsPerFeed)
+        .put("rssShowSummaries", settings.rssShowSummaries)
+        .put("aiEndpointUrl", settings.aiEndpointUrl)
+        .put("aiModel", settings.aiModel)
+        .put("aiSystemPrompt", settings.aiSystemPrompt)
+        .put("aiTemperature", settings.aiTemperature)
+        .put("aiAllowInsecureHttp", settings.aiAllowInsecureHttp)
+        .put("aiConfigs", JSONArray().apply { settings.aiConfigs.forEach { item -> put(JSONObject()
+            .put("id", item.id).put("name", item.name).put("type", item.type.name)
+            .put("endpointUrl", item.endpointUrl).put("model", item.model).put("enabled", item.enabled)
+            .put("allowInsecureHttp", item.allowInsecureHttp).put("temperature", item.temperature)
+            .put("systemPrompt", item.systemPrompt).put("apiKey", item.apiKey)) } })
+        .putNullable("aiChatConfigId", settings.aiChatConfigId)
+        .put("calorieEstimationEnabled", settings.calorieEstimationEnabled)
+        .putNullable("calorieTextConfigId", settings.calorieTextConfigId)
+        .putNullable("calorieImageConfigId", settings.calorieImageConfigId)
+        .put("calorieVisionPrompt", settings.calorieVisionPrompt)
+        .put("calorieTextPrompt", settings.calorieTextPrompt)
         .put("navItems", JSONArray().apply {
             settings.navItems.forEach { item ->
                 put(
@@ -206,16 +259,23 @@ object BackupJsonCodec {
 
     private fun decodeSettings(json: JSONObject, version: Int): AppSettings {
         val defaults = AppSettings()
-        val homeWidgets = migrateMealPhotosWidget(
-            items = json.requiredArray("homeWidgets").requiredStringList("homeWidgets"),
-            migrated = version >= 4,
+        val homeWidgets = migrateDailyRecordsWidget(
+            items = migrateMealPhotosWidget(
+                items = json.requiredArray("homeWidgets").requiredStringList("homeWidgets"),
+                migrated = version >= 4,
+            ),
+            migrated = version >= 9,
         )
         val decodedTitles = json.requiredArray("homeWidgetTitles").requiredStringList("homeWidgetTitles")
-        val homeWidgetTitles = if (version < 4 && "meal_photos" !in decodedTitles) {
+        val mealMigratedTitles = if (version < 4 && "meal_photos" !in decodedTitles) {
             decodedTitles + "meal_photos"
         } else {
             decodedTitles
         }
+        val homeWidgetTitles = migrateDailyRecordsWidget(
+            items = mealMigratedTitles,
+            migrated = version >= 9,
+        )
         return AppSettings(
             visualStyle = decodeVisualStyle(json, version),
             darkMode = json.requiredEnum("darkMode"),
@@ -265,6 +325,20 @@ object BackupJsonCodec {
                 .toFloat()
                 .coerceIn(0.25f, 0.8f),
             thoughtRowHeightDp = json.requiredCoercedInt("thoughtRowHeightDp", 48, 120),
+            thoughtReopenMode = if (version >= 9) json.requiredEnum("thoughtReopenMode")
+            else defaults.thoughtReopenMode,
+            thoughtDisplayMode = if (version >= 9) json.requiredEnum("thoughtDisplayMode")
+            else defaults.thoughtDisplayMode,
+            mealCalendarImageMaxHeightDp = if (version >= 9) {
+                json.requiredCoercedInt("mealCalendarImageMaxHeightDp", 80, 320)
+            } else {
+                defaults.mealCalendarImageMaxHeightDp
+            },
+            mealCalendarShowCaptions = if (version >= 9) {
+                json.requiredBoolean("mealCalendarShowCaptions")
+            } else {
+                defaults.mealCalendarShowCaptions
+            },
             mealButtonsUseIcons = if (version >= 4) {
                 json.requiredBoolean("mealButtonsUseIcons")
             } else {
@@ -288,6 +362,58 @@ object BackupJsonCodec {
             } else {
                 defaults.mealButtonIcons
             },
+            dailyEventTemplates = if (version >= 9) {
+                decodeDailyEventTemplates(json.requiredArray("dailyEventTemplates"))
+            } else {
+                defaults.dailyEventTemplates
+            },
+            rssSubscriptions = if (version >= 9) {
+                decodeRssSubscriptions(json.requiredArray("rssSubscriptions"))
+            } else {
+                defaults.rssSubscriptions
+            },
+            rssMaxItemsPerFeed = if (version >= 9) {
+                json.requiredCoercedInt("rssMaxItemsPerFeed", 10, 200)
+            } else {
+                defaults.rssMaxItemsPerFeed
+            },
+            rssShowSummaries = if (version >= 9) json.requiredBoolean("rssShowSummaries")
+            else defaults.rssShowSummaries,
+            aiEndpointUrl = if (version >= 9) {
+                json.requiredString("aiEndpointUrl").requireMaxLength("aiEndpointUrl", MAX_URL_CHARS)
+            } else {
+                defaults.aiEndpointUrl
+            },
+            aiModel = if (version >= 9) {
+                json.requiredString("aiModel").requireMaxLength("aiModel", 512)
+            } else {
+                defaults.aiModel
+            },
+            aiSystemPrompt = if (version >= 9) {
+                json.requiredString("aiSystemPrompt").requireMaxLength("aiSystemPrompt", 20_000)
+            } else {
+                defaults.aiSystemPrompt
+            },
+            aiTemperature = if (version >= 9) {
+                json.requiredFiniteNumber("aiTemperature").also { value ->
+                    require(value in 0.0..2.0) { "aiTemperature must be between 0 and 2" }
+                }.toFloat()
+            } else {
+                defaults.aiTemperature
+            },
+            aiAllowInsecureHttp = if (version >= 9) json.requiredBoolean("aiAllowInsecureHttp")
+            else defaults.aiAllowInsecureHttp,
+            aiConfigs = if (version >= 10) {
+                decodeAiConfigs(json.requiredArray("aiConfigs"), includeApiKeys = version >= 12)
+            } else {
+                emptyList()
+            },
+            aiChatConfigId = if (version >= 11) json.requiredNullableString("aiChatConfigId")?.requireMaxLength("aiChatConfigId", 80) else null,
+            calorieEstimationEnabled = if (version >= 10) json.requiredBoolean("calorieEstimationEnabled") else false,
+            calorieTextConfigId = if (version >= 11) json.requiredNullableString("calorieTextConfigId")?.requireMaxLength("calorieTextConfigId", 80) else null,
+            calorieImageConfigId = if (version >= 11) json.requiredNullableString("calorieImageConfigId")?.requireMaxLength("calorieImageConfigId", 80) else null,
+            calorieVisionPrompt = if (version >= 10) json.requiredString("calorieVisionPrompt").requireMaxLength("calorieVisionPrompt", 20_000) else defaults.calorieVisionPrompt,
+            calorieTextPrompt = if (version >= 10) json.requiredString("calorieTextPrompt").requireMaxLength("calorieTextPrompt", 20_000) else defaults.calorieTextPrompt,
             navItems = decodeNavItems(json.requiredArray("navItems")),
             defaultPage = json.requiredEnum("defaultPage"),
             bottomNavShowLabels = json.requiredBoolean("bottomNavShowLabels"),
@@ -305,10 +431,10 @@ object BackupJsonCodec {
     }
 
     private fun decodeMealButtonIcons(json: JSONArray, expectedCount: Int): List<String> {
-        require(json.length() == expectedCount) {
+        require(json.length() == expectedCount || json.length() == expectedCount - 1) {
             "mealButtonIcons must contain exactly $expectedCount items"
         }
-        return buildList(expectedCount) {
+        val decoded = buildList(json.length()) {
             for (index in 0 until json.length()) {
                 val value = json.get(index)
                 require(value is String) { "mealButtonIcons[$index] must be a string" }
@@ -317,6 +443,81 @@ object BackupJsonCodec {
                     "mealButtonIcons[$index] is too long"
                 }
                 add(value)
+            }
+        }
+        return if (decoded.size == expectedCount - 1) decoded.toMutableList().apply { add(2, defaultsMealTeaIcon()) } else decoded
+    }
+
+    private fun defaultsMealTeaIcon() = AppSettings().mealButtonIcons[2]
+
+    private fun decodeAiConfigs(json: JSONArray, includeApiKeys: Boolean): List<AiModelConfig> = buildList {
+        require(json.length() <= 20) { "Too many AI configurations" }
+        for (index in 0 until json.length()) json.getJSONObject(index).let { item ->
+            add(AiModelConfig(
+                id = item.requiredString("id").requireMaxLength("id", 80),
+                name = item.requiredString("name").requireMaxLength("name", 80),
+                type = item.requiredEnum<AiModelType>("type"),
+                endpointUrl = item.requiredString("endpointUrl").requireMaxLength("endpointUrl", MAX_URL_CHARS),
+                model = item.requiredString("model").requireMaxLength("model", 512),
+                enabled = item.requiredBoolean("enabled"),
+                allowInsecureHttp = item.requiredBoolean("allowInsecureHttp"),
+                temperature = item.requiredFiniteNumber("temperature").toFloat().coerceIn(0f, 2f),
+                systemPrompt = item.optString("systemPrompt").requireMaxLength("systemPrompt", 20_000),
+                apiKey = if (includeApiKeys) {
+                    item.requiredString("apiKey").requireMaxLength("apiKey", MAX_AI_API_KEY_CHARS)
+                } else {
+                    ""
+                },
+            ))
+        }
+    }
+
+    private fun decodeDailyEventTemplates(json: JSONArray): List<DailyEventTemplate> {
+        require(json.length() <= MAX_DAILY_EVENT_TEMPLATES) { "Too many daily event templates" }
+        val ids = HashSet<String>(json.length())
+        return buildList(json.length()) {
+            for (index in 0 until json.length()) {
+                val item = json.requiredObject(index, "dailyEventTemplates")
+                val id = item.requiredString("id")
+                    .requireMaxLength("dailyEventTemplates[$index].id", 80)
+                require(id.isNotBlank() && ids.add(id)) { "Invalid or duplicate daily event id: $id" }
+                val text = item.requiredString("text")
+                    .requireMaxLength("dailyEventTemplates[$index].text", 100)
+                require(text.isNotBlank()) { "dailyEventTemplates[$index].text must not be blank" }
+                add(
+                    DailyEventTemplate(
+                        id = id,
+                        text = text,
+                        firstUnit = item.requiredString("firstUnit")
+                            .requireMaxLength("dailyEventTemplates[$index].firstUnit", 12),
+                        secondUnit = item.requiredString("secondUnit")
+                            .requireMaxLength("dailyEventTemplates[$index].secondUnit", 12),
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun decodeRssSubscriptions(json: JSONArray): List<RssSubscription> {
+        require(json.length() <= MAX_RSS_SUBSCRIPTIONS) { "Too many RSS subscriptions" }
+        val ids = HashSet<String>(json.length())
+        return buildList(json.length()) {
+            for (index in 0 until json.length()) {
+                val item = json.requiredObject(index, "rssSubscriptions")
+                val id = item.requiredString("id").requireMaxLength("rssSubscriptions[$index].id", 80)
+                require(id.isNotBlank() && ids.add(id)) { "Invalid or duplicate RSS subscription id: $id" }
+                val url = item.requiredString("url")
+                    .requireMaxLength("rssSubscriptions[$index].url", MAX_URL_CHARS)
+                requireValidRssUrl(url, "rssSubscriptions[$index].url")
+                add(
+                    RssSubscription(
+                        id = id,
+                        title = item.requiredString("title")
+                            .requireMaxLength("rssSubscriptions[$index].title", 120),
+                        url = url,
+                        enabled = item.requiredBoolean("enabled"),
+                    ),
+                )
             }
         }
     }
@@ -701,6 +902,15 @@ object BackupJsonCodec {
                 url.startsWith("https://", ignoreCase = true) ||
                 url.startsWith("http://", ignoreCase = true),
         ) { "$field must use http, https, or about:blank" }
+    }
+
+    private fun requireValidRssUrl(url: String, field: String) {
+        val uri = runCatching { URI(url) }.getOrElse {
+            throw IllegalArgumentException("$field must be a valid HTTPS URL", it)
+        }
+        require(uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()) {
+            "$field must use HTTPS and include a host"
+        }
     }
 
     private fun requireValidDateIso(value: String, field: String) {

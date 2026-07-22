@@ -11,22 +11,29 @@ import com.deskcubby.app.data.backup.AutoBackupCoordinator
 import com.deskcubby.app.data.backup.AutoBackupStatus
 import com.deskcubby.app.data.backup.BackupSummary
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.BrowserTheme
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.ThoughtDisplayMode
+import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.preferences.SettingsRepository
+import com.deskcubby.app.data.repository.LegacyAiKeyMigrationStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
+import java.net.URL
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -49,12 +56,19 @@ class SettingsViewModel @Inject constructor(
     private val repository: SettingsRepository,
     private val backupRepository: AppBackupRepository,
     private val autoBackupCoordinator: AutoBackupCoordinator,
+    private val legacyAiKeyMigrationStore: LegacyAiKeyMigrationStore,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
     private val _ready = MutableStateFlow(false)
     val ready: StateFlow<Boolean> = _ready.asStateFlow()
 
-    val settings: StateFlow<AppSettings> = repository.settings.onEach { _ready.value = true }.stateIn(
+    private var legacyAiKeyMigrationAttempted = false
+    val settings: StateFlow<AppSettings> = repository.settings.map { current ->
+        if (legacyAiKeyMigrationAttempted) current else {
+            legacyAiKeyMigrationAttempted = true
+            migrateLegacyAiKeys(current)
+        }
+    }.onEach { _ready.value = true }.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
         AppSettings(),
@@ -66,7 +80,6 @@ class SettingsViewModel @Inject constructor(
 
     private val _settingsError = MutableStateFlow<String?>(null)
     val settingsError: StateFlow<String?> = _settingsError.asStateFlow()
-
     fun persistFolder(uri: Uri, diary: Boolean) {
         launch {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -100,10 +113,116 @@ class SettingsViewModel @Inject constructor(
     fun setBrowserTheme(value: BrowserTheme) = launch { repository.setBrowserTheme(value) }
     fun setBrowserDesktopMode(value: Boolean) = launch { repository.setBrowserDesktopMode(value) }
     fun setThoughtRowHeight(value: Int) = launch { repository.setThoughtRowHeight(value) }
+    fun setThoughtSettings(
+        rowHeightDp: Int,
+        reopenMode: ThoughtReopenMode,
+        displayMode: ThoughtDisplayMode,
+    ) = launch { repository.setThoughtSettings(rowHeightDp, reopenMode, displayMode) }
+    fun setMealCalendarImageMaxHeight(value: Int) =
+        launch { repository.setMealCalendarImageMaxHeight(value) }
+    fun setMealCalendarShowCaptions(value: Boolean) =
+        launch { repository.setMealCalendarShowCaptions(value) }
     fun setMealButtonsUseIcons(value: Boolean) = launch { repository.setMealButtonsUseIcons(value) }
     fun setMealButtonIcons(value: List<String>) = launch { repository.setMealButtonIcons(value) }
     fun setDefaultPage(value: NavItemId) = launch { repository.setDefaultPage(value) }
     fun setNavItems(value: List<NavItemConfig>) = launch { repository.setNavItems(value) }
+    fun setNavigationSettings(
+        defaultPage: NavItemId,
+        items: List<NavItemConfig>,
+        showLabels: Boolean,
+    ) = launch { repository.setNavigationSettings(defaultPage, items, showLabels) }
+    fun setRssSettings(maxItemsPerFeed: Int, showSummaries: Boolean) =
+        launch { repository.setRssSettings(maxItemsPerFeed, showSummaries) }
+    fun saveAiConfig(config: AiModelConfig, onDone: (Boolean) -> Unit = {}) =
+        viewModelScope.launch {
+            try {
+                val endpoint = URL(config.endpointUrl.trim())
+                val protocol = endpoint.protocol.lowercase()
+                require(endpoint.host.isNotBlank() && endpoint.userInfo.isNullOrBlank() &&
+                    (protocol == "https" || protocol == "http" && config.allowInsecureHttp)) {
+                    "AI 接口地址无效，或尚未允许 HTTP"
+                }
+                require(config.name.isNotBlank()) { "请填写配置名称" }
+                require(config.model.isNotBlank()) { "请填写模型名称" }
+                val normalized = config.copy(
+                    name = config.name.trim(), endpointUrl = config.endpointUrl.trim(),
+                    model = config.model.trim(), enabled = true, apiKey = config.apiKey.take(8_192),
+                )
+                val current = settings.value.aiConfigs
+                repository.setAiConfigs(
+                    if (current.any { it.id == normalized.id }) current.map { if (it.id == normalized.id) normalized else it }
+                    else current + normalized,
+                )
+                onDone(true)
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                _settingsError.value = error.message ?: "无法保存 AI 配置"
+                onDone(false)
+            }
+        }
+
+    fun copyAiConfig(config: AiModelConfig) = viewModelScope.launch {
+        try {
+            val copy = config.copy(id = java.util.UUID.randomUUID().toString(), name = "${config.name} - 副本", enabled = true)
+            repository.setAiConfigs(settings.value.aiConfigs + copy)
+        } catch (error: Exception) { _settingsError.value = error.message ?: "无法复制 AI 配置" }
+    }
+
+    fun deleteAiConfig(config: AiModelConfig) = viewModelScope.launch {
+        val snapshot = settings.value
+        repository.setAiConfigs(snapshot.aiConfigs.filterNot { it.id == config.id })
+        if (snapshot.aiChatConfigId == config.id) repository.setAiChatConfigId(null)
+        val textId = snapshot.calorieTextConfigId.takeUnless { it == config.id }
+        val imageId = snapshot.calorieImageConfigId.takeUnless { it == config.id }
+        if (textId != snapshot.calorieTextConfigId || imageId != snapshot.calorieImageConfigId) {
+            repository.setCalorieEstimationSettings(false, textId, imageId,
+                snapshot.calorieVisionPrompt, snapshot.calorieTextPrompt)
+        }
+    }
+
+    private suspend fun migrateLegacyAiKeys(current: AppSettings): AppSettings {
+        var allCurrentKeysReadable = true
+        val migrated = withContext(Dispatchers.IO) {
+            current.aiConfigs.map { config ->
+                if (config.apiKey.isNotEmpty()) return@map config
+                if (!legacyAiKeyMigrationStore.containsApiKey(config.id)) return@map config
+                val endpoint = runCatching { URL(config.endpointUrl) }.getOrNull() ?: run {
+                    allCurrentKeysReadable = false
+                    return@map config
+                }
+                val legacyKey = legacyAiKeyMigrationStore.readApiKey(config.id, endpoint)
+                    ?.take(8_192)
+                    .orEmpty()
+                if (legacyKey.isEmpty()) {
+                    allCurrentKeysReadable = false
+                    config
+                } else {
+                    config.copy(apiKey = legacyKey)
+                }
+            }
+        }
+        return try {
+            if (migrated != current.aiConfigs) repository.setAiConfigs(migrated)
+            if (allCurrentKeysReadable) {
+                withContext(Dispatchers.IO) { legacyAiKeyMigrationStore.discardLegacyStore() }
+            }
+            current.copy(aiConfigs = migrated)
+        } catch (_: Exception) {
+            // Keep the obsolete store intact so migration can be retried on the next launch.
+            current
+        }
+    }
+
+    fun setCalorieEstimationSettings(
+        enabled: Boolean, textConfigId: String?, imageConfigId: String?,
+        visionPrompt: String, textPrompt: String,
+    ) = launch {
+        val textValid = settings.value.aiConfigs.any { it.id == textConfigId && it.type == com.deskcubby.app.data.model.AiModelType.TEXT }
+        val imageValid = settings.value.aiConfigs.any { it.id == imageConfigId && it.type == com.deskcubby.app.data.model.AiModelType.IMAGE }
+        require(!enabled || textValid && imageValid) { "请选择有效的文字模型和图片模型" }
+        repository.setCalorieEstimationSettings(enabled, textConfigId, imageConfigId, visionPrompt, textPrompt)
+    }
+    fun acknowledgeNavigationIntro() = launch { repository.acknowledgeNavigationIntro() }
     fun setHomeWidgets(value: List<String>) = launch { repository.setHomeWidgets(value) }
     fun setHomeWidgetTitles(value: List<String>) = launch { repository.setHomeWidgetTitles(value) }
     fun setBottomNavShowLabels(value: Boolean) = launch { repository.setBottomNavShowLabels(value) }

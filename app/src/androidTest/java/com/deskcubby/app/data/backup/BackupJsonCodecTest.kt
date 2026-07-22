@@ -7,6 +7,12 @@ import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AiModelConfig
+import com.deskcubby.app.data.model.AiModelType
+import com.deskcubby.app.data.model.DailyEventTemplate
+import com.deskcubby.app.data.model.RssSubscription
+import com.deskcubby.app.data.model.ThoughtDisplayMode
+import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -35,9 +41,35 @@ class BackupJsonCodecTest {
             mealButtonsUseIcons = true,
             userName = "书桌主人",
             homeWidgetBordersEnabled = false,
-            mealButtonIcons = listOf("🥐", "🍜", "🍲", "🍓", "🍢"),
+            mealButtonIcons = listOf("🥐", "🍜", "🍹", "🍲", "🍓", "🍢"),
             mealImageCompressionEnabled = false,
             mealImageCompressionQuality = 65,
+            thoughtReopenMode = ThoughtReopenMode.LAST_VISITED,
+            thoughtDisplayMode = ThoughtDisplayMode.FULL,
+            mealCalendarImageMaxHeightDp = 188,
+            mealCalendarShowCaptions = false,
+            dailyEventTemplates = listOf(
+                DailyEventTemplate("exercise", "俯卧撑", "个", "次"),
+            ),
+            rssSubscriptions = listOf(
+                RssSubscription("feed", "示例", "https://example.com/feed.xml"),
+            ),
+            rssMaxItemsPerFeed = 80,
+            rssShowSummaries = false,
+            aiEndpointUrl = "https://example.com/v1/chat/completions",
+            aiModel = "example-model",
+            aiSystemPrompt = "测试系统提示词",
+            aiTemperature = 1.2f,
+            aiConfigs = listOf(
+                AiModelConfig("text-1", "文字一", AiModelType.TEXT, "https://example.com/text", "text-model",
+                    systemPrompt = "配置自己的系统提示词", apiKey = "sk-text-plain"),
+                AiModelConfig("image-1", "图片一", AiModelType.IMAGE, "https://example.com/image", "image-model",
+                    apiKey = "sk-image-plain"),
+            ),
+            aiChatConfigId = "text-1",
+            calorieEstimationEnabled = true,
+            calorieTextConfigId = "text-1",
+            calorieImageConfigId = "image-1",
             homeWidgets = emptyList(),
             homeWidgetTitles = emptyList(),
         )
@@ -106,14 +138,83 @@ class BackupJsonCodecTest {
         assertEquals(true, decoded.settings.mealButtonsUseIcons)
         assertEquals("书桌主人", decoded.settings.userName)
         assertEquals(false, decoded.settings.homeWidgetBordersEnabled)
-        assertEquals(listOf("🥐", "🍜", "🍲", "🍓", "🍢"), decoded.settings.mealButtonIcons)
+        assertEquals(listOf("🥐", "🍜", "🍹", "🍲", "🍓", "🍢"), decoded.settings.mealButtonIcons)
         assertEquals(false, decoded.settings.mealImageCompressionEnabled)
         assertEquals(65, decoded.settings.mealImageCompressionQuality)
         assertEquals(VisualStyle.ORGANIC_FUTURE, decoded.settings.visualStyle)
         assertEquals(settings.themeSecondaryColorsArgb, decoded.settings.themeSecondaryColorsArgb)
         assertEquals(settings.fontScale, decoded.settings.fontScale)
-        assertEquals(8, decoded.formatVersion)
+        assertEquals(12, decoded.formatVersion)
         assertEquals(40L, decoded.exportedAt)
+    }
+
+    @Test
+    fun versionElevenAiConfigurationsImportWithoutApiKeys() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 1,
+                    settings = AppSettings(
+                        aiConfigs = listOf(
+                            AiModelConfig(
+                                id = "text",
+                                name = "文字",
+                                type = AiModelType.TEXT,
+                                endpointUrl = "https://example.com/v1/chat/completions",
+                                model = "model",
+                                apiKey = "must-not-be-read-from-v11",
+                            ),
+                        ),
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        ).apply {
+            put("version", 11)
+            getJSONObject("settings").getJSONArray("aiConfigs").getJSONObject(0).remove("apiKey")
+        }
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+
+        assertEquals(11, decoded.formatVersion)
+        assertEquals("", decoded.settings.aiConfigs.single().apiKey)
+    }
+
+    @Test
+    fun versionTwelveRequiresBoundedStringApiKey() {
+        fun currentRoot() = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 1,
+                    settings = AppSettings(
+                        aiConfigs = listOf(
+                            AiModelConfig(
+                                id = "text",
+                                name = "文字",
+                                type = AiModelType.TEXT,
+                                endpointUrl = "https://example.com/v1/chat/completions",
+                                model = "model",
+                                apiKey = "plain-key",
+                            ),
+                        ),
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").getJSONArray("aiConfigs").getJSONObject(0).remove("apiKey")
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").getJSONArray("aiConfigs").getJSONObject(0).put("apiKey", 123)
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").getJSONArray("aiConfigs").getJSONObject(0)
+                .put("apiKey", "k".repeat(8_193))
+        })
     }
 
     @Test

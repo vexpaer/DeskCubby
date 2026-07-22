@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -14,6 +15,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -54,6 +57,7 @@ class ThoughtViewModel @Inject constructor(
         SharingStarted.Eagerly,
         AppSettings(),
     )
+    private var hasExplicitCategorySelection = false
 
     init {
         viewModelScope.launch {
@@ -76,10 +80,30 @@ class ThoughtViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            categories.collect { available ->
+            val (loadedSettings, availableAtStart) = combine(
+                settingsRepository.settings,
+                repository.categories,
+            ) { currentSettings, currentCategories ->
+                currentSettings to currentCategories
+            }.first()
+
+            if (!hasExplicitCategorySelection) {
+                val restored = when (loadedSettings.thoughtReopenMode) {
+                    ThoughtReopenMode.ALL -> ThoughtCategoryFilter.All
+                    ThoughtReopenMode.LAST_VISITED -> loadedSettings.lastThoughtPageKey
+                        .toThoughtCategoryFilter(availableAtStart)
+                }
+                mutableSelectedCategory.value = restored ?: ThoughtCategoryFilter.All
+                if (loadedSettings.thoughtReopenMode == ThoughtReopenMode.LAST_VISITED && restored == null) {
+                    settingsRepository.setLastThoughtPageKey(ThoughtCategoryFilter.All.pageKey())
+                }
+            }
+
+            repository.categories.collect { available ->
                 val selected = mutableSelectedCategory.value
                 if (selected is ThoughtCategoryFilter.Category && available.none { it.id == selected.id }) {
-                    mutableSelectedCategory.value = ThoughtCategoryFilter.Uncategorized
+                    mutableSelectedCategory.value = ThoughtCategoryFilter.All
+                    settingsRepository.setLastThoughtPageKey(ThoughtCategoryFilter.All.pageKey())
                 }
             }
         }
@@ -109,7 +133,9 @@ class ThoughtViewModel @Inject constructor(
     fun restore(id: Long) = viewModelScope.launch { repository.restore(id) }
     fun permanentlyDelete(id: Long) = viewModelScope.launch { repository.permanentlyDelete(id) }
     fun selectCategory(category: ThoughtCategoryFilter) {
+        hasExplicitCategorySelection = true
         mutableSelectedCategory.value = category
+        viewModelScope.launch { settingsRepository.setLastThoughtPageKey(category.pageKey()) }
     }
 
     fun setCategory(id: Long, category: ThoughtCategoryFilter) = viewModelScope.launch {
@@ -153,4 +179,25 @@ private fun ThoughtCategoryFilter.categoryIdOrNull(): Long? = when (this) {
     ThoughtCategoryFilter.Uncategorized,
     -> null
     is ThoughtCategoryFilter.Category -> id
+}
+
+private fun ThoughtCategoryFilter.pageKey(): String = when (this) {
+    ThoughtCategoryFilter.All -> "all"
+    ThoughtCategoryFilter.Uncategorized -> "uncategorized"
+    is ThoughtCategoryFilter.Category -> "category:$id"
+}
+
+private fun String.toThoughtCategoryFilter(
+    categories: List<ThoughtCategoryEntity>,
+): ThoughtCategoryFilter? = when (this) {
+    "all" -> ThoughtCategoryFilter.All
+    "uncategorized" -> ThoughtCategoryFilter.Uncategorized
+    else -> if (startsWith("category:")) {
+        removePrefix("category:")
+            .toLongOrNull()
+            ?.takeIf { id -> categories.any { it.id == id } }
+            ?.let(ThoughtCategoryFilter::Category)
+    } else {
+        null
+    }
 }
