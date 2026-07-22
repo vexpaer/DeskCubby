@@ -1,9 +1,55 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.kapt")
     id("com.google.dagger.hilt.android")
+}
+
+val releaseKeystorePropertiesFile = rootProject.file("keystore.properties")
+val releaseKeystoreProperties = Properties().apply {
+    if (releaseKeystorePropertiesFile.isFile) {
+        releaseKeystorePropertiesFile.inputStream().use(::load)
+    }
+}
+
+fun releaseSigningValue(propertyName: String, environmentName: String): String? =
+    providers.environmentVariable(environmentName).orNull
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?: releaseKeystoreProperties.getProperty(propertyName)
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+
+val releaseStoreFile = releaseSigningValue("storeFile", "DESKCUBBY_RELEASE_STORE_FILE")
+val releaseStorePassword = releaseSigningValue("storePassword", "DESKCUBBY_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = releaseSigningValue("keyAlias", "DESKCUBBY_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = releaseSigningValue("keyPassword", "DESKCUBBY_RELEASE_KEY_PASSWORD")
+val releaseSigningValues = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+)
+val releaseSigningConfigured = releaseSigningValues.all { !it.isNullOrBlank() }
+val releaseSigningPartiallyConfigured = releaseSigningValues.any { !it.isNullOrBlank() } &&
+    !releaseSigningConfigured
+val releaseTaskRequested = gradle.startParameter.taskNames.any {
+    it.contains("release", ignoreCase = true)
+}
+
+if (releaseTaskRequested && releaseSigningPartiallyConfigured) {
+    throw GradleException(
+        "Release signing is incomplete. Configure storeFile, storePassword, keyAlias and " +
+            "keyPassword in keystore.properties or the DESKCUBBY_RELEASE_* environment variables.",
+    )
+}
+if (releaseTaskRequested && !releaseSigningConfigured) {
+    throw GradleException(
+        "Release signing is not configured. Run scripts/generate-release-keystore.ps1 first.",
+    )
 }
 
 android {
@@ -21,8 +67,24 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = rootProject.file(checkNotNull(releaseStoreFile))
+                storePassword = checkNotNull(releaseStorePassword)
+                keyAlias = checkNotNull(releaseKeyAlias)
+                keyPassword = checkNotNull(releaseKeyPassword)
+                enableV1Signing = true
+                enableV2Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -47,6 +109,12 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+}
+
+android.applicationVariants.configureEach {
+    outputs.configureEach {
+        (this as com.android.build.gradle.api.ApkVariantOutput).outputFileName = "DeskCubby.apk"
     }
 }
 

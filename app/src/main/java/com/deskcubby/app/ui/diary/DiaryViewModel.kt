@@ -12,8 +12,10 @@ import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.DiaryTextUtils
 import com.deskcubby.app.data.repository.ExternalFileConflictException
+import com.deskcubby.app.data.repository.MealCalendarDay
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
@@ -37,6 +39,12 @@ data class DiaryListState(
 ) {
     val byMonth: Map<String, List<DiaryDocument>> get() = items.groupBy { it.monthKey }
 }
+
+data class MealCalendarState(
+    val loading: Boolean = false,
+    val items: List<MealCalendarDay> = emptyList(),
+    val error: String? = null,
+)
 
 data class EditorState(
     val document: DiaryEditorDocument? = null,
@@ -64,6 +72,9 @@ class DiaryViewModel @Inject constructor(
     private val _listState = MutableStateFlow(DiaryListState())
     val listState: StateFlow<DiaryListState> = _listState.asStateFlow()
 
+    private val _mealCalendarState = MutableStateFlow(MealCalendarState())
+    val mealCalendarState: StateFlow<MealCalendarState> = _mealCalendarState.asStateFlow()
+
     private val _expandedMonth = MutableStateFlow<String?>(null)
     val expandedMonth: StateFlow<String?> = _expandedMonth.asStateFlow()
 
@@ -84,6 +95,7 @@ class DiaryViewModel @Inject constructor(
     private val redoStack = ArrayDeque<String>()
     private val saveMutex = Mutex()
     private var refreshJob: Job? = null
+    private var mealCalendarRefreshJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -109,6 +121,24 @@ class DiaryViewModel @Inject constructor(
                     }
                 }
                 .onFailure { _listState.value = DiaryListState(error = it.userMessage()) }
+        }
+    }
+
+    fun refreshMealCalendar() {
+        mealCalendarRefreshJob?.cancel()
+        mealCalendarRefreshJob = viewModelScope.launch {
+            _mealCalendarState.value = _mealCalendarState.value.copy(loading = true, error = null)
+            try {
+                val items = repository.scanMealCalendar(settings.value)
+                _mealCalendarState.value = MealCalendarState(items = items)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _mealCalendarState.value = _mealCalendarState.value.copy(
+                    loading = false,
+                    error = error.userMessage(),
+                )
+            }
         }
     }
 
@@ -226,6 +256,7 @@ class DiaryViewModel @Inject constructor(
     fun dismissError() {
         _editorState.value = _editorState.value.copy(error = null)
         _listState.value = _listState.value.copy(error = null)
+        _mealCalendarState.value = _mealCalendarState.value.copy(error = null)
     }
 
     fun importImage(uri: Uri, category: String?) {

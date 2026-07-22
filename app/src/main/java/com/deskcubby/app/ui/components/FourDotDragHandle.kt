@@ -27,10 +27,15 @@ fun FourDotDragHandle(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     onDragStarted: () -> Unit = {},
+    onDragChanged: (verticalDistancePx: Float) -> Unit = {},
+    onDragCancelled: () -> Unit = {},
+    translateSelf: Boolean = true,
     onDragFinished: (verticalDistancePx: Float) -> Unit,
 ) {
     val description = tr("拖动排序", "Drag to reorder")
     val currentOnDragStarted by rememberUpdatedState(onDragStarted)
+    val currentOnDragChanged by rememberUpdatedState(onDragChanged)
+    val currentOnDragCancelled by rememberUpdatedState(onDragCancelled)
     val currentOnDragFinished by rememberUpdatedState(onDragFinished)
     var distance by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
@@ -46,7 +51,7 @@ fun FourDotDragHandle(
         modifier = modifier
             .size(48.dp)
             .graphicsLayer {
-                translationY = distance
+                translationY = if (translateSelf) distance else 0f
                 scaleX = if (dragging) 1.12f else 1f
                 scaleY = if (dragging) 1.12f else 1f
             }
@@ -58,10 +63,12 @@ fun FourDotDragHandle(
                             distance = 0f
                             dragging = true
                             currentOnDragStarted()
+                            currentOnDragChanged(0f)
                         },
                         onDragCancel = {
                             distance = 0f
                             dragging = false
+                            currentOnDragCancelled()
                         },
                         onDragEnd = {
                             val completedDistance = distance
@@ -72,6 +79,7 @@ fun FourDotDragHandle(
                         onDrag = { change, dragAmount ->
                             change.consume()
                             distance += dragAmount.y
+                            currentOnDragChanged(distance)
                         },
                     )
                 }

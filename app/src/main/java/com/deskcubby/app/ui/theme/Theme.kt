@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Shapes
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -33,11 +34,17 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AppLanguage
+import com.deskcubby.app.data.model.DEFAULT_THEME_COLOR_ARGB
+import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
 import com.deskcubby.app.data.model.VisualStyle
 import androidx.core.view.WindowCompat
 
@@ -100,12 +107,18 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
         DarkMode.LIGHT -> false
         DarkMode.DARK -> true
     }
-    val scheme = resolveColorScheme(settings.visualStyle, dark, settings.themeColorArgb)
-    val typography = if (settings.visualStyle == VisualStyle.ORGANIC_FUTURE) {
+    val scheme = resolveColorScheme(
+        visualStyle = settings.visualStyle,
+        dark = dark,
+        themeColorArgb = settings.themeColorArgb,
+        themeSecondaryColorsArgb = settings.themeSecondaryColorsArgb,
+    )
+    val baseTypography = if (settings.visualStyle == VisualStyle.ORGANIC_FUTURE) {
         OrganicFutureTypography
     } else {
         AppTypography
     }
+    val typography = scaledTypography(baseTypography, settings.fontScale)
     val shapes = if (settings.visualStyle == VisualStyle.ORGANIC_FUTURE) {
         OrganicFutureShapes
     } else {
@@ -131,6 +144,10 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
         LocalVisualStyle provides settings.visualStyle,
         LocalAppLanguage provides settings.appLanguage,
         LocalDeskCubbyVisuals provides visualTokens,
+        LocalOrganicFuturePrimaryColor provides Color(settings.themeColorArgb or 0xFF000000.toInt()),
+        LocalOrganicFutureAccentColors provides organicFutureAccentColors(
+            settings.themeSecondaryColorsArgb,
+        ),
     ) {
         MaterialTheme(
             colorScheme = scheme,
@@ -144,16 +161,19 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
 internal fun resolveColorScheme(
     visualStyle: VisualStyle,
     dark: Boolean,
-    themeColorArgb: Int,
+    themeColorArgb: Int = DEFAULT_THEME_COLOR_ARGB,
+    themeSecondaryColorsArgb: List<Int> = DEFAULT_THEME_SECONDARY_COLORS_ARGB,
 ): ColorScheme {
     val baseScheme = when (visualStyle) {
         VisualStyle.MATERIAL -> if (dark) MaterialDark else MaterialLight
         VisualStyle.LIQUID_GLASS -> if (dark) GlassDark else GlassLight
-        VisualStyle.ORGANIC_FUTURE -> organicFutureColorScheme(dark)
+        VisualStyle.ORGANIC_FUTURE -> organicFutureColorScheme(
+            dark = dark,
+            themeColorArgb = themeColorArgb,
+            secondaryColorsArgb = themeSecondaryColorsArgb,
+        )
     }
     if (visualStyle == VisualStyle.ORGANIC_FUTURE) {
-        // Organic Future keeps a deliberate emerald identity instead of inheriting a previously
-        // selected blue, pink, or purple accent from the other visual styles.
         return baseScheme
     }
     val accent = Color(themeColorArgb)
@@ -170,6 +190,39 @@ internal fun resolveColorScheme(
         secondary = lerp(accent, baseScheme.onSurface, 0.35f),
     )
 }
+
+internal fun scaledTypography(typography: Typography, fontScale: Float): Typography {
+    val scale = fontScale.takeIf(Float::isFinite)
+        ?.coerceIn(MIN_APP_FONT_SCALE, MAX_APP_FONT_SCALE)
+        ?: 1f
+    if (scale == 1f) return typography
+    return typography.copy(
+        displayLarge = typography.displayLarge.scaledBy(scale),
+        displayMedium = typography.displayMedium.scaledBy(scale),
+        displaySmall = typography.displaySmall.scaledBy(scale),
+        headlineLarge = typography.headlineLarge.scaledBy(scale),
+        headlineMedium = typography.headlineMedium.scaledBy(scale),
+        headlineSmall = typography.headlineSmall.scaledBy(scale),
+        titleLarge = typography.titleLarge.scaledBy(scale),
+        titleMedium = typography.titleMedium.scaledBy(scale),
+        titleSmall = typography.titleSmall.scaledBy(scale),
+        bodyLarge = typography.bodyLarge.scaledBy(scale),
+        bodyMedium = typography.bodyMedium.scaledBy(scale),
+        bodySmall = typography.bodySmall.scaledBy(scale),
+        labelLarge = typography.labelLarge.scaledBy(scale),
+        labelMedium = typography.labelMedium.scaledBy(scale),
+        labelSmall = typography.labelSmall.scaledBy(scale),
+    )
+}
+
+private fun TextStyle.scaledBy(scale: Float): TextStyle = copy(
+    fontSize = fontSize.scaledBy(scale),
+    lineHeight = lineHeight.scaledBy(scale),
+    letterSpacing = letterSpacing.scaledBy(scale),
+)
+
+private fun TextUnit.scaledBy(scale: Float): TextUnit =
+    if (this == TextUnit.Unspecified) this else this * scale
 
 @Composable
 fun tr(chinese: String, english: String): String =
@@ -191,6 +244,10 @@ fun GlassPanel(
 ) {
     val style = LocalVisualStyle.current
     val visuals = LocalDeskCubbyVisuals.current
+    val organicAccents = LocalOrganicFutureAccentColors.current
+    val organicAccent = organicAccents.getOrElse(role.ordinal % organicAccents.size.coerceAtLeast(1)) {
+        MaterialTheme.colorScheme.secondary
+    }
     val shape = if (style == VisualStyle.ORGANIC_FUTURE) {
         organicPanelShape(cornerRadius, role)
     } else {
@@ -228,13 +285,33 @@ fun GlassPanel(
                     spotColor = scheme.primary.copy(alpha = 0.05f),
                 )
                 .clip(shape)
-                .background(scheme.surfaceContainer)
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            scheme.surfaceContainer,
+                            lerp(scheme.surfaceContainer, organicAccent, 0.10f),
+                            scheme.surfaceContainerHigh,
+                        ),
+                    ),
+                )
                 .drawBehind {
                     drawOval(
-                        color = scheme.primary.copy(alpha = 0.035f),
+                        color = organicAccent.copy(alpha = 0.075f),
                         topLeft = Offset(size.width * 0.64f, -size.height * 0.22f),
                         size = Size(size.width * 0.48f, size.height * 0.72f),
                     )
+                    organicAccents.forEachIndexed { index, accent ->
+                        val column = index % 3
+                        val row = index / 3
+                        drawOval(
+                            color = accent.copy(alpha = 0.04f),
+                            topLeft = Offset(
+                                x = size.width * (0.08f + column * 0.29f),
+                                y = size.height * (0.62f + row * 0.12f),
+                            ),
+                            size = Size(size.width * 0.22f, size.height * 0.34f),
+                        )
+                    }
                 }
                 .border(
                     BorderStroke(visuals.borderWidth, scheme.outlineVariant.copy(alpha = 0.82f)),

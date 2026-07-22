@@ -2,6 +2,7 @@ package com.deskcubby.app.data.preferences
 
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -149,5 +150,53 @@ class SettingsRepositoryTest {
             listOf("🥐", "🥗", "🍚", "🍎", "🌙"),
             normalizeMealButtonIcons(listOf(" 🥐 ", "")),
         )
+    }
+
+    @Test
+    fun normalizeThemeSecondaryColorsMakesOpaqueDeduplicatesAndLimitsCount() {
+        val normalized = normalizeThemeSecondaryColors(
+            listOf(
+                0x00112233,
+                0xFF112233.toInt(),
+                0xFF223344.toInt(),
+                0xFF334455.toInt(),
+                0xFF445566.toInt(),
+                0xFF556677.toInt(),
+                0xFF667788.toInt(),
+            ),
+        )
+
+        assertEquals(
+            listOf(
+                0xFF112233.toInt(),
+                0xFF223344.toInt(),
+                0xFF334455.toInt(),
+                0xFF445566.toInt(),
+                0xFF556677.toInt(),
+            ),
+            normalized,
+        )
+    }
+
+    @Test
+    fun normalizeThemeSecondaryColorsFillsSingleColorAndFallsBackWhenEmpty() {
+        val oneColor = normalizeThemeSecondaryColors(listOf(0x00123456))
+
+        assertEquals(0xFF123456.toInt(), oneColor.first())
+        assertTrue(oneColor.size >= 2)
+        assertEquals(
+            DEFAULT_THEME_SECONDARY_COLORS_ARGB,
+            normalizeThemeSecondaryColors(emptyList()),
+        )
+    }
+
+    @Test
+    fun normalizeFontScaleClampsRangeAndRejectsNonFiniteValues() {
+        assertEquals(0.8f, normalizeFontScale(0.1f), 0f)
+        assertEquals(1.3f, normalizeFontScale(9f), 0f)
+        assertEquals(1f, normalizeFontScale(null), 0f)
+        assertEquals(1f, normalizeFontScale(Float.NaN), 0f)
+        assertEquals(1f, normalizeFontScale(Float.POSITIVE_INFINITY), 0f)
+        assertEquals(1f, normalizeFontScale(Float.NEGATIVE_INFINITY), 0f)
     }
 }

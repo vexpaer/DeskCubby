@@ -11,11 +11,18 @@ import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.deskcubby.app.data.model.DEFAULT_THEME_COLOR_ARGB
+import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
+import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
+import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.VisualStyle
 
 internal val OrganicFutureLight = lightColorScheme(
@@ -120,8 +127,133 @@ internal val OrganicFutureDark = darkColorScheme(
     surfaceContainerHighest = Color(0xFF203026),
 )
 
-internal fun organicFutureColorScheme(dark: Boolean) =
-    if (dark) OrganicFutureDark else OrganicFutureLight
+internal fun organicFutureColorScheme(
+    dark: Boolean,
+    themeColorArgb: Int = DEFAULT_THEME_COLOR_ARGB,
+    secondaryColorsArgb: List<Int> = DEFAULT_THEME_SECONDARY_COLORS_ARGB,
+) = (if (dark) OrganicFutureDark else OrganicFutureLight).withOrganicAccentRoles(
+    dark = dark,
+    primary = opaqueColor(themeColorArgb),
+    accents = organicFutureAccentColors(secondaryColorsArgb),
+)
+
+internal fun organicFutureAccentColors(colorsArgb: List<Int>): List<Color> {
+    val requested = colorsArgb
+        .map(::opaqueColor)
+        .distinct()
+        .take(MAX_THEME_SECONDARY_COLOR_COUNT)
+    val defaults = DEFAULT_THEME_SECONDARY_COLORS_ARGB.map(::opaqueColor)
+    if (requested.isEmpty()) return defaults
+    if (requested.size >= MIN_THEME_SECONDARY_COLOR_COUNT) return requested
+    return buildList(MAX_THEME_SECONDARY_COLOR_COUNT) {
+        addAll(requested)
+        defaults.forEach { color ->
+            if (size < MIN_THEME_SECONDARY_COLOR_COUNT && color !in this) add(color)
+        }
+    }
+}
+
+val LocalOrganicFutureAccentColors: ProvidableCompositionLocal<List<Color>> =
+    staticCompositionLocalOf { DEFAULT_THEME_SECONDARY_COLORS_ARGB.map(::opaqueColor) }
+
+val LocalOrganicFuturePrimaryColor: ProvidableCompositionLocal<Color> =
+    staticCompositionLocalOf { opaqueColor(DEFAULT_THEME_COLOR_ARGB) }
+
+val organicFutureAccentColors: List<Color>
+    @Composable get() = LocalOrganicFutureAccentColors.current
+
+@Composable
+internal fun currentOrganicFutureColorScheme(dark: Boolean) = organicFutureColorScheme(
+    dark = dark,
+    themeColorArgb = LocalOrganicFuturePrimaryColor.current.toArgb(),
+    secondaryColorsArgb = LocalOrganicFutureAccentColors.current.map(Color::toArgb),
+)
+
+private fun androidx.compose.material3.ColorScheme.withOrganicAccentRoles(
+    dark: Boolean,
+    primary: Color,
+    accents: List<Color>,
+): androidx.compose.material3.ColorScheme {
+    val surfaceForContrast = if (dark) OrganicFutureDark.surface else OrganicFutureLight.surface
+    val themedPrimary = roleColorForMode(primary, surfaceForContrast, dark)
+    val secondarySeed = accents[0]
+    val tertiarySeed = accents[1]
+    val secondary = roleColorForMode(secondarySeed, surfaceForContrast, dark)
+    val tertiary = roleColorForMode(tertiarySeed, surfaceForContrast, dark)
+    val primaryContainer = organicContainer(themedPrimary, dark)
+    val secondaryContainer = organicContainer(secondary, dark)
+    val tertiaryContainer = organicContainer(tertiary, dark)
+    val primaryFixed = fixedContainer(primary, 0.76f)
+    val primaryFixedDim = fixedContainer(primary, 0.56f)
+    val secondaryFixed = fixedContainer(secondarySeed, 0.76f)
+    val secondaryFixedDim = fixedContainer(secondarySeed, 0.56f)
+    val tertiaryFixed = fixedContainer(tertiarySeed, 0.76f)
+    val tertiaryFixedDim = fixedContainer(tertiarySeed, 0.56f)
+
+    return copy(
+        primary = themedPrimary,
+        onPrimary = readableContentColor(themedPrimary),
+        primaryContainer = primaryContainer,
+        onPrimaryContainer = readableContentColor(primaryContainer),
+        inversePrimary = lerp(themedPrimary, if (dark) Color.Black else Color.White, 0.32f),
+        primaryFixed = primaryFixed,
+        primaryFixedDim = primaryFixedDim,
+        onPrimaryFixed = readableContentColor(primaryFixed),
+        onPrimaryFixedVariant = readableContentColor(primaryFixed),
+        secondary = secondary,
+        onSecondary = readableContentColor(secondary),
+        secondaryContainer = secondaryContainer,
+        onSecondaryContainer = readableContentColor(secondaryContainer),
+        secondaryFixed = secondaryFixed,
+        secondaryFixedDim = secondaryFixedDim,
+        onSecondaryFixed = readableContentColor(secondaryFixed),
+        onSecondaryFixedVariant = readableContentColor(secondaryFixed),
+        tertiary = tertiary,
+        onTertiary = readableContentColor(tertiary),
+        tertiaryContainer = tertiaryContainer,
+        onTertiaryContainer = readableContentColor(tertiaryContainer),
+        tertiaryFixed = tertiaryFixed,
+        tertiaryFixedDim = tertiaryFixedDim,
+        onTertiaryFixed = readableContentColor(tertiaryFixed),
+        onTertiaryFixedVariant = readableContentColor(tertiaryFixed),
+        surfaceTint = themedPrimary,
+    )
+}
+
+/** Keeps user-picked hues recognizable while maintaining non-text contrast against the surface. */
+private fun roleColorForMode(seed: Color, surface: Color, dark: Boolean): Color {
+    if (contrastRatio(seed, surface) >= 3f) return seed
+    val target = if (dark) Color.White else Color.Black
+    for (step in 1..20) {
+        val candidate = lerp(seed, target, step / 20f)
+        if (contrastRatio(candidate, surface) >= 3f) return candidate
+    }
+    return target
+}
+
+private fun organicContainer(color: Color, dark: Boolean): Color = lerp(
+    color,
+    if (dark) Color.Black else Color.White,
+    if (dark) 0.54f else 0.76f,
+)
+
+private fun fixedContainer(color: Color, whiteFraction: Float): Color =
+    lerp(color, Color.White, whiteFraction)
+
+private fun readableContentColor(background: Color): Color {
+    val luminance = background.luminance()
+    val blackContrast = (luminance + 0.05f) / 0.05f
+    val whiteContrast = 1.05f / (luminance + 0.05f)
+    return if (blackContrast >= whiteContrast) Color.Black else Color.White
+}
+
+private fun contrastRatio(first: Color, second: Color): Float {
+    val lighter = maxOf(first.luminance(), second.luminance())
+    val darker = minOf(first.luminance(), second.luminance())
+    return (lighter + 0.05f) / (darker + 0.05f)
+}
+
+private fun opaqueColor(argb: Int): Color = Color(argb or 0xFF000000.toInt())
 
 private val DefaultTypography = Typography()
 

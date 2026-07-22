@@ -18,7 +18,12 @@ import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.BrowserTheme
 import com.deskcubby.app.data.model.DEFAULT_MEAL_BUTTON_ICONS
+import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
+import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.VisualStyle
@@ -47,6 +52,8 @@ class SettingsRepository @Inject constructor(
         val appLanguage = stringPreferencesKey("app_language")
         val userName = stringPreferencesKey("user_name")
         val themeColorArgb = intPreferencesKey("theme_color_argb")
+        val themeSecondaryColorsArgb = stringPreferencesKey("theme_secondary_colors_argb")
+        val fontScale = floatPreferencesKey("font_scale")
         val backupTreeUri = stringPreferencesKey("backup_tree_uri")
         val diaryTreeUri = stringPreferencesKey("diary_tree_uri")
         val mediaTreeUri = stringPreferencesKey("media_tree_uri")
@@ -91,6 +98,11 @@ class SettingsRepository @Inject constructor(
             appLanguage = prefs[Keys.appLanguage].enumValueOr(defaults.appLanguage),
             userName = normalizeUserName(prefs[Keys.userName] ?: defaults.userName),
             themeColorArgb = prefs[Keys.themeColorArgb] ?: defaults.themeColorArgb,
+            themeSecondaryColorsArgb = decodeThemeSecondaryColors(
+                prefs[Keys.themeSecondaryColorsArgb],
+                defaults.themeSecondaryColorsArgb,
+            ),
+            fontScale = normalizeFontScale(prefs[Keys.fontScale], defaults.fontScale),
             backupTreeUri = prefs[Keys.backupTreeUri]?.takeIf(::hasPersistedTreeAccess),
             diaryTreeUri = prefs[Keys.diaryTreeUri]?.takeIf(::hasPersistedTreeAccess),
             mediaTreeUri = prefs[Keys.mediaTreeUri]?.takeIf(::hasPersistedTreeAccess),
@@ -130,6 +142,11 @@ class SettingsRepository @Inject constructor(
     suspend fun setAppLanguage(value: AppLanguage) = set(Keys.appLanguage, value.name)
     suspend fun setUserName(value: String) = set(Keys.userName, normalizeUserName(value))
     suspend fun setThemeColor(value: Int) = set(Keys.themeColorArgb, value or 0xFF000000.toInt())
+    suspend fun setThemeSecondaryColors(value: List<Int>) = set(
+        Keys.themeSecondaryColorsArgb,
+        encodeThemeSecondaryColors(normalizeThemeSecondaryColors(value)),
+    )
+    suspend fun setFontScale(value: Float) = set(Keys.fontScale, normalizeFontScale(value))
     suspend fun setBackupTreeUri(value: String?) {
         context.settingsDataStore.edit {
             it.setOrRemove(Keys.backupTreeUri, value?.takeIf(String::isNotBlank))
@@ -158,6 +175,24 @@ class SettingsRepository @Inject constructor(
     suspend fun setDefaultPage(value: NavItemId) = set(Keys.defaultPage, value.name)
     suspend fun setBottomNavShowLabels(value: Boolean) = set(Keys.bottomNavShowLabels, value)
     suspend fun setHomeWidgetBordersEnabled(value: Boolean) = set(Keys.homeWidgetBordersEnabled, value)
+    suspend fun setHomePageSettings(
+        userName: String,
+        widgetBordersEnabled: Boolean,
+        widgets: List<String>,
+        visibleWidgetTitles: List<String>,
+        mealButtonsUseIcons: Boolean,
+        mealButtonIcons: List<String>,
+    ) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.userName] = normalizeUserName(userName)
+            prefs[Keys.homeWidgetBordersEnabled] = widgetBordersEnabled
+            prefs[Keys.homeWidgets] = encodeStringList(widgets.distinct())
+            prefs[Keys.mealPhotosWidgetMigrated] = true
+            prefs[Keys.homeWidgetTitles] = encodeStringList(visibleWidgetTitles.distinct())
+            prefs[Keys.mealButtonsUseIcons] = mealButtonsUseIcons
+            prefs[Keys.mealButtonIcons] = encodeStringList(normalizeMealButtonIcons(mealButtonIcons))
+        }
+    }
     suspend fun setHomeWidgets(value: List<String>) {
         context.settingsDataStore.edit { prefs ->
             prefs[Keys.homeWidgets] = encodeStringList(value.distinct())
@@ -184,6 +219,10 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.appLanguage] = value.appLanguage.name
             prefs[Keys.userName] = normalizeUserName(value.userName)
             prefs[Keys.themeColorArgb] = value.themeColorArgb or 0xFF000000.toInt()
+            prefs[Keys.themeSecondaryColorsArgb] = encodeThemeSecondaryColors(
+                normalizeThemeSecondaryColors(value.themeSecondaryColorsArgb),
+            )
+            prefs[Keys.fontScale] = normalizeFontScale(value.fontScale)
             prefs.setOrRemove(
                 Keys.diaryTreeUri,
                 restorableTreeUriOrCurrent(value.diaryTreeUri, prefs[Keys.diaryTreeUri]),
@@ -307,6 +346,21 @@ class SettingsRepository @Inject constructor(
         }.map { normalizeMealButtonIcons(it, fallback) }.getOrElse { fallback }
     }
 
+    private fun decodeThemeSecondaryColors(raw: String?, fallback: List<Int>): List<Int> {
+        if (raw == null) return normalizeThemeSecondaryColors(fallback)
+        return runCatching {
+            val array = JSONArray(raw)
+            buildList(array.length()) {
+                for (index in 0 until array.length()) add(array.getInt(index))
+            }
+        }.map { normalizeThemeSecondaryColors(it, fallback) }
+            .getOrElse { normalizeThemeSecondaryColors(fallback) }
+    }
+
+    private fun encodeThemeSecondaryColors(items: List<Int>): String = JSONArray().apply {
+        items.forEach(::put)
+    }.toString()
+
     private fun encodeStringList(items: List<String>): String = JSONArray().apply {
         items.forEach { put(it) }
     }.toString()
@@ -341,6 +395,48 @@ internal fun normalizeMealButtonIcons(
         ?.takeIf(String::isNotBlank)
         ?: defaultIcon
 }
+
+internal fun normalizeThemeSecondaryColors(
+    items: List<Int>,
+    fallback: List<Int> = DEFAULT_THEME_SECONDARY_COLORS_ARGB,
+): List<Int> {
+    val normalized = items
+        .map(::opaqueArgb)
+        .distinct()
+        .take(MAX_THEME_SECONDARY_COLOR_COUNT)
+    val normalizedFallback = fallback
+        .map(::opaqueArgb)
+        .distinct()
+        .take(MAX_THEME_SECONDARY_COLOR_COUNT)
+    val fallbackColors = buildList(MAX_THEME_SECONDARY_COLOR_COUNT) {
+        addAll(normalizedFallback)
+        DEFAULT_THEME_SECONDARY_COLORS_ARGB.forEach { color ->
+            if (size < MIN_THEME_SECONDARY_COLOR_COUNT && opaqueArgb(color) !in this) {
+                add(opaqueArgb(color))
+            }
+        }
+    }
+    if (normalized.isEmpty()) return fallbackColors
+    if (normalized.size >= MIN_THEME_SECONDARY_COLOR_COUNT) return normalized
+
+    return buildList(MAX_THEME_SECONDARY_COLOR_COUNT) {
+        addAll(normalized)
+        fallbackColors.forEach { color ->
+            if (size < MIN_THEME_SECONDARY_COLOR_COUNT && color !in this) add(color)
+        }
+    }
+}
+
+internal fun normalizeFontScale(value: Float?, fallback: Float = 1f): Float {
+    val normalizedFallback = fallback.takeIf(Float::isFinite)
+        ?.coerceIn(MIN_APP_FONT_SCALE, MAX_APP_FONT_SCALE)
+        ?: 1f
+    return value?.takeIf(Float::isFinite)
+        ?.coerceIn(MIN_APP_FONT_SCALE, MAX_APP_FONT_SCALE)
+        ?: normalizedFallback
+}
+
+private fun opaqueArgb(value: Int): Int = value or 0xFF000000.toInt()
 
 private const val MAX_USER_NAME_CHARS = 32
 private const val MAX_MEAL_BUTTON_ICON_CHARS = 16

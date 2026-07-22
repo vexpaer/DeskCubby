@@ -44,6 +44,16 @@ class ExternalFileConflictException(
     val diskDocument: DiaryEditorDocument,
 ) : IllegalStateException("日记已被其他应用修改")
 
+data class MealCalendarPhoto(
+    val uri: Uri,
+    val caption: String,
+)
+
+data class MealCalendarDay(
+    val dateIso: String,
+    val photos: List<MealCalendarPhoto>,
+)
+
 @Singleton
 class DiaryFileRepository @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -60,7 +70,11 @@ class DiaryFileRepository @Inject constructor(
             .filter { it.isFile && it.name?.endsWith(".md", ignoreCase = true) == true }
             .map { document ->
                 val content = readText(document.uri)
-                val date = extractDate(document.name.orEmpty(), document.lastModified())
+                val date = extractDate(
+                    name = document.name.orEmpty(),
+                    modified = document.lastModified(),
+                    fileNamePattern = settings.fileNamePattern,
+                )
                 val title = markdownStem(document.name.orEmpty())
                 DiaryDocument(
                     uri = document.uri.toString(),
@@ -92,6 +106,66 @@ class DiaryFileRepository @Inject constructor(
             },
         )
         documents.map { it.first }.sortedWith(compareByDescending<DiaryDocument> { it.dateIso }.thenByDescending { it.name })
+    }
+
+    /**
+     * Builds the meal photo wall directly from the current Markdown files. A media-directory
+     * lookup table is created once per scan so resolving many photos does not repeatedly query
+     * the Storage Access Framework provider. Unreadable or malformed individual diary files are
+     * ignored; a broken file should not hide valid meal photos from every other day.
+     */
+    suspend fun scanMealCalendar(settings: AppSettings): List<MealCalendarDay> = withContext(Dispatchers.IO) {
+        val diaryRoot = settings.diaryTreeUri?.let(::tree) ?: return@withContext emptyList()
+        val mediaByName = settings.mediaTreeUri
+            ?.let(::tree)
+            ?.listFiles()
+            .orEmpty()
+            .asSequence()
+            .filter { it.isFile }
+            .mapNotNull { file ->
+                file.name?.let { name -> name.lowercase(Locale.ROOT) to file.uri }
+            }
+            .toMap()
+
+        val photosByDate = linkedMapOf<String, MutableList<MealCalendarPhoto>>()
+        val diaries = diaryRoot.listFiles()
+            .asSequence()
+            .filter { it.isFile && it.name?.endsWith(".md", ignoreCase = true) == true }
+            .map { document ->
+                val name = document.name.orEmpty()
+                Triple(
+                    document,
+                    name,
+                    extractDate(name, document.lastModified(), settings.fileNamePattern),
+                )
+            }
+            .sortedWith(
+                compareByDescending<Triple<DocumentFile, String, LocalDate>> { it.third }
+                    .thenByDescending { it.second },
+            )
+
+        for ((diary, _, diaryDate) in diaries) {
+            val content = try {
+                readText(diary.uri)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                continue
+            }
+            val dateIso = diaryDate.toString()
+            for (match in MARKDOWN_IMAGE_REGEX.findAll(content)) {
+                val caption = match.groupValues[1].trim()
+                val target = match.groupValues[2].ifBlank { match.groupValues[3] }
+                if (!isMealCaption(caption) && !hasMealCategoryInFileName(target)) continue
+                val mediaUri = resolveMealMediaUri(target, mediaByName) ?: continue
+                photosByDate.getOrPut(dateIso) { mutableListOf() }
+                    .add(MealCalendarPhoto(uri = mediaUri, caption = caption))
+            }
+        }
+
+        photosByDate
+            .map { (dateIso, photos) -> MealCalendarDay(dateIso = dateIso, photos = photos) }
+            .sortedByDescending(MealCalendarDay::dateIso)
     }
 
     suspend fun load(uri: String): DiaryEditorDocument = withContext(Dispatchers.IO) {
@@ -640,7 +714,58 @@ class DiaryFileRepository @Inject constructor(
         return displayName?.substringAfterLast('.', "jpg")?.lowercase(Locale.ROOT) ?: "jpg"
     }
 
-    private fun extractDate(name: String, modified: Long): LocalDate {
+    private fun isMealCaption(caption: String): Boolean {
+        val normalized = caption.trim().lowercase(Locale.ROOT).replace(WHITESPACE_REGEX, " ")
+        return normalized in MEAL_CAPTIONS
+    }
+
+    private fun hasMealCategoryInFileName(target: String): Boolean {
+        val fileName = decodedTargetFileName(target)?.lowercase(Locale.ROOT) ?: return false
+        return CHINESE_MEAL_CAPTIONS.any(fileName::contains) ||
+            ENGLISH_MEAL_FILE_NAME_REGEX.containsMatchIn(fileName)
+    }
+
+    private fun resolveMealMediaUri(target: String, mediaByName: Map<String, Uri>): Uri? {
+        val cleaned = target.trim().trim('<', '>')
+        if (cleaned.isBlank()) return null
+        // Parse explicit URIs before decoding. Decoding a complete SAF URI corrupts encoded
+        // document IDs such as %3A and %2F.
+        val directUri = runCatching { Uri.parse(cleaned) }.getOrNull()
+        if (directUri?.scheme?.equals(ContentResolver.SCHEME_CONTENT, ignoreCase = true) == true ||
+            directUri?.scheme?.equals(ContentResolver.SCHEME_FILE, ignoreCase = true) == true ||
+            directUri?.scheme?.equals(ContentResolver.SCHEME_ANDROID_RESOURCE, ignoreCase = true) == true
+        ) {
+            return directUri
+        }
+
+        val fileName = decodedTargetFileName(cleaned)
+            ?: return null
+        return mediaByName[fileName.lowercase(Locale.ROOT)]
+    }
+
+    private fun decodedTargetFileName(target: String): String? = runCatching {
+        Uri.decode(
+            target
+                .trim()
+                .trim('<', '>')
+                .replace('\\', '/')
+                .substringAfterLast('/'),
+        )
+    }.getOrNull()?.takeIf(String::isNotBlank)
+
+    private fun extractDate(
+        name: String,
+        modified: Long,
+        fileNamePattern: String? = null,
+    ): LocalDate {
+        fileNamePattern?.takeIf(String::isNotBlank)?.let { pattern ->
+            runCatching {
+                LocalDate.parse(
+                    markdownStem(name),
+                    DateTimeFormatter.ofPattern(pattern, Locale.getDefault()),
+                )
+            }.getOrNull()?.let { return it }
+        }
         DATE_REGEX.find(name)?.value?.let { value ->
             runCatching { LocalDate.parse(value) }.getOrNull()?.let { return it }
         }
@@ -661,6 +786,28 @@ class DiaryFileRepository @Inject constructor(
 
     companion object {
         private val DATE_REGEX = Regex("\\d{4}-\\d{2}-\\d{2}")
+        private val WHITESPACE_REGEX = Regex("\\s+")
+        private val MARKDOWN_IMAGE_REGEX = Regex(
+            """!\[([^\]\r\n]*)]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:\s+(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\([^\)\r\n]*\)))?\s*\)""",
+        )
+        private val MEAL_CAPTIONS = setOf(
+            "早餐",
+            "午餐",
+            "晚餐",
+            "水果",
+            "夜宵",
+            "breakfast",
+            "lunch",
+            "dinner",
+            "fruit",
+            "late snack",
+            // Kept for compatibility with the label used by older DeskCubby versions.
+            "late-night snack",
+        )
+        private val CHINESE_MEAL_CAPTIONS = setOf("早餐", "午餐", "晚餐", "水果", "夜宵")
+        private val ENGLISH_MEAL_FILE_NAME_REGEX = Regex(
+            """(?:^|[^a-z])(?:breakfast|lunch|dinner|fruit|late[ _-]+(?:night[ _-]+)?snack)(?:[^a-z]|$)""",
+        )
         private val COMPRESSIBLE_IMAGE_MIMES = setOf(
             "image/jpeg",
             "image/jpg",

@@ -22,6 +22,12 @@ class BackupJsonCodecTest {
     fun roundTripPreservesContentButNotDeviceBackupFolder() {
         val settings = AppSettings(
             visualStyle = VisualStyle.ORGANIC_FUTURE,
+            themeSecondaryColorsArgb = listOf(
+                0xFF7B5C3E.toInt(),
+                0xFF4F6D7A.toInt(),
+                0xFFA26A4A.toInt(),
+            ),
+            fontScale = 1.15f,
             backupTreeUri = "content://device-only-backup-folder",
             diaryTreeUri = "content://diaries",
             mediaTreeUri = "content://media",
@@ -104,7 +110,9 @@ class BackupJsonCodecTest {
         assertEquals(false, decoded.settings.mealImageCompressionEnabled)
         assertEquals(65, decoded.settings.mealImageCompressionQuality)
         assertEquals(VisualStyle.ORGANIC_FUTURE, decoded.settings.visualStyle)
-        assertEquals(7, decoded.formatVersion)
+        assertEquals(settings.themeSecondaryColorsArgb, decoded.settings.themeSecondaryColorsArgb)
+        assertEquals(settings.fontScale, decoded.settings.fontScale)
+        assertEquals(8, decoded.formatVersion)
         assertEquals(40L, decoded.exportedAt)
     }
 
@@ -346,6 +354,71 @@ class BackupJsonCodecTest {
     }
 
     @Test
+    fun importsVersionSevenBackupWithDefaultsForVersionEightSettings() {
+        val versionSeven = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 7,
+                    settings = AppSettings(
+                        visualStyle = VisualStyle.ORGANIC_FUTURE,
+                        themeSecondaryColorsArgb = listOf(1, 2),
+                        fontScale = 1.3f,
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        ).apply {
+            put("version", 7)
+            getJSONObject("settings").removeVersionEightSettings()
+        }.toString()
+
+        val decoded = BackupJsonCodec.decode(versionSeven)
+        val defaults = AppSettings()
+
+        assertEquals(7, decoded.formatVersion)
+        assertEquals(VisualStyle.ORGANIC_FUTURE, decoded.settings.visualStyle)
+        assertEquals(defaults.themeSecondaryColorsArgb, decoded.settings.themeSecondaryColorsArgb)
+        assertEquals(defaults.fontScale, decoded.settings.fontScale)
+    }
+
+    @Test
+    fun rejectsInvalidVersionEightThemeSecondaryColors() {
+        val valid = validEmptyBackupJson()
+
+        assertDecodeRejected(JSONObject(valid.toString()).apply {
+            getJSONObject("settings").put("themeSecondaryColorsArgb", JSONArray(listOf(1)))
+        })
+        assertDecodeRejected(JSONObject(valid.toString()).apply {
+            getJSONObject("settings").put(
+                "themeSecondaryColorsArgb",
+                JSONArray(listOf(1, 2, 3, 4, 5, 6)),
+            )
+        })
+        assertDecodeRejected(JSONObject(valid.toString()).apply {
+            getJSONObject("settings").put("themeSecondaryColorsArgb", JSONArray(listOf(1, 2.5)))
+        })
+        assertDecodeRejected(JSONObject(valid.toString()).apply {
+            getJSONObject("settings").put("themeSecondaryColorsArgb", JSONArray(listOf(1, "2")))
+        })
+    }
+
+    @Test
+    fun rejectsInvalidVersionEightFontScale() {
+        val valid = validEmptyBackupJson()
+
+        assertDecodeRejected(JSONObject(valid.toString()).apply {
+            getJSONObject("settings").put("fontScale", 0.79)
+        })
+        assertDecodeRejected(JSONObject(valid.toString()).apply {
+            getJSONObject("settings").put("fontScale", 1.31)
+        })
+        assertDecodeRejected(JSONObject(valid.toString()).apply {
+            getJSONObject("settings").put("fontScale", "1.0")
+        })
+    }
+
+    @Test
     fun rejectsDuplicateCategoryIdsAndNamesCaseInsensitively() {
         val duplicateId = validCategorizedBackupJson().apply {
             getJSONArray("categories").getJSONObject(1).put("id", 1)
@@ -488,6 +561,17 @@ class BackupJsonCodecTest {
         ),
     )
 
+    private fun validEmptyBackupJson(): JSONObject = JSONObject(
+        BackupJsonCodec.encode(
+            AppBackup(
+                exportedAt = 1,
+                settings = AppSettings(),
+                thoughts = emptyList(),
+                favorites = emptyList(),
+            ),
+        ),
+    )
+
     private fun testCategory(id: Long, name: String): ThoughtCategoryEntity = ThoughtCategoryEntity(
         id = id,
         name = name,
@@ -533,6 +617,11 @@ class BackupJsonCodecTest {
     private fun JSONObject.removeVersionSixSettings() {
         remove("mealImageCompressionEnabled")
         remove("mealImageCompressionQuality")
+    }
+
+    private fun JSONObject.removeVersionEightSettings() {
+        remove("themeSecondaryColorsArgb")
+        remove("fontScale")
     }
 
     private fun assertVersionFiveSettingsUseDefaults(settings: AppSettings) {

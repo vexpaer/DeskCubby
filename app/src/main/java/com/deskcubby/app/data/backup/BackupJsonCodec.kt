@@ -10,7 +10,12 @@ import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
+import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.preferences.migrateMealPhotosWidget
+import com.deskcubby.app.data.preferences.normalizeThemeSecondaryColors
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.util.Locale
@@ -20,7 +25,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 7,
+    val formatVersion: Int = 8,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -40,7 +45,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 7
+    const val FORMAT_VERSION: Int = 8
 
     private const val FORMAT_NAME = "DeskCubby"
     private const val MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -162,6 +167,8 @@ object BackupJsonCodec {
         .put("darkMode", settings.darkMode.name)
         .put("appLanguage", settings.appLanguage.name)
         .put("themeColorArgb", settings.themeColorArgb)
+        .put("themeSecondaryColorsArgb", settings.themeSecondaryColorsArgb.toJsonIntArray())
+        .put("fontScale", settings.fontScale)
         .putNullable("diaryTreeUri", settings.diaryTreeUri)
         .putNullable("mediaTreeUri", settings.mediaTreeUri)
         .put("fileNamePattern", settings.fileNamePattern)
@@ -214,6 +221,20 @@ object BackupJsonCodec {
             darkMode = json.requiredEnum("darkMode"),
             appLanguage = json.requiredEnum("appLanguage"),
             themeColorArgb = json.requiredInt("themeColorArgb"),
+            themeSecondaryColorsArgb = if (version >= 8) {
+                decodeThemeSecondaryColors(json.requiredArray("themeSecondaryColorsArgb"))
+            } else {
+                defaults.themeSecondaryColorsArgb
+            },
+            fontScale = if (version >= 8) {
+                json.requiredFiniteNumber("fontScale").also { value ->
+                    require(value in MIN_APP_FONT_SCALE.toDouble()..MAX_APP_FONT_SCALE.toDouble()) {
+                        "fontScale must be between $MIN_APP_FONT_SCALE and $MAX_APP_FONT_SCALE"
+                    }
+                }.toFloat()
+            } else {
+                defaults.fontScale
+            },
             diaryTreeUri = json.requiredNullableString("diaryTreeUri"),
             mediaTreeUri = json.requiredNullableString("mediaTreeUri"),
             fileNamePattern = json.requiredString("fileNamePattern").requireMaxLength("fileNamePattern", 1_024),
@@ -298,6 +319,19 @@ object BackupJsonCodec {
                 add(value)
             }
         }
+    }
+
+    private fun decodeThemeSecondaryColors(json: JSONArray): List<Int> {
+        require(json.length() in MIN_THEME_SECONDARY_COLOR_COUNT..MAX_THEME_SECONDARY_COLOR_COUNT) {
+            "themeSecondaryColorsArgb must contain between " +
+                "$MIN_THEME_SECONDARY_COLOR_COUNT and $MAX_THEME_SECONDARY_COLOR_COUNT items"
+        }
+        val decoded = buildList(json.length()) {
+            for (index in 0 until json.length()) {
+                add(json.requiredInt(index, "themeSecondaryColorsArgb"))
+            }
+        }
+        return normalizeThemeSecondaryColors(decoded)
     }
 
     private fun decodeNavItems(json: JSONArray): List<NavItemConfig> = buildList {
@@ -686,6 +720,10 @@ private fun List<String>.toJsonArray(): JSONArray = JSONArray().apply {
     this@toJsonArray.forEach(::put)
 }
 
+private fun List<Int>.toJsonIntArray(): JSONArray = JSONArray().apply {
+    this@toJsonIntArray.forEach(::put)
+}
+
 private fun JSONObject.requiredValue(name: String): Any {
     require(has(name)) { "Missing required field: $name" }
     return get(name)
@@ -770,6 +808,22 @@ private fun JSONArray.requiredObject(index: Int, arrayName: String): JSONObject 
     val value = get(index)
     require(value is JSONObject) { "$arrayName[$index] must be an object" }
     return value
+}
+
+private fun JSONArray.requiredInt(index: Int, arrayName: String): Int {
+    val value = get(index)
+    require(value is Number) { "$arrayName[$index] must be an integer" }
+    val decoded = try {
+        BigDecimal(value.toString()).longValueExact()
+    } catch (_: ArithmeticException) {
+        throw IllegalArgumentException("$arrayName[$index] must be a 32-bit integer")
+    } catch (_: NumberFormatException) {
+        throw IllegalArgumentException("$arrayName[$index] must be a 32-bit integer")
+    }
+    require(decoded in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) {
+        "$arrayName[$index] must be a 32-bit integer"
+    }
+    return decoded.toInt()
 }
 
 private fun JSONArray.requiredStringList(arrayName: String): List<String> = buildList {

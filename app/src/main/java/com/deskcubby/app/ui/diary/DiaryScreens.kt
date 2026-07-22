@@ -9,6 +9,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -34,13 +35,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
@@ -52,7 +56,6 @@ import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Save
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Source
 import androidx.compose.material.icons.outlined.Today
 import androidx.compose.material.icons.outlined.Restore
@@ -62,6 +65,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -86,7 +90,9 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
@@ -94,6 +100,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.core.text.HtmlCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
@@ -118,6 +125,7 @@ fun DiaryListScreen(
     viewModel: DiaryViewModel,
     onOpen: (String) -> Unit,
     onOpenToday: () -> Unit,
+    onOpenMealCalendar: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val state by viewModel.listState.collectAsStateWithLifecycle()
@@ -152,7 +160,9 @@ fun DiaryListScreen(
                     IconButton(onClick = viewModel::refresh) { Icon(Icons.Outlined.Refresh, tr("刷新", "Refresh")) }
                     IconButton(onClick = { createDialog = true }) { Icon(Icons.Outlined.Add, tr("新建", "New")) }
                     IconButton(onClick = { viewModel.refreshTrash(); showTrash = true }) { Icon(Icons.Outlined.DeleteSweep, tr("日记回收站", "Diary trash")) }
-                    IconButton(onClick = onOpenSettings) { Icon(Icons.Outlined.Settings, tr("设置", "Settings")) }
+                    IconButton(onClick = onOpenMealCalendar) {
+                        Icon(Icons.Outlined.CalendarMonth, tr("吃历", "Meal calendar"))
+                    }
                 },
             )
         },
@@ -330,6 +340,131 @@ private fun EmptyDiary(onSettings: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 @Composable
+fun MealCalendarScreen(
+    viewModel: DiaryViewModel,
+    onBack: () -> Unit,
+) {
+    val state by viewModel.mealCalendarState.collectAsStateWithLifecycle()
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
+    val visuals = deskCubbyVisuals
+
+    LaunchedEffect(viewModel) {
+        viewModel.refreshMealCalendar()
+    }
+
+    Scaffold(
+        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
+        topBar = {
+            TopAppBar(
+                title = { Text(tr("吃历", "Meal calendar")) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, tr("返回", "Back"))
+                    }
+                },
+                actions = {
+                    IconButton(onClick = viewModel::refreshMealCalendar) {
+                        Icon(Icons.Outlined.Refresh, tr("刷新", "Refresh"))
+                    }
+                },
+            )
+        },
+    ) { inner ->
+        Box(Modifier.fillMaxSize().padding(inner).navigationBarsPadding()) {
+            when {
+                state.loading && state.items.isEmpty() -> {
+                    AppLoadingIndicator(Modifier.align(Alignment.Center))
+                }
+                state.error != null && state.items.isEmpty() -> {
+                    AppEmptyState(
+                        icon = Icons.Outlined.Image,
+                        title = tr("无法读取吃历", "Could not load meal calendar"),
+                        description = state.error.orEmpty(),
+                        actionLabel = tr("重试", "Retry"),
+                        onAction = viewModel::refreshMealCalendar,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                state.items.isEmpty() -> {
+                    AppEmptyState(
+                        icon = Icons.Outlined.Image,
+                        title = tr("还没有饮食照片", "No meal photos yet"),
+                        description = tr(
+                            "日记中标注为早餐、午餐、晚餐、水果或夜宵的照片会出现在这里。",
+                            "Photos captioned Breakfast, Lunch, Dinner, Fruit, or Late snack will appear here.",
+                        ),
+                        actionLabel = tr("刷新", "Refresh"),
+                        onAction = viewModel::refreshMealCalendar,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp),
+                        verticalArrangement = Arrangement.spacedBy(20.dp),
+                    ) {
+                        state.error?.let { error ->
+                            item(key = "meal-calendar-error") {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                    shape = MaterialTheme.shapes.medium,
+                                ) {
+                                    Text(error, modifier = Modifier.padding(12.dp))
+                                }
+                            }
+                        }
+                        items(state.items, key = { it.dateIso }) { day ->
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = day.dateIso,
+                                    modifier = Modifier.padding(horizontal = 16.dp),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                LazyRow(
+                                    contentPadding = PaddingValues(horizontal = 16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    itemsIndexed(
+                                        items = day.photos,
+                                        key = { index, photo -> "${photo.uri}#$index" },
+                                    ) { _, photo ->
+                                        Card(
+                                            modifier = Modifier.width(148.dp),
+                                            shape = if (organic) visuals.mediaShape else MaterialTheme.shapes.medium,
+                                        ) {
+                                            AsyncImage(
+                                                model = photo.uri,
+                                                contentDescription = photo.caption,
+                                                modifier = Modifier.fillMaxWidth().height(124.dp),
+                                                contentScale = ContentScale.Crop,
+                                            )
+                                            Text(
+                                                text = photo.caption,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                                style = MaterialTheme.typography.labelMedium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (state.loading) {
+                        LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun DiaryEditorScreen(
     viewModel: DiaryViewModel,
     onBack: () -> Unit,
@@ -498,6 +633,10 @@ private fun MarkdownSourceEditor(
     val scrollState = rememberScrollState()
     val density = LocalDensity.current
     var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var draggingMediaLineIndex by remember { mutableStateOf<Int?>(null) }
+    var mediaDragDistancePx by remember { mutableStateOf(0f) }
+    var mediaDragTargetVisualLine by remember { mutableStateOf<Int?>(null) }
+    var mediaDragTargetSourceLine by remember { mutableStateOf<Int?>(null) }
     val mediaLines = remember(value.text) { findMediaSourceLines(value.text) }
     val topPadding = 16.dp
     // The handle is an overlay and must never participate in text measurement. Keeping it
@@ -573,29 +712,131 @@ private fun MarkdownSourceEditor(
                     val currentLayout = textLayout
                     if (currentLayout != null && currentLayout.layoutInput.text.text == value.text) {
                         mediaLines.forEach { mediaLine ->
-                            val visualLine = currentLayout.getLineForOffset(mediaLine.startOffset)
-                            val lineTop = currentLayout.getLineTop(visualLine)
-                            val lineHeight = currentLayout.getLineBottom(visualLine) - lineTop
-                            val handleTopPx = with(density) { topPadding.toPx() } +
-                                lineTop +
-                                (lineHeight - with(density) { handleSize.toPx() }) / 2f
-
-                            FourDotDragHandle(
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .size(handleSize)
-                                    .offset { IntOffset(x = 0, y = handleTopPx.coerceAtLeast(0f).roundToInt()) },
-                                onDragFinished = { verticalDistance ->
-                                    val maxY = (currentLayout.size.height - 1).coerceAtLeast(0).toFloat()
-                                    val targetY = (lineTop + lineHeight / 2f + verticalDistance).coerceIn(0f, maxY)
-                                    val targetVisualLine = currentLayout.getLineForVerticalPosition(targetY)
-                                    val targetOffset = currentLayout.getLineStart(targetVisualLine)
-                                    val targetSourceLine = value.text
-                                        .take(targetOffset.coerceIn(0, value.text.length))
-                                        .count { it == '\n' }
-                                    onMoveMediaLine(mediaLine.index, targetSourceLine)
-                                },
+                            val startVisualLine = currentLayout.getLineForOffset(mediaLine.startOffset)
+                            val endVisualLine = currentLayout.getLineForOffset(
+                                (mediaLine.endOffset - 1).coerceAtLeast(mediaLine.startOffset),
                             )
+                            val blockTop = currentLayout.getLineTop(startVisualLine)
+                            val blockBottom = currentLayout.getLineBottom(endVisualLine)
+                            val blockHeight = (blockBottom - blockTop).coerceAtLeast(
+                                with(density) { handleSize.toPx() },
+                            )
+                            val blockTopWithPadding = with(density) { topPadding.toPx() } + blockTop
+                            val isDragging = draggingMediaLineIndex == mediaLine.index
+
+                            fun dragTarget(verticalDistance: Float): Pair<Int, Int> {
+                                val maxY = (currentLayout.size.height - 1).coerceAtLeast(0).toFloat()
+                                val targetY = (blockTop + blockHeight / 2f + verticalDistance)
+                                    .coerceIn(0f, maxY)
+                                val targetVisualLine = currentLayout.getLineForVerticalPosition(targetY)
+                                val targetOffset = currentLayout.getLineStart(targetVisualLine)
+                                val targetSourceLine = value.text
+                                    .take(targetOffset.coerceIn(0, value.text.length))
+                                    .count { it == '\n' }
+                                return targetVisualLine to targetSourceLine
+                            }
+
+                            // The stationary mask creates a real gap while the translucent source
+                            // block follows the finger above it.
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(with(density) { blockHeight.toDp() })
+                                    .offset {
+                                        IntOffset(x = 0, y = blockTopWithPadding.coerceAtLeast(0f).roundToInt())
+                                    }
+                                    .background(
+                                        if (isDragging) MaterialTheme.colorScheme.surface else Color.Transparent,
+                                    ),
+                            )
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(with(density) { blockHeight.toDp() })
+                                    .offset {
+                                        IntOffset(x = 0, y = blockTopWithPadding.coerceAtLeast(0f).roundToInt())
+                                    }
+                                    .zIndex(if (isDragging) 2f else 0f)
+                                    .graphicsLayer {
+                                        translationY = if (isDragging) mediaDragDistancePx else 0f
+                                        alpha = if (isDragging) 0.62f else 1f
+                                    }
+                                    .background(
+                                        if (isDragging) MaterialTheme.colorScheme.surface else Color.Transparent,
+                                    )
+                                    .padding(start = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (isDragging) {
+                                    Text(
+                                        text = value.text.substring(mediaLine.startOffset, mediaLine.endOffset),
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyLarge.copy(
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                        ),
+                                        maxLines = endVisualLine - startVisualLine + 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                } else {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                                FourDotDragHandle(
+                                    modifier = Modifier.size(handleSize),
+                                    translateSelf = false,
+                                    onDragStarted = {
+                                        draggingMediaLineIndex = mediaLine.index
+                                        mediaDragDistancePx = 0f
+                                        mediaDragTargetVisualLine = startVisualLine
+                                        mediaDragTargetSourceLine = mediaLine.index
+                                    },
+                                    onDragChanged = { verticalDistance ->
+                                        mediaDragDistancePx = verticalDistance
+                                        val (targetVisualLine, targetSourceLine) = dragTarget(verticalDistance)
+                                        mediaDragTargetVisualLine = targetVisualLine
+                                        mediaDragTargetSourceLine = targetSourceLine
+                                    },
+                                    onDragCancelled = {
+                                        draggingMediaLineIndex = null
+                                        mediaDragDistancePx = 0f
+                                        mediaDragTargetVisualLine = null
+                                        mediaDragTargetSourceLine = null
+                                    },
+                                    onDragFinished = { verticalDistance ->
+                                        val (_, calculatedTargetSourceLine) = dragTarget(verticalDistance)
+                                        val targetSourceLine = mediaDragTargetSourceLine
+                                            ?: calculatedTargetSourceLine
+                                        draggingMediaLineIndex = null
+                                        mediaDragDistancePx = 0f
+                                        mediaDragTargetVisualLine = null
+                                        mediaDragTargetSourceLine = null
+                                        onMoveMediaLine(mediaLine.index, targetSourceLine)
+                                    },
+                                )
+                            }
+                        }
+
+                        if (draggingMediaLineIndex != null) {
+                            mediaDragTargetVisualLine?.let { targetVisualLine ->
+                                val insertionTop = with(density) { topPadding.toPx() } +
+                                    currentLayout.getLineTop(targetVisualLine)
+                                HorizontalDivider(
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .fillMaxWidth()
+                                        .offset {
+                                            IntOffset(
+                                                x = 0,
+                                                y = insertionTop.coerceAtLeast(0f).roundToInt(),
+                                            )
+                                        }
+                                        .padding(horizontal = 8.dp)
+                                        .zIndex(3f),
+                                    thickness = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
                         }
                     }
                 }

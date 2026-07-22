@@ -5,8 +5,12 @@
 
 package com.deskcubby.app.ui.thought
 
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,6 +49,7 @@ import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Send
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -71,15 +76,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.model.VisualStyle
@@ -119,6 +131,10 @@ fun ThoughtScreen(
     var editor by remember { mutableStateOf("") }
     var actionItem by remember { mutableStateOf<FlashThoughtEntity?>(null) }
     var categorizingItem by remember { mutableStateOf<FlashThoughtEntity?>(null) }
+    var draggingThoughtId by remember { mutableStateOf<Long?>(null) }
+    var draggingDistancePx by remember { mutableStateOf(0f) }
+    var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
+    var isEditorFocused by remember { mutableStateOf(false) }
     var showSendCategoryPicker by remember { mutableStateOf(false) }
     var showAddCategory by remember { mutableStateOf(false) }
     var editingCategory by remember { mutableStateOf<com.deskcubby.app.data.local.ThoughtCategoryEntity?>(null) }
@@ -126,8 +142,11 @@ fun ThoughtScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    val shareChooserTitle = tr("分享小巧思", "Share thought")
+    val shareFailedMessage = tr("没有可用的分享应用", "No app is available for sharing")
     val dismissKeyboardOnListScroll = remember(focusManager, keyboardController) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -140,6 +159,26 @@ fun ThoughtScreen(
         }
     }
     val thoughtDateFormatter = remember { DateTimeFormatter.ofPattern("yyyy/M/d HH:mm") }
+
+    fun findDragTargetIndex(itemId: Long, verticalDistancePx: Float): Int? {
+        val visibleItems = listState.layoutInfo.visibleItemsInfo
+        val sourceInfo = visibleItems.firstOrNull { it.key == itemId } ?: return null
+        val targetCenter = sourceInfo.offset + sourceInfo.size / 2f + verticalDistancePx
+        return visibleItems.firstOrNull { info ->
+            targetCenter >= info.offset && targetCenter <= info.offset + info.size
+        }?.index ?: visibleItems.minByOrNull { info ->
+            abs(targetCenter - (info.offset + info.size / 2f))
+        }?.index
+    }
+
+    val dragSourceIndex = draggingThoughtId?.let { itemId ->
+        items.indexOfFirst { it.id == itemId }.takeIf { it >= 0 }
+    }
+    val insertionSlot = dragSourceIndex?.let { sourceIndex ->
+        dragTargetIndex?.let { targetIndex ->
+            if (targetIndex > sourceIndex) targetIndex + 1 else targetIndex
+        }
+    }
 
     LaunchedEffect(activeState.pendingScrollItemId, items) {
         activeState.pendingScrollItemId?.let { itemId ->
@@ -229,64 +268,104 @@ fun ThoughtScreen(
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                itemsIndexed(items, key = { _, item -> item.id }) { _, item ->
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth().combinedClickable(
-                                            onClick = { selected = item; editor = item.content },
-                                            onLongClick = { actionItem = item },
-                                        ),
+                                itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
+                                    val isDragging = draggingThoughtId == item.id
+                                    Box(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .zIndex(if (isDragging) 1f else 0f),
                                     ) {
-                                        Row(
-                                            Modifier
+                                        Card(
+                                            modifier = Modifier
                                                 .fillMaxWidth()
-                                                .height(settings.thoughtRowHeightDp.dp)
-                                                .padding(start = 10.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
+                                                .graphicsLayer {
+                                                    translationY = if (isDragging) draggingDistancePx else 0f
+                                                    alpha = if (isDragging) 0.62f else 1f
+                                                }
+                                                .combinedClickable(
+                                                    onClick = { selected = item; editor = item.content },
+                                                    onLongClick = { actionItem = item },
+                                                ),
                                         ) {
-                                            if (item.pinned) {
-                                                Icon(Icons.Outlined.PushPin, null, tint = MaterialTheme.colorScheme.primary)
-                                                Spacer(Modifier.width(6.dp))
+                                            Row(
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .height(settings.thoughtRowHeightDp.dp)
+                                                    .padding(start = 10.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                if (item.pinned) {
+                                                    Icon(Icons.Outlined.PushPin, null, tint = MaterialTheme.colorScheme.primary)
+                                                    Spacer(Modifier.width(6.dp))
+                                                }
+                                                categoriesById[item.categoryId]?.let { category ->
+                                                    CategoryColorDot(category.colorArgb)
+                                                    Spacer(Modifier.width(8.dp))
+                                                }
+                                                Text(
+                                                    item.content,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f),
+                                                )
+                                                IconButton(
+                                                    onClick = {
+                                                        if (selected?.id == item.id) {
+                                                            selected = null
+                                                            editor = ""
+                                                        }
+                                                        viewModel.delete(item.id)
+                                                    },
+                                                ) { Icon(Icons.Outlined.Delete, tr("删除", "Delete")) }
+                                                FourDotDragHandle(
+                                                    enabled = items.size > 1,
+                                                    translateSelf = false,
+                                                    onDragStarted = {
+                                                        focusManager.clearFocus(force = true)
+                                                        keyboardController?.hide()
+                                                        draggingThoughtId = item.id
+                                                        draggingDistancePx = 0f
+                                                        dragTargetIndex = index
+                                                    },
+                                                    onDragChanged = { distance ->
+                                                        draggingDistancePx = distance
+                                                        dragTargetIndex = findDragTargetIndex(item.id, distance)
+                                                    },
+                                                    onDragCancelled = {
+                                                        draggingThoughtId = null
+                                                        draggingDistancePx = 0f
+                                                        dragTargetIndex = null
+                                                    },
+                                                    onDragFinished = { distance ->
+                                                        val targetIndex = findDragTargetIndex(item.id, distance)
+                                                            ?: dragTargetIndex
+                                                        draggingThoughtId = null
+                                                        draggingDistancePx = 0f
+                                                        dragTargetIndex = null
+                                                        if (targetIndex != null && targetIndex != index) {
+                                                            viewModel.move(item.id, targetIndex)
+                                                        }
+                                                    },
+                                                )
                                             }
-                                            categoriesById[item.categoryId]?.let { category ->
-                                                CategoryColorDot(category.colorArgb)
-                                                Spacer(Modifier.width(8.dp))
-                                            }
-                                            Text(
-                                                item.content,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.weight(1f),
+                                        }
+
+                                        if (draggingThoughtId != null && insertionSlot == index) {
+                                            HorizontalDivider(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopCenter)
+                                                    .padding(horizontal = 8.dp),
+                                                thickness = 2.dp,
+                                                color = MaterialTheme.colorScheme.primary,
                                             )
-                                            IconButton(
-                                                onClick = {
-                                                    if (selected?.id == item.id) {
-                                                        selected = null
-                                                        editor = ""
-                                                    }
-                                                    viewModel.delete(item.id)
-                                                },
-                                            ) { Icon(Icons.Outlined.Delete, tr("删除", "Delete")) }
-                                            FourDotDragHandle(
-                                                enabled = items.size > 1,
-                                                onDragStarted = {
-                                                    focusManager.clearFocus(force = true)
-                                                    keyboardController?.hide()
-                                                },
-                                                onDragFinished = { distance ->
-                                                    val visibleItems = listState.layoutInfo.visibleItemsInfo
-                                                    val sourceInfo = visibleItems.firstOrNull { it.key == item.id }
-                                                    if (sourceInfo != null) {
-                                                        val targetCenter = sourceInfo.offset + sourceInfo.size / 2f + distance
-                                                        val targetInfo = visibleItems.firstOrNull { info ->
-                                                            targetCenter >= info.offset && targetCenter <= info.offset + info.size
-                                                        } ?: visibleItems.minByOrNull { info ->
-                                                            abs(targetCenter - (info.offset + info.size / 2f))
-                                                        }
-                                                        if (targetInfo != null && targetInfo.index != sourceInfo.index) {
-                                                            viewModel.move(item.id, targetInfo.index)
-                                                        }
-                                                    }
-                                                },
+                                        }
+                                        if (index == items.lastIndex && insertionSlot == items.size) {
+                                            HorizontalDivider(
+                                                modifier = Modifier
+                                                    .align(Alignment.BottomCenter)
+                                                    .padding(horizontal = 8.dp),
+                                                thickness = 2.dp,
+                                                color = MaterialTheme.colorScheme.primary,
                                             )
                                         }
                                     }
@@ -313,7 +392,51 @@ fun ThoughtScreen(
                         OutlinedTextField(
                             value = editor,
                             onValueChange = { editor = it },
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 168.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 168.dp)
+                                .onFocusChanged { isEditorFocused = it.isFocused }
+                                .pointerInput(
+                                    listState,
+                                    focusManager,
+                                    keyboardController,
+                                    isEditorFocused,
+                                ) {
+                                    if (isEditorFocused) return@pointerInput
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(
+                                            requireUnconsumed = false,
+                                            pass = PointerEventPass.Initial,
+                                        )
+                                        var totalX = 0f
+                                        var totalY = 0f
+                                        var isVerticalDrag: Boolean? = null
+                                        var dragStarted = false
+                                        while (true) {
+                                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                            if (!change.pressed) break
+                                            val delta = change.positionChange()
+                                            totalX += delta.x
+                                            totalY += delta.y
+                                            if (isVerticalDrag == null &&
+                                                (abs(totalX) > viewConfiguration.touchSlop ||
+                                                    abs(totalY) > viewConfiguration.touchSlop)
+                                            ) {
+                                                isVerticalDrag = abs(totalY) > abs(totalX)
+                                            }
+                                            if (isVerticalDrag == true) {
+                                                if (!dragStarted) {
+                                                    dragStarted = true
+                                                    focusManager.clearFocus(force = true)
+                                                    keyboardController?.hide()
+                                                }
+                                                change.consume()
+                                                listState.dispatchRawDelta(-delta.y)
+                                            }
+                                        }
+                                    }
+                                },
                             placeholder = { Text(tr("此刻在想什么？", "What's on your mind?")) },
                             minLines = 1,
                             maxLines = 6,
@@ -325,6 +448,8 @@ fun ThoughtScreen(
                                         viewModel.submit(selected?.id, editor) {
                                             selected = null
                                             editor = ""
+                                            focusManager.clearFocus(force = true)
+                                            keyboardController?.hide()
                                         }
                                     },
                                     onLongClick = { showSendCategoryPicker = true },
@@ -366,6 +491,25 @@ fun ThoughtScreen(
                     }
                     TextButton(onClick = { clipboard.setText(AnnotatedString(item.content)); actionItem = null }) {
                         Icon(Icons.Outlined.ContentCopy, null); Spacer(Modifier.width(8.dp)); Text(tr("复制", "Copy"))
+                    }
+                    TextButton(
+                        onClick = {
+                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, item.content)
+                            }
+                            runCatching {
+                                context.startActivity(Intent.createChooser(shareIntent, shareChooserTitle))
+                            }.onSuccess {
+                                actionItem = null
+                            }.onFailure {
+                                Toast.makeText(context, shareFailedMessage, Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                    ) {
+                        Icon(Icons.Outlined.Share, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(tr("分享这段文字", "Share this text"))
                     }
                     TextButton(onClick = { viewModel.delete(item.id); actionItem = null }) {
                         Icon(Icons.Outlined.Delete, null); Spacer(Modifier.width(8.dp)); Text(tr("移入回收站", "Move to trash"))
@@ -409,6 +553,8 @@ fun ThoughtScreen(
                 viewModel.submit(selected?.id, editor, category) {
                     selected = null
                     editor = ""
+                    focusManager.clearFocus(force = true)
+                    keyboardController?.hide()
                 }
             },
         )
@@ -448,16 +594,25 @@ internal fun ThoughtSendButton(
 ) {
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     val visuals = deskCubbyVisuals
-    Surface(
+    Box(
         modifier = Modifier
             .size(48.dp)
             .combinedClickable(enabled = enabled, onClick = onClick, onLongClick = onLongClick),
-        shape = if (organic) visuals.badgeShape else CircleShape,
-        color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+        contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Icon(Icons.Outlined.Send, tr("发送；长按选择分类", "Send; hold to choose category"))
+        Surface(
+            modifier = Modifier.size(36.dp),
+            shape = if (organic) visuals.badgeShape else CircleShape,
+            color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Icon(
+                Icons.Outlined.Send,
+                tr("发送；长按选择分类", "Send; hold to choose category"),
+                modifier = Modifier.size(19.dp),
+            )
+            }
         }
     }
 }

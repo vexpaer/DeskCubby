@@ -117,7 +117,7 @@ import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.theme.LocalVisualStyle
-import com.deskcubby.app.ui.theme.organicFutureColorScheme
+import com.deskcubby.app.ui.theme.currentOrganicFutureColorScheme
 import com.deskcubby.app.ui.theme.tr
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -619,7 +619,7 @@ private fun BrowserStartPage(
                 contentDescription = null,
                 alpha = if (dark) 0.12f else 0.08f,
                 colorFilter = if (organic) {
-                    ColorFilter.tint(organicFutureColorScheme(dark).primary)
+                    ColorFilter.tint(currentOrganicFutureColorScheme(dark).primary)
                 } else {
                     null
                 },
@@ -685,7 +685,7 @@ private fun BrowserStartPage(
     }
 
     if (organic) {
-        MaterialTheme(colorScheme = organicFutureColorScheme(dark)) { content() }
+        MaterialTheme(colorScheme = currentOrganicFutureColorScheme(dark)) { content() }
     } else {
         content()
     }
@@ -701,7 +701,7 @@ private fun BrowserRendererGonePage(
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
 
     if (organic) {
-        MaterialTheme(colorScheme = organicFutureColorScheme(dark)) {
+        MaterialTheme(colorScheme = currentOrganicFutureColorScheme(dark)) {
             AppEmptyState(
                 icon = Icons.Outlined.Refresh,
                 title = tr("网页渲染进程已停止", "The page renderer stopped"),
@@ -756,7 +756,7 @@ private data class BrowserChromePalette(
 private fun browserChromePalette(dark: Boolean): BrowserChromePalette {
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     return when {
-        organic -> organicFutureColorScheme(dark).let { scheme ->
+        organic -> currentOrganicFutureColorScheme(dark).let { scheme ->
             BrowserChromePalette(
                 background = scheme.background,
                 foreground = scheme.onBackground,
@@ -810,7 +810,7 @@ private fun BrowserWebPage(
         dark = dark,
         desktopMode = desktopMode,
         backgroundColor = if (organic) {
-            organicFutureColorScheme(dark).background.toArgb()
+            currentOrganicFutureColorScheme(dark).background.toArgb()
         } else {
             browserWebBackground(dark)
         },

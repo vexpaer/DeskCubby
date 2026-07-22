@@ -10,6 +10,17 @@ enum class AppLanguage { CHINESE, ENGLISH }
 
 val DEFAULT_MEAL_BUTTON_ICONS: List<String> = listOf("🍳", "🥗", "🍚", "🍎", "🌙")
 
+const val DEFAULT_THEME_COLOR_ARGB: Int = 0xFF42664D.toInt()
+val DEFAULT_THEME_SECONDARY_COLORS_ARGB: List<Int> = listOf(
+    0xFFC96F4A.toInt(),
+    0xFFD4A72C.toInt(),
+    0xFF527F91.toInt(),
+)
+const val MIN_THEME_SECONDARY_COLOR_COUNT: Int = 2
+const val MAX_THEME_SECONDARY_COLOR_COUNT: Int = 5
+const val MIN_APP_FONT_SCALE: Float = 0.8f
+const val MAX_APP_FONT_SCALE: Float = 1.3f
+
 enum class NavItemId(val route: String, val defaultLabel: String, val englishLabel: String, val defaultIcon: String) {
     HOME("home", "首页", "Home", "home"),
     DIARY("diary", "日记", "Diary", "book"),
@@ -32,7 +43,9 @@ data class AppSettings(
     val darkMode: DarkMode = DarkMode.SYSTEM,
     val appLanguage: AppLanguage = AppLanguage.CHINESE,
     val userName: String = "",
-    val themeColorArgb: Int = 0xFF42664D.toInt(),
+    val themeColorArgb: Int = DEFAULT_THEME_COLOR_ARGB,
+    val themeSecondaryColorsArgb: List<Int> = DEFAULT_THEME_SECONDARY_COLORS_ARGB,
+    val fontScale: Float = 1f,
     val backupTreeUri: String? = null,
     val diaryTreeUri: String? = null,
     val mediaTreeUri: String? = null,

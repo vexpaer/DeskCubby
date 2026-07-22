@@ -12,14 +12,17 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -31,8 +34,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Backup
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Language
@@ -40,6 +45,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Save
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.ViewWeek
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -64,6 +70,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -81,10 +88,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -112,6 +128,7 @@ import kotlin.math.roundToInt
 private enum class SettingsPage {
     MAIN,
     APPEARANCE,
+    SUBPAGES,
     HOME,
     BACKUP,
     DIARY,
@@ -119,6 +136,53 @@ private enum class SettingsPage {
     THOUGHT,
     NAVIGATION,
 }
+
+private data class HomeWidgetOption(
+    val id: String,
+    val chinese: String,
+    val english: String,
+)
+
+private data class MealButtonOption(
+    val chinese: String,
+    val english: String,
+    val defaultIcon: String,
+)
+
+private data class HomeSettingsDraft(
+    val userName: String,
+    val widgetBordersEnabled: Boolean,
+    val widgets: List<String>,
+    val visibleWidgetTitles: List<String>,
+    val mealButtonsUseIcons: Boolean,
+    val mealButtonIcons: List<String>,
+)
+
+private val homeWidgetOptions = listOf(
+    HomeWidgetOption("calendar", "日历", "Calendar"),
+    HomeWidgetOption("weather", "天气缓存", "Weather cache"),
+    HomeWidgetOption("poem", "每日诗词", "Daily poem"),
+    HomeWidgetOption("today", "今天日期", "Today"),
+    HomeWidgetOption("date_records", "日期记录", "Date records"),
+    HomeWidgetOption("streak", "连续记录天数", "Writing streak"),
+    HomeWidgetOption("month_diaries", "本月日记数量", "Diaries this month"),
+    HomeWidgetOption("total_words", "日记总字数", "Total diary words"),
+    HomeWidgetOption("recent_diary", "最近日记", "Recent diary"),
+    HomeWidgetOption("recent_thought", "最近小巧思", "Recent thought"),
+    HomeWidgetOption("quick_input", "快速输入", "Quick input"),
+    HomeWidgetOption("meal_photos", "饮食图片", "Meal photos"),
+    HomeWidgetOption("random_diary", "随机旧日记", "Random old diary"),
+    HomeWidgetOption("year_progress", "年度进度", "Year progress"),
+    HomeWidgetOption("website", "网站快捷入口", "Website shortcut"),
+)
+
+private val mealButtonOptions = listOf(
+    MealButtonOption("早餐", "Breakfast", "🍳"),
+    MealButtonOption("午餐", "Lunch", "🥗"),
+    MealButtonOption("晚餐", "Dinner", "🍚"),
+    MealButtonOption("水果", "Fruit", "🍎"),
+    MealButtonOption("夜宵", "Late snack", "🌙"),
+)
 
 private data class DiarySettingsDraft(
     val diaryTreeUri: String?,
@@ -152,7 +216,7 @@ fun SettingsScreen(
         }
     }
 
-    BackHandler(enabled = page != SettingsPage.MAIN) { page = SettingsPage.MAIN }
+    BackHandler(enabled = page != SettingsPage.MAIN) { page = parentSettingsPage(page) }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -161,8 +225,15 @@ fun SettingsScreen(
                 title = { Text(pageTitle(page)) },
                 navigationIcon = {
                     if (page != SettingsPage.MAIN) {
-                        IconButton(onClick = { page = SettingsPage.MAIN }) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = tr("返回设置", "Back to settings"))
+                        IconButton(onClick = { page = parentSettingsPage(page) }) {
+                            Icon(
+                                Icons.AutoMirrored.Outlined.ArrowBack,
+                                contentDescription = if (parentSettingsPage(page) == SettingsPage.SUBPAGES) {
+                                    tr("返回子页面设置", "Back to subpage settings")
+                                } else {
+                                    tr("返回设置", "Back to settings")
+                                },
+                            )
                         }
                     }
                 },
@@ -183,22 +254,36 @@ fun SettingsScreen(
             SettingsPage.APPEARANCE -> AppearanceSettingsPage(
                 settings = settings,
                 contentPadding = inner,
-                onSave = { visualStyle, darkMode, language, themeColor ->
+                onSave = { visualStyle, darkMode, language, themeColor, secondaryColors, fontScale ->
                     viewModel.setVisualStyle(visualStyle)
                     viewModel.setDarkMode(darkMode)
                     viewModel.setAppLanguage(language)
                     viewModel.setThemeColor(themeColor)
+                    viewModel.setThemeSecondaryColors(secondaryColors)
+                    viewModel.setFontScale(fontScale)
                     page = SettingsPage.MAIN
                 },
+            )
+
+            SettingsPage.SUBPAGES -> SubpageSettingsPage(
+                settings = settings,
+                contentPadding = inner,
+                onOpen = { page = it },
             )
 
             SettingsPage.HOME -> HomeSettingsPage(
                 settings = settings,
                 contentPadding = inner,
-                onSave = { userName, widgetBordersEnabled ->
-                    viewModel.setUserName(userName)
-                    viewModel.setHomeWidgetBordersEnabled(widgetBordersEnabled)
-                    page = SettingsPage.MAIN
+                onSave = { draft ->
+                    viewModel.setHomePageSettings(
+                        userName = draft.userName,
+                        widgetBordersEnabled = draft.widgetBordersEnabled,
+                        widgets = draft.widgets,
+                        visibleWidgetTitles = draft.visibleWidgetTitles,
+                        mealButtonsUseIcons = draft.mealButtonsUseIcons,
+                        mealButtonIcons = draft.mealButtonIcons,
+                    )
+                    page = SettingsPage.SUBPAGES
                 },
             )
 
@@ -234,7 +319,7 @@ fun SettingsScreen(
                     draft.imageHeight?.let(viewModel::setImageMaxHeight)
                     viewModel.setMealImageCompressionEnabled(draft.mealImageCompressionEnabled)
                     viewModel.setMealImageCompressionQuality(draft.mealImageCompressionQuality)
-                    page = SettingsPage.MAIN
+                    page = SettingsPage.SUBPAGES
                 },
             )
 
@@ -245,7 +330,7 @@ fun SettingsScreen(
                     viewModel.setBrowserHome(browserHome)
                     viewModel.setBrowserTheme(browserTheme)
                     viewModel.setBrowserDesktopMode(browserDesktopMode)
-                    page = SettingsPage.MAIN
+                    page = SettingsPage.SUBPAGES
                 },
             )
 
@@ -254,7 +339,7 @@ fun SettingsScreen(
                 contentPadding = inner,
                 onSave = { rowHeight ->
                     viewModel.setThoughtRowHeight(rowHeight)
-                    page = SettingsPage.MAIN
+                    page = SettingsPage.SUBPAGES
                 },
             )
 
@@ -287,17 +372,19 @@ private fun SettingsMainPage(
         item {
             SettingsMenuItem(
                 title = tr("外观与语言", "Appearance & language"),
-                description = tr("界面风格、主题色、明暗模式和语言", "Style, color, dark mode and language"),
+                description = tr("界面风格、多色主题、字号、明暗模式和语言", "Style, multi-color theme, type size, dark mode and language"),
                 icon = { Icon(Icons.Outlined.Palette, contentDescription = null) },
+                accentColor = settings.menuAccentColor(0),
                 onClick = { onOpen(SettingsPage.APPEARANCE) },
             )
         }
         item {
             SettingsMenuItem(
-                title = tr("主页", "Home"),
-                description = tr("用户名、问候语和模块边框", "User name, greeting and widget borders"),
-                icon = { Icon(Icons.Outlined.Home, contentDescription = null) },
-                onClick = { onOpen(SettingsPage.HOME) },
+                title = tr("子页面设置", "Subpage settings"),
+                description = tr("主页、日记与媒体、浏览器和小巧思", "Home, diary & media, browser and thoughts"),
+                icon = { Icon(Icons.Outlined.Tune, contentDescription = null) },
+                accentColor = settings.menuAccentColor(1),
+                onClick = { onOpen(SettingsPage.SUBPAGES) },
             )
         }
         item {
@@ -309,32 +396,8 @@ private fun SettingsMainPage(
                     tr("应用内容会在更改后自动保存", "App data is saved automatically after changes")
                 },
                 icon = { Icon(Icons.Outlined.Backup, contentDescription = null) },
+                accentColor = settings.menuAccentColor(2),
                 onClick = { onOpen(SettingsPage.BACKUP) },
-            )
-        }
-        item {
-            SettingsMenuItem(
-                title = tr("日记与媒体", "Diary & media"),
-                description = if (settings.diaryTreeUri == null) tr("目录、文件名与图片规则", "Folders, file names and image rules")
-                else tr("日记目录已配置", "Diary folder configured"),
-                icon = { Icon(Icons.Outlined.MenuBook, contentDescription = null) },
-                onClick = { onOpen(SettingsPage.DIARY) },
-            )
-        }
-        item {
-            SettingsMenuItem(
-                title = tr("浏览器", "Browser"),
-                description = tr("默认主页、主题和电脑模式", "Home page, theme and desktop mode"),
-                icon = { Icon(Icons.Outlined.Language, contentDescription = null) },
-                onClick = { onOpen(SettingsPage.BLOG) },
-            )
-        }
-        item {
-            SettingsMenuItem(
-                title = tr("小巧思", "Thoughts"),
-                description = tr("调节每一行的显示高度", "Adjust the height of each row"),
-                icon = { Icon(Icons.Outlined.Bolt, contentDescription = null) },
-                onClick = { onOpen(SettingsPage.THOUGHT) },
             )
         }
         item {
@@ -342,6 +405,7 @@ private fun SettingsMainPage(
                 title = tr("底部导航", "Bottom navigation"),
                 description = tr("显示方式、默认页、排序、名称与图标", "Display, default page, order, labels and icons"),
                 icon = { Icon(Icons.Outlined.ViewWeek, contentDescription = null) },
+                accentColor = settings.menuAccentColor(3),
                 onClick = { onOpen(SettingsPage.NAVIGATION) },
             )
         }
@@ -350,7 +414,62 @@ private fun SettingsMainPage(
                 title = "About",
                 description = tr("查看 DeskCubby GitHub 仓库", "Open the DeskCubby GitHub repository"),
                 icon = { Icon(Icons.Outlined.Info, contentDescription = null) },
+                accentColor = settings.menuAccentColor(4),
                 onClick = { openUrl(context, GITHUB_URL) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SubpageSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    onOpen: (SettingsPage) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            SettingsMenuItem(
+                title = tr("主页", "Home"),
+                description = tr("问候语、模块、标题、排序与饮食按钮", "Greeting, widgets, titles, order and meal buttons"),
+                icon = { Icon(Icons.Outlined.Home, contentDescription = null) },
+                accentColor = settings.menuAccentColor(0),
+                onClick = { onOpen(SettingsPage.HOME) },
+            )
+        }
+        item {
+            SettingsMenuItem(
+                title = tr("日记与媒体", "Diary & media"),
+                description = if (settings.diaryTreeUri == null) {
+                    tr("目录、文件名与图片规则", "Folders, file names and image rules")
+                } else {
+                    tr("日记目录已配置", "Diary folder configured")
+                },
+                icon = { Icon(Icons.Outlined.MenuBook, contentDescription = null) },
+                accentColor = settings.menuAccentColor(1),
+                onClick = { onOpen(SettingsPage.DIARY) },
+            )
+        }
+        item {
+            SettingsMenuItem(
+                title = tr("浏览器", "Browser"),
+                description = tr("默认主页、主题和电脑模式", "Home page, theme and desktop mode"),
+                icon = { Icon(Icons.Outlined.Language, contentDescription = null) },
+                accentColor = settings.menuAccentColor(2),
+                onClick = { onOpen(SettingsPage.BLOG) },
+            )
+        }
+        item {
+            SettingsMenuItem(
+                title = tr("小巧思", "Thoughts"),
+                description = tr("调节每一行的显示高度", "Adjust the height of each row"),
+                icon = { Icon(Icons.Outlined.Bolt, contentDescription = null) },
+                accentColor = settings.menuAccentColor(3),
+                onClick = { onOpen(SettingsPage.THOUGHT) },
             )
         }
     }
@@ -361,22 +480,163 @@ private fun SettingsMenuItem(
     title: String,
     description: String,
     icon: @Composable () -> Unit,
+    accentColor: Color,
     onClick: () -> Unit,
 ) {
-    GlassPanel(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        padding = PaddingValues(0.dp),
-    ) {
-        ListItem(
-            headlineContent = { Text(title) },
-            supportingContent = { Text(description) },
-            leadingContent = icon,
-            trailingContent = {
-                Icon(Icons.Outlined.ChevronRight, contentDescription = tr("进入$title", "Open $title"))
-            },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+    if (LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE) {
+        OrganicSettingsMenuItem(
+            title = title,
+            description = description,
+            icon = icon,
+            accentColor = accentColor,
+            onClick = onClick,
         )
+    } else {
+        GlassPanel(
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+            padding = PaddingValues(0.dp),
+        ) {
+            ListItem(
+                headlineContent = { Text(title) },
+                supportingContent = { Text(description) },
+                leadingContent = icon,
+                trailingContent = {
+                    Icon(Icons.Outlined.ChevronRight, contentDescription = tr("进入$title", "Open $title"))
+                },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            )
+        }
     }
+}
+
+@Composable
+private fun OrganicSettingsMenuItem(
+    title: String,
+    description: String,
+    icon: @Composable () -> Unit,
+    accentColor: Color,
+    onClick: () -> Unit,
+) {
+    val bodyContentColor = readableContentColor(accentColor)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 80.dp)
+            .height(IntrinsicSize.Min)
+            .clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Surface(
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            shape = OrganicMenuBodyShape,
+            color = accentColor,
+            contentColor = bodyContentColor,
+        ) {
+            Row(
+                modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 28.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                icon()
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        Surface(
+            modifier = Modifier.width(64.dp).fillMaxHeight(),
+            shape = OrganicMenuTrailingShape,
+            color = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(start = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Outlined.ChevronRight,
+                    contentDescription = tr("进入$title", "Open $title"),
+                )
+            }
+        }
+    }
+}
+
+private object OrganicMenuBodyShape : Shape {
+    override fun createOutline(
+        size: androidx.compose.ui.geometry.Size,
+        layoutDirection: LayoutDirection,
+        density: Density,
+    ): Outline {
+        val radius = with(density) { 16.dp.toPx() }.coerceAtMost(size.height / 2f)
+        val cut = with(density) { 18.dp.toPx() }.coerceAtMost(size.width / 3f)
+        val joinRadius = with(density) { 4.dp.toPx() }.coerceAtMost(cut / 3f)
+        val path = Path().apply {
+            moveTo(radius, 0f)
+            lineTo(size.width - joinRadius, 0f)
+            quadraticBezierTo(size.width, 0f, size.width - joinRadius * 0.5f, joinRadius)
+            lineTo(size.width - cut + joinRadius * 0.5f, size.height - joinRadius)
+            quadraticBezierTo(size.width - cut, size.height, size.width - cut - joinRadius, size.height)
+            lineTo(radius, size.height)
+            quadraticBezierTo(0f, size.height, 0f, size.height - radius)
+            lineTo(0f, radius)
+            quadraticBezierTo(0f, 0f, radius, 0f)
+            close()
+        }
+        return Outline.Generic(path)
+    }
+}
+
+private object OrganicMenuTrailingShape : Shape {
+    override fun createOutline(
+        size: androidx.compose.ui.geometry.Size,
+        layoutDirection: LayoutDirection,
+        density: Density,
+    ): Outline {
+        val radius = with(density) { 16.dp.toPx() }.coerceAtMost(size.height / 2f)
+        val cut = with(density) { 18.dp.toPx() }.coerceAtMost(size.width / 2f)
+        val joinRadius = with(density) { 4.dp.toPx() }.coerceAtMost(cut / 3f)
+        val path = Path().apply {
+            moveTo(cut + joinRadius, 0f)
+            lineTo(size.width - radius, 0f)
+            quadraticBezierTo(size.width, 0f, size.width, radius)
+            lineTo(size.width, size.height - radius)
+            quadraticBezierTo(size.width, size.height, size.width - radius, size.height)
+            lineTo(joinRadius, size.height)
+            quadraticBezierTo(0f, size.height, joinRadius * 0.5f, size.height - joinRadius)
+            lineTo(cut - joinRadius * 0.5f, joinRadius)
+            quadraticBezierTo(cut, 0f, cut + joinRadius, 0f)
+            close()
+        }
+        return Outline.Generic(path)
+    }
+}
+
+private fun AppSettings.menuAccentColor(index: Int): Color {
+    val colors = themeSecondaryColorsArgb.ifEmpty { listOf(themeColorArgb) }
+    return Color(colors[index.mod(colors.size)])
+}
+
+private fun readableContentColor(background: Color): Color {
+    val dark = Color(0xFF151713)
+    val light = Color.White
+    fun contrast(foreground: Color): Float {
+        val lighter = maxOf(foreground.luminance(), background.luminance())
+        val darker = minOf(foreground.luminance(), background.luminance())
+        return (lighter + 0.05f) / (darker + 0.05f)
+    }
+    return if (contrast(dark) >= contrast(light)) dark else light
 }
 
 @Composable
@@ -624,14 +884,41 @@ private fun BackupSettingsPage(
 private fun AppearanceSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
-    onSave: (VisualStyle, DarkMode, AppLanguage, Int) -> Unit,
+    onSave: (VisualStyle, DarkMode, AppLanguage, Int, List<Int>, Float) -> Unit,
 ) {
-    var visualStyle by remember(settings.visualStyle) { mutableStateOf(settings.visualStyle) }
-    var darkMode by remember(settings.darkMode) { mutableStateOf(settings.darkMode) }
-    var language by remember(settings.appLanguage) { mutableStateOf(settings.appLanguage) }
-    var themeHex by remember(settings.themeColorArgb) { mutableStateOf(colorToHex(settings.themeColorArgb)) }
+    val presets = listOf(
+        0xFF42664D.toInt(),
+        0xFF4C63A6.toInt(),
+        0xFFC44B75.toInt(),
+        0xFFE57C23.toInt(),
+        0xFF7B5EA7.toInt(),
+        0xFF00897B.toInt(),
+    )
+    var visualStyle by rememberSaveable(settings.visualStyle) { mutableStateOf(settings.visualStyle) }
+    var darkMode by rememberSaveable(settings.darkMode) { mutableStateOf(settings.darkMode) }
+    var language by rememberSaveable(settings.appLanguage) { mutableStateOf(settings.appLanguage) }
+    var themeHex by rememberSaveable(settings.themeColorArgb) { mutableStateOf(colorToHex(settings.themeColorArgb)) }
+    var secondaryHexes by rememberSaveable(settings.themeSecondaryColorsArgb) {
+        mutableStateOf(
+            settings.themeSecondaryColorsArgb
+                .take(5)
+                .map(::colorToHex)
+                .let { saved ->
+                    if (saved.size >= 2) saved else {
+                        (saved + presets.map(::colorToHex)).distinct().take(2)
+                    }
+                },
+        )
+    }
+    var fontScale by rememberSaveable(settings.fontScale) {
+        mutableStateOf(settings.fontScale.coerceIn(0.8f, 1.3f))
+    }
     val parsedThemeColor = parseThemeColor(themeHex)
-    val presets = listOf(0xFF42664D, 0xFF4C63A6, 0xFFC44B75, 0xFFE57C23, 0xFF7B5EA7, 0xFF00897B)
+    val parsedSecondaryColors = secondaryHexes.map(::parseThemeColor)
+    val validSecondaryValues = parsedSecondaryColors.filterNotNull()
+    val secondaryColorsUnique = validSecondaryValues.distinct().size == secondaryHexes.size
+    val secondaryColorsValid = secondaryHexes.size in 2..5 &&
+        parsedSecondaryColors.all { it != null } && secondaryColorsUnique
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -714,56 +1001,141 @@ private fun AppearanceSettingsPage(
             }
         }
         item {
-            SettingsSection(tr("主题色", "Theme color")) {
-                if (visualStyle == VisualStyle.ORGANIC_FUTURE) {
+            SettingsSection(tr("主题颜色", "Theme colors")) {
+                Text(
+                    tr("主颜色", "Primary color"),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    presets.forEach { value ->
+                        Box(
+                            Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(Color(value))
+                                .clickable { themeHex = colorToHex(value) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = themeHex,
+                    onValueChange = { themeHex = it.take(7) },
+                    label = { Text(tr("主颜色 Hex", "Primary color hex")) },
+                    supportingText = { Text(tr("输入 #RRGGBB，例如 #42664D", "Enter #RRGGBB, for example #42664D")) },
+                    isError = parsedThemeColor == null,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            tr("副颜色", "Secondary colors"),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        Text(
+                            tr("设置 2–5 个，有机未来会轮换使用", "Choose 2–5; Organic Future rotates through them"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    OutlinedButton(
+                        enabled = secondaryHexes.size < 5,
+                        onClick = {
+                            val used = parsedSecondaryColors.filterNotNull().toSet()
+                            val next = presets.firstOrNull { it !in used }
+                                ?: presets[(secondaryHexes.size + 1) % presets.size]
+                            secondaryHexes = secondaryHexes + colorToHex(next)
+                        },
+                    ) {
+                        Icon(Icons.Outlined.Add, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text(tr("添加", "Add"))
+                    }
+                }
+                secondaryHexes.forEachIndexed { index, value ->
+                    val parsed = parsedSecondaryColors[index]
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(
                             Modifier
-                                .size(38.dp)
+                                .size(32.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFF72F28F)),
+                                .background(parsed?.let(::Color) ?: MaterialTheme.colorScheme.errorContainer),
                         )
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            tr(
-                                "Organic Future 使用专属祖母绿强调色；自定义颜色会保留给另外两套主题。",
-                                "Organic Future uses its own emerald accent; your custom color is kept for the other styles.",
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        Spacer(Modifier.width(10.dp))
+                        OutlinedTextField(
+                            value = value,
+                            onValueChange = { changed ->
+                                secondaryHexes = secondaryHexes.toMutableList().apply {
+                                    this[index] = changed.take(7)
+                                }
+                            },
+                            label = { Text(tr("副颜色 ${index + 1}", "Secondary ${index + 1}")) },
+                            isError = parsed == null,
+                            singleLine = true,
                             modifier = Modifier.weight(1f),
                         )
-                    }
-                } else {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        presets.forEach { value ->
-                            Box(
-                                Modifier
-                                    .size(38.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(value))
-                                    .clickable { themeHex = colorToHex(value.toInt()) },
-                            )
+                        IconButton(
+                            enabled = secondaryHexes.size > 2,
+                            onClick = {
+                                secondaryHexes = secondaryHexes.toMutableList().apply { removeAt(index) }
+                            },
+                        ) {
+                            Icon(Icons.Outlined.Close, contentDescription = tr("删除副颜色", "Remove secondary color"))
                         }
                     }
-                    OutlinedTextField(
-                        value = themeHex,
-                        onValueChange = { themeHex = it.take(7) },
-                        label = { Text(tr("自定义颜色", "Custom color")) },
-                        supportingText = { Text(tr("输入 #RRGGBB，例如 #42664D", "Enter #RRGGBB, for example #42664D")) },
-                        isError = parsedThemeColor == null,
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                }
+                if (!secondaryColorsValid) {
+                    Text(
+                        if (!secondaryColorsUnique) {
+                            tr("副颜色不能重复", "Secondary colors must be unique")
+                        } else {
+                            tr("每个颜色都必须使用 #RRGGBB 格式", "Every color must use #RRGGBB format")
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
                     )
                 }
             }
         }
         item {
-            SaveButton(enabled = visualStyle == VisualStyle.ORGANIC_FUTURE || parsedThemeColor != null) {
-                onSave(visualStyle, darkMode, language, parsedThemeColor ?: settings.themeColorArgb)
+            SettingsSection(tr("字体大小", "Font size")) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(tr("全局字号", "Global type size"))
+                    Text("${(fontScale * 100).roundToInt()}%", color = MaterialTheme.colorScheme.primary)
+                }
+                Slider(
+                    value = fontScale,
+                    onValueChange = { raw ->
+                        fontScale = (raw * 20f).roundToInt().div(20f).coerceIn(0.8f, 1.3f)
+                    },
+                    valueRange = 0.8f..1.3f,
+                    steps = 9,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(tr("小 80%", "Small 80%"), style = MaterialTheme.typography.bodySmall)
+                    Text(tr("大 130%", "Large 130%"), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        item {
+            SaveButton(enabled = parsedThemeColor != null && secondaryColorsValid) {
+                onSave(
+                    visualStyle,
+                    darkMode,
+                    language,
+                    parsedThemeColor ?: settings.themeColorArgb,
+                    parsedSecondaryColors.filterNotNull(),
+                    fontScale,
+                )
             }
         }
     }
@@ -773,17 +1145,60 @@ private fun AppearanceSettingsPage(
 private fun HomeSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
-    onSave: (String, Boolean) -> Unit,
+    onSave: (HomeSettingsDraft) -> Unit,
 ) {
     var userName by rememberSaveable(settings.userName) { mutableStateOf(settings.userName) }
     var widgetBordersEnabled by rememberSaveable(settings.homeWidgetBordersEnabled) {
         mutableStateOf(settings.homeWidgetBordersEnabled)
     }
+    var widgets by remember(settings.homeWidgets) { mutableStateOf(settings.homeWidgets.distinct()) }
+    var visibleWidgetTitles by remember(settings.homeWidgetTitles) {
+        mutableStateOf(settings.homeWidgetTitles.distinct())
+    }
+    var mealButtonsUseIcons by rememberSaveable(settings.mealButtonsUseIcons) {
+        mutableStateOf(settings.mealButtonsUseIcons)
+    }
+    var mealButtonIcons by remember(settings.mealButtonIcons) {
+        mutableStateOf(
+            mealButtonOptions.mapIndexed { index, option ->
+                settings.mealButtonIcons.getOrNull(index)?.trim()?.takeIf(String::isNotBlank)
+                    ?: option.defaultIcon
+            },
+        )
+    }
+    val widgetCenters = remember { mutableStateMapOf<String, Float>() }
+    var draggingWidgetId by remember { mutableStateOf<String?>(null) }
+    var widgetDragDistancePx by remember { mutableStateOf(0f) }
+    var widgetDragOriginY by remember { mutableStateOf<Float?>(null) }
+    var widgetDragTargetIndex by remember { mutableStateOf<Int?>(null) }
     val trimmedName = userName.trim()
     val greetingPreview = if (trimmedName.isBlank()) {
         tr("你好！", "Hello!")
     } else {
         tr("你好，$trimmedName！", "Hello, $trimmedName!")
+    }
+    val widgetDragSourceIndex = draggingWidgetId?.let(widgets::indexOf)?.takeIf { it >= 0 }
+    val widgetInsertionSlot = widgetDragSourceIndex?.let { sourceIndex ->
+        widgetDragTargetIndex?.let { targetIndex ->
+            if (targetIndex > sourceIndex) targetIndex + 1 else targetIndex
+        }
+    }
+
+    fun widgetTargetIndex(distancePx: Float): Int? {
+        val origin = widgetDragOriginY ?: return null
+        val targetId = widgetCenters.entries
+            .asSequence()
+            .filter { (id, _) -> id in widgets }
+            .minByOrNull { (_, center) -> kotlin.math.abs(center - (origin + distancePx)) }
+            ?.key
+        return widgets.indexOf(targetId).takeIf { it >= 0 }
+    }
+
+    fun clearWidgetDrag() {
+        draggingWidgetId = null
+        widgetDragDistancePx = 0f
+        widgetDragOriginY = null
+        widgetDragTargetIndex = null
     }
 
     LazyColumn(
@@ -829,7 +1244,189 @@ private fun HomeSettingsPage(
             }
         }
         item {
-            SaveButton { onSave(trimmedName, widgetBordersEnabled) }
+            SettingsSection(tr("主页模块", "Home widgets")) {
+                Text(
+                    tr("拖动四点按钮排序，并可单独隐藏标题或移除模块。", "Drag the four-dot handle to reorder, hide individual titles, or remove widgets."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                widgets.forEachIndexed { index, widgetId ->
+                    key(widgetId) {
+                        val option = homeWidgetOptions.firstOrNull { it.id == widgetId }
+                        val isDragging = draggingWidgetId == widgetId
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .zIndex(if (isDragging) 1f else 0f),
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .onGloballyPositioned {
+                                        widgetCenters[widgetId] = it.boundsInRoot().center.y
+                                    }
+                                    .graphicsLayer {
+                                        translationY = if (isDragging) widgetDragDistancePx else 0f
+                                        alpha = if (isDragging) 0.62f else 1f
+                                    }
+                                    .padding(vertical = 4.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = option?.let { tr(it.chinese, it.english) } ?: widgetId,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    FourDotDragHandle(
+                                        translateSelf = false,
+                                        onDragStarted = {
+                                            draggingWidgetId = widgetId
+                                            widgetDragDistancePx = 0f
+                                            widgetDragOriginY = widgetCenters[widgetId]
+                                            widgetDragTargetIndex = index
+                                        },
+                                        onDragChanged = { distance ->
+                                            widgetDragDistancePx = distance
+                                            widgetDragTargetIndex = widgetTargetIndex(distance)
+                                        },
+                                        onDragCancelled = ::clearWidgetDrag,
+                                        onDragFinished = { distance ->
+                                            val target = widgetTargetIndex(distance)
+                                                ?: widgetDragTargetIndex
+                                            clearWidgetDrag()
+                                            if (target != null && target in widgets.indices && target != index) {
+                                                widgets = widgets.toMutableList().apply {
+                                                    val moved = removeAt(index)
+                                                    add(target, moved)
+                                                }
+                                            }
+                                        },
+                                    )
+                                    TextButton(
+                                        onClick = {
+                                            widgets = widgets - widgetId
+                                            visibleWidgetTitles = visibleWidgetTitles - widgetId
+                                            widgetCenters.remove(widgetId)
+                                        },
+                                    ) { Text(tr("移除", "Remove")) }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        tr("显示标题", "Show title"),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Switch(
+                                        checked = widgetId in visibleWidgetTitles,
+                                        onCheckedChange = { visible ->
+                                            visibleWidgetTitles = if (visible) {
+                                                (visibleWidgetTitles + widgetId).distinct()
+                                            } else {
+                                                visibleWidgetTitles - widgetId
+                                            }
+                                        },
+                                    )
+                                }
+                            }
+                            if (draggingWidgetId != null && widgetInsertionSlot == index) {
+                                HorizontalDivider(
+                                    modifier = Modifier.align(Alignment.TopCenter),
+                                    thickness = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            if (index == widgets.lastIndex && widgetInsertionSlot == widgets.size) {
+                                HorizontalDivider(
+                                    modifier = Modifier.align(Alignment.BottomCenter),
+                                    thickness = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                        if (index != widgets.lastIndex) HorizontalDivider()
+                    }
+                }
+                if (widgets.isEmpty()) {
+                    Text(
+                        tr("主页暂无模块，可从下方添加。", "The home page has no widgets; add one below."),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+        item {
+            val missingWidgets = homeWidgetOptions.filterNot { it.id in widgets }
+            SettingsSection(tr("添加模块", "Add widgets")) {
+                if (missingWidgets.isEmpty()) {
+                    Text(tr("所有模块都已添加", "All widgets have been added"))
+                } else {
+                    missingWidgets.forEach { option ->
+                        OutlinedButton(
+                            onClick = {
+                                widgets = widgets + option.id
+                                visibleWidgetTitles = (visibleWidgetTitles + option.id).distinct()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Outlined.Add, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(tr(option.chinese, option.english))
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("饮食按钮", "Meal buttons")) {
+                Text(
+                    tr("选择按钮显示文字还是自定义图标。", "Choose text labels or custom icons for the meal buttons."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    listOf(false, true).forEachIndexed { index, useIcons ->
+                        SegmentedButton(
+                            selected = mealButtonsUseIcons == useIcons,
+                            onClick = { mealButtonsUseIcons = useIcons },
+                            shape = SegmentedButtonDefaults.itemShape(index, 2),
+                        ) {
+                            Text(if (useIcons) tr("图标", "Icons") else tr("文字", "Text"))
+                        }
+                    }
+                }
+                mealButtonOptions.forEachIndexed { index, option ->
+                    OutlinedTextField(
+                        value = mealButtonIcons[index],
+                        onValueChange = { value ->
+                            mealButtonIcons = mealButtonIcons.toMutableList().apply {
+                                this[index] = value.takeCodePoints(16)
+                            }
+                        },
+                        label = { Text(tr("${option.chinese}图标", "${option.english} icon")) },
+                        supportingText = { Text(tr("可输入 emoji 或简短符号", "Enter an emoji or short symbol")) },
+                        isError = mealButtonIcons[index].isBlank(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+        item {
+            SaveButton(enabled = mealButtonIcons.all { it.isNotBlank() }) {
+                onSave(
+                    HomeSettingsDraft(
+                        userName = trimmedName,
+                        widgetBordersEnabled = widgetBordersEnabled,
+                        widgets = widgets,
+                        visibleWidgetTitles = visibleWidgetTitles,
+                        mealButtonsUseIcons = mealButtonsUseIcons,
+                        mealButtonIcons = mealButtonIcons.map(String::trim),
+                    ),
+                )
+            }
         }
     }
 }
@@ -1107,6 +1704,33 @@ private fun NavigationSettingsPage(
     var navItems by remember(settings.navItems) { mutableStateOf(settings.navItems.map { it.copy() }) }
     var showLabels by remember(settings.bottomNavShowLabels) { mutableStateOf(settings.bottomNavShowLabels) }
     val navCenters = remember { mutableStateMapOf<NavItemId, Float>() }
+    var draggingNavId by remember { mutableStateOf<NavItemId?>(null) }
+    var navDragDistancePx by remember { mutableStateOf(0f) }
+    var navDragOriginY by remember { mutableStateOf<Float?>(null) }
+    var navDragTargetIndex by remember { mutableStateOf<Int?>(null) }
+    val navDragSourceIndex = draggingNavId?.let { id ->
+        navItems.indexOfFirst { it.id == id }.takeIf { it >= 0 }
+    }
+    val navInsertionSlot = navDragSourceIndex?.let { sourceIndex ->
+        navDragTargetIndex?.let { targetIndex ->
+            if (targetIndex > sourceIndex) targetIndex + 1 else targetIndex
+        }
+    }
+
+    fun navTargetIndex(distancePx: Float): Int? {
+        val origin = navDragOriginY ?: return null
+        val targetId = navCenters.entries.minByOrNull { (_, center) ->
+            kotlin.math.abs(center - (origin + distancePx))
+        }?.key
+        return navItems.indexOfFirst { it.id == targetId }.takeIf { it >= 0 }
+    }
+
+    fun clearNavDrag() {
+        draggingNavId = null
+        navDragDistancePx = 0f
+        navDragOriginY = null
+        navDragTargetIndex = null
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -1144,31 +1768,65 @@ private fun NavigationSettingsPage(
                 Spacer(Modifier.height(4.dp))
                 navItems.forEachIndexed { index, item ->
                     key(item.id) {
-                        NavConfigRow(
-                            item = item,
-                            onChange = { changed ->
-                                val changedItems = navItems.toMutableList().apply { set(index, changed) }
-                                navItems = changedItems
-                                if (defaultPage == changed.id && !changed.visible && changed.id != NavItemId.SETTINGS) {
-                                    defaultPage = changedItems.firstOrNull { it.visible || it.id == NavItemId.SETTINGS }?.id
-                                        ?: NavItemId.SETTINGS
-                                }
-                            },
-                            onCenterChanged = { navCenters[item.id] = it },
-                            onMove = { distance ->
-                                val start = navCenters[item.id]
-                                val targetId = start?.let { origin ->
-                                    navCenters.minByOrNull { (_, center) -> kotlin.math.abs(center - (origin + distance)) }?.key
-                                }
-                                val target = navItems.indexOfFirst { it.id == targetId }
-                                if (target in navItems.indices && target != index) {
-                                    navItems = navItems.toMutableList().apply {
-                                        val moved = removeAt(index)
-                                        add(target, moved)
+                        val isDragging = draggingNavId == item.id
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .zIndex(if (isDragging) 1f else 0f),
+                        ) {
+                            NavConfigRow(
+                                modifier = Modifier.graphicsLayer {
+                                    translationY = if (isDragging) navDragDistancePx else 0f
+                                    alpha = if (isDragging) 0.62f else 1f
+                                },
+                                item = item,
+                                onChange = { changed ->
+                                    val changedItems = navItems.toMutableList().apply { set(index, changed) }
+                                    navItems = changedItems
+                                    if (defaultPage == changed.id && !changed.visible && changed.id != NavItemId.SETTINGS) {
+                                        defaultPage = changedItems.firstOrNull {
+                                            it.visible || it.id == NavItemId.SETTINGS
+                                        }?.id ?: NavItemId.SETTINGS
                                     }
-                                }
-                            },
-                        )
+                                },
+                                onCenterChanged = { navCenters[item.id] = it },
+                                onDragStarted = {
+                                    draggingNavId = item.id
+                                    navDragDistancePx = 0f
+                                    navDragOriginY = navCenters[item.id]
+                                    navDragTargetIndex = index
+                                },
+                                onDragChanged = { distance ->
+                                    navDragDistancePx = distance
+                                    navDragTargetIndex = navTargetIndex(distance)
+                                },
+                                onDragCancelled = ::clearNavDrag,
+                                onMove = { distance ->
+                                    val target = navTargetIndex(distance) ?: navDragTargetIndex
+                                    clearNavDrag()
+                                    if (target != null && target in navItems.indices && target != index) {
+                                        navItems = navItems.toMutableList().apply {
+                                            val moved = removeAt(index)
+                                            add(target, moved)
+                                        }
+                                    }
+                                },
+                            )
+                            if (draggingNavId != null && navInsertionSlot == index) {
+                                HorizontalDivider(
+                                    modifier = Modifier.align(Alignment.TopCenter),
+                                    thickness = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            if (index == navItems.lastIndex && navInsertionSlot == navItems.size) {
+                                HorizontalDivider(
+                                    modifier = Modifier.align(Alignment.BottomCenter),
+                                    thickness = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
                         if (index != navItems.lastIndex) HorizontalDivider()
                     }
                 }
@@ -1263,16 +1921,20 @@ private fun DefaultPagePicker(current: NavItemId, items: List<NavItemConfig>, on
 
 @Composable
 private fun NavConfigRow(
+    modifier: Modifier = Modifier,
     item: NavItemConfig,
     onChange: (NavItemConfig) -> Unit,
     onCenterChanged: (Float) -> Unit,
+    onDragStarted: () -> Unit,
+    onDragChanged: (Float) -> Unit,
+    onDragCancelled: () -> Unit,
     onMove: (Float) -> Unit,
 ) {
     var iconMenu by remember { mutableStateOf(false) }
     val icons = listOf("home", "book", "poetry", "language", "bolt", "settings", "calendar", "star", "write", "sparkle", "day")
 
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
             .onGloballyPositioned { onCenterChanged(it.boundsInRoot().center.y) }
             .padding(vertical = 8.dp),
@@ -1315,7 +1977,13 @@ private fun NavConfigRow(
                 enabled = item.id != NavItemId.SETTINGS,
                 onCheckedChange = { onChange(item.copy(visible = it)) },
             )
-            FourDotDragHandle(onDragFinished = onMove)
+            FourDotDragHandle(
+                translateSelf = false,
+                onDragStarted = onDragStarted,
+                onDragChanged = onDragChanged,
+                onDragCancelled = onDragCancelled,
+                onDragFinished = onMove,
+            )
         }
     }
 }
@@ -1324,12 +1992,28 @@ private fun NavConfigRow(
 private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.MAIN -> tr("设置", "Settings")
     SettingsPage.APPEARANCE -> tr("外观与语言", "Appearance & language")
+    SettingsPage.SUBPAGES -> tr("子页面设置", "Subpage settings")
     SettingsPage.HOME -> tr("主页", "Home")
     SettingsPage.BACKUP -> tr("应用数据与备份", "App data & backup")
     SettingsPage.DIARY -> tr("日记与媒体", "Diary & media")
     SettingsPage.BLOG -> tr("浏览器", "Browser")
     SettingsPage.THOUGHT -> tr("小巧思", "Thoughts")
     SettingsPage.NAVIGATION -> tr("底部导航", "Bottom navigation")
+}
+
+private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
+    SettingsPage.HOME,
+    SettingsPage.DIARY,
+    SettingsPage.BLOG,
+    SettingsPage.THOUGHT,
+    -> SettingsPage.SUBPAGES
+
+    SettingsPage.MAIN,
+    SettingsPage.APPEARANCE,
+    SettingsPage.SUBPAGES,
+    SettingsPage.BACKUP,
+    SettingsPage.NAVIGATION,
+    -> SettingsPage.MAIN
 }
 
 private fun defaultBackupFileName(): String =

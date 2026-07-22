@@ -7,6 +7,7 @@ local.properties
 keystore.properties
 *.jks
 *.keystore
+release/
 .env
 .env.*
 build/

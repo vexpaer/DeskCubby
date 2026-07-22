@@ -84,6 +84,9 @@ class SettingsViewModel @Inject constructor(
     fun setAppLanguage(value: AppLanguage) = launch { repository.setAppLanguage(value) }
     fun setUserName(value: String) = launch { repository.setUserName(value) }
     fun setThemeColor(value: Int) = launch { repository.setThemeColor(value) }
+    fun setThemeSecondaryColors(value: List<Int>) =
+        launch { repository.setThemeSecondaryColors(value) }
+    fun setFontScale(value: Float) = launch { repository.setFontScale(value) }
     fun setFileNamePattern(value: String) = launch { repository.setFileNamePattern(value) }
     fun setTemplate(value: String) = launch { repository.setMarkdownTemplate(value) }
     fun setImageNamePattern(value: String) = launch { repository.setImageNamePattern(value) }
@@ -106,6 +109,23 @@ class SettingsViewModel @Inject constructor(
     fun setBottomNavShowLabels(value: Boolean) = launch { repository.setBottomNavShowLabels(value) }
     fun setHomeWidgetBordersEnabled(value: Boolean) =
         launch { repository.setHomeWidgetBordersEnabled(value) }
+    fun setHomePageSettings(
+        userName: String,
+        widgetBordersEnabled: Boolean,
+        widgets: List<String>,
+        visibleWidgetTitles: List<String>,
+        mealButtonsUseIcons: Boolean,
+        mealButtonIcons: List<String>,
+    ) = launch {
+        repository.setHomePageSettings(
+            userName = userName,
+            widgetBordersEnabled = widgetBordersEnabled,
+            widgets = widgets,
+            visibleWidgetTitles = visibleWidgetTitles,
+            mealButtonsUseIcons = mealButtonsUseIcons,
+            mealButtonIcons = mealButtonIcons,
+        )
+    }
 
     fun selectBackupFolder(uri: Uri) = viewModelScope.launch {
         _backupOperation.value = BackupOperationState(busy = true)

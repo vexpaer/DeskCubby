@@ -31,17 +31,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CalendarMonth
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Visibility
-import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.WbSunny
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -57,19 +51,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -78,7 +70,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.deskcubby.app.takeCodePoints
 import com.deskcubby.app.data.local.DateRecordEntity
 import com.deskcubby.app.data.local.DiaryIndexEntity
 import com.deskcubby.app.data.local.FlashThoughtEntity
@@ -87,7 +78,6 @@ import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.DailyPoem
-import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
@@ -107,8 +97,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.random.Random
 
-private data class WidgetInfo(val id: String, val chinese: String, val english: String)
-
 private data class MealQuickAction(
     val key: String,
     val chinese: String,
@@ -126,24 +114,6 @@ private val mealQuickActions = listOf(
     MealQuickAction("late_snack", "夜宵", "Late snack", "🌙"),
 )
 
-private val availableWidgets = listOf(
-    WidgetInfo("calendar", "日历", "Calendar"),
-    WidgetInfo("weather", "天气缓存", "Weather cache"),
-    WidgetInfo("poem", "每日诗词", "Daily poem"),
-    WidgetInfo("today", "今天日期", "Today"),
-    WidgetInfo("date_records", "日期记录", "Date records"),
-    WidgetInfo("streak", "连续记录天数", "Writing streak"),
-    WidgetInfo("month_diaries", "本月日记数量", "Diaries this month"),
-    WidgetInfo("total_words", "日记总字数", "Total diary words"),
-    WidgetInfo("recent_diary", "最近日记", "Recent diary"),
-    WidgetInfo("recent_thought", "最近小巧思", "Recent thought"),
-    WidgetInfo("quick_input", "快速输入", "Quick input"),
-    WidgetInfo("meal_photos", "饮食图片", "Meal photos"),
-    WidgetInfo("random_diary", "随机旧日记", "Random old diary"),
-    WidgetInfo("year_progress", "年度进度", "Year progress"),
-    WidgetInfo("website", "网站快捷入口", "Website shortcut"),
-)
-
 @Composable
 fun HomeScreen(
     padding: PaddingValues,
@@ -153,10 +123,6 @@ fun HomeScreen(
     onOpenThoughts: () -> Unit,
     onOpenDateRecords: () -> Unit,
     onOpenWebsite: () -> Unit,
-    onWidgetsChanged: (List<String>) -> Unit,
-    onWidgetTitlesChanged: (List<String>) -> Unit,
-    onMealButtonsUseIconsChanged: (Boolean) -> Unit,
-    onMealButtonIconsChanged: (List<String>) -> Unit,
 ) {
     val context = LocalContext.current
     val organic = settings.visualStyle == VisualStyle.ORGANIC_FUTURE
@@ -168,14 +134,8 @@ fun HomeScreen(
     val mealUploadInProgress by viewModel.mealUploadInProgress.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    var editing by rememberSaveable { mutableStateOf(false) }
-    var addDialog by remember { mutableStateOf(false) }
     var pendingMealKey by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingCameraPath by rememberSaveable { mutableStateOf<String?>(null) }
-    var visibleWidgetTitles by remember(settings.homeWidgetTitles) {
-        mutableStateOf(settings.homeWidgetTitles)
-    }
-    val widgetCenters = remember { mutableStateMapOf<String, Float>() }
     val foldersMissingMessage = tr(
         "请先在设置中选择日记目录和媒体目录",
         "Choose both diary and media folders in Settings first",
@@ -314,10 +274,6 @@ fun HomeScreen(
                         )
                     }
                 },
-                actions = {
-                    if (editing) IconButton(onClick = { addDialog = true }) { Icon(Icons.Outlined.Add, tr("添加组件", "Add widget")) }
-                    IconButton(onClick = { editing = !editing }) { Icon(if (editing) Icons.Outlined.Close else Icons.Outlined.Edit, tr("编辑组件", "Edit widgets")) }
-                },
             )
         },
     ) { inner ->
@@ -325,97 +281,32 @@ fun HomeScreen(
             modifier = Modifier.fillMaxSize().padding(inner),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(
-                if (editing || settings.homeWidgetBordersEnabled) 12.dp else 0.dp,
+                if (settings.homeWidgetBordersEnabled) 12.dp else 0.dp,
             ),
         ) {
             items(settings.homeWidgets, key = { it }) { id ->
-                DisposableEffect(id) {
-                    onDispose { widgetCenters.remove(id) }
-                }
-                Column(
-                    Modifier.onGloballyPositioned { widgetCenters[id] = it.boundsInRoot().center.y },
-                ) {
-                    if (editing) {
-                        val index = settings.homeWidgets.indexOf(id)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            val titleVisible = id in visibleWidgetTitles
-                            IconButton(
-                                onClick = {
-                                    val updated = if (titleVisible) visibleWidgetTitles - id else visibleWidgetTitles + id
-                                    visibleWidgetTitles = updated
-                                    onWidgetTitlesChanged(updated)
-                                },
-                            ) {
-                                Icon(
-                                    imageVector = if (titleVisible) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
-                                    contentDescription = if (titleVisible) tr("隐藏标题", "Hide title") else tr("显示标题", "Show title"),
-                                )
-                            }
-                            FourDotDragHandle { distance ->
-                                val start = widgetCenters[id]
-                                val targetId = start?.let { origin ->
-                                    widgetCenters.minByOrNull { (_, center) -> kotlin.math.abs(center - (origin + distance)) }?.key
-                                }
-                                val target = settings.homeWidgets.indexOf(targetId)
-                                if (target in settings.homeWidgets.indices && target != index) {
-                                    onWidgetsChanged(settings.homeWidgets.moved(index, target))
-                                }
-                            }
-                            IconButton(onClick = { onWidgetsChanged(settings.homeWidgets - id) }) { Icon(Icons.Outlined.Close, tr("移除", "Remove")) }
-                        }
-                    }
-                    HomeWidget(
-                        id = id,
-                        settings = settings.copy(homeWidgetTitles = visibleWidgetTitles),
-                        diaries = diaries,
-                        thoughts = thoughts,
-                        thoughtCategories = thoughtCategories,
-                        dateRecords = dateRecords,
-                        poem = poem,
-                        onOpenDiary = onOpenDiary,
-                        onOpenThoughts = onOpenThoughts,
-                        onOpenDateRecords = onOpenDateRecords,
-                        onOpenWebsite = onOpenWebsite,
-                        onQuickThought = viewModel::addThought,
-                        onRefreshPoem = { viewModel.refreshPoem() },
-                        onSavePoem = { viewModel.savePoem(poem, settings.appLanguage) },
-                        mealUploadInProgress = mealInteractionBusy,
-                        onChooseMealPhoto = chooseMealPhoto,
-                        onCaptureMealPhoto = captureMealPhoto,
-                        onMealButtonsUseIconsChanged = onMealButtonsUseIconsChanged,
-                        onMealButtonIconsChanged = onMealButtonIconsChanged,
-                        editing = editing,
-                    )
-                }
+                HomeWidget(
+                    id = id,
+                    settings = settings,
+                    diaries = diaries,
+                    thoughts = thoughts,
+                    thoughtCategories = thoughtCategories,
+                    dateRecords = dateRecords,
+                    poem = poem,
+                    onOpenDiary = onOpenDiary,
+                    onOpenThoughts = onOpenThoughts,
+                    onOpenDateRecords = onOpenDateRecords,
+                    onOpenWebsite = onOpenWebsite,
+                    onQuickThought = viewModel::addThought,
+                    onRefreshPoem = { viewModel.refreshPoem() },
+                    onSavePoem = { viewModel.savePoem(poem, settings.appLanguage) },
+                    mealUploadInProgress = mealInteractionBusy,
+                    onChooseMealPhoto = chooseMealPhoto,
+                    onCaptureMealPhoto = captureMealPhoto,
+                )
             }
             item { Spacer(Modifier.height(20.dp)) }
         }
-    }
-
-    if (addDialog) {
-        val missing = availableWidgets.filterNot { it.id in settings.homeWidgets }
-        AlertDialog(
-            onDismissRequest = { addDialog = false },
-            title = { Text(tr("添加小组件", "Add widget")) },
-            text = {
-                Column {
-                    missing.forEach { widget ->
-                        TextButton(
-                            onClick = {
-                                onWidgetsChanged(settings.homeWidgets + widget.id)
-                                val updatedTitles = (visibleWidgetTitles + widget.id).distinct()
-                                visibleWidgetTitles = updatedTitles
-                                onWidgetTitlesChanged(updatedTitles)
-                                addDialog = false
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text(tr(widget.chinese, widget.english)) }
-                    }
-                    if (missing.isEmpty()) Text(tr("所有组件都已添加", "All widgets are already added"))
-                }
-            },
-            confirmButton = { TextButton(onClick = { addDialog = false }) { Text(tr("完成", "Done")) } },
-        )
     }
 }
 
@@ -438,9 +329,6 @@ private fun HomeWidget(
     mealUploadInProgress: Boolean,
     onChooseMealPhoto: (MealQuickAction) -> Unit,
     onCaptureMealPhoto: (MealQuickAction) -> Unit,
-    onMealButtonsUseIconsChanged: (Boolean) -> Unit,
-    onMealButtonIconsChanged: (List<String>) -> Unit,
-    editing: Boolean,
 ) {
     val today = LocalDate.now()
     val locale = if (settings.appLanguage == AppLanguage.ENGLISH) Locale.ENGLISH else Locale.SIMPLIFIED_CHINESE
@@ -515,12 +403,9 @@ private fun HomeWidget(
             useIcons = settings.mealButtonsUseIcons,
             icons = settings.mealButtonIcons,
             language = settings.appLanguage,
-            editing = editing,
             uploading = mealUploadInProgress,
             onChoosePhoto = onChooseMealPhoto,
             onTakePhoto = onCaptureMealPhoto,
-            onUseIconsChanged = onMealButtonsUseIconsChanged,
-            onIconsChanged = onMealButtonIconsChanged,
         )
         "random_diary" -> WidgetCard(tr("随机旧日记", "Random old diary"), showTitle, settings.homeWidgetBordersEnabled) {
             val item = remember(diaries) { diaries.takeIf { it.isNotEmpty() }?.get(Random.nextInt(diaries.size)) }
@@ -678,12 +563,18 @@ private fun QuickInputWidget(
     var value by rememberSaveable { mutableStateOf("") }
     var categoryPickerThought by rememberSaveable { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     fun submit(snapshot: String, categoryId: Long?) {
         if (snapshot.isBlank() || submitting) return
         submitting = true
         onSubmit(snapshot, categoryId) { success ->
-            if (success && value == snapshot) value = ""
+            if (success) {
+                if (value == snapshot) value = ""
+                focusManager.clearFocus(force = true)
+                keyboardController?.hide()
+            }
             submitting = false
         }
     }
@@ -721,39 +612,17 @@ private fun MealPhotosWidget(
     useIcons: Boolean,
     icons: List<String>,
     language: AppLanguage,
-    editing: Boolean,
     uploading: Boolean,
     onChoosePhoto: (MealQuickAction) -> Unit,
     onTakePhoto: (MealQuickAction) -> Unit,
-    onUseIconsChanged: (Boolean) -> Unit,
-    onIconsChanged: (List<String>) -> Unit,
 ) {
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     val visuals = deskCubbyVisuals
-    var editingIconIndex by rememberSaveable { mutableStateOf<Int?>(null) }
-    var iconDraft by rememberSaveable { mutableStateOf("") }
     val displayedIcons = mealQuickActions.mapIndexed { index, action ->
         icons.getOrNull(index)?.trim()?.takeIf(String::isNotBlank) ?: action.symbol
     }
 
-    LaunchedEffect(editing) {
-        if (!editing) {
-            editingIconIndex = null
-            iconDraft = ""
-        }
-    }
-
     WidgetCard(tr("饮食图片", "Meal photos"), showTitle, showBorder) {
-        if (editing) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                TextButton(onClick = { onUseIconsChanged(!useIcons) }) {
-                    Text(if (useIcons) tr("显示文字", "Show text") else tr("显示图标", "Show icons"))
-                }
-            }
-        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -762,26 +631,18 @@ private fun MealPhotosWidget(
                 val label = action.label(language)
                 val chooseLabel = if (language == AppLanguage.ENGLISH) "Choose $label photo" else "选择${label}图片"
                 val cameraLabel = if (language == AppLanguage.ENGLISH) "Take $label photo" else "拍摄${label}图片"
-                val editLabel = if (language == AppLanguage.ENGLISH) "Change $label icon" else "更改${label}图标"
                 Surface(
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
-                        .semantics { contentDescription = if (editing) editLabel else label }
+                        .semantics { contentDescription = label }
                         .combinedClickable(
                             enabled = !uploading,
-                            onClickLabel = if (editing) editLabel else chooseLabel,
+                            onClickLabel = chooseLabel,
                             role = Role.Button,
-                            onLongClickLabel = cameraLabel.takeUnless { editing },
-                            onClick = {
-                                if (editing) {
-                                    iconDraft = displayedIcons[index]
-                                    editingIconIndex = index
-                                } else {
-                                    onChoosePhoto(action)
-                                }
-                            },
-                            onLongClick = if (editing) null else ({ onTakePhoto(action) }),
+                            onLongClickLabel = cameraLabel,
+                            onClick = { onChoosePhoto(action) },
+                            onLongClick = { onTakePhoto(action) },
                         ),
                     shape = if (organic) visuals.badgeShape else MaterialTheme.shapes.medium,
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -795,63 +656,18 @@ private fun MealPhotosWidget(
                             overflow = TextOverflow.Ellipsis,
                             textAlign = TextAlign.Center,
                         )
-                        if (editing) {
-                            Icon(
-                                imageVector = Icons.Outlined.Edit,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(3.dp)
-                                    .size(12.dp),
-                            )
-                        }
                     }
                 }
             }
         }
         Text(
-            text = if (editing) {
-                tr("点击任一餐别按钮可更改图标", "Tap a meal button to change its icon")
-            } else if (uploading) {
+            text = if (uploading) {
                 tr("正在加入今日日记…", "Adding to today's diary…")
             } else {
                 tr("单击选图，长按拍照", "Tap to choose; hold to take a photo")
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-
-    editingIconIndex?.takeIf { editing }?.let { index ->
-        val action = mealQuickActions[index]
-        AlertDialog(
-            onDismissRequest = { editingIconIndex = null },
-            title = { Text(tr("更改${action.chinese}图标", "Change ${action.english} icon")) },
-            text = {
-                OutlinedTextField(
-                    value = iconDraft,
-                    onValueChange = { iconDraft = it.takeCodePoints(16) },
-                    label = { Text(tr("图标", "Icon")) },
-                    supportingText = { Text(tr("可输入 emoji 或简短符号", "Enter an emoji or short symbol")) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = iconDraft.isNotBlank(),
-                    onClick = {
-                        val updatedIcons = displayedIcons.toMutableList().apply {
-                            this[index] = iconDraft.trim()
-                        }
-                        onIconsChanged(updatedIcons)
-                        editingIconIndex = null
-                    },
-                ) { Text(tr("保存", "Save")) }
-            },
-            dismissButton = {
-                TextButton(onClick = { editingIconIndex = null }) { Text(tr("取消", "Cancel")) }
-            },
         )
     }
 }
@@ -915,11 +731,6 @@ private fun streakDays(diaries: List<DiaryIndexEntity>, today: LocalDate): Int {
     var count = 0
     while (cursor in dates) { count++; cursor = cursor.minusDays(1) }
     return count
-}
-
-private fun <T> List<T>.moved(from: Int, to: Int): List<T> {
-    if (from !in indices || to !in indices) return this
-    return toMutableList().apply { val value = removeAt(from); add(to, value) }
 }
 
 private const val CAMERA_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L

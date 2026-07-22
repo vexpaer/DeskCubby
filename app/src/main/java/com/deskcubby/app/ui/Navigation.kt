@@ -68,6 +68,7 @@ import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.diary.DiaryEditorScreen
 import com.deskcubby.app.ui.diary.DiaryListScreen
 import com.deskcubby.app.ui.diary.DiaryViewModel
+import com.deskcubby.app.ui.diary.MealCalendarScreen
 import com.deskcubby.app.ui.date.DateRecordScreen
 import com.deskcubby.app.ui.date.DateRecordViewModel
 import com.deskcubby.app.ui.home.HomeScreen
@@ -88,6 +89,7 @@ import com.deskcubby.app.ui.thought.ThoughtViewModel
 
 object Routes {
     const val EDITOR = "diary_editor"
+    const val MEAL_CALENDAR = "meal_calendar"
     const val THOUGHT_TRASH = "thought_trash"
 }
 
@@ -193,10 +195,6 @@ fun DeskCubbyRoot(
                             onOpenThoughts = { navController.navigate(NavItemId.THOUGHT.route) },
                             onOpenWebsite = { navController.navigate(NavItemId.BLOG.route) },
                             onOpenDateRecords = { navController.navigate(NavItemId.DATE.route) },
-                            onWidgetsChanged = settingsViewModel::setHomeWidgets,
-                            onWidgetTitlesChanged = settingsViewModel::setHomeWidgetTitles,
-                            onMealButtonsUseIconsChanged = settingsViewModel::setMealButtonsUseIcons,
-                            onMealButtonIconsChanged = settingsViewModel::setMealButtonIcons,
                         )
                     }
                     composable(NavItemId.DIARY.route) {
@@ -205,6 +203,7 @@ fun DeskCubbyRoot(
                             viewModel = diaryViewModel,
                             onOpen = { uri -> diaryViewModel.open(uri); navController.navigate(Routes.EDITOR) },
                             onOpenToday = { diaryViewModel.enterToday { navController.navigate(Routes.EDITOR) } },
+                            onOpenMealCalendar = { navController.navigate(Routes.MEAL_CALENDAR) },
                             onOpenSettings = { navigateMain(NavItemId.SETTINGS.route) },
                         )
                     }
@@ -229,6 +228,9 @@ fun DeskCubbyRoot(
                     }
                     composable(Routes.EDITOR) {
                         DiaryEditorScreen(viewModel = diaryViewModel, onBack = { navController.popBackStack() })
+                    }
+                    composable(Routes.MEAL_CALENDAR) {
+                        MealCalendarScreen(viewModel = diaryViewModel, onBack = { navController.popBackStack() })
                     }
                     composable(Routes.THOUGHT_TRASH) {
                         ThoughtTrashScreen(viewModel = thoughtViewModel, onBack = { navController.popBackStack() })
@@ -278,7 +280,7 @@ private fun DeskBottomBar(
                     },
                     alwaysShowLabel = showLabels,
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = if (organic) MaterialTheme.colorScheme.primary
+                        selectedIconColor = if (organic) MaterialTheme.colorScheme.onPrimaryContainer
                         else MaterialTheme.colorScheme.onSecondaryContainer,
                         selectedTextColor = if (organic) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurface,
