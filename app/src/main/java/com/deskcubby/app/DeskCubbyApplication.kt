@@ -3,6 +3,7 @@ package com.deskcubby.app
 import android.app.Application
 import com.deskcubby.app.data.backup.AutoBackupCoordinator
 import com.deskcubby.app.data.repository.PoetryRepository
+import com.deskcubby.app.data.sync.CloudSyncScheduler
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -15,11 +16,13 @@ import kotlinx.coroutines.launch
 class DeskCubbyApplication : Application() {
     @Inject lateinit var autoBackupCoordinator: AutoBackupCoordinator
     @Inject lateinit var poetryRepository: PoetryRepository
+    @Inject lateinit var cloudSyncScheduler: CloudSyncScheduler
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
         autoBackupCoordinator.start()
+        cloudSyncScheduler.start()
         applicationScope.launch {
             try {
                 poetryRepository.refresh(force = true)

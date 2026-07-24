@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -75,12 +76,14 @@ import com.deskcubby.app.ui.diary.DiaryEditorScreen
 import com.deskcubby.app.ui.diary.DiaryListScreen
 import com.deskcubby.app.ui.diary.DiaryViewModel
 import com.deskcubby.app.ui.diary.MealCalendarScreen
+import com.deskcubby.app.ui.diary.filter.MealPhotoFilterSettingsScreen
 import com.deskcubby.app.ui.daily.DailyRecordScreen
 import com.deskcubby.app.ui.daily.DailyRecordViewModel
 import com.deskcubby.app.ui.date.DateRecordScreen
 import com.deskcubby.app.ui.date.DateRecordViewModel
 import com.deskcubby.app.ui.home.HomeScreen
 import com.deskcubby.app.ui.home.HomeViewModel
+import com.deskcubby.app.ui.more.MoreHubScreen
 import com.deskcubby.app.ui.poetry.PoetryBookScreen
 import com.deskcubby.app.ui.poetry.PoetryBookViewModel
 import com.deskcubby.app.ui.settings.SettingsScreen
@@ -103,6 +106,7 @@ import com.deskcubby.app.ui.thought.ThoughtViewModel
 object Routes {
     const val EDITOR = "diary_editor"
     const val MEAL_CALENDAR = "meal_calendar"
+    const val MEAL_FILTER_SETTINGS = "meal_filter_settings"
     const val THOUGHT_TRASH = "thought_trash"
     const val DAILY_RECORDS = "daily_records"
     const val DAILY_RECORDS_TODAY = "daily_records/today"
@@ -142,6 +146,13 @@ fun DeskCubbyRoot(
         val backStack by navController.currentBackStackEntryAsState()
         val route = backStack?.destination?.route
         val visibleTabs = settings.navItems.filter { it.visible || it.id == NavItemId.SETTINGS }
+        val bottomSelectedRoute = route.takeIf { currentRoute ->
+            visibleTabs.any { it.id.route == currentRoute }
+        } ?: NavItemId.MORE.route.takeIf {
+            route != null && settings.navItems.any { item ->
+                item.id.route == route && item.showInMore
+            }
+        }
         val showBottomBar = route in NavItemId.entries.map { it.route } &&
             !(route == NavItemId.SETTINGS.route && settingsSubpageOpen) &&
             !WindowInsets.isImeVisible
@@ -161,7 +172,7 @@ fun DeskCubbyRoot(
                 if (showBottomBar) {
                     DeskBottomBar(
                         items = visibleTabs,
-                        selectedRoute = route,
+                        selectedRoute = bottomSelectedRoute,
                         showLabels = settings.bottomNavShowLabels,
                         onSelected = { item -> navigateMain(item.id.route) },
                     )
@@ -258,6 +269,25 @@ fun DeskCubbyRoot(
                             onOpenSettings = { navController.navigate(Routes.AI_SETTINGS) },
                         )
                     }
+                    composable(NavItemId.MORE.route) {
+                        MoreHubScreen(
+                            padding = padding,
+                            items = settings.navItems.filter { item ->
+                                item.showInMore &&
+                                    item.id != NavItemId.HOME &&
+                                    item.id != NavItemId.MORE &&
+                                    item.id != NavItemId.SETTINGS
+                            },
+                            onOpenPage = { itemId ->
+                                navController.navigate(itemId.route) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            onOpenNavigationSettings = {
+                                navController.navigate(Routes.NAVIGATION_SETTINGS)
+                            },
+                        )
+                    }
                     composable(NavItemId.SETTINGS.route) {
                         SettingsScreen(
                             padding = padding,
@@ -288,7 +318,30 @@ fun DeskCubbyRoot(
                         )
                     }
                     composable(Routes.MEAL_CALENDAR) {
-                        MealCalendarScreen(viewModel = diaryViewModel, onBack = { navController.popBackStack() })
+                        MealCalendarScreen(
+                            viewModel = diaryViewModel,
+                            onBack = { navController.popBackStack() },
+                            filterSettings = settings.mealPhotoFilter,
+                            onFilterEnabledChange = { enabled ->
+                                settingsViewModel.setMealPhotoFilter(
+                                    settings.mealPhotoFilter.copy(enabled = enabled),
+                                )
+                            },
+                            onOpenFilterSettings = {
+                                navController.navigate(Routes.MEAL_FILTER_SETTINGS)
+                            },
+                        )
+                    }
+                    composable(Routes.MEAL_FILTER_SETTINGS) {
+                        MealPhotoFilterSettingsScreen(
+                            settings = settings.mealPhotoFilter,
+                            onBack = { navController.popBackStack() },
+                            onSave = { filter ->
+                                settingsViewModel.setMealPhotoFilter(filter) {
+                                    navController.popBackStack()
+                                }
+                            },
+                        )
                     }
                     composable(Routes.THOUGHT_TRASH) {
                         ThoughtTrashScreen(viewModel = thoughtViewModel, onBack = { navController.popBackStack() })
@@ -320,9 +373,9 @@ fun DeskCubbyRoot(
                 text = {
                     Text(
                         if (settings.appLanguage == AppLanguage.ENGLISH) {
-                            "DeskCubby has several pages. You can show, hide, rename, and reorder them from Bottom navigation settings."
+                            "DeskCubby has several pages. Bottom navigation settings can show, hide, rename and reorder them, or place less-used pages on the More page."
                         } else {
-                            "DeskCubby 包含多个页面，你可以在“底部导航”设置中手动开关、改名和排序。"
+                            "DeskCubby 包含多个页面，你可以在“底部导航”设置中开关、改名和排序，也可把较少使用的页面收进导航页。"
                         },
                     )
                 },
@@ -459,5 +512,6 @@ fun iconFor(key: String): ImageVector = when (key) {
     "day" -> Icons.Outlined.ViewDay
     "rss" -> Icons.Outlined.RssFeed
     "ai" -> Icons.Outlined.SmartToy
+    "apps" -> Icons.Outlined.Apps
     else -> Icons.Outlined.MenuBook
 }

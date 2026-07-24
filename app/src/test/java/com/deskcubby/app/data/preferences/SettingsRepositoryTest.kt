@@ -2,6 +2,8 @@ package com.deskcubby.app.data.preferences
 
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
+import com.deskcubby.app.data.model.CloudSyncConfig
+import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
@@ -107,6 +109,94 @@ class SettingsRepositoryTest {
         )
         assertEquals(NavItemId.SETTINGS, normalized.last().id)
         assertTrue(normalized.last().visible)
+    }
+
+    @Test
+    fun normalizeCloudSyncConfigsTrimsMetadataNormalizesPathAndKeepsFirstId() {
+        val first = CloudSyncConfig(
+            id = " primary ",
+            name = " Primary\nCloud ",
+            endpointUrl = " https://cloud.example.com/dav ",
+            remotePath = " /DeskCubby//photos/ ",
+            webDavUsername = " alice ",
+            s3Bucket = " archive-bucket ",
+            s3Region = " cn-east-1 ",
+            selectedContents = setOf(
+                CloudSyncContent.DIARIES,
+                CloudSyncContent.MEDIA,
+            ),
+        )
+        val duplicate = first.copy(
+            id = "primary",
+            name = "Duplicate",
+        )
+
+        val normalized = normalizeCloudSyncConfigs(listOf(first, duplicate))
+
+        assertEquals(1, normalized.size)
+        assertEquals("primary", normalized.single().id)
+        assertEquals("Primary Cloud", normalized.single().name)
+        assertEquals("https://cloud.example.com/dav", normalized.single().endpointUrl)
+        assertEquals("DeskCubby/photos", normalized.single().remotePath)
+        assertEquals("alice", normalized.single().webDavUsername)
+        assertEquals("archive-bucket", normalized.single().s3Bucket)
+        assertEquals("cn-east-1", normalized.single().s3Region)
+        assertEquals(first.selectedContents, normalized.single().selectedContents)
+    }
+
+    @Test
+    fun normalizeCloudSyncConfigsStripsEveryCredentialField() {
+        val normalized = normalizeCloudSyncConfigs(
+            listOf(
+                CloudSyncConfig(
+                    id = "private",
+                    name = "Private cloud",
+                    endpointUrl = "https://cloud.example.com/dav",
+                    webDavUsername = "alice",
+                    webDavPassword = "webdav-password",
+                    s3AccessKey = "s3-access-key",
+                    s3SecretKey = "s3-secret-key",
+                    s3SessionToken = "s3-session-token",
+                ),
+            ),
+        ).single()
+
+        assertEquals("alice", normalized.webDavUsername)
+        assertEquals("", normalized.webDavPassword)
+        assertEquals("", normalized.s3AccessKey)
+        assertEquals("", normalized.s3SecretKey)
+        assertEquals("", normalized.s3SessionToken)
+    }
+
+    @Test
+    fun normalizeCloudSyncConfigsRequiresExplicitOptInForHttp() {
+        val https = CloudSyncConfig(
+            id = "https",
+            name = "HTTPS",
+            endpointUrl = "https://cloud.example.com/dav",
+        )
+        val blockedHttp = CloudSyncConfig(
+            id = "http-blocked",
+            name = "Blocked HTTP",
+            endpointUrl = "http://192.168.1.2/dav",
+            allowInsecureHttp = false,
+        )
+        val allowedHttp = blockedHttp.copy(
+            id = "http-allowed",
+            name = "Allowed HTTP",
+            allowInsecureHttp = true,
+        )
+        val endpointWithUserInfo = CloudSyncConfig(
+            id = "userinfo",
+            name = "Unsafe user info",
+            endpointUrl = "https://alice:secret@cloud.example.com/dav",
+        )
+
+        val normalized = normalizeCloudSyncConfigs(
+            listOf(https, blockedHttp, allowedHttp, endpointWithUserInfo),
+        )
+
+        assertEquals(listOf("https", "http-allowed"), normalized.map(CloudSyncConfig::id))
     }
 
     @Test

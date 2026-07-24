@@ -42,6 +42,10 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Language
@@ -52,6 +56,7 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.RssFeed
 import androidx.compose.material.icons.outlined.SmartToy
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.ViewWeek
 import androidx.compose.material3.AlertDialog
@@ -103,6 +108,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -119,6 +125,10 @@ import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.BrowserTheme
+import com.deskcubby.app.data.model.CloudSyncConfig
+import com.deskcubby.app.data.model.CloudSyncContent
+import com.deskcubby.app.data.model.CloudSyncDirection
+import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
@@ -126,11 +136,14 @@ import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.buildAiRequestPreviewJson
+import com.deskcubby.app.data.sync.AppCloudSyncStatus
+import com.deskcubby.app.data.sync.PendingCloudSyncJson
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.iconFor
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
 import com.deskcubby.app.ui.theme.GlassPanel
+import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.tr
 import java.text.DateFormat
@@ -146,6 +159,8 @@ private enum class SettingsPage {
     SUBPAGES,
     HOME,
     BACKUP,
+    SYNC,
+    SYNC_DETAIL,
     DIARY,
     BLOG,
     THOUGHT,
@@ -284,6 +299,7 @@ fun SettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val backupOperation by viewModel.backupOperation.collectAsStateWithLifecycle()
     val autoBackupStatus by viewModel.autoBackupStatus.collectAsStateWithLifecycle()
+    val cloudSyncStatus by viewModel.cloudSyncStatus.collectAsStateWithLifecycle()
     val settingsError by viewModel.settingsError.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val rootPage = remember(startPage) { startPage.toSettingsPage() }
@@ -291,6 +307,7 @@ fun SettingsScreen(
     val saveCoordinator = remember { SettingsSaveCoordinator() }
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var editingAiConfig by remember { mutableStateOf<AiModelConfig?>(null) }
+    var editingCloudSyncConfig by remember { mutableStateOf<CloudSyncConfig?>(null) }
 
     LaunchedEffect(page) {
         saveCoordinator.clear()
@@ -417,6 +434,61 @@ fun SettingsScreen(
                     completeSave(SettingsPage.SUBPAGES)
                 },
             )
+
+            SettingsPage.SYNC -> CloudSyncSettingsPage(
+                settings = settings,
+                status = cloudSyncStatus,
+                pendingJson = viewModel.pendingCloudSyncJson(),
+                contentPadding = inner,
+                saveCoordinator = saveCoordinator,
+                onSaveEnabled = { enabled ->
+                    viewModel.setCloudSyncEnabled(enabled) { saved ->
+                        if (saved) completeSave(SettingsPage.MAIN)
+                    }
+                },
+                onAdd = {
+                    editingCloudSyncConfig = CloudSyncConfig(
+                        id = UUID.randomUUID().toString(),
+                        name = "",
+                    )
+                    page = SettingsPage.SYNC_DETAIL
+                },
+                onEdit = { config ->
+                    editingCloudSyncConfig = config
+                    page = SettingsPage.SYNC_DETAIL
+                },
+                onCopy = viewModel::copyCloudSyncConfig,
+                onDelete = viewModel::deleteCloudSyncConfig,
+                onSyncNow = viewModel::syncCloudNow,
+                onRestoreIncomingJson = { fileName ->
+                    viewModel.restoreIncomingCloudJson(fileName)
+                },
+            )
+
+            SettingsPage.SYNC_DETAIL -> {
+                val config = editingCloudSyncConfig
+                if (config == null) {
+                    LaunchedEffect(Unit) { page = SettingsPage.SYNC }
+                } else {
+                    CloudSyncConfigDetailPage(
+                        initial = config,
+                        hasStoredCredentials = viewModel.hasCloudSyncCredentials(config),
+                        contentPadding = inner,
+                        saveCoordinator = saveCoordinator,
+                        onSave = { changed, clearCredentials ->
+                            viewModel.saveCloudSyncConfig(
+                                config = changed,
+                                clearExistingCredentials = clearCredentials,
+                            ) { saved ->
+                                if (saved) {
+                                    editingCloudSyncConfig = null
+                                    completeSave(SettingsPage.SYNC)
+                                }
+                            }
+                        },
+                    )
+                }
+            }
 
             SettingsPage.BACKUP -> BackupSettingsPage(
                 backupTreeUri = settings.backupTreeUri,
@@ -613,10 +685,29 @@ private fun SettingsMainPage(
         }
         item {
             SettingsMenuItem(
+                title = tr("云端同步", "Cloud sync"),
+                description = if (settings.cloudSyncEnabled) {
+                    tr(
+                        "已开启，可同步日记、媒体与 JSON 备份",
+                        "Enabled for diaries, media and JSON backups",
+                    )
+                } else {
+                    tr(
+                        "WebDAV、S3 兼容服务与同步内容",
+                        "WebDAV, S3-compatible services and content selection",
+                    )
+                },
+                icon = { Icon(Icons.Outlined.Cloud, contentDescription = null) },
+                accentColor = settings.menuAccentColor(3),
+                onClick = { onOpen(SettingsPage.SYNC) },
+            )
+        }
+        item {
+            SettingsMenuItem(
                 title = tr("底部导航", "Bottom navigation"),
                 description = tr("显示方式、默认页、排序、名称与图标", "Display, default page, order, labels and icons"),
                 icon = { Icon(Icons.Outlined.ViewWeek, contentDescription = null) },
-                accentColor = settings.menuAccentColor(3),
+                accentColor = settings.menuAccentColor(4),
                 onClick = { onOpen(SettingsPage.NAVIGATION) },
             )
         }
@@ -625,7 +716,7 @@ private fun SettingsMainPage(
                 title = "About",
                 description = tr("查看 DeskCubby GitHub 仓库", "Open the DeskCubby GitHub repository"),
                 icon = { Icon(Icons.Outlined.Info, contentDescription = null) },
-                accentColor = settings.menuAccentColor(4),
+                accentColor = settings.menuAccentColor(5),
                 onClick = { openUrl(context, GITHUB_URL) },
             )
         }
@@ -787,6 +878,625 @@ private fun AppSettings.menuAccentColor(index: Int): Color {
 }
 
 @Composable
+private fun CloudSyncSettingsPage(
+    settings: AppSettings,
+    status: AppCloudSyncStatus,
+    pendingJson: List<PendingCloudSyncJson>,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onSaveEnabled: (Boolean) -> Unit,
+    onAdd: () -> Unit,
+    onEdit: (CloudSyncConfig) -> Unit,
+    onCopy: (CloudSyncConfig) -> Unit,
+    onDelete: (CloudSyncConfig) -> Unit,
+    onSyncNow: () -> Unit,
+    onRestoreIncomingJson: (String) -> Unit,
+) {
+    var enabled by remember(settings.cloudSyncEnabled) {
+        mutableStateOf(settings.cloudSyncEnabled)
+    }
+    var deleteCandidate by remember { mutableStateOf<CloudSyncConfig?>(null) }
+    var restoreCandidate by remember { mutableStateOf<PendingCloudSyncJson?>(null) }
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = enabled != settings.cloudSyncEnabled,
+        enabled = !enabled || settings.cloudSyncConfigs.any(CloudSyncConfig::enabled),
+    ) { onSaveEnabled(enabled) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            SettingsSection(tr("同步开关", "Cloud sync")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("开启云端同步", "Enable cloud sync"))
+                        Text(
+                            tr(
+                                "开启后后台任务会在联网时同步已启用的服务。",
+                                "When enabled, background work syncs active services while connected.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = enabled, onCheckedChange = { enabled = it })
+                }
+                Text(
+                    tr(
+                        "WebDAV 密码和 S3 凭据仅加密保存在本机，不会写入 DeskCubby JSON 备份。",
+                        "WebDAV passwords and S3 credentials are encrypted on this device and excluded from DeskCubby JSON backups.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            SettingsSection(tr("同步状态", "Sync status")) {
+                status.progress?.let { progress ->
+                    Text(
+                        tr(
+                            "正在处理 ${progress.completedObjects}/${progress.totalObjects} 项",
+                            "Processing ${progress.completedObjects}/${progress.totalObjects} items",
+                        ),
+                    )
+                    progress.currentKey?.let {
+                        Text(
+                            it,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                status.message?.let {
+                    Text(it, color = MaterialTheme.colorScheme.primary)
+                }
+                status.error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error)
+                }
+                status.lastRuns.takeIf(List<*>::isNotEmpty)?.let { runs ->
+                    val uploaded = runs.sumOf { it.result?.uploadedCount ?: 0 }
+                    val downloaded = runs.sumOf { it.result?.downloadedCount ?: 0 }
+                    val conflicts = runs.sumOf { it.result?.conflictCount ?: 0 }
+                    Text(
+                        tr(
+                            "上次：上传 $uploaded，下载 $downloaded，冲突副本 $conflicts",
+                            "Last run: $uploaded uploaded, $downloaded downloaded, $conflicts conflict copies",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Button(
+                    onClick = onSyncNow,
+                    enabled = settings.cloudSyncEnabled && !status.running,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Outlined.Sync, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (status.running) tr("正在同步", "Syncing")
+                        else tr("立即同步", "Sync now"),
+                    )
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("云端服务", "Cloud services")) {
+                if (settings.cloudSyncConfigs.isEmpty()) {
+                    Text(
+                        tr(
+                            "尚未添加服务。可分别配置多个 WebDAV 或 S3 兼容端点。",
+                            "No services yet. Add multiple WebDAV or S3-compatible endpoints.",
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                settings.cloudSyncConfigs.forEach { config ->
+                    ListItem(
+                        headlineContent = { Text(config.name) },
+                        supportingContent = {
+                            val serviceLabel = syncServiceLabel(config.serviceType)
+                            val contentsLabel = syncContentsLabel(config.selectedContents)
+                            val disabledSuffix = if (config.enabled) {
+                                ""
+                            } else {
+                                tr(" · 已停用", " · Disabled")
+                            }
+                            Text(
+                                "$serviceLabel · $contentsLabel$disabledSuffix",
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        leadingContent = {
+                            Icon(Icons.Outlined.Cloud, contentDescription = null)
+                        },
+                        trailingContent = {
+                            Row {
+                                IconButton(onClick = { onEdit(config) }) {
+                                    Icon(Icons.Outlined.Edit, tr("编辑", "Edit"))
+                                }
+                                IconButton(onClick = { onCopy(config) }) {
+                                    Icon(Icons.Outlined.ContentCopy, tr("复制", "Copy"))
+                                }
+                                IconButton(onClick = { deleteCandidate = config }) {
+                                    Icon(Icons.Outlined.Delete, tr("删除", "Delete"))
+                                }
+                            }
+                        },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    )
+                    HorizontalDivider()
+                }
+                OutlinedButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Outlined.Add, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("新增同步服务", "Add sync service"))
+                }
+            }
+        }
+        if (pendingJson.isNotEmpty()) {
+            item {
+                SettingsSection(tr("待导入的云端 JSON", "Incoming cloud JSON")) {
+                    Text(
+                        tr(
+                            "远端 JSON 不会自动覆盖本机数据。确认后才会导入；成功后会移除本机暂存副本。",
+                            "Remote JSON never overwrites local data automatically. Import only after review; the local staged copy is removed after success.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    pendingJson.forEach { pending ->
+                        OutlinedButton(
+                            onClick = { restoreCandidate = pending },
+                            enabled = !status.running,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(tr("导入待处理备份", "Import staged backup"))
+                                Text(
+                                    formatBackupTime(pending.receivedAt),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    deleteCandidate?.let { config ->
+        AlertDialog(
+            onDismissRequest = { deleteCandidate = null },
+            title = { Text(tr("删除同步配置？", "Delete sync configuration?")) },
+            text = {
+                Text(
+                    tr(
+                        "将删除“${config.name}”及本机加密凭据，不会删除云端文件。",
+                        "This removes “${config.name}” and its local encrypted credentials, but not remote files.",
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        deleteCandidate = null
+                        onDelete(config)
+                    },
+                ) { Text(tr("删除", "Delete")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteCandidate = null }) {
+                    Text(tr("取消", "Cancel"))
+                }
+            },
+        )
+    }
+    restoreCandidate?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { restoreCandidate = null },
+            title = { Text(tr("导入云端 JSON？", "Import cloud JSON?")) },
+            text = {
+                Text(
+                    tr(
+                        "这会按备份导入应用设置和结构化数据。日记与媒体真实文件不会被 JSON 导入替换。",
+                        "This imports app settings and structured data from the backup. Diary and media files are not replaced by JSON import.",
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        restoreCandidate = null
+                        onRestoreIncomingJson(pending.fileName)
+                    },
+                ) { Text(tr("确认导入", "Import")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { restoreCandidate = null }) {
+                    Text(tr("取消", "Cancel"))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun CloudSyncConfigDetailPage(
+    initial: CloudSyncConfig,
+    hasStoredCredentials: Boolean,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onSave: (CloudSyncConfig, Boolean) -> Unit,
+) {
+    var name by remember(initial.id) { mutableStateOf(initial.name) }
+    var enabled by remember(initial.id) { mutableStateOf(initial.enabled) }
+    var serviceType by remember(initial.id) { mutableStateOf(initial.serviceType) }
+    var endpointUrl by remember(initial.id) { mutableStateOf(initial.endpointUrl) }
+    var remotePath by remember(initial.id) { mutableStateOf(initial.remotePath) }
+    var webDavUsername by remember(initial.id) { mutableStateOf(initial.webDavUsername) }
+    var webDavPassword by remember(initial.id) { mutableStateOf("") }
+    var s3Bucket by remember(initial.id) { mutableStateOf(initial.s3Bucket) }
+    var s3Region by remember(initial.id) { mutableStateOf(initial.s3Region) }
+    var s3AccessKey by remember(initial.id) { mutableStateOf("") }
+    var s3SecretKey by remember(initial.id) { mutableStateOf("") }
+    var s3SessionToken by remember(initial.id) { mutableStateOf("") }
+    var allowInsecureHttp by remember(initial.id) {
+        mutableStateOf(initial.allowInsecureHttp)
+    }
+    var selectedContents by remember(initial.id) {
+        mutableStateOf(initial.selectedContents)
+    }
+    var direction by remember(initial.id) { mutableStateOf(initial.direction) }
+    var clearCredentials by remember(initial.id) { mutableStateOf(false) }
+
+    val draft = initial.copy(
+        name = name,
+        enabled = enabled,
+        serviceType = serviceType,
+        endpointUrl = endpointUrl,
+        remotePath = remotePath,
+        webDavUsername = webDavUsername,
+        webDavPassword = webDavPassword,
+        s3Bucket = s3Bucket,
+        s3Region = s3Region,
+        s3AccessKey = s3AccessKey,
+        s3SecretKey = s3SecretKey,
+        s3SessionToken = s3SessionToken,
+        allowInsecureHttp = allowInsecureHttp,
+        selectedContents = selectedContents,
+        direction = direction,
+    )
+    val dirty = draft != initial || clearCredentials
+    val canSave = name.isNotBlank() && endpointUrl.isNotBlank() &&
+        selectedContents.isNotEmpty() &&
+        (serviceType != CloudSyncServiceType.S3_COMPATIBLE ||
+            s3Bucket.isNotBlank() && s3Region.isNotBlank())
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = dirty,
+        enabled = canSave,
+    ) { onSave(draft, clearCredentials) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            SettingsSection(tr("服务", "Service")) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("启用此配置", "Enable this configuration"))
+                        Text(
+                            tr(
+                                "全局同步开启时才会自动运行",
+                                "Runs automatically only while global sync is enabled",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(checked = enabled, onCheckedChange = { enabled = it })
+                }
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    CloudSyncServiceType.entries.forEachIndexed { index, type ->
+                        SegmentedButton(
+                            selected = serviceType == type,
+                            onClick = { serviceType = type },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index,
+                                CloudSyncServiceType.entries.size,
+                            ),
+                        ) {
+                            Text(syncServiceLabel(type))
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(200) },
+                    label = { Text(tr("配置名称", "Configuration name")) },
+                    singleLine = true,
+                    isError = name.isBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = endpointUrl,
+                    onValueChange = { endpointUrl = it.take(4_096) },
+                    label = { Text(tr("服务地址", "Endpoint URL")) },
+                    supportingText = {
+                        Text(
+                            if (serviceType == CloudSyncServiceType.WEBDAV) {
+                                tr(
+                                    "例如 https://dav.example.com/remote.php/dav/files/name/",
+                                    "For example https://dav.example.com/remote.php/dav/files/name/",
+                                )
+                            } else {
+                                tr(
+                                    "S3 兼容 API 根地址，例如 https://s3.example.com",
+                                    "S3-compatible API root, for example https://s3.example.com",
+                                )
+                            },
+                        )
+                    },
+                    singleLine = true,
+                    isError = endpointUrl.isBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = remotePath,
+                    onValueChange = { remotePath = it.take(1_024) },
+                    label = { Text(tr("远端目录", "Remote path")) },
+                    supportingText = {
+                        Text(tr("默认 DeskCubby；不能包含 . 或 ..", "Defaults to DeskCubby; . and .. are not allowed"))
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("允许 HTTP", "Allow HTTP"))
+                        Text(
+                            tr(
+                                "仅用于可信局域网服务",
+                                "Only for trusted local-network services",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(
+                        checked = allowInsecureHttp,
+                        onCheckedChange = { allowInsecureHttp = it },
+                    )
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("同步内容", "Sync contents")) {
+                CloudSyncContent.entries.forEach { content ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = content in selectedContents,
+                            onCheckedChange = { checked ->
+                                selectedContents = if (checked) {
+                                    selectedContents + content
+                                } else {
+                                    selectedContents - content
+                                }
+                            },
+                        )
+                        Text(syncContentLabel(content))
+                    }
+                }
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    CloudSyncDirection.entries.forEachIndexed { index, value ->
+                        SegmentedButton(
+                            selected = direction == value,
+                            onClick = { direction = value },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index,
+                                CloudSyncDirection.entries.size,
+                            ),
+                        ) {
+                            Text(
+                                if (value == CloudSyncDirection.TWO_WAY) {
+                                    tr("双向", "Two-way")
+                                } else {
+                                    tr("仅上传", "Upload only")
+                                },
+                            )
+                        }
+                    }
+                }
+                Text(
+                    tr(
+                        "双向同步遇到双方都修改时会保留冲突副本，不会无条件覆盖。",
+                        "Two-way sync preserves a conflict copy when both sides changed.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (CloudSyncContent.JSON_BACKUP in selectedContents) {
+                    Text(
+                        tr(
+                            "应用 JSON 包含结构化记录及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "App JSON contains structured records and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+        item {
+            SettingsSection(
+                if (serviceType == CloudSyncServiceType.WEBDAV) {
+                    tr("WebDAV 凭据", "WebDAV credentials")
+                } else {
+                    tr("S3 配置与凭据", "S3 settings & credentials")
+                },
+            ) {
+                if (serviceType == CloudSyncServiceType.WEBDAV) {
+                    OutlinedTextField(
+                        value = webDavUsername,
+                        onValueChange = { webDavUsername = it.take(512) },
+                        label = { Text(tr("用户名", "Username")) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    SecretSettingField(
+                        value = webDavPassword,
+                        onValueChange = { webDavPassword = it.take(8_192) },
+                        label = tr("密码", "Password"),
+                        hasStoredValue = hasStoredCredentials && !clearCredentials,
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = s3Bucket,
+                        onValueChange = { s3Bucket = it.take(255) },
+                        label = { Text("Bucket") },
+                        singleLine = true,
+                        isError = s3Bucket.isBlank(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = s3Region,
+                        onValueChange = { s3Region = it.take(128) },
+                        label = { Text("Region") },
+                        singleLine = true,
+                        isError = s3Region.isBlank(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    SecretSettingField(
+                        value = s3AccessKey,
+                        onValueChange = { s3AccessKey = it.take(8_192) },
+                        label = "Access Key ID",
+                        hasStoredValue = hasStoredCredentials && !clearCredentials,
+                    )
+                    SecretSettingField(
+                        value = s3SecretKey,
+                        onValueChange = { s3SecretKey = it.take(8_192) },
+                        label = "Secret Access Key",
+                        hasStoredValue = hasStoredCredentials && !clearCredentials,
+                    )
+                    SecretSettingField(
+                        value = s3SessionToken,
+                        onValueChange = { s3SessionToken = it.take(8_192) },
+                        label = tr("会话令牌（可选）", "Session token (optional)"),
+                        hasStoredValue = hasStoredCredentials && !clearCredentials,
+                    )
+                }
+                if (hasStoredCredentials) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = clearCredentials,
+                            onCheckedChange = {
+                                clearCredentials = it
+                                if (it) {
+                                    webDavPassword = ""
+                                    s3AccessKey = ""
+                                    s3SecretKey = ""
+                                    s3SessionToken = ""
+                                }
+                            },
+                        )
+                        Text(tr("清除本机已保存凭据", "Clear saved device credentials"))
+                    }
+                }
+                Text(
+                    tr(
+                        "凭据使用 Android Keystore 加密，只在发起请求时读取，不进入日志或 JSON 备份。",
+                        "Credentials are encrypted with Android Keystore, read only for requests, and excluded from logs and JSON backups.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SecretSettingField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    hasStoredValue: Boolean,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        supportingText = if (hasStoredValue && value.isEmpty()) {
+            { Text(tr("已在本机加密保存；留空可保留", "Encrypted on this device; leave blank to keep it")) }
+        } else {
+            null
+        },
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+private fun syncServiceLabel(type: CloudSyncServiceType): String = when (type) {
+    CloudSyncServiceType.WEBDAV -> "WebDAV"
+    CloudSyncServiceType.S3_COMPATIBLE -> tr("S3 兼容", "S3 compatible")
+}
+
+@Composable
+private fun syncContentLabel(content: CloudSyncContent): String = when (content) {
+    CloudSyncContent.DIARIES -> tr("日记", "Diaries")
+    CloudSyncContent.MEDIA -> tr("媒体", "Media")
+    CloudSyncContent.JSON_BACKUP -> tr("应用 JSON", "App JSON")
+}
+
+@Composable
+private fun syncContentsLabel(contents: Set<CloudSyncContent>): String =
+    if (LocalAppLanguage.current == AppLanguage.ENGLISH) {
+        CloudSyncContent.entries
+            .filter(contents::contains)
+            .joinToString(", ") { content ->
+                when (content) {
+                    CloudSyncContent.DIARIES -> "Diaries"
+                    CloudSyncContent.MEDIA -> "Media"
+                    CloudSyncContent.JSON_BACKUP -> "App JSON"
+                }
+            }
+    } else {
+        CloudSyncContent.entries
+            .filter(contents::contains)
+            .joinToString("、") { content ->
+                when (content) {
+                    CloudSyncContent.DIARIES -> "日记"
+                    CloudSyncContent.MEDIA -> "媒体"
+                    CloudSyncContent.JSON_BACKUP -> "应用 JSON"
+                }
+            }
+    }
+
+@Composable
 private fun BackupSettingsPage(
     backupTreeUri: String?,
     operation: BackupOperationState,
@@ -936,15 +1646,15 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "包含应用设置（含 AI API Key）、小巧思及其分类、浏览器收藏夹、日期记录、诗词本，以及日记和媒体目录路径；不包含日记正文或媒体文件。",
-                        "Includes app settings (including AI API keys), thoughts and categories, browser bookmarks, date records, the poetry book, and diary/media folder paths; diary entries and media files are not included.",
+                        "包含应用设置（含 AI API Key、同步服务元数据与吃历滤镜）、小巧思及其分类、浏览器收藏夹、日期记录、诗词本，以及日记和媒体目录路径；不包含日记正文、媒体文件、AI 对话历史或云端凭据。",
+                        "Includes app settings (including AI API keys, sync-service metadata and meal filters), thoughts and categories, browser bookmarks, date records, the poetry book, and diary/media folder paths; diary files, media, AI chat history and cloud credentials are excluded.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
                     tr(
-                        "跨设备导入后需重新选择日记和媒体目录；没有本机授权的目录路径不会覆盖当前目录。",
-                        "After importing on another device, reselect diary and media folders; paths without local access do not replace current folders.",
+                        "跨设备导入后需重新选择日记和媒体目录、填写云端凭据并手动重新开启同步；没有本机授权的目录路径不会覆盖当前目录。",
+                        "After importing on another device, reselect diary/media folders, enter cloud credentials and explicitly re-enable sync; paths without local access do not replace current folders.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -2667,7 +3377,10 @@ private fun NavigationSettingsPage(
         item {
             SettingsSection(tr("导航项目", "Navigation items")) {
                 Text(
-                    tr("设置入口始终保留；其余页面可隐藏、改名、换图标和排序。", "Settings is always available; other items can be hidden, renamed, reordered or given new icons."),
+                    tr(
+                        "“底栏”控制底部导航；“导航页”把入口收进导航主页。页面也可同时隐藏、改名、换图标和排序。",
+                        "Bottom controls the bottom bar; More places an entry on the navigation page. Pages can also be hidden, renamed, reordered or given new icons.",
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(4.dp))
@@ -2831,63 +3544,84 @@ private fun NavConfigRow(
     var iconMenu by remember { mutableStateOf(false) }
     val icons = listOf(
         "home", "book", "poetry", "language", "bolt", "settings", "calendar",
-        "event", "rss", "ai", "star", "write", "sparkle", "day",
+        "event", "rss", "ai", "apps", "star", "write", "sparkle", "day",
     )
     val visibilityDescription = tr(
-        "${item.id.defaultLabel}是否显示",
-        "Show ${item.id.englishLabel}",
+        "${item.id.defaultLabel}是否显示在底栏",
+        "Show ${item.id.englishLabel} in bottom bar",
+    )
+    val moreDescription = tr(
+        "${item.id.defaultLabel}是否放入导航页",
+        "Show ${item.id.englishLabel} on the More page",
     )
 
-    Row(
+    Column(
         modifier
             .fillMaxWidth()
             .onGloballyPositioned { onCenterChanged(it.boundsInRoot().center.y) }
             .padding(vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box {
-            IconButton(onClick = { iconMenu = true }) {
-                Icon(iconFor(item.iconKey), tr("选择图标", "Choose icon"))
-            }
-            DropdownMenu(expanded = iconMenu, onDismissRequest = { iconMenu = false }) {
-                icons.chunked(5).forEach { row ->
-                    Row {
-                        row.forEach { key ->
-                            IconButton(
-                                onClick = {
-                                    onChange(item.copy(iconKey = key))
-                                    iconMenu = false
-                                },
-                            ) { Icon(iconFor(key), key) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box {
+                IconButton(onClick = { iconMenu = true }) {
+                    Icon(iconFor(item.iconKey), tr("选择图标", "Choose icon"))
+                }
+                DropdownMenu(expanded = iconMenu, onDismissRequest = { iconMenu = false }) {
+                    icons.chunked(5).forEach { row ->
+                        Row {
+                            row.forEach { key ->
+                                IconButton(
+                                    onClick = {
+                                        onChange(item.copy(iconKey = key))
+                                        iconMenu = false
+                                    },
+                                ) { Icon(iconFor(key), key) }
+                            }
                         }
                     }
                 }
             }
+            OutlinedTextField(
+                value = item.label,
+                onValueChange = { onChange(item.copy(label = it.take(8))) },
+                singleLine = true,
+                label = { Text(tr(item.id.defaultLabel, item.id.englishLabel)) },
+                modifier = Modifier.weight(1f),
+            )
+            FourDotDragHandle(
+                translateSelf = false,
+                onDragStarted = onDragStarted,
+                onDragChanged = onDragChanged,
+                onDragCancelled = onDragCancelled,
+                onMoveUp = onMoveUp,
+                onMoveDown = onMoveDown,
+                onDragFinished = onMove,
+            )
         }
-        OutlinedTextField(
-            value = item.label,
-            onValueChange = { onChange(item.copy(label = it.take(8))) },
-            singleLine = true,
-            label = { Text(tr(item.id.defaultLabel, item.id.englishLabel)) },
-            modifier = Modifier.weight(1f),
-        )
-        Checkbox(
-            checked = item.visible || item.id == NavItemId.SETTINGS,
-            enabled = item.id != NavItemId.SETTINGS,
-            onCheckedChange = { onChange(item.copy(visible = it)) },
-            modifier = Modifier.semantics {
-                contentDescription = visibilityDescription
-            },
-        )
-        FourDotDragHandle(
-            translateSelf = false,
-            onDragStarted = onDragStarted,
-            onDragChanged = onDragChanged,
-            onDragCancelled = onDragCancelled,
-            onMoveUp = onMoveUp,
-            onMoveDown = onMoveDown,
-            onDragFinished = onMove,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End,
+        ) {
+            Checkbox(
+                checked = item.visible || item.id == NavItemId.SETTINGS,
+                enabled = item.id != NavItemId.SETTINGS,
+                onCheckedChange = { onChange(item.copy(visible = it)) },
+                modifier = Modifier.semantics {
+                    contentDescription = visibilityDescription
+                },
+            )
+            Text(tr("底栏", "Bottom"), style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.width(12.dp))
+            Checkbox(
+                checked = item.showInMore,
+                enabled = item.id != NavItemId.HOME &&
+                    item.id != NavItemId.MORE && item.id != NavItemId.SETTINGS,
+                onCheckedChange = { onChange(item.copy(showInMore = it)) },
+                modifier = Modifier.semantics { contentDescription = moreDescription },
+            )
+            Text(tr("导航页", "More"), style = MaterialTheme.typography.labelMedium)
+        }
     }
 }
 
@@ -2898,6 +3632,8 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.SUBPAGES -> tr("子页面设置", "Subpage settings")
     SettingsPage.HOME -> tr("主页", "Home")
     SettingsPage.BACKUP -> tr("应用数据与备份", "App data & backup")
+    SettingsPage.SYNC -> tr("云端同步", "Cloud sync")
+    SettingsPage.SYNC_DETAIL -> tr("同步配置", "Sync configuration")
     SettingsPage.DIARY -> tr("日记与媒体", "Diary & media")
     SettingsPage.BLOG -> tr("浏览器", "Browser")
     SettingsPage.THOUGHT -> tr("小巧思", "Thoughts")
@@ -2917,11 +3653,13 @@ private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
     -> SettingsPage.SUBPAGES
 
     SettingsPage.AI_DETAIL -> SettingsPage.AI
+    SettingsPage.SYNC_DETAIL -> SettingsPage.SYNC
 
     SettingsPage.MAIN,
     SettingsPage.APPEARANCE,
     SettingsPage.SUBPAGES,
     SettingsPage.BACKUP,
+    SettingsPage.SYNC,
     SettingsPage.NAVIGATION,
     -> SettingsPage.MAIN
 }

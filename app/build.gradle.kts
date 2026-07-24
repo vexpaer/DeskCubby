@@ -60,8 +60,8 @@ android {
         applicationId = "com.deskcubby.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -107,6 +107,10 @@ android {
         buildConfig = true
     }
 
+    sourceSets {
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    }
+
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
@@ -147,6 +151,7 @@ dependencies {
     implementation("androidx.room:room-runtime:2.8.4")
     implementation("androidx.room:room-ktx:2.8.4")
     kapt("androidx.room:room-compiler:2.8.4")
+    androidTestImplementation("androidx.room:room-testing:2.8.4")
     implementation("androidx.datastore:datastore-preferences:1.2.1")
     implementation("androidx.documentfile:documentfile:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.11.2")

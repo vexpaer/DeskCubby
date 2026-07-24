@@ -79,15 +79,52 @@ enum class NavItemId(
     val englishLabel: String,
     val defaultIcon: String,
     val defaultVisible: Boolean = true,
+    val defaultShowInMore: Boolean = false,
 ) {
     HOME("home", "首页", "Home", "home"),
     DIARY("diary", "日记", "Diary", "book"),
-    BLOG("blog", "浏览器", "Browser", "language"),
+    BLOG(
+        "blog",
+        "浏览器",
+        "Browser",
+        "language",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
     THOUGHT("thought", "小巧思", "Thoughts", "bolt"),
-    DATE("date_records", "日期记录", "Dates", "event"),
-    POETRY("poetry_book", "诗词本", "Poetry book", "poetry"),
-    RSS("rss", "RSS 订阅", "RSS", "rss", defaultVisible = false),
-    AI_CHAT("ai_chat", "AI 聊天", "AI chat", "ai", defaultVisible = false),
+    DATE(
+        "date_records",
+        "日期记录",
+        "Dates",
+        "event",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
+    POETRY(
+        "poetry_book",
+        "诗词本",
+        "Poetry book",
+        "poetry",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
+    RSS(
+        "rss",
+        "RSS 订阅",
+        "RSS",
+        "rss",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
+    AI_CHAT(
+        "ai_chat",
+        "AI 聊天",
+        "AI chat",
+        "ai",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
+    MORE("more", "导航", "More", "apps", defaultVisible = false),
     SETTINGS("settings", "设置", "Settings", "settings"),
 }
 
@@ -96,6 +133,7 @@ data class NavItemConfig(
     val label: String = id.defaultLabel,
     val iconKey: String = id.defaultIcon,
     val visible: Boolean = id.defaultVisible,
+    val showInMore: Boolean = id.defaultShowInMore,
 )
 
 data class AppSettings(
@@ -107,6 +145,8 @@ data class AppSettings(
     val themeSecondaryColorsArgb: List<Int> = DEFAULT_THEME_SECONDARY_COLORS_ARGB,
     val fontScale: Float = 1f,
     val backupTreeUri: String? = null,
+    val cloudSyncEnabled: Boolean = false,
+    val cloudSyncConfigs: List<CloudSyncConfig> = emptyList(),
     val diaryTreeUri: String? = null,
     val mediaTreeUri: String? = null,
     val fileNamePattern: String = "yyyy-MM-dd",
@@ -127,6 +167,7 @@ data class AppSettings(
     val thoughtDisplayMode: ThoughtDisplayMode = ThoughtDisplayMode.SINGLE_LINE,
     val mealCalendarImageMaxHeightDp: Int = 124,
     val mealCalendarShowCaptions: Boolean = true,
+    val mealPhotoFilter: MealPhotoFilterSettings = MealPhotoFilterSettings(),
     val mealButtonsUseIcons: Boolean = false,
     val mealButtonIcons: List<String> = DEFAULT_MEAL_BUTTON_ICONS,
     val dailyEventTemplates: List<DailyEventTemplate> = emptyList(),
@@ -146,7 +187,9 @@ data class AppSettings(
     val calorieVisionPrompt: String = DEFAULT_CALORIE_VISION_PROMPT,
     val calorieTextPrompt: String = DEFAULT_CALORIE_TEXT_PROMPT,
     val navigationIntroAcknowledged: Boolean = false,
-    val navItems: List<NavItemConfig> = NavItemId.entries.map(::NavItemConfig),
+    val navItems: List<NavItemConfig> = NavItemId.entries.map { id ->
+        NavItemConfig(id = id, visible = id.defaultVisible || id == NavItemId.MORE)
+    },
     val defaultPage: NavItemId = NavItemId.HOME,
     val bottomNavShowLabels: Boolean = true,
     val homeWidgetBordersEnabled: Boolean = true,

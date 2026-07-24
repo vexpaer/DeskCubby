@@ -2,6 +2,7 @@ package com.deskcubby.app.di
 
 import android.content.Context
 import androidx.room.Room
+import com.deskcubby.app.data.local.AiChatDao
 import com.deskcubby.app.data.local.AppDatabase
 import com.deskcubby.app.data.local.BrowserRecordDao
 import com.deskcubby.app.data.local.DiaryIndexDao
@@ -28,6 +29,7 @@ object AppModule {
                 AppDatabase.MIGRATION_2_3,
                 AppDatabase.MIGRATION_3_4,
                 AppDatabase.MIGRATION_4_5,
+                AppDatabase.MIGRATION_5_6,
             )
             .build()
 
@@ -37,4 +39,5 @@ object AppModule {
     @Provides fun provideDiaryIndexDao(db: AppDatabase): DiaryIndexDao = db.diaryIndexDao()
     @Provides fun provideDateRecordDao(db: AppDatabase): DateRecordDao = db.dateRecordDao()
     @Provides fun provideSavedPoemDao(db: AppDatabase): SavedPoemDao = db.savedPoemDao()
+    @Provides fun provideAiChatDao(db: AppDatabase): AiChatDao = db.aiChatDao()
 }

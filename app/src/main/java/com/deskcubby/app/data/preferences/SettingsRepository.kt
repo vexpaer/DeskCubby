@@ -19,12 +19,17 @@ import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.BrowserTheme
+import com.deskcubby.app.data.model.CloudSyncConfig
+import com.deskcubby.app.data.model.CloudSyncContent
+import com.deskcubby.app.data.model.CloudSyncDirection
+import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DEFAULT_MEAL_BUTTON_ICONS
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
+import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.NavItemConfig
@@ -37,6 +42,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import java.io.IOException
+import java.net.URI
+import java.util.Locale
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -61,6 +68,8 @@ class SettingsRepository @Inject constructor(
         val themeSecondaryColorsArgb = stringPreferencesKey("theme_secondary_colors_argb")
         val fontScale = floatPreferencesKey("font_scale")
         val backupTreeUri = stringPreferencesKey("backup_tree_uri")
+        val cloudSyncEnabled = booleanPreferencesKey("cloud_sync_enabled")
+        val cloudSyncConfigs = stringPreferencesKey("cloud_sync_configs_v1")
         val diaryTreeUri = stringPreferencesKey("diary_tree_uri")
         val mediaTreeUri = stringPreferencesKey("media_tree_uri")
         val fileNamePattern = stringPreferencesKey("file_name_pattern")
@@ -81,6 +90,12 @@ class SettingsRepository @Inject constructor(
         val thoughtDisplayMode = stringPreferencesKey("thought_display_mode")
         val mealCalendarImageMaxHeightDp = intPreferencesKey("meal_calendar_image_max_height_dp")
         val mealCalendarShowCaptions = booleanPreferencesKey("meal_calendar_show_captions")
+        val mealPhotoFilterEnabled = booleanPreferencesKey("meal_photo_filter_enabled")
+        val mealPhotoFilterBrightness = floatPreferencesKey("meal_photo_filter_brightness")
+        val mealPhotoFilterContrast = floatPreferencesKey("meal_photo_filter_contrast")
+        val mealPhotoFilterSaturation = floatPreferencesKey("meal_photo_filter_saturation")
+        val mealPhotoFilterWarmth = floatPreferencesKey("meal_photo_filter_warmth")
+        val mealPhotoFilterTint = floatPreferencesKey("meal_photo_filter_tint")
         val mealButtonsUseIcons = booleanPreferencesKey("meal_buttons_use_icons")
         val mealButtonIcons = stringPreferencesKey("meal_button_icons")
         val dailyEventTemplates = stringPreferencesKey("daily_event_templates")
@@ -119,6 +134,7 @@ class SettingsRepository @Inject constructor(
     private fun decode(prefs: Preferences): AppSettings {
         val defaults = AppSettings()
         val nav = decodeNav(prefs[Keys.navItems])
+        val cloudSyncConfigs = decodeCloudSyncConfigs(prefs[Keys.cloudSyncConfigs])
         val visibleIds = nav.filter { it.visible || it.id == NavItemId.SETTINGS }.map { it.id }.toSet()
         val requestedDefault = prefs[Keys.defaultPage].enumValueOr(defaults.defaultPage)
         val decodedConfigs = decodeAiConfigs(prefs[Keys.aiConfigs]).ifEmpty {
@@ -148,6 +164,9 @@ class SettingsRepository @Inject constructor(
             ),
             fontScale = normalizeFontScale(prefs[Keys.fontScale], defaults.fontScale),
             backupTreeUri = prefs[Keys.backupTreeUri]?.takeIf(::hasPersistedTreeAccess),
+            cloudSyncEnabled = (prefs[Keys.cloudSyncEnabled] ?: false) &&
+                cloudSyncConfigs.any { it.enabled && it.selectedContents.isNotEmpty() },
+            cloudSyncConfigs = cloudSyncConfigs,
             diaryTreeUri = prefs[Keys.diaryTreeUri]?.takeIf(::hasPersistedTreeAccess),
             mediaTreeUri = prefs[Keys.mediaTreeUri]?.takeIf(::hasPersistedTreeAccess),
             fileNamePattern = (prefs[Keys.fileNamePattern] ?: defaults.fileNamePattern)
@@ -175,6 +194,16 @@ class SettingsRepository @Inject constructor(
                 ?: defaults.mealCalendarImageMaxHeightDp).coerceIn(80, 320),
             mealCalendarShowCaptions = prefs[Keys.mealCalendarShowCaptions]
                 ?: defaults.mealCalendarShowCaptions,
+            mealPhotoFilter = MealPhotoFilterSettings(
+                enabled = prefs[Keys.mealPhotoFilterEnabled] ?: defaults.mealPhotoFilter.enabled,
+                brightness = prefs[Keys.mealPhotoFilterBrightness]
+                    ?: defaults.mealPhotoFilter.brightness,
+                contrast = prefs[Keys.mealPhotoFilterContrast] ?: defaults.mealPhotoFilter.contrast,
+                saturation = prefs[Keys.mealPhotoFilterSaturation]
+                    ?: defaults.mealPhotoFilter.saturation,
+                warmth = prefs[Keys.mealPhotoFilterWarmth] ?: defaults.mealPhotoFilter.warmth,
+                tint = prefs[Keys.mealPhotoFilterTint] ?: defaults.mealPhotoFilter.tint,
+            ).normalized(),
             mealButtonsUseIcons = prefs[Keys.mealButtonsUseIcons] ?: defaults.mealButtonsUseIcons,
             mealButtonIcons = decodeMealButtonIcons(prefs[Keys.mealButtonIcons], defaults.mealButtonIcons),
             dailyEventTemplates = decodeDailyEventTemplates(prefs[Keys.dailyEventTemplates]),
@@ -234,6 +263,19 @@ class SettingsRepository @Inject constructor(
             it.setOrRemove(Keys.backupTreeUri, value?.takeIf(String::isNotBlank))
         }
     }
+    suspend fun setCloudSyncSettings(enabled: Boolean, configs: List<CloudSyncConfig>) {
+        val normalized = normalizeCloudSyncConfigs(configs)
+        require(normalized.size == configs.distinctBy { it.id.trim() }.size) {
+            "同步配置无效，请检查名称、地址、远端目录和内容选择。"
+        }
+        val safeEnabled = enabled && normalized.any {
+            it.enabled && it.selectedContents.isNotEmpty()
+        }
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.cloudSyncEnabled] = safeEnabled
+            prefs[Keys.cloudSyncConfigs] = encodeCloudSyncConfigs(normalized)
+        }
+    }
     suspend fun setDiaryTreeUri(value: String) = set(Keys.diaryTreeUri, value)
     suspend fun setMediaTreeUri(value: String) = set(Keys.mediaTreeUri, value)
     suspend fun setFileNamePattern(value: String) = set(Keys.fileNamePattern, value)
@@ -269,6 +311,17 @@ class SettingsRepository @Inject constructor(
     suspend fun setMealCalendarImageMaxHeight(value: Int) =
         set(Keys.mealCalendarImageMaxHeightDp, value.coerceIn(80, 320))
     suspend fun setMealCalendarShowCaptions(value: Boolean) = set(Keys.mealCalendarShowCaptions, value)
+    suspend fun setMealPhotoFilter(value: MealPhotoFilterSettings) {
+        val normalized = value.normalized()
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.mealPhotoFilterEnabled] = normalized.enabled
+            prefs[Keys.mealPhotoFilterBrightness] = normalized.brightness
+            prefs[Keys.mealPhotoFilterContrast] = normalized.contrast
+            prefs[Keys.mealPhotoFilterSaturation] = normalized.saturation
+            prefs[Keys.mealPhotoFilterWarmth] = normalized.warmth
+            prefs[Keys.mealPhotoFilterTint] = normalized.tint
+        }
+    }
     suspend fun setMealButtonsUseIcons(value: Boolean) = set(Keys.mealButtonsUseIcons, value)
     suspend fun setMealButtonIcons(value: List<String>) =
         set(Keys.mealButtonIcons, encodeStringList(normalizeMealButtonIcons(value)))
@@ -377,6 +430,8 @@ class SettingsRepository @Inject constructor(
 
     suspend fun restoreFromBackup(value: AppSettings) {
         val normalizedNav = normalizeNavItems(value.navItems)
+        val normalizedMealPhotoFilter = value.mealPhotoFilter.normalized()
+        val normalizedCloudSyncConfigs = normalizeCloudSyncConfigs(value.cloudSyncConfigs)
         val visibleIds = normalizedNav.filter(NavItemConfig::visible).map(NavItemConfig::id).toSet()
         val normalizedDefaultPage = value.defaultPage.takeIf(visibleIds::contains)
             ?: visibleIds.firstOrNull()
@@ -392,6 +447,11 @@ class SettingsRepository @Inject constructor(
                 normalizeThemeSecondaryColors(value.themeSecondaryColorsArgb),
             )
             prefs[Keys.fontScale] = normalizeFontScale(value.fontScale)
+            prefs[Keys.cloudSyncConfigs] = encodeCloudSyncConfigs(normalizedCloudSyncConfigs)
+            prefs[Keys.cloudSyncEnabled] = value.cloudSyncEnabled &&
+                normalizedCloudSyncConfigs.any {
+                    it.enabled && it.selectedContents.isNotEmpty()
+                }
             prefs.setOrRemove(
                 Keys.diaryTreeUri,
                 restorableTreeUriOrCurrent(value.diaryTreeUri, prefs[Keys.diaryTreeUri]),
@@ -417,6 +477,12 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.thoughtDisplayMode] = value.thoughtDisplayMode.name
             prefs[Keys.mealCalendarImageMaxHeightDp] = value.mealCalendarImageMaxHeightDp.coerceIn(80, 320)
             prefs[Keys.mealCalendarShowCaptions] = value.mealCalendarShowCaptions
+            prefs[Keys.mealPhotoFilterEnabled] = normalizedMealPhotoFilter.enabled
+            prefs[Keys.mealPhotoFilterBrightness] = normalizedMealPhotoFilter.brightness
+            prefs[Keys.mealPhotoFilterContrast] = normalizedMealPhotoFilter.contrast
+            prefs[Keys.mealPhotoFilterSaturation] = normalizedMealPhotoFilter.saturation
+            prefs[Keys.mealPhotoFilterWarmth] = normalizedMealPhotoFilter.warmth
+            prefs[Keys.mealPhotoFilterTint] = normalizedMealPhotoFilter.tint
             prefs[Keys.mealButtonsUseIcons] = value.mealButtonsUseIcons
             prefs[Keys.mealButtonIcons] = encodeStringList(normalizeMealButtonIcons(value.mealButtonIcons))
             prefs[Keys.dailyEventTemplates] = encodeDailyEventTemplates(
@@ -478,11 +544,13 @@ class SettingsRepository @Inject constructor(
     }
 
     private fun decodeNav(raw: String?): List<NavItemConfig> = runCatching {
-        val array = JSONArray(raw ?: return@runCatching NavItemId.entries.map(::NavItemConfig))
+        val array = JSONArray(raw ?: return@runCatching AppSettings().navItems)
         buildList {
             for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
                 val id = NavItemId.valueOf(item.getString("id"))
+                val visible = item.optBoolean("visible", id.defaultVisible) ||
+                    id == NavItemId.SETTINGS
                 add(
                     NavItemConfig(
                         id = id,
@@ -491,12 +559,19 @@ class SettingsRepository @Inject constructor(
                             item.optString("label", id.defaultLabel).ifBlank { id.defaultLabel },
                         ),
                         iconKey = item.optString("icon", id.defaultIcon),
-                        visible = item.optBoolean("visible", id.defaultVisible) || id == NavItemId.SETTINGS,
+                        visible = visible,
+                        showInMore = when {
+                            id == NavItemId.HOME ||
+                                id == NavItemId.MORE ||
+                                id == NavItemId.SETTINGS -> false
+                            item.has("showInMore") -> item.optBoolean("showInMore")
+                            else -> id.defaultShowInMore && !visible
+                        },
                     ),
                 )
             }
         }.let(::normalizeNavItems)
-    }.getOrElse { NavItemId.entries.map(::NavItemConfig) }
+    }.getOrElse { AppSettings().navItems }
 
     private fun encodeNav(items: List<NavItemConfig>): String = JSONArray().apply {
         items.forEach { item ->
@@ -505,7 +580,74 @@ class SettingsRepository @Inject constructor(
                     .put("id", item.id.name)
                     .put("label", item.label)
                     .put("icon", item.iconKey)
-                    .put("visible", item.visible || item.id == NavItemId.SETTINGS),
+                    .put("visible", item.visible || item.id == NavItemId.SETTINGS)
+                    .put(
+                        "showInMore",
+                        item.showInMore && item.id != NavItemId.HOME &&
+                            item.id != NavItemId.MORE && item.id != NavItemId.SETTINGS,
+                    ),
+            )
+        }
+    }.toString()
+
+    private fun decodeCloudSyncConfigs(raw: String?): List<CloudSyncConfig> = runCatching {
+        val array = JSONArray(raw ?: return@runCatching emptyList())
+        buildList(array.length()) {
+            for (index in 0 until array.length()) {
+                val item = array.getJSONObject(index)
+                val contents = item.optJSONArray("selectedContents")?.let { values ->
+                    buildSet {
+                        for (contentIndex in 0 until values.length()) {
+                            runCatching {
+                                CloudSyncContent.valueOf(values.getString(contentIndex))
+                            }.getOrNull()?.let(::add)
+                        }
+                    }
+                }.orEmpty()
+                add(
+                    CloudSyncConfig(
+                        id = item.optString("id"),
+                        name = item.optString("name"),
+                        enabled = item.optBoolean("enabled", true),
+                        serviceType = runCatching {
+                            CloudSyncServiceType.valueOf(item.optString("serviceType"))
+                        }.getOrDefault(CloudSyncServiceType.WEBDAV),
+                        endpointUrl = item.optString("endpointUrl"),
+                        remotePath = item.optString("remotePath", "DeskCubby"),
+                        webDavUsername = item.optString("webDavUsername"),
+                        s3Bucket = item.optString("s3Bucket"),
+                        s3Region = item.optString("s3Region", "us-east-1"),
+                        allowInsecureHttp = item.optBoolean("allowInsecureHttp", false),
+                        selectedContents = contents,
+                        direction = runCatching {
+                            CloudSyncDirection.valueOf(item.optString("direction"))
+                        }.getOrDefault(CloudSyncDirection.TWO_WAY),
+                    ),
+                )
+            }
+        }.let(::normalizeCloudSyncConfigs)
+    }.getOrDefault(emptyList())
+
+    private fun encodeCloudSyncConfigs(items: List<CloudSyncConfig>): String = JSONArray().apply {
+        normalizeCloudSyncConfigs(items).forEach { item ->
+            put(
+                JSONObject()
+                    .put("id", item.id)
+                    .put("name", item.name)
+                    .put("enabled", item.enabled)
+                    .put("serviceType", item.serviceType.name)
+                    .put("endpointUrl", item.endpointUrl)
+                    .put("remotePath", item.remotePath)
+                    .put("webDavUsername", item.webDavUsername)
+                    .put("s3Bucket", item.s3Bucket)
+                    .put("s3Region", item.s3Region)
+                    .put("allowInsecureHttp", item.allowInsecureHttp)
+                    .put("selectedContents", JSONArray().apply {
+                        CloudSyncContent.entries
+                            .filter(item.selectedContents::contains)
+                            .forEach { put(it.name) }
+                    })
+                    .put("direction", item.direction.name),
             )
         }
     }.toString()
@@ -688,6 +830,62 @@ internal fun normalizeMealButtonIcons(
         ?: defaultIcon
 }
 
+internal fun normalizeCloudSyncConfigs(items: List<CloudSyncConfig>): List<CloudSyncConfig> =
+    items.asSequence()
+        .map { item ->
+            val normalizedPath = item.remotePath
+                .trim()
+                .trim('/')
+                .split('/')
+                .filter(String::isNotEmpty)
+                .takeIf { segments -> segments.none { it == "." || it == ".." } }
+                ?.joinToString("/")
+                .orEmpty()
+                .take(MAX_CLOUD_SYNC_PATH_CHARS)
+            item.copy(
+                id = item.id.trim().take(MAX_CLOUD_SYNC_ID_CHARS),
+                name = item.name.trim().replaceLineBreaks().take(MAX_CLOUD_SYNC_NAME_CHARS),
+                endpointUrl = item.endpointUrl.trim().take(MAX_URL_CHARS),
+                remotePath = normalizedPath,
+                webDavUsername = item.webDavUsername.trim().take(MAX_CLOUD_SYNC_USERNAME_CHARS),
+                webDavPassword = "",
+                s3Bucket = item.s3Bucket.trim().take(MAX_CLOUD_SYNC_BUCKET_CHARS),
+                s3Region = item.s3Region.trim().take(MAX_CLOUD_SYNC_REGION_CHARS),
+                s3AccessKey = "",
+                s3SecretKey = "",
+                s3SessionToken = "",
+                selectedContents = item.selectedContents.intersect(CloudSyncContent.entries.toSet()),
+            )
+        }
+        .filter { item ->
+            item.id.isNotEmpty() &&
+                item.name.isNotEmpty() &&
+                item.selectedContents.isNotEmpty() &&
+                item.remotePath.length <= MAX_CLOUD_SYNC_PATH_CHARS &&
+                isValidCloudSyncEndpoint(item.endpointUrl, item.allowInsecureHttp) &&
+                (item.serviceType != CloudSyncServiceType.S3_COMPATIBLE ||
+                    isValidS3Metadata(item.s3Bucket, item.s3Region))
+        }
+        .distinctBy(CloudSyncConfig::id)
+        .take(MAX_CLOUD_SYNC_CONFIGS)
+        .toList()
+
+private fun isValidCloudSyncEndpoint(raw: String, allowInsecureHttp: Boolean): Boolean {
+    val uri = runCatching { URI(raw) }.getOrNull() ?: return false
+    val scheme = uri.scheme?.lowercase(Locale.ROOT)
+    return uri.isAbsolute &&
+        !uri.host.isNullOrBlank() &&
+        uri.userInfo == null &&
+        uri.query == null &&
+        uri.fragment == null &&
+        (scheme == "https" || scheme == "http" && allowInsecureHttp)
+}
+
+private fun isValidS3Metadata(bucket: String, region: String): Boolean =
+    bucket.isNotEmpty() &&
+        bucket.none { it == '/' || it == '\\' || it.isISOControl() } &&
+        Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}").matches(region)
+
 internal fun normalizeThemeSecondaryColors(
     items: List<Int>,
     fallback: List<Int> = DEFAULT_THEME_SECONDARY_COLORS_ARGB,
@@ -789,10 +987,23 @@ private const val MAX_AI_SYSTEM_PROMPT_CHARS = 20_000
 private const val MAX_AI_MODEL_CHARS = 512
 private const val MAX_AI_API_KEY_CHARS = 8_192
 private const val MAX_URL_CHARS = 4_096
+private const val MAX_CLOUD_SYNC_CONFIGS = 20
+private const val MAX_CLOUD_SYNC_ID_CHARS = 128
+private const val MAX_CLOUD_SYNC_NAME_CHARS = 200
+private const val MAX_CLOUD_SYNC_PATH_CHARS = 1_024
+private const val MAX_CLOUD_SYNC_USERNAME_CHARS = 512
+private const val MAX_CLOUD_SYNC_BUCKET_CHARS = 255
+private const val MAX_CLOUD_SYNC_REGION_CHARS = 128
 
 internal fun normalizeNavItems(items: List<NavItemConfig>): List<NavItemConfig> {
     val distinctItems = items.distinctBy(NavItemConfig::id).map { item ->
-        item.copy(visible = item.visible || item.id == NavItemId.SETTINGS)
+        item.copy(
+            visible = item.visible || item.id == NavItemId.SETTINGS,
+            showInMore = item.showInMore &&
+                item.id != NavItemId.HOME &&
+                item.id != NavItemId.MORE &&
+                item.id != NavItemId.SETTINGS,
+        )
     }
     val presentIds = distinctItems.map(NavItemConfig::id).toSet()
     val missingNonSettings = NavItemId.entries

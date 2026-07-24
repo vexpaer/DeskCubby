@@ -35,6 +35,8 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -58,6 +60,29 @@ data class MealCalendarDay(
     val dateIso: String,
     val photos: List<MealCalendarPhoto>,
 ) { val totalEnergyKj: Int? get() = photos.mapNotNull { it.energyKj }.takeIf(List<Int>::isNotEmpty)?.sum() }
+
+enum class DiaryCloudSyncArea {
+    DIARY,
+    MEDIA,
+}
+
+data class DiaryCloudSyncFile(
+    val area: DiaryCloudSyncArea,
+    val name: String,
+    val uri: String,
+    val mimeType: String,
+    val size: Long,
+    val lastModifiedMillis: Long,
+    val sha256: String,
+)
+
+sealed interface DiaryCloudSyncWriteResult {
+    data class Applied(val file: DiaryCloudSyncFile) : DiaryCloudSyncWriteResult
+    data class ConflictCopy(
+        val existing: DiaryCloudSyncFile?,
+        val copy: DiaryCloudSyncFile,
+    ) : DiaryCloudSyncWriteResult
+}
 
 @Singleton
 class DiaryFileRepository @Inject constructor(
@@ -598,6 +623,193 @@ class DiaryFileRepository @Inject constructor(
         root.listFiles().firstOrNull { it.name == fileName }?.uri
     }
 
+    /**
+     * Produces bounded, hash-verified SAF snapshots for cloud sync. Only direct children are
+     * included because the diary and media features themselves use these directories as flat
+     * stores. No content URI is converted to a filesystem path.
+     */
+    suspend fun snapshotForCloudSync(
+        settings: AppSettings,
+        areas: Set<DiaryCloudSyncArea>,
+        maxObjectBytes: Long,
+        maxObjects: Int,
+    ): List<DiaryCloudSyncFile> = withContext(Dispatchers.IO) {
+        require(maxObjectBytes > 0L && maxObjects > 0) { "同步大小限制无效" }
+        val result = mutableListOf<DiaryCloudSyncFile>()
+        areas.forEach { area ->
+            val rawTree = when (area) {
+                DiaryCloudSyncArea.DIARY -> settings.diaryTreeUri
+                DiaryCloudSyncArea.MEDIA -> settings.mediaTreeUri
+            } ?: return@forEach
+            val root = tree(rawTree)
+            root.listFiles()
+                .asSequence()
+                .filter(DocumentFile::isFile)
+                .filter { file ->
+                    area != DiaryCloudSyncArea.DIARY ||
+                        file.name?.endsWith(".md", ignoreCase = true) == true
+                }
+                .sortedBy { it.name.orEmpty().lowercase(Locale.ROOT) }
+                .forEach { file ->
+                    currentCoroutineContext().ensureActive()
+                    if (result.size >= maxObjects) error("同步文件数量超过上限")
+                    val name = requireCloudSyncFileName(file.name)
+                    val bytes = readBytesBounded(file.uri, maxObjectBytes)
+                    result += DiaryCloudSyncFile(
+                        area = area,
+                        name = name,
+                        uri = file.uri.toString(),
+                        mimeType = file.type ?: mimeTypeForCloudSync(name, area),
+                        size = bytes.size.toLong(),
+                        lastModifiedMillis = file.lastModified().coerceAtLeast(0L),
+                        sha256 = DiaryTextUtils.sha256(bytes),
+                    )
+                }
+        }
+        result
+    }
+
+    suspend fun readForCloudSync(
+        file: DiaryCloudSyncFile,
+        maxObjectBytes: Long,
+    ): ByteArray = withContext(Dispatchers.IO) {
+        val bytes = readBytesBounded(Uri.parse(file.uri), maxObjectBytes)
+        if (bytes.size.toLong() != file.size || DiaryTextUtils.sha256(bytes) != file.sha256) {
+            error("本地文件在同步读取期间发生变化")
+        }
+        bytes
+    }
+
+    /**
+     * Applies a remote object conservatively. A replacement is first written and read back from a
+     * pending document; the old bytes then receive a verified recovery copy before the existing
+     * document is overwritten. If the expected local hash no longer matches, a deterministic
+     * remote-conflict copy is created instead.
+     */
+    suspend fun writeFromCloudSync(
+        settings: AppSettings,
+        area: DiaryCloudSyncArea,
+        name: String,
+        bytes: ByteArray,
+        expectedSha256: String,
+        expectedLocalSha256: String?,
+        maxObjectBytes: Long,
+    ): DiaryCloudSyncWriteResult {
+        require(bytes.size.toLong() <= maxObjectBytes) { "远端文件超过单文件同步上限" }
+        require(DiaryTextUtils.sha256(bytes) == expectedSha256) { "远端文件校验失败" }
+        val validName = requireCloudSyncFileName(name)
+        if (area == DiaryCloudSyncArea.DIARY) {
+            require(validName.endsWith(".md", ignoreCase = true)) { "远端日记不是 Markdown 文件" }
+        }
+        val mutex = if (area == DiaryCloudSyncArea.MEDIA) mediaMutex else writeMutex
+        return mutex.withLock {
+            withContext(Dispatchers.IO) {
+                val rawTree = when (area) {
+                    DiaryCloudSyncArea.DIARY -> settings.diaryTreeUri
+                    DiaryCloudSyncArea.MEDIA -> settings.mediaTreeUri
+                } ?: error(if (area == DiaryCloudSyncArea.DIARY) "请先选择日记目录" else "请先选择媒体目录")
+                val root = tree(rawTree)
+                val target = root.listFiles().firstOrNull {
+                    it.isFile && it.name == validName
+                }
+                val current = target?.let {
+                    snapshotCloudSyncDocument(area, it, maxObjectBytes)
+                }
+                if (current?.sha256 != expectedLocalSha256) {
+                    val copy = writeCloudConflictCopy(
+                        root = root,
+                        area = area,
+                        originalName = validName,
+                        bytes = bytes,
+                        hash = expectedSha256,
+                        maxObjectBytes = maxObjectBytes,
+                    )
+                    return@withContext DiaryCloudSyncWriteResult.ConflictCopy(current, copy)
+                }
+                if (target == null) {
+                    val created = createAndVerifyCloudSyncDocument(
+                        root = root,
+                        area = area,
+                        name = validName,
+                        bytes = bytes,
+                        expectedHash = expectedSha256,
+                        maxObjectBytes = maxObjectBytes,
+                    )
+                    return@withContext DiaryCloudSyncWriteResult.Applied(created)
+                }
+
+                val mime = target.type ?: mimeTypeForCloudSync(validName, area)
+                val pendingName = uniqueCloudSyncName(
+                    root,
+                    cloudSyncSiblingName(validName, ".sync-pending-${expectedSha256.take(8)}"),
+                )
+                val pending = root.createFile(mime, pendingName)
+                    ?: error("无法创建同步临时文件")
+                try {
+                    ensureExactDocumentName(pending, pendingName)
+                    writeBytes(pending.uri, bytes)
+                    verifyCloudSyncBytes(pending.uri, bytes.size.toLong(), expectedSha256, maxObjectBytes)
+
+                    // Recheck immediately before committing so an external edit after the initial
+                    // scan cannot be silently overwritten.
+                    val originalBytes = readBytesBounded(target.uri, maxObjectBytes)
+                    val originalHash = DiaryTextUtils.sha256(originalBytes)
+                    if (originalHash != expectedLocalSha256) {
+                        val copy = writeCloudConflictCopy(
+                            root, area, validName, bytes, expectedSha256, maxObjectBytes,
+                        )
+                        return@withContext DiaryCloudSyncWriteResult.ConflictCopy(
+                            snapshotCloudSyncDocument(area, target, maxObjectBytes),
+                            copy,
+                        )
+                    }
+                    val recoveryName = uniqueCloudSyncName(
+                        root,
+                        cloudSyncSiblingName(validName, ".sync-previous-${originalHash.take(8)}"),
+                    )
+                    val recovery = root.createFile(mime, recoveryName)
+                        ?: error("无法创建同步恢复副本")
+                    ensureExactDocumentName(recovery, recoveryName)
+                    writeBytes(recovery.uri, originalBytes)
+                    verifyCloudSyncBytes(
+                        recovery.uri,
+                        originalBytes.size.toLong(),
+                        originalHash,
+                        maxObjectBytes,
+                    )
+                    try {
+                        writeBytes(target.uri, bytes)
+                        verifyCloudSyncBytes(
+                            target.uri,
+                            bytes.size.toLong(),
+                            expectedSha256,
+                            maxObjectBytes,
+                        )
+                    } catch (error: Exception) {
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            runCatching {
+                                writeBytes(target.uri, originalBytes)
+                                verifyCloudSyncBytes(
+                                    target.uri,
+                                    originalBytes.size.toLong(),
+                                    originalHash,
+                                    maxObjectBytes,
+                                )
+                            }.exceptionOrNull()?.let(error::addSuppressed)
+                        }
+                        throw error
+                    }
+                    runCatching { recovery.delete() }
+                    DiaryCloudSyncWriteResult.Applied(
+                        snapshotCloudSyncDocument(area, target, maxObjectBytes),
+                    )
+                } finally {
+                    runCatching { pending.delete() }
+                }
+            }
+        }
+    }
+
     fun hasPersistedAccess(uri: String?): Boolean {
         if (uri == null) return false
         return resolver.persistedUriPermissions.any {
@@ -632,6 +844,24 @@ class DiaryFileRepository @Inject constructor(
         return output.toByteArray()
     }
 
+    private suspend fun readBytesBounded(uri: Uri, maxBytes: Long): ByteArray {
+        val output = ByteArrayOutputStream()
+        resolver.openInputStream(uri).use { input ->
+            requireNotNull(input) { "无法读取文件" }
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var total = 0L
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val count = input.read(buffer)
+                if (count < 0) break
+                total += count
+                require(total <= maxBytes) { "文件超过单文件同步上限" }
+                output.write(buffer, 0, count)
+            }
+        }
+        return output.toByteArray()
+    }
+
     private fun writeText(uri: Uri, content: String) {
         val stream = resolver.openOutputStream(uri, "rwt") ?: resolver.openOutputStream(uri, "wt")
         stream.use { output ->
@@ -639,6 +869,137 @@ class DiaryFileRepository @Inject constructor(
             output.write(content.toByteArray())
             output.flush()
         }
+    }
+
+    private suspend fun writeBytes(uri: Uri, bytes: ByteArray) {
+        val stream = runCatching { resolver.openOutputStream(uri, "rwt") }.getOrNull()
+            ?: resolver.openOutputStream(uri, "wt")
+        stream.use { output ->
+            requireNotNull(output) { "无法写入文件" }
+            var offset = 0
+            while (offset < bytes.size) {
+                currentCoroutineContext().ensureActive()
+                val count = minOf(DEFAULT_BUFFER_SIZE, bytes.size - offset)
+                output.write(bytes, offset, count)
+                offset += count
+            }
+            output.flush()
+        }
+    }
+
+    private suspend fun snapshotCloudSyncDocument(
+        area: DiaryCloudSyncArea,
+        document: DocumentFile,
+        maxObjectBytes: Long,
+    ): DiaryCloudSyncFile {
+        val name = requireCloudSyncFileName(document.name)
+        val bytes = readBytesBounded(document.uri, maxObjectBytes)
+        return DiaryCloudSyncFile(
+            area = area,
+            name = name,
+            uri = document.uri.toString(),
+            mimeType = document.type ?: mimeTypeForCloudSync(name, area),
+            size = bytes.size.toLong(),
+            lastModifiedMillis = document.lastModified().coerceAtLeast(0L),
+            sha256 = DiaryTextUtils.sha256(bytes),
+        )
+    }
+
+    private suspend fun createAndVerifyCloudSyncDocument(
+        root: DocumentFile,
+        area: DiaryCloudSyncArea,
+        name: String,
+        bytes: ByteArray,
+        expectedHash: String,
+        maxObjectBytes: Long,
+    ): DiaryCloudSyncFile {
+        val created = root.createFile(mimeTypeForCloudSync(name, area), name)
+            ?: error("无法创建同步文件")
+        try {
+            ensureExactDocumentName(created, name)
+            writeBytes(created.uri, bytes)
+            verifyCloudSyncBytes(created.uri, bytes.size.toLong(), expectedHash, maxObjectBytes)
+            return snapshotCloudSyncDocument(area, created, maxObjectBytes)
+        } catch (error: Exception) {
+            withContext(NonCancellable + Dispatchers.IO) {
+                runCatching { created.delete() }
+            }
+            throw error
+        }
+    }
+
+    private suspend fun writeCloudConflictCopy(
+        root: DocumentFile,
+        area: DiaryCloudSyncArea,
+        originalName: String,
+        bytes: ByteArray,
+        hash: String,
+        maxObjectBytes: Long,
+    ): DiaryCloudSyncFile {
+        val preferred = cloudSyncSiblingName(originalName, ".remote-conflict-${hash.take(8)}")
+        root.listFiles().firstOrNull { it.isFile && it.name == preferred }?.let { existing ->
+            val snapshot = snapshotCloudSyncDocument(area, existing, maxObjectBytes)
+            if (snapshot.sha256 == hash) return snapshot
+        }
+        val name = uniqueCloudSyncName(root, preferred)
+        return createAndVerifyCloudSyncDocument(
+            root, area, name, bytes, hash, maxObjectBytes,
+        )
+    }
+
+    private suspend fun verifyCloudSyncBytes(
+        uri: Uri,
+        expectedSize: Long,
+        expectedHash: String,
+        maxObjectBytes: Long,
+    ) {
+        val verified = readBytesBounded(uri, maxObjectBytes)
+        check(
+            verified.size.toLong() == expectedSize &&
+                DiaryTextUtils.sha256(verified) == expectedHash,
+        ) { "同步文件写入后的校验失败" }
+    }
+
+    private fun ensureExactDocumentName(document: DocumentFile, expectedName: String) {
+        if (document.name != expectedName) {
+            runCatching { document.delete() }
+            error("存储服务更改了同步文件名")
+        }
+    }
+
+    private fun uniqueCloudSyncName(root: DocumentFile, preferred: String): String {
+        if (root.findFile(preferred) == null) return preferred
+        val dot = preferred.lastIndexOf('.').takeIf { it > 0 } ?: preferred.length
+        val stem = preferred.substring(0, dot)
+        val extension = preferred.substring(dot)
+        var sequence = 2
+        while (sequence <= 10_000) {
+            val candidate = "$stem ($sequence)$extension"
+            if (root.findFile(candidate) == null) return candidate
+            sequence++
+        }
+        error("无法为同步副本生成文件名")
+    }
+
+    private fun cloudSyncSiblingName(originalName: String, suffix: String): String {
+        val dot = originalName.lastIndexOf('.').takeIf { it > 0 } ?: originalName.length
+        return originalName.substring(0, dot) + suffix + originalName.substring(dot)
+    }
+
+    private fun requireCloudSyncFileName(name: String?): String {
+        val value = name?.takeIf(String::isNotBlank) ?: error("存储服务返回了空文件名")
+        require(
+            value.length <= 255 && value != "." && value != ".." &&
+                '/' !in value && '\\' !in value && value.none(Char::isISOControl),
+        ) { "同步文件名无效" }
+        return value
+    }
+
+    private fun mimeTypeForCloudSync(name: String, area: DiaryCloudSyncArea): String {
+        if (area == DiaryCloudSyncArea.DIARY) return "text/markdown"
+        val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+            ?: "application/octet-stream"
     }
 
     private fun isCompressibleImage(mime: String, extension: String): Boolean {

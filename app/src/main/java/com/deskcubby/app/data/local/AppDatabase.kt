@@ -13,8 +13,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DiaryIndexEntity::class,
         DateRecordEntity::class,
         SavedPoemEntity::class,
+        AiConversationEntity::class,
+        AiMessageEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -24,6 +26,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun diaryIndexDao(): DiaryIndexDao
     abstract fun dateRecordDao(): DateRecordDao
     abstract fun savedPoemDao(): SavedPoemDao
+    abstract fun aiChatDao(): AiChatDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -105,6 +108,47 @@ abstract class AppDatabase : RoomDatabase() {
                         `updatedAt` INTEGER NOT NULL
                     )
                     """.trimIndent(),
+                )
+            }
+        }
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `ai_conversations` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `modelConfigId` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ai_conversations_updatedAt` " +
+                        "ON `ai_conversations` (`updatedAt`)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `ai_messages` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `conversationId` INTEGER NOT NULL,
+                        `role` TEXT NOT NULL,
+                        `content` TEXT NOT NULL,
+                        `reasoning` TEXT NOT NULL,
+                        `imageUri` TEXT,
+                        `imageMimeType` TEXT,
+                        `imagePermissionOwned` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        FOREIGN KEY(`conversationId`) REFERENCES `ai_conversations`(`id`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ai_messages_conversationId` " +
+                        "ON `ai_messages` (`conversationId`)",
                 )
             }
         }

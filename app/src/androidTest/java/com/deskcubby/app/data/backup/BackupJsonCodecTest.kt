@@ -9,12 +9,19 @@ import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
+import com.deskcubby.app.data.model.CloudSyncConfig
+import com.deskcubby.app.data.model.CloudSyncContent
+import com.deskcubby.app.data.model.CloudSyncDirection
+import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DailyEventTemplate
+import com.deskcubby.app.data.model.MealPhotoFilterSettings
+import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.fail
 import org.junit.Test
@@ -144,8 +151,174 @@ class BackupJsonCodecTest {
         assertEquals(VisualStyle.ORGANIC_FUTURE, decoded.settings.visualStyle)
         assertEquals(settings.themeSecondaryColorsArgb, decoded.settings.themeSecondaryColorsArgb)
         assertEquals(settings.fontScale, decoded.settings.fontScale)
-        assertEquals(12, decoded.formatVersion)
+        assertEquals(13, decoded.formatVersion)
         assertEquals(40L, decoded.exportedAt)
+    }
+
+    @Test
+    fun versionThirteenPreservesNavigationFilterAndCloudMetadataWithoutCredentials() {
+        val webDav = CloudSyncConfig(
+            id = "webdav",
+            name = "Personal WebDAV",
+            endpointUrl = "https://cloud.example.com/dav",
+            remotePath = "DeskCubby/personal",
+            webDavUsername = "alice",
+            webDavPassword = "webdav-password-marker",
+            s3AccessKey = "unused-access-key-marker",
+            s3SecretKey = "unused-secret-key-marker",
+            s3SessionToken = "unused-session-token-marker",
+            selectedContents = setOf(
+                CloudSyncContent.DIARIES,
+                CloudSyncContent.MEDIA,
+            ),
+            direction = CloudSyncDirection.TWO_WAY,
+        )
+        val s3 = CloudSyncConfig(
+            id = "s3",
+            name = "Archive",
+            enabled = false,
+            serviceType = CloudSyncServiceType.S3_COMPATIBLE,
+            endpointUrl = "https://s3.example.com",
+            remotePath = "DeskCubby/archive",
+            s3Bucket = "deskcubby-archive",
+            s3Region = "cn-east-1",
+            s3AccessKey = "s3-access-key-marker",
+            s3SecretKey = "s3-secret-key-marker",
+            s3SessionToken = "s3-session-token-marker",
+            selectedContents = setOf(CloudSyncContent.JSON_BACKUP),
+            direction = CloudSyncDirection.UPLOAD_ONLY,
+        )
+        val navItems = AppSettings().navItems.map { item ->
+            when (item.id) {
+                NavItemId.DIARY -> item.copy(visible = false, showInMore = true)
+                NavItemId.BLOG -> item.copy(visible = true, showInMore = false)
+                else -> item
+            }
+        }
+        val filter = MealPhotoFilterSettings(
+            enabled = true,
+            brightness = 0.25f,
+            contrast = 1.35f,
+            saturation = 0.7f,
+            warmth = -0.2f,
+            tint = 0.15f,
+        )
+        val encoded = BackupJsonCodec.encode(
+            AppBackup(
+                exportedAt = 13,
+                settings = AppSettings(
+                    cloudSyncEnabled = true,
+                    cloudSyncConfigs = listOf(webDav, s3),
+                    mealPhotoFilter = filter,
+                    navItems = navItems,
+                ),
+                thoughts = emptyList(),
+                favorites = emptyList(),
+            ),
+        )
+        val encodedSettings = JSONObject(encoded).getJSONObject("settings")
+        val encodedConfigs = encodedSettings.getJSONArray("cloudSyncConfigs")
+
+        assertEquals(false, encodedSettings.getBoolean("cloudSyncEnabled"))
+        for (index in 0 until encodedConfigs.length()) {
+            val item = encodedConfigs.getJSONObject(index)
+            assertFalse(item.has("webDavPassword"))
+            assertFalse(item.has("s3AccessKey"))
+            assertFalse(item.has("s3SecretKey"))
+            assertFalse(item.has("s3SessionToken"))
+        }
+        listOf(
+            "webdav-password-marker",
+            "unused-access-key-marker",
+            "unused-secret-key-marker",
+            "unused-session-token-marker",
+            "s3-access-key-marker",
+            "s3-secret-key-marker",
+            "s3-session-token-marker",
+        ).forEach { credential ->
+            assertFalse(encoded.contains(credential))
+        }
+
+        val decoded = BackupJsonCodec.decode(encoded)
+
+        assertEquals(13, decoded.formatVersion)
+        assertEquals(false, decoded.settings.cloudSyncEnabled)
+        assertEquals(
+            listOf(
+                webDav.copy(
+                    webDavPassword = "",
+                    s3AccessKey = "",
+                    s3SecretKey = "",
+                    s3SessionToken = "",
+                ),
+                s3.copy(
+                    webDavPassword = "",
+                    s3AccessKey = "",
+                    s3SecretKey = "",
+                    s3SessionToken = "",
+                ),
+            ),
+            decoded.settings.cloudSyncConfigs,
+        )
+        assertEquals(filter, decoded.settings.mealPhotoFilter)
+        assertEquals(navItems, decoded.settings.navItems)
+    }
+
+    @Test
+    fun versionTwelveUsesSafeDefaultsForVersionThirteenSettings() {
+        val navItems = AppSettings().navItems.map { item ->
+            when (item.id) {
+                NavItemId.BLOG -> item.copy(visible = false, showInMore = false)
+                NavItemId.DIARY -> item.copy(visible = false, showInMore = true)
+                else -> item
+            }
+        }
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 12,
+                    settings = AppSettings(
+                        cloudSyncEnabled = true,
+                        cloudSyncConfigs = listOf(
+                            CloudSyncConfig(
+                                id = "legacy",
+                                name = "Legacy cloud",
+                                endpointUrl = "https://cloud.example.com/dav",
+                            ),
+                        ),
+                        mealPhotoFilter = MealPhotoFilterSettings(
+                            enabled = true,
+                            brightness = 0.5f,
+                            contrast = 1.5f,
+                            saturation = 0.5f,
+                            warmth = 0.25f,
+                            tint = -0.25f,
+                        ),
+                        navItems = navItems,
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        ).apply {
+            put("version", 12)
+            getJSONObject("settings").removeVersionThirteenSettings()
+        }
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+
+        assertEquals(12, decoded.formatVersion)
+        assertEquals(false, decoded.settings.cloudSyncEnabled)
+        assertEquals(emptyList<CloudSyncConfig>(), decoded.settings.cloudSyncConfigs)
+        assertEquals(MealPhotoFilterSettings(), decoded.settings.mealPhotoFilter)
+        assertEquals(
+            true,
+            decoded.settings.navItems.single { it.id == NavItemId.BLOG }.showInMore,
+        )
+        assertEquals(
+            false,
+            decoded.settings.navItems.single { it.id == NavItemId.DIARY }.showInMore,
+        )
     }
 
     @Test
@@ -182,7 +355,7 @@ class BackupJsonCodecTest {
     }
 
     @Test
-    fun versionTwelveRequiresBoundedStringApiKey() {
+    fun versionThirteenRequiresBoundedStringApiKey() {
         fun currentRoot() = JSONObject(
             BackupJsonCodec.encode(
                 AppBackup(
@@ -723,6 +896,21 @@ class BackupJsonCodecTest {
     private fun JSONObject.removeVersionEightSettings() {
         remove("themeSecondaryColorsArgb")
         remove("fontScale")
+    }
+
+    private fun JSONObject.removeVersionThirteenSettings() {
+        remove("cloudSyncEnabled")
+        remove("cloudSyncConfigs")
+        remove("mealPhotoFilter")
+        val navigation = getJSONArray("navItems")
+        for (index in navigation.length() - 1 downTo 0) {
+            val item = navigation.getJSONObject(index)
+            if (item.getString("id") == NavItemId.MORE.name) {
+                navigation.remove(index)
+            } else {
+                item.remove("showInMore")
+            }
+        }
     }
 
     private fun assertVersionFiveSettingsUseDefaults(settings: AppSettings) {

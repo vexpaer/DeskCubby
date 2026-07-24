@@ -102,6 +102,20 @@ class AppBackupRepository @Inject constructor(
         withContext(Dispatchers.IO) { loadCurrentContent() }
     }
 
+    /** Produces the same validated UTF-8 snapshot used by manual and automatic backups. */
+    suspend fun encodeCurrentBackupForSync(): ByteArray = operationMutex.withLock {
+        withContext(Dispatchers.IO) {
+            BackupJsonCodec.encode(loadCurrentContent().toBackup()).toByteArray(Charsets.UTF_8)
+        }
+    }
+
+    /** Imports a user-confirmed JSON file previously staged by cloud sync. */
+    suspend fun importStagedBackupJson(raw: String): BackupSummary = operationMutex.withLock {
+        withContext(Dispatchers.IO) {
+            restoreBackup(decodeDocument(raw, "导入云端 JSON"))
+        }
+    }
+
     suspend fun exportTo(uri: Uri): BackupSummary = operationMutex.withLock {
         withContext(Dispatchers.IO) {
             val content = loadCurrentContent()
@@ -191,8 +205,12 @@ class AppBackupRepository @Inject constructor(
         // Apply the reversible DataStore edit first and make the Room transaction the final
         // commit. If the process dies between stores, existing user-created database content
         // is never destructively replaced before settings have been durably written.
-        val restoredSettings = mergeLegacyBackupAiApiKeys(
-            imported = backup.settings,
+        val restoredSettings = mergeBackupCloudSyncSettings(
+            imported = mergeLegacyBackupAiApiKeys(
+                imported = backup.settings,
+                current = previousSettings,
+                formatVersion = backup.formatVersion,
+            ),
             current = previousSettings,
             formatVersion = backup.formatVersion,
         )
@@ -669,3 +687,18 @@ internal fun mergeLegacyBackupAiApiKeys(
 }
 
 private const val PLAINTEXT_AI_KEY_BACKUP_VERSION = 12
+
+internal fun mergeBackupCloudSyncSettings(
+    imported: AppSettings,
+    current: AppSettings,
+    formatVersion: Int,
+): AppSettings = if (formatVersion < 13) {
+    imported.copy(
+        cloudSyncEnabled = false,
+        cloudSyncConfigs = current.cloudSyncConfigs,
+    )
+} else {
+    // Credentials are device-local and are resolved only after the user reviews and re-enables
+    // an imported configuration.
+    imported.copy(cloudSyncEnabled = false)
+}

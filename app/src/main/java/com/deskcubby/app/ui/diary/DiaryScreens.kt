@@ -40,6 +40,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -55,6 +56,7 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.MoreVert
@@ -99,6 +101,9 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -109,6 +114,7 @@ import androidx.core.text.HtmlCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.deskcubby.app.data.model.DiaryDocument
+import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.AppLoadingIndicator
@@ -121,6 +127,7 @@ import com.deskcubby.app.ui.theme.PanelRole
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.organicFutureAccentColors
 import com.deskcubby.app.ui.theme.tr
+import com.deskcubby.app.ui.diary.filter.asComposeColorFilter
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.HtmlRenderer
 import kotlin.math.roundToInt
@@ -382,9 +389,16 @@ private fun EmptyDiary(onSettings: () -> Unit, modifier: Modifier = Modifier) {
 fun MealCalendarScreen(
     viewModel: DiaryViewModel,
     onBack: () -> Unit,
+    filterSettings: MealPhotoFilterSettings = MealPhotoFilterSettings(),
+    onFilterEnabledChange: (Boolean) -> Unit = {},
+    onOpenFilterSettings: () -> Unit = {},
 ) {
     val state by viewModel.mealCalendarState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val normalizedFilterSettings = remember(filterSettings) { filterSettings.normalized() }
+    val mealPhotoColorFilter = remember(normalizedFilterSettings) {
+        normalizedFilterSettings.asComposeColorFilter()
+    }
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     val visuals = deskCubbyVisuals
     var calculateAllDialog by remember { mutableStateOf(false) }
@@ -410,6 +424,13 @@ fun MealCalendarScreen(
                             Icon(Icons.Outlined.Calculate, tr("计算未计算的热量", "Calculate missing calories"))
                         }
                     }
+                    MealFilterToolbarButton(
+                        enabled = normalizedFilterSettings.enabled,
+                        onToggle = {
+                            onFilterEnabledChange(!normalizedFilterSettings.enabled)
+                        },
+                        onOpenSettings = onOpenFilterSettings,
+                    )
                     IconButton(onClick = viewModel::refreshMealCalendar) {
                         Icon(Icons.Outlined.Refresh, tr("刷新", "Refresh"))
                     }
@@ -497,6 +518,7 @@ fun MealCalendarScreen(
                                                     .fillMaxWidth()
                                                     .heightIn(max = settings.mealCalendarImageMaxHeightDp.dp),
                                                 contentScale = ContentScale.Crop,
+                                                colorFilter = mealPhotoColorFilter,
                                             )
                                             if (settings.mealCalendarShowCaptions) {
                                                 Text(
@@ -534,6 +556,42 @@ fun MealCalendarScreen(
         confirmButton = { TextButton(onClick = { calculateDateDialog = null; viewModel.calculateUncalculatedCalories(date, true) }) { Text(tr("重新计算", "Recalculate")) } },
         dismissButton = { TextButton(onClick = { calculateDateDialog = null }) { Text(tr("取消", "Cancel")) } },
     ) }
+}
+
+@Composable
+private fun MealFilterToolbarButton(
+    enabled: Boolean,
+    onToggle: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    val stateLabel = if (enabled) tr("滤镜已开启", "Filter on")
+    else tr("滤镜已关闭", "Filter off")
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(
+                if (enabled) MaterialTheme.colorScheme.primaryContainer
+                else Color.Transparent,
+            )
+            .combinedClickable(
+                role = Role.Button,
+                onClickLabel = if (enabled) tr("关闭滤镜", "Turn filter off")
+                else tr("开启滤镜", "Turn filter on"),
+                onLongClickLabel = tr("打开滤镜设置", "Open filter settings"),
+                onLongClick = onOpenSettings,
+                onClick = onToggle,
+            )
+            .semantics { stateDescription = stateLabel },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.FilterAlt,
+            contentDescription = tr("照片滤镜", "Photo filter"),
+            tint = if (enabled) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable

@@ -56,6 +56,45 @@ class AiRequestJsonTest {
     }
 
     @Test
+    fun textBuilderUsesMultimodalPartsOnlyForAttachedUserMessage() {
+        val body = buildTextChatRequestJson(
+            model = "vision-capable-text-model",
+            temperature = 0.5f,
+            systemPrompt = null,
+            messages = listOf(
+                AiChatMessage(
+                    id = 7,
+                    role = AiChatRole.USER,
+                    content = "这是什么？",
+                    image = AiChatImage("content://example/photo", "image/jpeg"),
+                ),
+                AiChatMessage(8, AiChatRole.ASSISTANT, "一张照片"),
+            ),
+            imageDataUrls = mapOf(7L to "data:image/jpeg;base64,AAAA"),
+        )
+
+        val messages = body.getJSONArray("messages")
+        val userContent = messages.getJSONObject(0).getJSONArray("content")
+        assertEquals("text", userContent.getJSONObject(0).getString("type"))
+        assertEquals("这是什么？", userContent.getJSONObject(0).getString("text"))
+        assertEquals(
+            "data:image/jpeg;base64,AAAA",
+            userContent.getJSONObject(1).getJSONObject("image_url").getString("url"),
+        )
+        assertEquals("一张照片", messages.getJSONObject(1).getString("content"))
+    }
+
+    @Test
+    fun thinkingTagsAreSeparatedFromFinalAnswer() {
+        val parsed = splitAiThinkingContent(
+            "<think>先识别问题，再检查答案。</think>\n最终答案",
+        )
+
+        assertEquals("最终答案", parsed.content)
+        assertEquals("先识别问题，再检查答案。", parsed.reasoning)
+    }
+
+    @Test
     fun previewUsesRealShapeWithoutApiKeyOrAuthorization() {
         val preview = buildAiRequestPreviewJson(
             AiModelConfig(

@@ -351,3 +351,77 @@ interface SavedPoemDao {
     @Query("DELETE FROM saved_poems WHERE id = :id")
     suspend fun delete(id: Long): Int
 }
+
+@Dao
+interface AiChatDao {
+    @Query("SELECT * FROM ai_conversations ORDER BY updatedAt DESC, id DESC")
+    fun observeConversations(): Flow<List<AiConversationEntity>>
+
+    @Query("SELECT * FROM ai_conversations WHERE id = :id LIMIT 1")
+    suspend fun getConversation(id: Long): AiConversationEntity?
+
+    @Query(
+        "SELECT * FROM ai_messages WHERE conversationId = :conversationId " +
+            "ORDER BY createdAt ASC, id ASC",
+    )
+    fun observeMessages(conversationId: Long): Flow<List<AiMessageEntity>>
+
+    @Query(
+        "SELECT * FROM ai_messages WHERE conversationId = :conversationId " +
+            "ORDER BY createdAt ASC, id ASC",
+    )
+    suspend fun getMessages(conversationId: Long): List<AiMessageEntity>
+
+    @Insert
+    suspend fun insertConversation(conversation: AiConversationEntity): Long
+
+    @Insert
+    suspend fun insertMessage(message: AiMessageEntity): Long
+
+    @Query(
+        "UPDATE ai_conversations SET updatedAt = :updatedAt WHERE id = :conversationId",
+    )
+    suspend fun touchConversation(conversationId: Long, updatedAt: Long): Int
+
+    @Transaction
+    suspend fun insertMessageAndTouch(message: AiMessageEntity): Long {
+        val id = insertMessage(message)
+        touchConversation(message.conversationId, message.createdAt)
+        return id
+    }
+
+    @Query(
+        "UPDATE ai_conversations SET title = :title, updatedAt = :updatedAt WHERE id = :id",
+    )
+    suspend fun renameConversation(id: Long, title: String, updatedAt: Long): Int
+
+    @Query(
+        "UPDATE ai_conversations SET modelConfigId = :modelConfigId, updatedAt = :updatedAt " +
+            "WHERE id = :id",
+    )
+    suspend fun setModelConfig(id: Long, modelConfigId: String, updatedAt: Long): Int
+
+    @Query(
+        "SELECT COALESCE(MAX(imagePermissionOwned), 0) FROM ai_messages WHERE imageUri = :imageUri",
+    )
+    suspend fun isImagePermissionOwned(imageUri: String): Boolean
+
+    @Query(
+        "SELECT DISTINCT imageUri FROM ai_messages " +
+            "WHERE conversationId = :conversationId AND imageUri IS NOT NULL " +
+            "AND imagePermissionOwned = 1",
+    )
+    suspend fun getOwnedImageUris(conversationId: Long): List<String>
+
+    @Query("SELECT COUNT(*) FROM ai_messages WHERE imageUri = :imageUri")
+    suspend fun countImageReferences(imageUri: String): Int
+
+    @Query("DELETE FROM ai_conversations WHERE id = :id")
+    suspend fun deleteConversation(id: Long): Int
+
+    @Transaction
+    suspend fun deleteConversationAndGetOwnedImageUris(id: Long): List<String>? {
+        val imageUris = getOwnedImageUris(id)
+        return if (deleteConversation(id) > 0) imageUris else null
+    }
+}

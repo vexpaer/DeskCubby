@@ -1,9 +1,17 @@
 package com.deskcubby.app.data.repository
 
+import android.content.ContentResolver
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.util.Base64
+import com.deskcubby.app.data.local.AiChatDao
+import com.deskcubby.app.data.local.AiConversationEntity
+import com.deskcubby.app.data.local.AiMessageEntity
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
+import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -11,9 +19,16 @@ import java.net.HttpURLConnection
 import java.net.MalformedURLException
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONException
@@ -28,6 +43,28 @@ data class AiChatMessage(
     val id: Long,
     val role: AiChatRole,
     val content: String,
+    val reasoning: String = "",
+    val image: AiChatImage? = null,
+    val createdAt: Long = 0L,
+)
+
+data class AiChatImage(
+    val uri: String,
+    val mimeType: String,
+    val permissionOwnedByChat: Boolean = false,
+)
+
+data class AiConversation(
+    val id: Long,
+    val title: String,
+    val modelConfigId: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+data class AiChatCompletion(
+    val content: String,
+    val reasoning: String = "",
 )
 
 enum class AiChatFailure {
@@ -46,11 +83,147 @@ class AiChatException(
 
 /** A small, dependency-free client for OpenAI-compatible chat/completions APIs. */
 @Singleton
-class AiChatRepository @Inject constructor() {
+class AiChatRepository @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val aiChatDao: AiChatDao,
+) {
+    fun observeConversations(): Flow<List<AiConversation>> =
+        aiChatDao.observeConversations().map { items -> items.map(AiConversationEntity::toDomain) }
+
+    fun observeMessages(conversationId: Long): Flow<List<AiChatMessage>> =
+        aiChatDao.observeMessages(conversationId).map { items -> items.mapNotNull(AiMessageEntity::toDomain) }
+
+    suspend fun getConversation(id: Long): AiConversation? = withContext(Dispatchers.IO) {
+        aiChatDao.getConversation(id)?.toDomain()
+    }
+
+    suspend fun getMessages(conversationId: Long): List<AiChatMessage> = withContext(Dispatchers.IO) {
+        aiChatDao.getMessages(conversationId).mapNotNull(AiMessageEntity::toDomain)
+    }
+
+    suspend fun createConversation(
+        firstMessage: String,
+        hasImage: Boolean,
+        modelConfigId: String,
+        now: Long = System.currentTimeMillis(),
+    ): Long = withContext(Dispatchers.IO) {
+        aiChatDao.insertConversation(
+            AiConversationEntity(
+                title = generateConversationTitle(firstMessage, hasImage),
+                modelConfigId = modelConfigId,
+                createdAt = now,
+                updatedAt = now,
+            ),
+        )
+    }
+
+    suspend fun appendMessage(
+        conversationId: Long,
+        role: AiChatRole,
+        content: String,
+        reasoning: String = "",
+        image: AiChatImage? = null,
+        now: Long = System.currentTimeMillis(),
+    ): Long = withContext(Dispatchers.IO) {
+        val imagePermission = image?.let { persistImagePermission(it) }
+        try {
+            aiChatDao.insertMessageAndTouch(
+                AiMessageEntity(
+                    conversationId = conversationId,
+                    role = role.apiValue,
+                    content = content,
+                    reasoning = reasoning,
+                    imageUri = image?.uri,
+                    imageMimeType = image?.mimeType,
+                    imagePermissionOwned = imagePermission?.ownedByChat ?: false,
+                    createdAt = now,
+                ),
+            )
+        } catch (error: Exception) {
+            if (imagePermission?.newlyAcquired == true) {
+                image?.uri?.let(::releaseImagePermission)
+            }
+            throw error
+        }
+    }
+
+    suspend fun renameConversation(id: Long, title: String): Boolean = withContext(Dispatchers.IO) {
+        val normalized = title.replace(Regex("\\s+"), " ").trim().take(MAX_TITLE_CHARS)
+        normalized.isNotEmpty() &&
+            aiChatDao.renameConversation(id, normalized, System.currentTimeMillis()) > 0
+    }
+
+    suspend fun setConversationModel(id: Long, modelConfigId: String): Boolean =
+        withContext(Dispatchers.IO) {
+            aiChatDao.setModelConfig(id, modelConfigId, System.currentTimeMillis()) > 0
+        }
+
+    suspend fun deleteConversation(id: Long): Boolean = withContext(Dispatchers.IO) {
+        val ownedImageUris = aiChatDao.deleteConversationAndGetOwnedImageUris(id)
+            ?: return@withContext false
+        ownedImageUris.forEach { uri ->
+            if (aiChatDao.countImageReferences(uri) == 0) releaseImagePermission(uri)
+        }
+        true
+    }
+
+    suspend fun prepareImage(uriValue: String): AiChatImage = withContext(Dispatchers.IO) {
+        val uri = runCatching { Uri.parse(uriValue) }.getOrNull()
+            ?.takeIf { it.scheme == ContentResolver.SCHEME_CONTENT }
+            ?: throw AiChatException(AiChatFailure.CONFIGURATION, "只能选择系统文件选择器中的图片。")
+        val resolver = context.contentResolver
+        val mimeType = resolver.getType(uri)
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase()
+            ?.takeIf { it.startsWith("image/") }
+            ?: throw AiChatException(AiChatFailure.CONFIGURATION, "所选文件不是受支持的图片。")
+        readImageBytes(uri)
+        AiChatImage(uri = uri.toString(), mimeType = mimeType)
+    }
+
+    private suspend fun persistImagePermission(image: AiChatImage): PersistedImagePermission {
+        val resolver = context.contentResolver
+        val uri = Uri.parse(image.uri)
+        val alreadyPersisted = resolver.persistedUriPermissions.any {
+            it.uri == uri && it.isReadPermission
+        }
+        if (!alreadyPersisted) {
+            try {
+                resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (error: SecurityException) {
+                throw AiChatException(
+                    AiChatFailure.CONFIGURATION,
+                    "无法保留所选图片的读取权限，请重新选择。",
+                    error,
+                )
+            }
+        }
+        val alreadyOwnedByChat = alreadyPersisted && aiChatDao.isImagePermissionOwned(image.uri)
+        return PersistedImagePermission(
+            ownedByChat = !alreadyPersisted || alreadyOwnedByChat,
+            newlyAcquired = !alreadyPersisted,
+        )
+    }
+
+    private fun releaseImagePermission(uriValue: String) {
+        runCatching {
+            context.contentResolver.releasePersistableUriPermission(
+                Uri.parse(uriValue),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }
+    }
+
     suspend fun complete(
         settings: AppSettings,
         messages: List<AiChatMessage>,
-    ): String = withContext(Dispatchers.IO) {
+    ): String = completeWithReasoning(settings, messages).content
+
+    suspend fun completeWithReasoning(
+        settings: AppSettings,
+        messages: List<AiChatMessage>,
+    ): AiChatCompletion = withContext(Dispatchers.IO) {
         val config = settings.aiConfigs.firstOrNull {
             it.id == settings.aiChatConfigId && it.type == AiModelType.TEXT
         }
@@ -66,16 +239,36 @@ class AiChatRepository @Inject constructor() {
             rawValue = config?.endpointUrl ?: settings.aiEndpointUrl,
             allowInsecureHttp = config?.allowInsecureHttp ?: settings.aiAllowInsecureHttp,
         )
+        val imageDataUrls = buildMap {
+            var totalImageBytes = 0
+            messages.asReversed().forEach { message ->
+                val image = message.image ?: return@forEach
+                val imageBytes = readImageBytes(Uri.parse(image.uri))
+                if (totalImageBytes + imageBytes.size > MAX_IMAGE_BYTES) return@forEach
+                put(
+                    message.id,
+                    "data:${image.mimeType};base64," +
+                        Base64.encodeToString(imageBytes, Base64.NO_WRAP),
+                )
+                totalImageBytes += imageBytes.size
+            }
+        }
         val requestBody = buildTextChatRequestJson(
             model = model,
             temperature = config?.temperature ?: settings.aiTemperature,
             systemPrompt = config?.systemPrompt?.takeIf(String::isNotBlank)
                 ?: settings.aiSystemPrompt.takeIf(String::isNotBlank),
             messages = messages,
+            imageDataUrls = imageDataUrls,
         )
             .toString()
             .toByteArray(StandardCharsets.UTF_8)
-        if (requestBody.size > MAX_BODY_BYTES) {
+        val requestBodyLimit = if (imageDataUrls.isEmpty()) {
+            MAX_BODY_BYTES
+        } else {
+            MAX_IMAGE_REQUEST_BODY_BYTES
+        }
+        if (requestBody.size > requestBodyLimit) {
             throw AiChatException(
                 AiChatFailure.CONFIGURATION,
                 "当前对话内容过长，请清空对话后重试。",
@@ -125,89 +318,125 @@ class AiChatRepository @Inject constructor() {
             .toString().toByteArray(StandardCharsets.UTF_8)
         if (body.size > MAX_IMAGE_REQUEST_BODY_BYTES) throw AiChatException(AiChatFailure.CONFIGURATION, "图片过大，无法发送。")
         val response = executeRequest(endpoint, body, config.apiKey.trim(), config.allowInsecureHttp)
-        parseAssistantContent(response)
+        parseAssistantContent(response).content
     }
 
-    private fun executeRequest(
+    private suspend fun executeRequest(
         initialUrl: URL,
         body: ByteArray,
         apiKey: String,
         allowInsecureHttp: Boolean,
-    ): String {
+    ): String = suspendCancellableCoroutine { continuation ->
         val allowedHost = initialUrl.host
         var currentUrl = initialUrl
         var redirects = 0
+        val activeConnection = AtomicReference<HttpURLConnection?>(null)
+        continuation.invokeOnCancellation {
+            activeConnection.getAndSet(null)?.disconnect()
+        }
 
-        while (true) {
-            val connection = (currentUrl.openConnection() as? HttpURLConnection)
-                ?: throw AiChatException(AiChatFailure.CONFIGURATION, "AI 接口地址不是 HTTP 地址。")
-            var redirectUrl: URL? = null
-            try {
-                connection.instanceFollowRedirects = false
-                connection.requestMethod = "POST"
-                connection.doOutput = true
-                connection.connectTimeout = CONNECT_TIMEOUT_MS
-                connection.readTimeout = READ_TIMEOUT_MS
-                connection.useCaches = false
-                connection.setRequestProperty("Accept", "application/json")
-                connection.setRequestProperty("Accept-Encoding", "identity")
-                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                if (apiKey.isNotEmpty()) {
-                    connection.setRequestProperty("Authorization", "Bearer $apiKey")
-                }
-                connection.setFixedLengthStreamingMode(body.size)
-                connection.outputStream.use { output -> output.write(body) }
+        try {
+            while (true) {
+                ensureRequestActive(continuation.isActive)
+                val connection = (currentUrl.openConnection() as? HttpURLConnection)
+                    ?: throw AiChatException(AiChatFailure.CONFIGURATION, "AI 接口地址不是 HTTP 地址。")
+                activeConnection.set(connection)
+                ensureRequestActive(continuation.isActive)
+                var redirectUrl: URL? = null
+                try {
+                    connection.instanceFollowRedirects = false
+                    connection.requestMethod = "POST"
+                    connection.doOutput = true
+                    connection.connectTimeout = CONNECT_TIMEOUT_MS
+                    connection.readTimeout = READ_TIMEOUT_MS
+                    connection.useCaches = false
+                    connection.setRequestProperty("Accept", "application/json")
+                    connection.setRequestProperty("Accept-Encoding", "identity")
+                    connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    if (apiKey.isNotEmpty()) {
+                        connection.setRequestProperty("Authorization", "Bearer $apiKey")
+                    }
+                    connection.setFixedLengthStreamingMode(body.size)
+                    connection.outputStream.use { output ->
+                        var offset = 0
+                        while (offset < body.size) {
+                            ensureRequestActive(continuation.isActive)
+                            val count = minOf(WRITE_BUFFER_BYTES, body.size - offset)
+                            output.write(body, offset, count)
+                            offset += count
+                        }
+                        output.flush()
+                    }
+                    ensureRequestActive(continuation.isActive)
 
-                val status = connection.responseCode
-                if (status in REDIRECT_STATUS_CODES) {
-                    if (redirects >= MAX_REDIRECTS) {
-                        throw AiChatException(AiChatFailure.NETWORK, "AI 接口重定向次数过多。")
-                    }
-                    val location = connection.getHeaderField("Location")
-                        ?.trim()
-                        ?.takeIf(String::isNotEmpty)
-                        ?: throw AiChatException(
-                            AiChatFailure.INVALID_RESPONSE,
-                            "AI 接口返回了无效的重定向。",
+                    val status = connection.responseCode
+                    ensureRequestActive(continuation.isActive)
+                    if (status in REDIRECT_STATUS_CODES) {
+                        if (redirects >= MAX_REDIRECTS) {
+                            throw AiChatException(AiChatFailure.NETWORK, "AI 接口重定向次数过多。")
+                        }
+                        val location = connection.getHeaderField("Location")
+                            ?.trim()
+                            ?.takeIf(String::isNotEmpty)
+                            ?: throw AiChatException(
+                                AiChatFailure.INVALID_RESPONSE,
+                                "AI 接口返回了无效的重定向。",
+                            )
+                        val candidate = try {
+                            URL(currentUrl, location)
+                        } catch (error: MalformedURLException) {
+                            throw AiChatException(
+                                AiChatFailure.INVALID_RESPONSE,
+                                "AI 接口返回了无效的重定向地址。",
+                                error,
+                            )
+                        }
+                        validateRedirect(
+                            from = currentUrl,
+                            candidate = candidate,
+                            allowedHost = allowedHost,
+                            allowInsecureHttp = allowInsecureHttp,
                         )
-                    val candidate = try {
-                        URL(currentUrl, location)
-                    } catch (error: MalformedURLException) {
-                        throw AiChatException(
-                            AiChatFailure.INVALID_RESPONSE,
-                            "AI 接口返回了无效的重定向地址。",
-                            error,
+                        redirectUrl = candidate
+                    } else {
+                        val responseBody = readResponseBody(
+                            connection = connection,
+                            status = status,
+                            isActive = { continuation.isActive },
                         )
+                        if (status !in 200..299) {
+                            val remoteMessage = parseRemoteError(responseBody)
+                                ?.let { redactRemoteSecrets(it, apiKey) }
+                            val suffix = remoteMessage?.let { "：$it" }.orEmpty()
+                            throw AiChatException(
+                                AiChatFailure.REMOTE,
+                                "AI 服务返回 HTTP $status$suffix",
+                            )
+                        }
+                        continuation.resume(responseBody)
+                        return@suspendCancellableCoroutine
                     }
-                    validateRedirect(
-                        from = currentUrl,
-                        candidate = candidate,
-                        allowedHost = allowedHost,
-                        allowInsecureHttp = allowInsecureHttp,
-                    )
-                    redirectUrl = candidate
-                } else {
-                    val responseBody = readResponseBody(connection, status)
-                    if (status !in 200..299) {
-                        val remoteMessage = parseRemoteError(responseBody)
-                        val suffix = remoteMessage?.let { "：$it" }.orEmpty()
-                        throw AiChatException(
-                            AiChatFailure.REMOTE,
-                            "AI 服务返回 HTTP $status$suffix",
-                        )
-                    }
-                    return responseBody
+                } finally {
+                    activeConnection.compareAndSet(connection, null)
+                    connection.disconnect()
                 }
-            } finally {
-                connection.disconnect()
+
+                currentUrl = checkNotNull(redirectUrl)
+                redirects += 1
             }
-
-            currentUrl = checkNotNull(redirectUrl)
-            redirects += 1
+        } catch (error: Throwable) {
+            if (continuation.isActive) continuation.resumeWithException(error)
+        } finally {
+            activeConnection.getAndSet(null)?.disconnect()
         }
     }
 
-    private fun readResponseBody(connection: HttpURLConnection, status: Int): String {
+    private fun readResponseBody(
+        connection: HttpURLConnection,
+        status: Int,
+        isActive: () -> Boolean,
+    ): String {
+        ensureRequestActive(isActive())
         val declaredLength = connection.contentLengthLong
         if (declaredLength > MAX_BODY_BYTES) {
             throw AiChatException(
@@ -216,17 +445,19 @@ class AiChatRepository @Inject constructor() {
             )
         }
         val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-        return readLimited(stream).toString(StandardCharsets.UTF_8)
+        return readLimited(stream, isActive).toString(StandardCharsets.UTF_8)
     }
 
-    private fun readLimited(stream: InputStream?): ByteArray {
+    private fun readLimited(stream: InputStream?, isActive: () -> Boolean): ByteArray {
         if (stream == null) return ByteArray(0)
         return stream.use { input ->
             val output = ByteArrayOutputStream()
             val buffer = ByteArray(READ_BUFFER_BYTES)
             var total = 0
             while (true) {
+                ensureRequestActive(isActive())
                 val count = input.read(buffer)
+                ensureRequestActive(isActive())
                 if (count < 0) break
                 total += count
                 if (total > MAX_BODY_BYTES) {
@@ -241,7 +472,46 @@ class AiChatRepository @Inject constructor() {
         }
     }
 
-    private fun parseAssistantContent(responseBody: String): String {
+    private fun ensureRequestActive(isActive: Boolean) {
+        if (!isActive) throw CancellationException("AI request cancelled")
+    }
+
+    private fun readImageBytes(uri: Uri): ByteArray {
+        val stream = try {
+            context.contentResolver.openInputStream(uri)
+        } catch (error: SecurityException) {
+            throw AiChatException(AiChatFailure.CONFIGURATION, "无法读取所选图片，请重新选择。", error)
+        } catch (error: IOException) {
+            throw AiChatException(AiChatFailure.CONFIGURATION, "无法读取所选图片，请重新选择。", error)
+        } ?: throw AiChatException(AiChatFailure.CONFIGURATION, "无法读取所选图片，请重新选择。")
+
+        return try {
+            stream.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(READ_BUFFER_BYTES)
+                var total = 0
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    if (total > MAX_IMAGE_BYTES) {
+                        throw AiChatException(
+                            AiChatFailure.CONFIGURATION,
+                            "图片超过 8 MiB，请选择更小的图片。",
+                        )
+                    }
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            }
+        } catch (error: AiChatException) {
+            throw error
+        } catch (error: IOException) {
+            throw AiChatException(AiChatFailure.CONFIGURATION, "无法读取所选图片，请重新选择。", error)
+        }
+    }
+
+    private fun parseAssistantContent(responseBody: String): AiChatCompletion {
         val root = try {
             JSONObject(responseBody)
         } catch (error: JSONException) {
@@ -266,13 +536,29 @@ class AiChatRepository @Inject constructor() {
                 "AI 响应中没有可用的回答。",
             )
         val message = firstChoice.optJSONObject("message")
-        val content = extractContent(message?.opt("content"))
+        val rawContent = extractContent(message?.opt("content"))
             ?: firstChoice.optString("text").takeIf(String::isNotBlank)
-        return content?.trim()?.takeIf(String::isNotEmpty)
-            ?: throw AiChatException(
+            ?: ""
+        val tagged = splitAiThinkingContent(rawContent)
+        val explicitReasoning = listOf("reasoning_content", "reasoning", "analysis")
+            .mapNotNull { key -> extractContent(message?.opt(key))?.takeIf(String::isNotBlank) }
+            .firstOrNull()
+            ?.trim()
+            .orEmpty()
+        val reasoning = listOf(explicitReasoning, tagged.reasoning)
+            .filter(String::isNotBlank)
+            .distinct()
+            .joinToString("\n\n")
+        if (tagged.content.isBlank() && reasoning.isBlank()) {
+            throw AiChatException(
                 AiChatFailure.INVALID_RESPONSE,
                 "AI 返回了空回答。",
             )
+        }
+        return AiChatCompletion(
+            content = tagged.content.trim(),
+            reasoning = reasoning,
+        )
     }
 
     private fun extractContent(value: Any?): String? = when (value) {
@@ -301,6 +587,15 @@ class AiChatRepository @Inject constructor() {
                 ?: root.optString("message").takeIf(String::isNotBlank)
         }.getOrNull()
         return message?.replace(Regex("\\s+"), " ")?.trim()?.take(MAX_ERROR_MESSAGE_CHARS)
+    }
+
+    private fun redactRemoteSecrets(message: String, apiKey: String): String {
+        var redacted = message.replace(
+            Regex("(?i)Bearer\\s+[^\\s\"']+"),
+            "Bearer [REDACTED]",
+        )
+        if (apiKey.isNotEmpty()) redacted = redacted.replace(apiKey, "[REDACTED]")
+        return redacted
     }
 
     private fun parseAndValidateEndpoint(rawValue: String, allowInsecureHttp: Boolean): URL {
@@ -360,10 +655,86 @@ class AiChatRepository @Inject constructor() {
         const val CONNECT_TIMEOUT_MS = 15_000
         const val READ_TIMEOUT_MS = 120_000
         const val MAX_BODY_BYTES = 4 * 1024 * 1024
+        const val MAX_IMAGE_BYTES = 8 * 1024 * 1024
         const val MAX_IMAGE_REQUEST_BODY_BYTES = 12 * 1024 * 1024
         const val READ_BUFFER_BYTES = 8 * 1024
+        const val WRITE_BUFFER_BYTES = 8 * 1024
         const val MAX_REDIRECTS = 3
         const val MAX_ERROR_MESSAGE_CHARS = 500
+        const val MAX_TITLE_CHARS = 80
         val REDIRECT_STATUS_CODES = setOf(301, 302, 303, 307, 308)
     }
 }
+
+internal fun generateConversationTitle(message: String, hasImage: Boolean): String {
+    val normalized = message.replace(Regex("\\s+"), " ").trim()
+    if (normalized.isEmpty()) return if (hasImage) "🖼️" else "💬"
+    val endIndex = normalized.offsetByCodePoints(
+        0,
+        normalized.codePointCount(0, normalized.length).coerceAtMost(40),
+    )
+    return normalized.substring(0, endIndex)
+}
+
+internal fun splitAiThinkingContent(raw: String): AiChatCompletion {
+    val reasoningParts = mutableListOf<String>()
+    val completeTag = Regex(
+        pattern = "<think(?:\\s[^>]*)?>(.*?)</think\\s*>",
+        options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+    )
+    var answer = completeTag.replace(raw) { match ->
+        match.groupValues[1].trim().takeIf(String::isNotEmpty)?.let(reasoningParts::add)
+        ""
+    }
+    val openTag = Regex(
+        pattern = "<think(?:\\s[^>]*)?>",
+        options = setOf(RegexOption.IGNORE_CASE),
+    )
+    val unmatchedOpen = openTag.find(answer)
+    if (unmatchedOpen != null) {
+        answer.substring(unmatchedOpen.range.last + 1)
+            .trim()
+            .takeIf(String::isNotEmpty)
+            ?.let(reasoningParts::add)
+        answer = answer.substring(0, unmatchedOpen.range.first)
+    }
+    answer = answer.replace(Regex("</think\\s*>", RegexOption.IGNORE_CASE), "")
+    return AiChatCompletion(
+        content = answer.trim(),
+        reasoning = reasoningParts.joinToString("\n\n"),
+    )
+}
+
+private fun AiConversationEntity.toDomain() = AiConversation(
+    id = id,
+    title = title,
+    modelConfigId = modelConfigId,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+)
+
+private fun AiMessageEntity.toDomain(): AiChatMessage? {
+    val messageRole = AiChatRole.entries.firstOrNull { it.apiValue == role } ?: return null
+    val messageImage = if (!imageUri.isNullOrBlank() && !imageMimeType.isNullOrBlank()) {
+        AiChatImage(
+            uri = imageUri,
+            mimeType = imageMimeType,
+            permissionOwnedByChat = imagePermissionOwned,
+        )
+    } else {
+        null
+    }
+    return AiChatMessage(
+        id = id,
+        role = messageRole,
+        content = content,
+        reasoning = reasoning,
+        image = messageImage,
+        createdAt = createdAt,
+    )
+}
+
+private data class PersistedImagePermission(
+    val ownedByChat: Boolean,
+    val newlyAcquired: Boolean,
+)

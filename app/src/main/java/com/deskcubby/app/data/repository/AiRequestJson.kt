@@ -10,6 +10,7 @@ internal fun buildTextChatRequestJson(
     temperature: Float,
     systemPrompt: String?,
     messages: List<AiChatMessage>,
+    imageDataUrls: Map<Long, String> = emptyMap(),
 ): JSONObject {
     val requestMessages = JSONArray()
     systemPrompt?.takeIf(String::isNotBlank)?.let { prompt ->
@@ -20,10 +21,26 @@ internal fun buildTextChatRequestJson(
         )
     }
     messages.forEach { message ->
+        val imageDataUrl = imageDataUrls[message.id]
+            ?.takeIf { message.role == AiChatRole.USER }
+        val content: Any = if (imageDataUrl == null) {
+            message.content
+        } else {
+            JSONArray().apply {
+                if (message.content.isNotBlank()) {
+                    put(JSONObject().put("type", "text").put("text", message.content))
+                }
+                put(
+                    JSONObject()
+                        .put("type", "image_url")
+                        .put("image_url", JSONObject().put("url", imageDataUrl)),
+                )
+            }
+        }
         requestMessages.put(
             JSONObject()
                 .put("role", message.role.apiValue)
-                .put("content", message.content),
+                .put("content", content),
         )
     }
     return JSONObject()

@@ -14,14 +14,23 @@ import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.BrowserTheme
+import com.deskcubby.app.data.model.CloudSyncConfig
+import com.deskcubby.app.data.model.CloudSyncContent
+import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.LegacyAiKeyMigrationStore
+import com.deskcubby.app.data.sync.AppCloudSyncService
+import com.deskcubby.app.data.sync.AppCloudSyncStatus
+import com.deskcubby.app.data.sync.CloudSyncSecretStore
+import com.deskcubby.app.data.sync.PendingCloudSyncJson
+import com.deskcubby.app.data.sync.validateForSync
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -57,6 +66,8 @@ class SettingsViewModel @Inject constructor(
     private val backupRepository: AppBackupRepository,
     private val autoBackupCoordinator: AutoBackupCoordinator,
     private val legacyAiKeyMigrationStore: LegacyAiKeyMigrationStore,
+    private val cloudSyncService: AppCloudSyncService,
+    private val cloudSyncSecretStore: CloudSyncSecretStore,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
     private val _ready = MutableStateFlow(false)
@@ -77,6 +88,7 @@ class SettingsViewModel @Inject constructor(
     private val _backupOperation = MutableStateFlow(BackupOperationState())
     val backupOperation: StateFlow<BackupOperationState> = _backupOperation.asStateFlow()
     val autoBackupStatus: StateFlow<AutoBackupStatus> = autoBackupCoordinator.status
+    val cloudSyncStatus: StateFlow<AppCloudSyncStatus> = cloudSyncService.status
 
     private val _settingsError = MutableStateFlow<String?>(null)
     val settingsError: StateFlow<String?> = _settingsError.asStateFlow()
@@ -122,8 +134,175 @@ class SettingsViewModel @Inject constructor(
         launch { repository.setMealCalendarImageMaxHeight(value) }
     fun setMealCalendarShowCaptions(value: Boolean) =
         launch { repository.setMealCalendarShowCaptions(value) }
+    fun setMealPhotoFilter(
+        value: MealPhotoFilterSettings,
+        onSaved: () -> Unit = {},
+    ) = viewModelScope.launch {
+        try {
+            repository.setMealPhotoFilter(value)
+            onSaved()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _settingsError.value = error.message?.takeIf(String::isNotBlank)
+                ?: "滤镜设置保存失败 / Could not save filter settings"
+        }
+    }
+    fun toggleMealPhotoFilter() {
+        val current = settings.value.mealPhotoFilter
+        setMealPhotoFilter(current.copy(enabled = !current.enabled))
+    }
     fun setMealButtonsUseIcons(value: Boolean) = launch { repository.setMealButtonsUseIcons(value) }
     fun setMealButtonIcons(value: List<String>) = launch { repository.setMealButtonIcons(value) }
+    fun hasCloudSyncCredentials(config: CloudSyncConfig): Boolean =
+        cloudSyncSecretStore.hasCredentials(config)
+    fun pendingCloudSyncJson(): List<PendingCloudSyncJson> =
+        cloudSyncService.pendingIncomingJson()
+
+    fun saveCloudSyncConfig(
+        config: CloudSyncConfig,
+        clearExistingCredentials: Boolean = false,
+        onDone: (Boolean) -> Unit = {},
+    ) = viewModelScope.launch {
+        try {
+            val stored = if (clearExistingCredentials) {
+                config
+            } else {
+                val existing = cloudSyncSecretStore.hydrate(config)
+                config.copy(
+                    webDavPassword = config.webDavPassword.ifBlank {
+                        existing.webDavPassword
+                    },
+                    s3AccessKey = config.s3AccessKey.ifBlank { existing.s3AccessKey },
+                    s3SecretKey = config.s3SecretKey.ifBlank { existing.s3SecretKey },
+                    s3SessionToken = config.s3SessionToken.ifBlank {
+                        existing.s3SessionToken
+                    },
+                )
+            }
+            val candidate = if (stored.enabled) {
+                stored
+            } else {
+                stored.copy(
+                    enabled = true,
+                    s3AccessKey = stored.s3AccessKey.ifBlank { "not-configured" },
+                    s3SecretKey = stored.s3SecretKey.ifBlank { "not-configured" },
+                )
+            }
+            candidate.validateForSync()
+            val withSavedCredentials = cloudSyncSecretStore.save(
+                stored,
+                clearExisting = clearExistingCredentials,
+            )
+            val current = settings.value
+            val configs = if (current.cloudSyncConfigs.any { it.id == config.id }) {
+                current.cloudSyncConfigs.map { item ->
+                    if (item.id == config.id) withSavedCredentials else item
+                }
+            } else {
+                current.cloudSyncConfigs + withSavedCredentials
+            }
+            repository.setCloudSyncSettings(current.cloudSyncEnabled, configs)
+            onDone(true)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _settingsError.value = error.message ?: "无法保存云端同步配置"
+            onDone(false)
+        }
+    }
+
+    fun deleteCloudSyncConfig(config: CloudSyncConfig) = viewModelScope.launch {
+        try {
+            val current = settings.value
+            repository.setCloudSyncSettings(
+                enabled = current.cloudSyncEnabled,
+                configs = current.cloudSyncConfigs.filterNot { it.id == config.id },
+            )
+            cloudSyncSecretStore.delete(config.id)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _settingsError.value = error.message ?: "无法删除云端同步配置"
+        }
+    }
+
+    fun copyCloudSyncConfig(config: CloudSyncConfig) = viewModelScope.launch {
+        try {
+            val copy = config.copy(
+                id = java.util.UUID.randomUUID().toString(),
+                name = "${config.name} - 副本",
+                enabled = false,
+                webDavPassword = "",
+                s3AccessKey = "",
+                s3SecretKey = "",
+                s3SessionToken = "",
+            )
+            val current = settings.value
+            repository.setCloudSyncSettings(
+                enabled = current.cloudSyncEnabled,
+                configs = current.cloudSyncConfigs + copy,
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _settingsError.value = error.message ?: "无法复制云端同步配置"
+        }
+    }
+
+    fun setCloudSyncEnabled(
+        enabled: Boolean,
+        onDone: (Boolean) -> Unit = {},
+    ) = viewModelScope.launch {
+        try {
+            val current = settings.value
+            if (enabled) {
+                val configs = current.cloudSyncConfigs.filter(CloudSyncConfig::enabled)
+                require(configs.isNotEmpty()) { "请先新增并启用至少一个同步配置" }
+                configs.forEach { config ->
+                    require(
+                        CloudSyncContent.DIARIES !in config.selectedContents ||
+                            current.diaryTreeUri != null,
+                    ) { "同步日记前请先选择日记目录" }
+                    require(
+                        CloudSyncContent.MEDIA !in config.selectedContents ||
+                            current.mediaTreeUri != null,
+                    ) { "同步媒体前请先选择媒体目录" }
+                    cloudSyncSecretStore.hydrate(config).validateForSync()
+                }
+            }
+            repository.setCloudSyncSettings(enabled, current.cloudSyncConfigs)
+            onDone(true)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _settingsError.value = error.message ?: "无法更新云端同步设置"
+            onDone(false)
+        }
+    }
+
+    fun syncCloudNow() = viewModelScope.launch {
+        try {
+            cloudSyncService.syncEnabled()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _settingsError.value = error.message ?: "云端同步失败"
+        }
+    }
+
+    fun restoreIncomingCloudJson(fileName: String, onDone: (Boolean) -> Unit = {}) =
+        viewModelScope.launch {
+            try {
+                cloudSyncService.restoreIncomingJson(fileName)
+                onDone(true)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _settingsError.value = error.message ?: "无法导入云端 JSON"
+                onDone(false)
+            }
+        }
     fun setDefaultPage(value: NavItemId) = launch { repository.setDefaultPage(value) }
     fun setNavItems(value: List<NavItemConfig>) = launch { repository.setNavItems(value) }
     fun setNavigationSettings(

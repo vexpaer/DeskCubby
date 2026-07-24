@@ -83,3 +83,39 @@ data class SavedPoemEntity(
     val createdAt: Long,
     val updatedAt: Long,
 )
+
+@Entity(
+    tableName = "ai_conversations",
+    indices = [Index("updatedAt")],
+)
+data class AiConversationEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val modelConfigId: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+@Entity(
+    tableName = "ai_messages",
+    foreignKeys = [
+        ForeignKey(
+            entity = AiConversationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["conversationId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("conversationId")],
+)
+data class AiMessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val conversationId: Long,
+    val role: String,
+    val content: String,
+    val reasoning: String,
+    val imageUri: String?,
+    val imageMimeType: String?,
+    val imagePermissionOwned: Boolean,
+    val createdAt: Long,
+)

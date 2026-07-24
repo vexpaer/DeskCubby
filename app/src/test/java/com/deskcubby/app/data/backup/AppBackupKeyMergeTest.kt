@@ -3,7 +3,10 @@ package com.deskcubby.app.data.backup
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.CloudSyncConfig
+import com.deskcubby.app.data.model.CloudSyncContent
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class AppBackupKeyMergeTest {
@@ -64,6 +67,61 @@ class AppBackupKeyMergeTest {
         assertEquals("legacy-model", merged.aiConfigs.single().model)
     }
 
+    @Test
+    fun preVersionThirteenRestoreKeepsLocalCloudConfigsButDisablesSync() {
+        val localConfig = cloudConfig(
+            id = "local",
+            password = "device-password",
+        )
+        val importedConfig = cloudConfig(id = "imported")
+
+        val merged = mergeBackupCloudSyncSettings(
+            imported = AppSettings(
+                cloudSyncEnabled = true,
+                cloudSyncConfigs = listOf(importedConfig),
+            ),
+            current = AppSettings(
+                cloudSyncEnabled = true,
+                cloudSyncConfigs = listOf(localConfig),
+            ),
+            formatVersion = 12,
+        )
+
+        assertFalse(merged.cloudSyncEnabled)
+        assertEquals(listOf(localConfig), merged.cloudSyncConfigs)
+    }
+
+    @Test
+    fun versionThirteenRestoreUsesImportedMetadataWithoutLocalCredentials() {
+        val localConfig = cloudConfig(
+            id = "shared",
+            password = "device-password",
+        )
+        val importedMetadata = cloudConfig(
+            id = "shared",
+            password = "",
+        ).copy(
+            name = "Imported metadata",
+            selectedContents = setOf(CloudSyncContent.JSON_BACKUP),
+        )
+
+        val merged = mergeBackupCloudSyncSettings(
+            imported = AppSettings(
+                cloudSyncEnabled = true,
+                cloudSyncConfigs = listOf(importedMetadata),
+            ),
+            current = AppSettings(
+                cloudSyncEnabled = true,
+                cloudSyncConfigs = listOf(localConfig),
+            ),
+            formatVersion = 13,
+        )
+
+        assertFalse(merged.cloudSyncEnabled)
+        assertEquals(listOf(importedMetadata), merged.cloudSyncConfigs)
+        assertEquals("", merged.cloudSyncConfigs.single().webDavPassword)
+    }
+
     private fun config(id: String, url: String, apiKey: String = "") = AiModelConfig(
         id = id,
         name = id,
@@ -71,5 +129,16 @@ class AppBackupKeyMergeTest {
         endpointUrl = url,
         model = "model",
         apiKey = apiKey,
+    )
+
+    private fun cloudConfig(
+        id: String,
+        password: String = "",
+    ) = CloudSyncConfig(
+        id = id,
+        name = id,
+        endpointUrl = "https://cloud.example.com/dav",
+        webDavUsername = "alice",
+        webDavPassword = password,
     )
 }

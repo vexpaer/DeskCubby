@@ -9,6 +9,10 @@ import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
+import com.deskcubby.app.data.model.CloudSyncConfig
+import com.deskcubby.app.data.model.CloudSyncContent
+import com.deskcubby.app.data.model.CloudSyncDirection
+import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
@@ -18,6 +22,7 @@ import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
+import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.preferences.migrateMealPhotosWidget
 import com.deskcubby.app.data.preferences.migrateDailyRecordsWidget
 import com.deskcubby.app.data.preferences.normalizeThemeSecondaryColors
@@ -31,7 +36,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 12,
+    val formatVersion: Int = 13,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -51,7 +56,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 12
+    const val FORMAT_VERSION: Int = 13
 
     private const val FORMAT_NAME = "DeskCubby"
     private const val MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -74,6 +79,7 @@ object BackupJsonCodec {
     private const val MAX_DAILY_EVENT_TEMPLATES = 100
     private const val MAX_RSS_SUBSCRIPTIONS = 100
     private const val MAX_AI_API_KEY_CHARS = 8_192
+    private const val MAX_CLOUD_SYNC_CONFIGS = 20
 
     fun encode(backup: AppBackup): String {
         require(backup.formatVersion == FORMAT_VERSION) {
@@ -178,6 +184,9 @@ object BackupJsonCodec {
         .put("themeColorArgb", settings.themeColorArgb)
         .put("themeSecondaryColorsArgb", settings.themeSecondaryColorsArgb.toJsonIntArray())
         .put("fontScale", settings.fontScale)
+        // Credentials are device-local. Imports must be explicitly re-enabled after review.
+        .put("cloudSyncEnabled", false)
+        .put("cloudSyncConfigs", encodeCloudSyncConfigs(settings.cloudSyncConfigs))
         .putNullable("diaryTreeUri", settings.diaryTreeUri)
         .putNullable("mediaTreeUri", settings.mediaTreeUri)
         .put("fileNamePattern", settings.fileNamePattern)
@@ -197,6 +206,13 @@ object BackupJsonCodec {
         .put("thoughtDisplayMode", settings.thoughtDisplayMode.name)
         .put("mealCalendarImageMaxHeightDp", settings.mealCalendarImageMaxHeightDp)
         .put("mealCalendarShowCaptions", settings.mealCalendarShowCaptions)
+        .put("mealPhotoFilter", JSONObject()
+            .put("enabled", settings.mealPhotoFilter.enabled)
+            .put("brightness", settings.mealPhotoFilter.brightness)
+            .put("contrast", settings.mealPhotoFilter.contrast)
+            .put("saturation", settings.mealPhotoFilter.saturation)
+            .put("warmth", settings.mealPhotoFilter.warmth)
+            .put("tint", settings.mealPhotoFilter.tint))
         .put("mealButtonsUseIcons", settings.mealButtonsUseIcons)
         .put("userName", settings.userName)
         .put("homeWidgetBordersEnabled", settings.homeWidgetBordersEnabled)
@@ -248,7 +264,8 @@ object BackupJsonCodec {
                         .put("id", item.id.name)
                         .put("label", item.label)
                         .put("iconKey", item.iconKey)
-                        .put("visible", item.visible),
+                        .put("visible", item.visible)
+                        .put("showInMore", item.showInMore),
                 )
             }
         })
@@ -256,6 +273,113 @@ object BackupJsonCodec {
         .put("bottomNavShowLabels", settings.bottomNavShowLabels)
         .put("homeWidgets", settings.homeWidgets.toJsonArray())
         .put("homeWidgetTitles", settings.homeWidgetTitles.toJsonArray())
+
+    private fun encodeCloudSyncConfigs(configs: List<CloudSyncConfig>): JSONArray = JSONArray().apply {
+        require(configs.size <= MAX_CLOUD_SYNC_CONFIGS) { "Too many cloud sync configurations" }
+        val ids = HashSet<String>(configs.size)
+        configs.forEachIndexed { index, item ->
+            require(ids.add(item.id)) { "Duplicate cloud sync configuration: ${item.id}" }
+            validateCloudSyncConfigMetadata(item, "cloudSyncConfigs[$index]")
+            put(
+                JSONObject()
+                    .put("id", item.id)
+                    .put("name", item.name)
+                    .put("enabled", item.enabled)
+                    .put("serviceType", item.serviceType.name)
+                    .put("endpointUrl", item.endpointUrl)
+                    .put("remotePath", item.remotePath)
+                    .put("webDavUsername", item.webDavUsername)
+                    .put("s3Bucket", item.s3Bucket)
+                    .put("s3Region", item.s3Region)
+                    .put("allowInsecureHttp", item.allowInsecureHttp)
+                    .put("selectedContents", JSONArray().apply {
+                        CloudSyncContent.entries
+                            .filter(item.selectedContents::contains)
+                            .forEach { put(it.name) }
+                    })
+                    .put("direction", item.direction.name),
+            )
+        }
+    }
+
+    private fun decodeCloudSyncConfigs(json: JSONArray): List<CloudSyncConfig> = buildList {
+        require(json.length() <= MAX_CLOUD_SYNC_CONFIGS) {
+            "Too many cloud sync configurations"
+        }
+        val ids = HashSet<String>(json.length())
+        for (index in 0 until json.length()) {
+            val item = json.requiredObject(index, "cloudSyncConfigs")
+            val contentsJson = item.requiredArray("selectedContents")
+            val contents = buildSet {
+                for (contentIndex in 0 until contentsJson.length()) {
+                    val raw = contentsJson.get(contentIndex)
+                    require(raw is String) {
+                        "cloudSyncConfigs[$index].selectedContents[$contentIndex] must be a string"
+                    }
+                    val content = enumValues<CloudSyncContent>().firstOrNull { it.name == raw }
+                        ?: throw IllegalArgumentException(
+                            "Invalid CloudSyncContent value: $raw",
+                        )
+                    require(add(content)) {
+                        "cloudSyncConfigs[$index].selectedContents contains a duplicate: $raw"
+                    }
+                }
+            }
+            val decoded = CloudSyncConfig(
+                id = item.requiredString("id"),
+                name = item.requiredString("name"),
+                enabled = item.requiredBoolean("enabled"),
+                serviceType = item.requiredEnum("serviceType"),
+                endpointUrl = item.requiredString("endpointUrl"),
+                remotePath = item.requiredString("remotePath"),
+                webDavUsername = item.requiredString("webDavUsername"),
+                s3Bucket = item.requiredString("s3Bucket"),
+                s3Region = item.requiredString("s3Region"),
+                allowInsecureHttp = item.requiredBoolean("allowInsecureHttp"),
+                selectedContents = contents,
+                direction = item.requiredEnum("direction"),
+            )
+            require(ids.add(decoded.id)) {
+                "Duplicate cloud sync configuration: ${decoded.id}"
+            }
+            validateCloudSyncConfigMetadata(decoded, "cloudSyncConfigs[$index]")
+            add(decoded)
+        }
+    }
+
+    private fun validateCloudSyncConfigMetadata(config: CloudSyncConfig, field: String) {
+        require(config.id.isNotBlank() && config.id.length <= 128) { "$field.id is invalid" }
+        require(config.name.isNotBlank() && config.name.length <= 200) { "$field.name is invalid" }
+        require(config.selectedContents.isNotEmpty()) { "$field.selectedContents must not be empty" }
+        require(config.endpointUrl.length <= MAX_URL_CHARS) { "$field.endpointUrl is too long" }
+        val endpoint = runCatching { URI(config.endpointUrl) }.getOrElse {
+            throw IllegalArgumentException("$field.endpointUrl is invalid", it)
+        }
+        val scheme = endpoint.scheme?.lowercase(Locale.ROOT)
+        require(
+            endpoint.isAbsolute && !endpoint.host.isNullOrBlank() &&
+                endpoint.userInfo == null && endpoint.query == null && endpoint.fragment == null &&
+                (scheme == "https" || scheme == "http" && config.allowInsecureHttp),
+        ) { "$field.endpointUrl must use HTTPS, or explicitly allowed HTTP" }
+        require(config.remotePath.length <= 1_024 && !config.remotePath.contains('\\')) {
+            "$field.remotePath is invalid"
+        }
+        require(config.remotePath.split('/').none { it == "." || it == ".." }) {
+            "$field.remotePath cannot contain . or .."
+        }
+        require(config.webDavUsername.length <= 512) { "$field.webDavUsername is too long" }
+        require(config.s3Bucket.length <= 255) { "$field.s3Bucket is too long" }
+        require(config.s3Region.length <= 128) { "$field.s3Region is too long" }
+        if (config.serviceType == CloudSyncServiceType.S3_COMPATIBLE) {
+            require(config.s3Bucket.isNotBlank() &&
+                config.s3Bucket.none { it == '/' || it == '\\' || it.isISOControl() }) {
+                "$field.s3Bucket is invalid"
+            }
+            require(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}").matches(config.s3Region)) {
+                "$field.s3Region is invalid"
+            }
+        }
+    }
 
     private fun decodeSettings(json: JSONObject, version: Int): AppSettings {
         val defaults = AppSettings()
@@ -294,6 +418,17 @@ object BackupJsonCodec {
                 }.toFloat()
             } else {
                 defaults.fontScale
+            },
+            cloudSyncEnabled = if (version >= 13) {
+                json.requiredBoolean("cloudSyncEnabled")
+                false
+            } else {
+                false
+            },
+            cloudSyncConfigs = if (version >= 13) {
+                decodeCloudSyncConfigs(json.requiredArray("cloudSyncConfigs"))
+            } else {
+                defaults.cloudSyncConfigs
             },
             diaryTreeUri = json.requiredNullableString("diaryTreeUri"),
             mediaTreeUri = json.requiredNullableString("mediaTreeUri"),
@@ -338,6 +473,11 @@ object BackupJsonCodec {
                 json.requiredBoolean("mealCalendarShowCaptions")
             } else {
                 defaults.mealCalendarShowCaptions
+            },
+            mealPhotoFilter = if (version >= 13) {
+                decodeMealPhotoFilter(json.requiredObject("mealPhotoFilter"))
+            } else {
+                defaults.mealPhotoFilter
             },
             mealButtonsUseIcons = if (version >= 4) {
                 json.requiredBoolean("mealButtonsUseIcons")
@@ -414,7 +554,7 @@ object BackupJsonCodec {
             calorieImageConfigId = if (version >= 11) json.requiredNullableString("calorieImageConfigId")?.requireMaxLength("calorieImageConfigId", 80) else null,
             calorieVisionPrompt = if (version >= 10) json.requiredString("calorieVisionPrompt").requireMaxLength("calorieVisionPrompt", 20_000) else defaults.calorieVisionPrompt,
             calorieTextPrompt = if (version >= 10) json.requiredString("calorieTextPrompt").requireMaxLength("calorieTextPrompt", 20_000) else defaults.calorieTextPrompt,
-            navItems = decodeNavItems(json.requiredArray("navItems")),
+            navItems = decodeNavItems(json.requiredArray("navItems"), version),
             defaultPage = json.requiredEnum("defaultPage"),
             bottomNavShowLabels = json.requiredBoolean("bottomNavShowLabels"),
             homeWidgets = homeWidgets,
@@ -446,6 +586,32 @@ object BackupJsonCodec {
             }
         }
         return if (decoded.size == expectedCount - 1) decoded.toMutableList().apply { add(2, defaultsMealTeaIcon()) } else decoded
+    }
+
+    private fun decodeMealPhotoFilter(json: JSONObject): MealPhotoFilterSettings {
+        val brightness = json.requiredFiniteNumber("brightness").toFloat()
+        val contrast = json.requiredFiniteNumber("contrast").toFloat()
+        val saturation = json.requiredFiniteNumber("saturation").toFloat()
+        val warmth = json.requiredFiniteNumber("warmth").toFloat()
+        val tint = json.requiredFiniteNumber("tint").toFloat()
+        require(brightness in MealPhotoFilterSettings.MIN_BRIGHTNESS..
+            MealPhotoFilterSettings.MAX_BRIGHTNESS) { "mealPhotoFilter.brightness is out of range" }
+        require(contrast in MealPhotoFilterSettings.MIN_CONTRAST..
+            MealPhotoFilterSettings.MAX_CONTRAST) { "mealPhotoFilter.contrast is out of range" }
+        require(saturation in MealPhotoFilterSettings.MIN_SATURATION..
+            MealPhotoFilterSettings.MAX_SATURATION) { "mealPhotoFilter.saturation is out of range" }
+        require(warmth in MealPhotoFilterSettings.MIN_WARMTH..
+            MealPhotoFilterSettings.MAX_WARMTH) { "mealPhotoFilter.warmth is out of range" }
+        require(tint in MealPhotoFilterSettings.MIN_TINT..
+            MealPhotoFilterSettings.MAX_TINT) { "mealPhotoFilter.tint is out of range" }
+        return MealPhotoFilterSettings(
+            enabled = json.requiredBoolean("enabled"),
+            brightness = brightness,
+            contrast = contrast,
+            saturation = saturation,
+            warmth = warmth,
+            tint = tint,
+        )
     }
 
     private fun defaultsMealTeaIcon() = AppSettings().mealButtonIcons[2]
@@ -535,19 +701,27 @@ object BackupJsonCodec {
         return normalizeThemeSecondaryColors(decoded)
     }
 
-    private fun decodeNavItems(json: JSONArray): List<NavItemConfig> = buildList {
+    private fun decodeNavItems(json: JSONArray, version: Int): List<NavItemConfig> = buildList {
         require(json.length() <= NavItemId.entries.size) { "navItems contains too many items" }
         val ids = HashSet<NavItemId>(json.length())
         for (index in 0 until json.length()) {
             val item = json.requiredObject(index, "navItems")
             val id = item.requiredEnum<NavItemId>("id")
             require(ids.add(id)) { "Duplicate navigation item: $id" }
+            val visible = item.requiredBoolean("visible")
             add(
                 NavItemConfig(
                     id = id,
                     label = item.requiredString("label").requireMaxLength("navItems[$index].label", 128),
                     iconKey = item.requiredString("iconKey").requireMaxLength("navItems[$index].iconKey", 128),
-                    visible = item.requiredBoolean("visible"),
+                    visible = visible,
+                    showInMore = when {
+                        id == NavItemId.HOME ||
+                            id == NavItemId.MORE ||
+                            id == NavItemId.SETTINGS -> false
+                        version >= 13 -> item.requiredBoolean("showInMore")
+                        else -> id.defaultShowInMore && !visible
+                    },
                 ),
             )
         }
