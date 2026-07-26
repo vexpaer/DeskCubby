@@ -36,6 +36,7 @@ class ThoughtRepository @Inject constructor(
 
     suspend fun update(id: Long, content: String) = dao.updateContent(id, content.trim(), System.currentTimeMillis())
     suspend fun togglePinned(id: Long) = dao.togglePinned(id, System.currentTimeMillis())
+    suspend fun toggleHighlighted(id: Long) = dao.toggleHighlighted(id, System.currentTimeMillis())
     suspend fun delete(id: Long) = dao.softDelete(id, System.currentTimeMillis())
     suspend fun restore(id: Long) = dao.restoreToActiveList(id, System.currentTimeMillis())
     suspend fun permanentlyDelete(id: Long) = dao.permanentlyDelete(id)

@@ -75,6 +75,59 @@ class AppDatabaseMigrationTest {
         database.close()
     }
 
+    @Test
+    fun migrate6To7AddsHighlightColumnAndNewTables() {
+        helper.createDatabase(TEST_DATABASE, 6).apply {
+            execSQL(
+                """
+                INSERT INTO flash_thoughts (id, content, createdAt, updatedAt, pinned, deletedAt, sortOrder, categoryId)
+                VALUES (5, '迁移前的小巧思', 10, 20, 0, NULL, 0, NULL)
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            TEST_DATABASE,
+            7,
+            true,
+            AppDatabase.MIGRATION_6_7,
+        )
+        database.query(
+            "SELECT content, highlighted FROM flash_thoughts WHERE id = 5",
+        ).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("迁移前的小巧思", cursor.getString(0))
+            assertEquals(0, cursor.getInt(1))
+        }
+        database.execSQL("UPDATE flash_thoughts SET highlighted = 1 WHERE id = 5")
+        database.query("SELECT highlighted FROM flash_thoughts WHERE id = 5").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(1, cursor.getInt(0))
+        }
+        database.execSQL(
+            """
+            INSERT INTO vault_items (id, cipherText, iv, createdAt, updatedAt)
+            VALUES (1, 'Y2lwaGVy', 'aXY=', 10, 20)
+            """.trimIndent(),
+        )
+        database.query("SELECT COUNT(*) FROM vault_items").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(1, cursor.getInt(0))
+        }
+        database.execSQL(
+            """
+            INSERT INTO game_states (gameId, highScore, saveJson, updatedAt)
+            VALUES ('2048', 2048, NULL, 30)
+            """.trimIndent(),
+        )
+        database.query("SELECT highScore FROM game_states WHERE gameId = '2048'").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(2048, cursor.getInt(0))
+        }
+        database.close()
+    }
+
     private companion object {
         const val TEST_DATABASE = "ai-chat-migration-test"
     }

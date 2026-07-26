@@ -76,6 +76,18 @@ interface FlashThoughtDao {
         setPinned(id, pinned, sortOrder, now)
     }
 
+    @Query("SELECT highlighted FROM flash_thoughts WHERE id = :id LIMIT 1")
+    suspend fun isHighlighted(id: Long): Boolean?
+
+    @Query("UPDATE flash_thoughts SET highlighted = :highlighted, updatedAt = :now WHERE id = :id")
+    suspend fun setHighlighted(id: Long, highlighted: Boolean, now: Long)
+
+    @Transaction
+    suspend fun toggleHighlighted(id: Long, now: Long) {
+        val highlighted = !(isHighlighted(id) ?: return)
+        setHighlighted(id, highlighted, now)
+    }
+
     @Query("UPDATE flash_thoughts SET deletedAt = :now, updatedAt = :now WHERE id = :id")
     suspend fun softDelete(id: Long, now: Long)
 
@@ -424,4 +436,53 @@ interface AiChatDao {
         val imageUris = getOwnedImageUris(id)
         return if (deleteConversation(id) > 0) imageUris else null
     }
+}
+
+@Dao
+interface VaultItemDao {
+    @Query("SELECT * FROM vault_items ORDER BY updatedAt DESC, id DESC")
+    fun observeAll(): Flow<List<VaultItemEntity>>
+
+    @Query("SELECT * FROM vault_items ORDER BY id ASC")
+    suspend fun getAll(): List<VaultItemEntity>
+
+    @Insert
+    suspend fun insert(item: VaultItemEntity): Long
+
+    @Query(
+        "UPDATE vault_items SET cipherText = :cipherText, iv = :iv, updatedAt = :updatedAt " +
+            "WHERE id = :id",
+    )
+    suspend fun update(id: Long, cipherText: String, iv: String, updatedAt: Long): Int
+
+    @Query("DELETE FROM vault_items WHERE id = :id")
+    suspend fun delete(id: Long): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(items: List<VaultItemEntity>)
+
+    @Query("DELETE FROM vault_items")
+    suspend fun clearAll()
+
+    /** Used when the vault password changes and every row must be re-encrypted atomically. */
+    @Transaction
+    suspend fun replaceAll(items: List<VaultItemEntity>) {
+        clearAll()
+        if (items.isNotEmpty()) insertAll(items)
+    }
+}
+
+@Dao
+interface GameStateDao {
+    @Query("SELECT * FROM game_states WHERE gameId = :gameId LIMIT 1")
+    fun observe(gameId: String): Flow<GameStateEntity?>
+
+    @Query("SELECT * FROM game_states WHERE gameId = :gameId LIMIT 1")
+    suspend fun get(gameId: String): GameStateEntity?
+
+    @Upsert
+    suspend fun upsert(item: GameStateEntity)
+
+    @Query("UPDATE game_states SET saveJson = NULL, updatedAt = :now WHERE gameId = :gameId")
+    suspend fun clearSave(gameId: String, now: Long)
 }

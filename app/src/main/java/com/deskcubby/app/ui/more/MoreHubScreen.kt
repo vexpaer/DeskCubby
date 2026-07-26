@@ -277,6 +277,8 @@ private fun NavItemId.localizedDescription(): String = when (this) {
     NavItemId.POETRY -> tr("收藏喜欢的诗词", "Keep your favorite poems")
     NavItemId.RSS -> tr("阅读订阅源的最新文章", "Read the latest from your feeds")
     NavItemId.AI_CHAT -> tr("与已配置的模型聊天", "Chat with a configured model")
+    NavItemId.VAULT -> tr("密码保护的私密收藏", "Password-protected private notes")
+    NavItemId.GAMES -> tr("2048、贪吃蛇与俄罗斯方块", "2048, Snake and Tetris")
     NavItemId.SETTINGS -> tr("调整应用与页面设置", "Adjust app and page settings")
     else -> tr("从这里打开此页面", "Open this page from here")
 }

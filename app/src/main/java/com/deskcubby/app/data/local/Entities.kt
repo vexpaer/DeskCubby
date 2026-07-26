@@ -27,6 +27,7 @@ data class FlashThoughtEntity(
     val deletedAt: Long? = null,
     @ColumnInfo(defaultValue = "0") val sortOrder: Long = 0,
     @ColumnInfo(defaultValue = "NULL") val categoryId: Long? = null,
+    @ColumnInfo(defaultValue = "0") val highlighted: Boolean = false,
 )
 
 @Entity(
@@ -118,4 +119,27 @@ data class AiMessageEntity(
     val imageMimeType: String?,
     val imagePermissionOwned: Boolean,
     val createdAt: Long,
+)
+
+/**
+ * A password-protected vault entry. [cipherText] and [iv] are Base64; the plaintext
+ * (title + content JSON) is only recoverable with the key derived from the user's
+ * vault password. Never stored or backed up in plain form.
+ */
+@Entity(tableName = "vault_items")
+data class VaultItemEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val cipherText: String,
+    val iv: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+/** High score plus an optional serialized paused-game snapshot for one mini game. */
+@Entity(tableName = "game_states")
+data class GameStateEntity(
+    @PrimaryKey val gameId: String,
+    @ColumnInfo(defaultValue = "0") val highScore: Int = 0,
+    val saveJson: String? = null,
+    val updatedAt: Long,
 )

@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -34,6 +35,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -53,6 +55,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.RssFeed
 import androidx.compose.material.icons.outlined.SmartToy
@@ -75,6 +78,7 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -118,6 +122,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.deskcubby.app.BuildConfig
 import com.deskcubby.app.takeCodePoints
 import com.deskcubby.app.data.backup.AutoBackupStatus
 import com.deskcubby.app.data.model.AppSettings
@@ -132,18 +137,24 @@ import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.repository.UpdateCheckResult
 import com.deskcubby.app.data.repository.buildAiRequestPreviewJson
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.PendingCloudSyncJson
 import com.deskcubby.app.ui.components.AppLoadingIndicator
+import com.deskcubby.app.ui.components.ColorPickerDialog
 import com.deskcubby.app.ui.iconFor
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
+import com.deskcubby.app.ui.theme.LocalCompactMode
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.tr
 import java.text.DateFormat
@@ -168,6 +179,7 @@ private enum class SettingsPage {
     AI,
     AI_DETAIL,
     NAVIGATION,
+    ABOUT,
 }
 
 enum class SettingsStartPage { MAIN, NAVIGATION, RSS, AI }
@@ -278,8 +290,12 @@ private data class DiarySettingsDraft(
     val imageHeight: Int?,
     val mealImageCompressionEnabled: Boolean,
     val mealImageCompressionQuality: Int,
+    val saveOriginalToGallery: Boolean,
+    val photoLocationEnabled: Boolean,
     val mealCalendarImageMaxHeightDp: Int,
     val mealCalendarShowCaptions: Boolean,
+    val mealCalendarWrapEnabled: Boolean,
+    val mealCalendarPhotosPerRow: MealPhotosPerRow,
     val calorieEstimationEnabled: Boolean,
     val calorieTextConfigId: String?,
     val calorieImageConfigId: String?,
@@ -401,13 +417,14 @@ fun SettingsScreen(
                 settings = settings,
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
-                onSave = { visualStyle, darkMode, language, themeColor, secondaryColors, fontScale ->
+                onSave = { visualStyle, darkMode, language, themeColor, secondaryColors, fontScale, compactMode ->
                     viewModel.setVisualStyle(visualStyle)
                     viewModel.setDarkMode(darkMode)
                     viewModel.setAppLanguage(language)
                     viewModel.setThemeColor(themeColor)
                     viewModel.setThemeSecondaryColors(secondaryColors)
                     viewModel.setFontScale(fontScale)
+                    viewModel.setCompactMode(compactMode)
                     completeSave(SettingsPage.MAIN)
                 },
             )
@@ -523,8 +540,14 @@ fun SettingsScreen(
                     draft.imageHeight?.let(viewModel::setImageMaxHeight)
                     viewModel.setMealImageCompressionEnabled(draft.mealImageCompressionEnabled)
                     viewModel.setMealImageCompressionQuality(draft.mealImageCompressionQuality)
+                    viewModel.setSaveOriginalToGallery(draft.saveOriginalToGallery)
+                    viewModel.setPhotoLocationEnabled(draft.photoLocationEnabled)
                     viewModel.setMealCalendarImageMaxHeight(draft.mealCalendarImageMaxHeightDp)
                     viewModel.setMealCalendarShowCaptions(draft.mealCalendarShowCaptions)
+                    viewModel.setMealCalendarWrap(
+                        enabled = draft.mealCalendarWrapEnabled,
+                        photosPerRow = draft.mealCalendarPhotosPerRow,
+                    )
                     viewModel.setCalorieEstimationSettings(
                         draft.calorieEstimationEnabled, draft.calorieTextConfigId,
                         draft.calorieImageConfigId, draft.calorieVisionPrompt, draft.calorieTextPrompt,
@@ -549,8 +572,14 @@ fun SettingsScreen(
                 settings = settings,
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
-                onSave = { rowHeight, reopenMode, displayMode ->
-                    viewModel.setThoughtSettings(rowHeight, reopenMode, displayMode)
+                onSave = { rowHeight, reopenMode, displayMode, highlightColor, editorMaxHeight ->
+                    viewModel.setThoughtSettings(
+                        rowHeightDp = rowHeight,
+                        reopenMode = reopenMode,
+                        displayMode = displayMode,
+                        highlightColorArgb = highlightColor,
+                        editorMaxHeightDp = editorMaxHeight,
+                    )
                     completeSave(SettingsPage.SUBPAGES)
                 },
             )
@@ -606,6 +635,12 @@ fun SettingsScreen(
                     completeSave(SettingsPage.MAIN)
                 },
             )
+
+            SettingsPage.ABOUT -> AboutSettingsPage(
+                settings = settings,
+                contentPadding = inner,
+                viewModel = viewModel,
+            )
         }
     }
 
@@ -640,18 +675,152 @@ fun SettingsScreen(
     }
 }
 
+private data class SettingsSearchEntry(
+    val title: String,
+    val description: String,
+    val keywords: String,
+    val page: SettingsPage,
+)
+
+@Composable
+private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
+    SettingsSearchEntry(
+        tr("外观与语言", "Appearance & language"),
+        tr("风格、主题颜色、辅色、字号、明暗、紧凑模式", "Style, theme colors, secondary colors, font size, dark mode, compact mode"),
+        "appearance style theme color secondary font dark compact 外观 风格 主题 颜色 辅色 副色 字号 明暗 紧凑 语言 material glass organic",
+        SettingsPage.APPEARANCE,
+    ),
+    SettingsSearchEntry(
+        tr("主页", "Home"),
+        tr("问候语、模块、标题、排序与饮食按钮", "Greeting, widgets, titles, order and meal buttons"),
+        "home widget 主页 模块 问候 组件 饮食按钮",
+        SettingsPage.HOME,
+    ),
+    SettingsSearchEntry(
+        tr("日记与媒体", "Diary & media"),
+        tr("目录、文件名、图片压缩、相册、吃历显示与热量", "Folders, file names, compression, gallery, meal calendar and calories"),
+        "diary media image compress gallery meal calendar calorie 日记 媒体 图片 压缩 相册 原图 吃历 换行 每行 热量",
+        SettingsPage.DIARY,
+    ),
+    SettingsSearchEntry(
+        tr("浏览器", "Browser"),
+        tr("默认主页、主题和电脑模式", "Home page, theme and desktop mode"),
+        "browser 浏览器 主页 电脑模式 desktop",
+        SettingsPage.BLOG,
+    ),
+    SettingsSearchEntry(
+        tr("小巧思", "Thoughts"),
+        tr("打开位置、内容显示、行高、重点颜色与输入框高度", "Reopen page, display, row height, highlight color and editor height"),
+        "thought 小巧思 行高 重点 高亮 颜色 输入框 高度 编辑框",
+        SettingsPage.THOUGHT,
+    ),
+    SettingsSearchEntry(
+        tr("RSS 订阅", "RSS"),
+        tr("每个订阅的文章数量与摘要显示", "Article limit and summary display"),
+        "rss feed 订阅 摘要",
+        SettingsPage.RSS,
+    ),
+    SettingsSearchEntry(
+        tr("AI 配置", "AI configurations"),
+        tr("兼容接口、模型、系统提示词与 API 密钥", "Endpoint, model, system prompt and API key"),
+        "ai api key model prompt 模型 密钥 提示词 热量",
+        SettingsPage.AI,
+    ),
+    SettingsSearchEntry(
+        tr("应用数据与备份", "App data & backup"),
+        tr("自动保存文件夹、导入与导出 JSON", "Auto-save folder and JSON import/export"),
+        "backup json 备份 导入 导出",
+        SettingsPage.BACKUP,
+    ),
+    SettingsSearchEntry(
+        tr("云端同步", "Cloud sync"),
+        tr("WebDAV、S3 兼容服务与同步内容", "WebDAV, S3-compatible services and content selection"),
+        "cloud sync webdav s3 云端 同步",
+        SettingsPage.SYNC,
+    ),
+    SettingsSearchEntry(
+        tr("底部导航", "Bottom navigation"),
+        tr("显示方式、默认页、排序、名称与图标", "Display, default page, order, labels and icons"),
+        "navigation bottom bar 导航 底栏 图标 默认页",
+        SettingsPage.NAVIGATION,
+    ),
+    SettingsSearchEntry(
+        tr("关于", "About"),
+        tr("版本、更新检查与应用显示名称", "Version, update check and app display name"),
+        "about version update github 关于 版本 更新 名称 桌洞",
+        SettingsPage.ABOUT,
+    ),
+)
+
 @Composable
 private fun SettingsMainPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
     onOpen: (SettingsPage) -> Unit,
 ) {
-    val context = LocalContext.current
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    val searchIndex = settingsSearchIndex()
+    val query = searchQuery.trim()
+    val searchResults = if (query.isEmpty()) {
+        emptyList()
+    } else {
+        searchIndex.filter { entry ->
+            entry.title.contains(query, ignoreCase = true) ||
+                entry.description.contains(query, ignoreCase = true) ||
+                entry.keywords.contains(query, ignoreCase = true)
+        }
+    }
+    val compact = LocalCompactMode.current
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = if (compact) 8.dp else 12.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 12.dp),
     ) {
+        item {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text(tr("搜索设置", "Search settings")) },
+                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                trailingIcon = if (searchQuery.isNotEmpty()) {
+                    {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Outlined.Close, tr("清除搜索", "Clear search"))
+                        }
+                    }
+                } else {
+                    null
+                },
+            )
+        }
+        if (query.isNotEmpty()) {
+            if (searchResults.isEmpty()) {
+                item {
+                    Text(
+                        tr("没有匹配的设置", "No matching settings"),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                }
+            } else {
+                itemsIndexed(searchResults) { index, entry ->
+                    SettingsMenuItem(
+                        title = entry.title,
+                        description = entry.description,
+                        icon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                        accentColor = settings.menuAccentColor(index),
+                        onClick = {
+                            searchQuery = ""
+                            onOpen(entry.page)
+                        },
+                    )
+                }
+            }
+            return@LazyColumn
+        }
         item {
             SettingsMenuItem(
                 title = tr("外观与语言", "Appearance & language"),
@@ -713,11 +882,11 @@ private fun SettingsMainPage(
         }
         item {
             SettingsMenuItem(
-                title = "About",
-                description = tr("查看 DeskCubby GitHub 仓库", "Open the DeskCubby GitHub repository"),
+                title = tr("关于", "About"),
+                description = tr("版本、检查更新与应用显示名称", "Version, update check and app display name"),
                 icon = { Icon(Icons.Outlined.Info, contentDescription = null) },
                 accentColor = settings.menuAccentColor(5),
-                onClick = { openUrl(context, GITHUB_URL) },
+                onClick = { onOpen(SettingsPage.ABOUT) },
             )
         }
     }
@@ -729,10 +898,11 @@ private fun SubpageSettingsPage(
     contentPadding: PaddingValues,
     onOpen: (SettingsPage) -> Unit,
 ) {
+    val compact = LocalCompactMode.current
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = if (compact) 8.dp else 12.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 12.dp),
     ) {
         item {
             SettingsMenuItem(
@@ -1742,7 +1912,7 @@ private fun AppearanceSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
     saveCoordinator: SettingsSaveCoordinator,
-    onSave: (VisualStyle, DarkMode, AppLanguage, Int, List<Int>, Float) -> Unit,
+    onSave: (VisualStyle, DarkMode, AppLanguage, Int, List<Int>, Float, Boolean) -> Unit,
 ) {
     val presets = listOf(
         0xFF42664D.toInt(),
@@ -1752,6 +1922,8 @@ private fun AppearanceSettingsPage(
         0xFF7B5EA7.toInt(),
         0xFF00897B.toInt(),
     )
+    // null = closed, -1 = primary color, >= 0 = index into secondaryHexes.
+    var colorPickerTarget by remember { mutableStateOf<Int?>(null) }
     var visualStyle by rememberSaveable(settings.visualStyle) { mutableStateOf(settings.visualStyle) }
     var darkMode by rememberSaveable(settings.darkMode) { mutableStateOf(settings.darkMode) }
     var language by rememberSaveable(settings.appLanguage) { mutableStateOf(settings.appLanguage) }
@@ -1771,6 +1943,9 @@ private fun AppearanceSettingsPage(
     var fontScale by rememberSaveable(settings.fontScale) {
         mutableStateOf(settings.fontScale.coerceIn(0.8f, 1.3f))
     }
+    var compactMode by rememberSaveable(settings.compactMode) {
+        mutableStateOf(settings.compactMode)
+    }
     val parsedThemeColor = parseThemeColor(themeHex)
     val parsedSecondaryColors = secondaryHexes.map(::parseThemeColor)
     val validSecondaryValues = parsedSecondaryColors.filterNotNull()
@@ -1781,7 +1956,8 @@ private fun AppearanceSettingsPage(
         darkMode != settings.darkMode || language != settings.appLanguage ||
         parsedThemeColor != settings.themeColorArgb ||
         validSecondaryValues != settings.themeSecondaryColorsArgb ||
-        fontScale != settings.fontScale
+        fontScale != settings.fontScale ||
+        compactMode != settings.compactMode
     RegisterSettingsSave(
         coordinator = saveCoordinator,
         dirty = appearanceDirty,
@@ -1794,6 +1970,31 @@ private fun AppearanceSettingsPage(
             parsedThemeColor ?: settings.themeColorArgb,
             parsedSecondaryColors.filterNotNull(),
             fontScale,
+            compactMode,
+        )
+    }
+
+    colorPickerTarget?.let { target ->
+        val initial = if (target < 0) {
+            parsedThemeColor ?: settings.themeColorArgb
+        } else {
+            secondaryHexes.getOrNull(target)?.let(::parseThemeColor)
+                ?: settings.themeSecondaryColorsArgb.firstOrNull()
+                ?: settings.themeColorArgb
+        }
+        ColorPickerDialog(
+            initialColorArgb = initial,
+            onDismiss = { colorPickerTarget = null },
+            onConfirm = { picked ->
+                if (target < 0) {
+                    themeHex = colorToHex(picked)
+                } else if (target < secondaryHexes.size) {
+                    secondaryHexes = secondaryHexes.toMutableList().apply {
+                        this[target] = colorToHex(picked)
+                    }
+                }
+                colorPickerTarget = null
+            },
         )
     }
 
@@ -1893,6 +2094,20 @@ private fun AppearanceSettingsPage(
                                 .clickable { themeHex = colorToHex(value) },
                         )
                     }
+                    Box(
+                        Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                            .clickable { colorPickerTarget = -1 },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Outlined.Palette,
+                            tr("自定义主颜色", "Custom primary color"),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 OutlinedTextField(
                     value = themeHex,
@@ -1915,7 +2130,10 @@ private fun AppearanceSettingsPage(
                             style = MaterialTheme.typography.labelLarge,
                         )
                         Text(
-                            tr("设置 2–5 个，有机未来会轮换使用", "Choose 2–5; Organic Future rotates through them"),
+                            tr(
+                                "设置 2–5 个，三种风格都会在不同位置使用",
+                                "Choose 2–5; every style uses them in different places",
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1944,7 +2162,8 @@ private fun AppearanceSettingsPage(
                             Modifier
                                 .size(32.dp)
                                 .clip(CircleShape)
-                                .background(parsed?.let(::Color) ?: MaterialTheme.colorScheme.errorContainer),
+                                .background(parsed?.let(::Color) ?: MaterialTheme.colorScheme.errorContainer)
+                                .clickable { colorPickerTarget = index },
                         )
                         Spacer(Modifier.width(10.dp))
                         OutlinedTextField(
@@ -2000,6 +2219,24 @@ private fun AppearanceSettingsPage(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(tr("小 80%", "Small 80%"), style = MaterialTheme.typography.bodySmall)
                     Text(tr("大 130%", "Large 130%"), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("紧凑模式", "Compact mode")) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("紧凑显示", "Compact layout"))
+                        Text(
+                            tr("缩小列表与卡片间距，一屏显示更多内容", "Tighter list spacing to fit more on screen"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = compactMode, onCheckedChange = { compactMode = it })
                 }
             }
         }
@@ -2330,6 +2567,21 @@ private fun DiarySettingsPage(
     var mealCalendarShowCaptions by rememberSaveable(settings.mealCalendarShowCaptions) {
         mutableStateOf(settings.mealCalendarShowCaptions)
     }
+    var saveOriginalToGallery by rememberSaveable(settings.saveOriginalToGallery) {
+        mutableStateOf(settings.saveOriginalToGallery)
+    }
+    var photoLocationEnabled by rememberSaveable(settings.photoLocationEnabled) {
+        mutableStateOf(settings.photoLocationEnabled)
+    }
+    val mediaLocationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* Best-effort: the feature still works for camera photos when denied. */ }
+    var mealCalendarWrapEnabled by rememberSaveable(settings.mealCalendarWrapEnabled) {
+        mutableStateOf(settings.mealCalendarWrapEnabled)
+    }
+    var mealCalendarPhotosPerRow by rememberSaveable(settings.mealCalendarPhotosPerRow) {
+        mutableStateOf(settings.mealCalendarPhotosPerRow)
+    }
     val textConfigs = settings.aiConfigs.filter { it.type == AiModelType.TEXT }
     val imageConfigs = settings.aiConfigs.filter { it.type == AiModelType.IMAGE }
     var calorieEnabled by rememberSaveable(settings.calorieEstimationEnabled) {
@@ -2360,8 +2612,12 @@ private fun DiarySettingsPage(
         imageHeight = imageHeight.toIntOrNull(),
         mealImageCompressionEnabled = mealImageCompressionEnabled,
         mealImageCompressionQuality = mealImageCompressionQuality,
+        saveOriginalToGallery = saveOriginalToGallery,
+        photoLocationEnabled = photoLocationEnabled,
         mealCalendarImageMaxHeightDp = mealCalendarImageMaxHeight,
         mealCalendarShowCaptions = mealCalendarShowCaptions,
+        mealCalendarWrapEnabled = mealCalendarWrapEnabled,
+        mealCalendarPhotosPerRow = mealCalendarPhotosPerRow,
         calorieEstimationEnabled = calorieEnabled,
         calorieTextConfigId = calorieTextConfigId,
         calorieImageConfigId = calorieImageConfigId,
@@ -2374,8 +2630,12 @@ private fun DiarySettingsPage(
         diaryDraft.imageHeight != settings.imageMaxHeightDp ||
         mealImageCompressionEnabled != settings.mealImageCompressionEnabled ||
         mealImageCompressionQuality != settings.mealImageCompressionQuality ||
+        saveOriginalToGallery != settings.saveOriginalToGallery ||
+        photoLocationEnabled != settings.photoLocationEnabled ||
         mealCalendarImageMaxHeight != settings.mealCalendarImageMaxHeightDp ||
         mealCalendarShowCaptions != settings.mealCalendarShowCaptions ||
+        mealCalendarWrapEnabled != settings.mealCalendarWrapEnabled ||
+        mealCalendarPhotosPerRow != settings.mealCalendarPhotosPerRow ||
         calorieEnabled != settings.calorieEstimationEnabled ||
         calorieTextConfigId != settings.calorieTextConfigId ||
         calorieImageConfigId != settings.calorieImageConfigId ||
@@ -2489,6 +2749,57 @@ private fun DiarySettingsPage(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("保存原图到系统相册", "Save original to system gallery"))
+                        Text(
+                            tr(
+                                "导入图片时把未压缩的原图另存到系统相册的 DeskCubby 相簿。",
+                                "Also saves the uncompressed original into the DeskCubby album in the system gallery.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(
+                        checked = saveOriginalToGallery,
+                        onCheckedChange = { saveOriginalToGallery = it },
+                    )
+                }
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("记录照片拍摄地点", "Record photo location"))
+                        Text(
+                            tr(
+                                "从照片 EXIF 读取拍摄地点，与热量一起记录到媒体目录的 deskcubby-media.json；相册照片可能需要授予媒体位置权限。",
+                                "Reads the photo's EXIF location into deskcubby-media.json in the media folder alongside calories; gallery photos may need the media-location permission.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(
+                        checked = photoLocationEnabled,
+                        onCheckedChange = { enabled ->
+                            photoLocationEnabled = enabled
+                            if (enabled && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                mediaLocationPermission.launch(
+                                    android.Manifest.permission.ACCESS_MEDIA_LOCATION,
+                                )
+                            }
+                        },
+                    )
+                }
             }
         }
         item {
@@ -2524,6 +2835,56 @@ private fun DiarySettingsPage(
                     Switch(
                         checked = mealCalendarShowCaptions,
                         onCheckedChange = { mealCalendarShowCaptions = it },
+                    )
+                }
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("图片自动换行", "Wrap photos into rows"))
+                        Text(
+                            tr(
+                                "关闭时单行横向滑动，开启后按每行数量换行显示。",
+                                "Off keeps one scrollable row; on wraps photos into fixed rows.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = mealCalendarWrapEnabled,
+                        onCheckedChange = { mealCalendarWrapEnabled = it },
+                    )
+                }
+                if (mealCalendarWrapEnabled) {
+                    Text(tr("每行图片数量", "Photos per row"), style = MaterialTheme.typography.labelLarge)
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        MealPhotosPerRow.entries.forEachIndexed { index, mode ->
+                            SegmentedButton(
+                                selected = mealCalendarPhotosPerRow == mode,
+                                onClick = { mealCalendarPhotosPerRow = mode },
+                                shape = SegmentedButtonDefaults.itemShape(index, MealPhotosPerRow.entries.size),
+                            ) {
+                                Text(
+                                    when (mode) {
+                                        MealPhotosPerRow.TWO -> "2"
+                                        MealPhotosPerRow.THREE -> "3"
+                                        MealPhotosPerRow.SMART -> tr("2+3 自动", "2+3 auto")
+                                    },
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        tr(
+                            "2+3 自动：混合每行 2 或 3 张，让最后一行不留空位（如 4=2+2、5=3+2、7=3+2+2）。",
+                            "2+3 auto mixes rows of 2 and 3 so the last row is never left short (4=2+2, 5=3+2, 7=3+2+2).",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -2696,18 +3057,43 @@ private fun ThoughtSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
     saveCoordinator: SettingsSaveCoordinator,
-    onSave: (Int, ThoughtReopenMode, ThoughtDisplayMode) -> Unit,
+    onSave: (Int, ThoughtReopenMode, ThoughtDisplayMode, Int, Int) -> Unit,
 ) {
     var rowHeight by remember(settings.thoughtRowHeightDp) {
         mutableIntStateOf(settings.thoughtRowHeightDp.coerceIn(48, 120))
     }
     var reopenMode by remember(settings.thoughtReopenMode) { mutableStateOf(settings.thoughtReopenMode) }
     var displayMode by remember(settings.thoughtDisplayMode) { mutableStateOf(settings.thoughtDisplayMode) }
+    var highlightColor by remember(settings.thoughtHighlightColorArgb) {
+        mutableIntStateOf(settings.thoughtHighlightColorArgb)
+    }
+    var editorMaxHeight by remember(settings.thoughtEditorMaxHeightDp) {
+        mutableIntStateOf(
+            settings.thoughtEditorMaxHeightDp.coerceIn(
+                MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP,
+                MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP,
+            ),
+        )
+    }
+    var showHighlightPicker by remember { mutableStateOf(false) }
     RegisterSettingsSave(
         coordinator = saveCoordinator,
         dirty = rowHeight != settings.thoughtRowHeightDp || reopenMode != settings.thoughtReopenMode ||
-            displayMode != settings.thoughtDisplayMode,
-    ) { onSave(rowHeight, reopenMode, displayMode) }
+            displayMode != settings.thoughtDisplayMode ||
+            highlightColor != settings.thoughtHighlightColorArgb ||
+            editorMaxHeight != settings.thoughtEditorMaxHeightDp,
+    ) { onSave(rowHeight, reopenMode, displayMode, highlightColor, editorMaxHeight) }
+
+    if (showHighlightPicker) {
+        ColorPickerDialog(
+            initialColorArgb = highlightColor,
+            onDismiss = { showHighlightPicker = false },
+            onConfirm = { picked ->
+                highlightColor = picked
+                showHighlightPicker = false
+            },
+        )
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -2779,6 +3165,59 @@ private fun ThoughtSettingsPage(
                     Text(tr("紧凑 48 dp", "Compact 48 dp"), style = MaterialTheme.typography.bodySmall)
                     Text(tr("宽松 120 dp", "Spacious 120 dp"), style = MaterialTheme.typography.bodySmall)
                 }
+            }
+        }
+        item {
+            SettingsSection(tr("重点标记", "Highlight")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("重点背景颜色", "Highlight background color"))
+                        Text(
+                            tr("长按小巧思可标记为重点", "Long-press a thought to mark it as a highlight"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Box(
+                        Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(Color(highlightColor))
+                            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                            .clickable { showHighlightPicker = true },
+                    )
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("输入框高度", "Editor height")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(tr("输入框最大高度", "Editor max height"))
+                    Text("$editorMaxHeight dp", color = MaterialTheme.colorScheme.primary)
+                }
+                Slider(
+                    value = editorMaxHeight.toFloat(),
+                    onValueChange = {
+                        editorMaxHeight = it.roundToInt().coerceIn(
+                            MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP,
+                            MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP,
+                        )
+                    },
+                    valueRange = MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP.toFloat()..MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP.toFloat(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    tr("超过上限后输入框内部滚动。", "The editor scrolls internally beyond this height."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -3451,6 +3890,132 @@ private fun NavigationSettingsPage(
 }
 
 @Composable
+private fun AboutSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    viewModel: SettingsViewModel,
+) {
+    val context = LocalContext.current
+    val checking by viewModel.updateCheckInProgress.collectAsStateWithLifecycle()
+    val result by viewModel.updateCheckResult.collectAsStateWithLifecycle()
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            SettingsSection(tr("应用信息", "App info")) {
+                Text(
+                    if (settings.useChineseLauncherName) "桌洞" else "Desk Cubby",
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+                Text(
+                    tr("版本 ", "Version ") + BuildConfig.VERSION_NAME,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = { openUrl(context, GITHUB_URL) }) {
+                    Icon(Icons.Outlined.Info, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("GitHub 仓库", "GitHub repository"))
+                }
+                TextButton(onClick = { openUrl(context, TUTORIAL_URL) }) {
+                    Icon(Icons.Outlined.MenuBook, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("应用教学", "App tutorial"))
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("检查更新", "Check for updates")) {
+                Text(
+                    tr(
+                        "从 GitHub Release 获取最新版本信息。",
+                        "Fetches the latest release information from GitHub.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(
+                    onClick = viewModel::checkForUpdate,
+                    enabled = !checking,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (checking) tr("正在检查…", "Checking…") else tr("检查更新", "Check for updates"))
+                }
+                when (val current = result) {
+                    null -> Unit
+                    is UpdateCheckResult.UpToDate -> Text(
+                        tr(
+                            "已是最新版本（${current.currentVersion}）。",
+                            "You are on the latest version (${current.currentVersion}).",
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    is UpdateCheckResult.Failed -> Text(
+                        current.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    is UpdateCheckResult.UpdateAvailable -> Column(
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            tr(
+                                "发现新版本 ${current.latestVersion}（当前 ${current.currentVersion}）",
+                                "New version ${current.latestVersion} available (current ${current.currentVersion})",
+                            ),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        if (current.releaseName.isNotBlank()) {
+                            Text(current.releaseName, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        if (current.notes.isNotBlank()) {
+                            Text(
+                                current.notes.take(2000),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Button(
+                            onClick = { openUrl(context, current.htmlUrl) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(tr("前往下载页面", "Open release page")) }
+                    }
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("应用显示名称", "App display name")) {
+                Text(
+                    tr(
+                        "更改桌面图标下显示的应用名称。部分启动器需要片刻才会刷新。",
+                        "Changes the launcher label. Some launchers take a moment to refresh.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                listOf(false to "Desk Cubby", true to "桌洞").forEach { (useChinese, label) ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.setUseChineseLauncherName(useChinese) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = settings.useChineseLauncherName == useChinese,
+                            onClick = { viewModel.setUseChineseLauncherName(useChinese) },
+                        )
+                        Text(label)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     GlassPanel(modifier = Modifier.fillMaxWidth(), padding = PaddingValues(16.dp)) {
@@ -3545,6 +4110,7 @@ private fun NavConfigRow(
     val icons = listOf(
         "home", "book", "poetry", "language", "bolt", "settings", "calendar",
         "event", "rss", "ai", "apps", "star", "write", "sparkle", "day",
+        "lock", "game",
     )
     val visibilityDescription = tr(
         "${item.id.defaultLabel}是否显示在底栏",
@@ -3641,6 +4207,7 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.AI -> tr("AI 配置", "AI configurations")
     SettingsPage.AI_DETAIL -> tr("AI 配置详情", "AI configuration")
     SettingsPage.NAVIGATION -> tr("底部导航", "Bottom navigation")
+    SettingsPage.ABOUT -> tr("关于", "About")
 }
 
 private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
@@ -3661,6 +4228,7 @@ private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
     SettingsPage.BACKUP,
     SettingsPage.SYNC,
     SettingsPage.NAVIGATION,
+    SettingsPage.ABOUT,
     -> SettingsPage.MAIN
 }
 
@@ -3683,6 +4251,7 @@ private fun openUrl(context: Context, url: String) {
 }
 
 private const val GITHUB_URL = "https://github.com/vexpaer/DeskCubby"
+private const val TUTORIAL_URL = "https://github.com/vexpaer/DeskCubby/blob/main/TUTORIAL.md"
 
 @Composable
 private fun localizedNavLabel(item: NavItemConfig): String =

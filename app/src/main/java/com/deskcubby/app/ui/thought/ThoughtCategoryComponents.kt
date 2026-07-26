@@ -31,7 +31,9 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.LabelOff
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -58,6 +60,7 @@ import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.ThoughtRepository
+import com.deskcubby.app.ui.components.ColorPickerDialog
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.tr
@@ -74,16 +77,17 @@ private val categoryColors = listOf(
     0xFF7B716A.toInt(),
 )
 
+// Muted, organic-leaning hues that still span the wheel — deliberately not all green.
 private val organicCategoryColors = listOf(
-    0xFF2E7D4B.toInt(),
-    0xFF5C7A3E.toInt(),
-    0xFF3D7665.toInt(),
-    0xFF7E8352.toInt(),
-    0xFF5F7467.toInt(),
-    0xFF8A6F50.toInt(),
-    0xFF456B50.toInt(),
-    0xFF6B7E62.toInt(),
-    0xFF756F5E.toInt(),
+    0xFFB0563C.toInt(), // 赤陶
+    0xFFC08A2E.toInt(), // 赭黄
+    0xFF2E7D4B.toInt(), // 森绿
+    0xFF3D7665.toInt(), // 苔青
+    0xFF3E7C8A.toInt(), // 湖蓝
+    0xFF4C63A6.toInt(), // 黛蓝
+    0xFF7A5FA0.toInt(), // 苍紫
+    0xFFA05577.toInt(), // 绛紫
+    0xFF7B716A.toInt(), // 暖灰
 )
 
 internal val defaultThoughtCategoryColor: Int = categoryColors.first()
@@ -195,6 +199,7 @@ internal fun ThoughtCategoryEditorDialog(
     onDismiss: () -> Unit,
     onSave: (String, Int, (Boolean) -> Unit) -> Unit,
     onDelete: ((ThoughtCategoryEntity) -> Unit)? = null,
+    onExport: ((ThoughtCategoryEntity) -> Unit)? = null,
 ) {
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     val palette = if (organic) organicCategoryColors else categoryColors
@@ -204,6 +209,7 @@ internal fun ThoughtCategoryEditorDialog(
     }
     var duplicateName by remember(category?.id) { mutableStateOf(false) }
     var confirmingDelete by remember(category?.id) { mutableStateOf(false) }
+    var showColorPicker by remember(category?.id) { mutableStateOf(false) }
 
     if (confirmingDelete && category != null) {
         AlertDialog(
@@ -239,8 +245,9 @@ internal fun ThoughtCategoryEditorDialog(
         existing.id != category?.id && existing.name.equals(normalizedName, ignoreCase = true)
     }
     val canSave = normalizedName.isNotBlank() && !duplicateInUi
-    val availableColors = remember(category?.colorArgb, organic) {
-        listOfNotNull(category?.colorArgb).plus(palette).distinct()
+    // colorArgb participates so a freshly picked custom color shows up as a selectable swatch.
+    val availableColors = remember(category?.colorArgb, organic, colorArgb) {
+        listOfNotNull(category?.colorArgb).plus(palette).plus(colorArgb).distinct()
     }
 
     AlertDialog(
@@ -299,6 +306,24 @@ internal fun ThoughtCategoryEditorDialog(
                             }
                         }
                     }
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .border(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.outline,
+                                shape = CircleShape,
+                            )
+                            .combinedClickable(onClick = { showColorPicker = true }),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Outlined.Palette,
+                            tr("自定义颜色", "Custom color"),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         },
@@ -314,6 +339,13 @@ internal fun ThoughtCategoryEditorDialog(
         },
         dismissButton = {
             Row {
+                if (category != null && onExport != null) {
+                    TextButton(onClick = { onExport(category) }) {
+                        Icon(Icons.Outlined.Share, null)
+                        Spacer(Modifier.width(4.dp))
+                        Text(tr("导出", "Export"))
+                    }
+                }
                 if (category != null && onDelete != null) {
                     TextButton(onClick = { confirmingDelete = true }) {
                         Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error)
@@ -325,6 +357,17 @@ internal fun ThoughtCategoryEditorDialog(
             }
         },
     )
+
+    if (showColorPicker) {
+        ColorPickerDialog(
+            initialColorArgb = colorArgb,
+            onDismiss = { showColorPicker = false },
+            onConfirm = { picked ->
+                colorArgb = picked
+                showColorPicker = false
+            },
+        )
+    }
 }
 
 @Composable
@@ -334,6 +377,7 @@ internal fun ThoughtCategoryPickerDialog(
     currentCategoryId: Long?,
     onDismiss: () -> Unit,
     onSelect: (ThoughtCategoryFilter) -> Unit,
+    onCreateNew: (() -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -355,6 +399,16 @@ internal fun ThoughtCategoryPickerDialog(
                         leading = { CategoryColorDot(category.colorArgb) },
                         onClick = { onSelect(ThoughtCategoryFilter.Category(category.id)) },
                     )
+                }
+                if (onCreateNew != null) {
+                    item {
+                        CategoryPickerItem(
+                            label = tr("新增分类…", "New category…"),
+                            selected = false,
+                            leading = { Icon(Icons.Outlined.Add, null) },
+                            onClick = onCreateNew,
+                        )
+                    }
                 }
             }
         },

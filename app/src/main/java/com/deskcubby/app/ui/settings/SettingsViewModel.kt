@@ -21,11 +21,14 @@ import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
+import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.LegacyAiKeyMigrationStore
+import com.deskcubby.app.data.repository.UpdateCheckResult
+import com.deskcubby.app.data.repository.UpdateRepository
 import com.deskcubby.app.data.sync.AppCloudSyncService
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncSecretStore
@@ -68,6 +71,7 @@ class SettingsViewModel @Inject constructor(
     private val legacyAiKeyMigrationStore: LegacyAiKeyMigrationStore,
     private val cloudSyncService: AppCloudSyncService,
     private val cloudSyncSecretStore: CloudSyncSecretStore,
+    private val updateRepository: UpdateRepository,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
     private val _ready = MutableStateFlow(false)
@@ -92,6 +96,24 @@ class SettingsViewModel @Inject constructor(
 
     private val _settingsError = MutableStateFlow<String?>(null)
     val settingsError: StateFlow<String?> = _settingsError.asStateFlow()
+
+    private val _updateCheckInProgress = MutableStateFlow(false)
+    val updateCheckInProgress: StateFlow<Boolean> = _updateCheckInProgress.asStateFlow()
+    private val _updateCheckResult = MutableStateFlow<UpdateCheckResult?>(null)
+    val updateCheckResult: StateFlow<UpdateCheckResult?> = _updateCheckResult.asStateFlow()
+
+    fun checkForUpdate() {
+        if (_updateCheckInProgress.value) return
+        viewModelScope.launch {
+            _updateCheckInProgress.value = true
+            try {
+                _updateCheckResult.value = updateRepository.checkForUpdate()
+            } finally {
+                _updateCheckInProgress.value = false
+            }
+        }
+    }
+
     fun persistFolder(uri: Uri, diary: Boolean) {
         launch {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -112,6 +134,13 @@ class SettingsViewModel @Inject constructor(
     fun setThemeSecondaryColors(value: List<Int>) =
         launch { repository.setThemeSecondaryColors(value) }
     fun setFontScale(value: Float) = launch { repository.setFontScale(value) }
+    fun setCompactMode(value: Boolean) = launch { repository.setCompactMode(value) }
+    fun setUseChineseLauncherName(value: Boolean) =
+        launch { repository.setUseChineseLauncherName(value) }
+    fun setSaveOriginalToGallery(value: Boolean) =
+        launch { repository.setSaveOriginalToGallery(value) }
+    fun setPhotoLocationEnabled(value: Boolean) =
+        launch { repository.setPhotoLocationEnabled(value) }
     fun setFileNamePattern(value: String) = launch { repository.setFileNamePattern(value) }
     fun setTemplate(value: String) = launch { repository.setMarkdownTemplate(value) }
     fun setImageNamePattern(value: String) = launch { repository.setImageNamePattern(value) }
@@ -129,11 +158,23 @@ class SettingsViewModel @Inject constructor(
         rowHeightDp: Int,
         reopenMode: ThoughtReopenMode,
         displayMode: ThoughtDisplayMode,
-    ) = launch { repository.setThoughtSettings(rowHeightDp, reopenMode, displayMode) }
+        highlightColorArgb: Int,
+        editorMaxHeightDp: Int,
+    ) = launch {
+        repository.setThoughtSettings(
+            rowHeightDp = rowHeightDp,
+            reopenMode = reopenMode,
+            displayMode = displayMode,
+            highlightColorArgb = highlightColorArgb,
+            editorMaxHeightDp = editorMaxHeightDp,
+        )
+    }
     fun setMealCalendarImageMaxHeight(value: Int) =
         launch { repository.setMealCalendarImageMaxHeight(value) }
     fun setMealCalendarShowCaptions(value: Boolean) =
         launch { repository.setMealCalendarShowCaptions(value) }
+    fun setMealCalendarWrap(enabled: Boolean, photosPerRow: MealPhotosPerRow) =
+        launch { repository.setMealCalendarWrap(enabled, photosPerRow) }
     fun setMealPhotoFilter(
         value: MealPhotoFilterSettings,
         onSaved: () -> Unit = {},

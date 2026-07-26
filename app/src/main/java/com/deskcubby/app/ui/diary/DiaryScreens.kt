@@ -56,6 +56,7 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MenuBook
@@ -66,6 +67,8 @@ import androidx.compose.material.icons.outlined.Source
 import androidx.compose.material.icons.outlined.Today
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
@@ -97,6 +100,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -113,14 +118,20 @@ import androidx.compose.ui.zIndex
 import androidx.core.text.HtmlCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.DiaryDocument
+import com.deskcubby.app.data.model.MealCategory
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
+import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.model.mealPhotoRowSizes
+import com.deskcubby.app.data.repository.MealCalendarPhoto
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
 import com.deskcubby.app.ui.components.OrganicSplitActionRowSize
+import com.deskcubby.app.ui.components.ZoomableImageDialog
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.PanelRole
@@ -246,6 +257,10 @@ fun DiaryListScreen(
                                 },
                             )
                         } else {
+                            // Secondary colors rotate through month rows in every style,
+                            // not just Organic Future.
+                            val accentColors = organicFutureAccentColors
+                            val accent = accentColors[monthIndex.mod(accentColors.size)]
                             GlassPanel(
                                 modifier = Modifier.fillMaxWidth().combinedClickable(
                                     onClick = { viewModel.toggleExpandedMonth(month) },
@@ -259,10 +274,10 @@ fun DiaryListScreen(
                                     Text(
                                         diaries.size.toString(),
                                         style = MaterialTheme.typography.titleMedium,
-                                        color = MaterialTheme.colorScheme.primary,
+                                        color = accent,
                                     )
                                     Spacer(Modifier.width(8.dp))
-                                    Icon(Icons.Outlined.MenuBook, null, tint = MaterialTheme.colorScheme.primary)
+                                    Icon(Icons.Outlined.MenuBook, null, tint = accent)
                                 }
                             }
                         }
@@ -403,6 +418,22 @@ fun MealCalendarScreen(
     val visuals = deskCubbyVisuals
     var calculateAllDialog by remember { mutableStateOf(false) }
     var calculateDateDialog by remember { mutableStateOf<String?>(null) }
+    var zoomedPhoto by remember { mutableStateOf<MealCalendarPhoto?>(null) }
+    var showCategoryFilter by remember { mutableStateOf(false) }
+    var visibleMealCategories by remember { mutableStateOf(MealCategory.entries.toSet()) }
+    val categoryFilterActive = visibleMealCategories.size < MealCategory.entries.size
+    val filteredItems = remember(state.items, visibleMealCategories) {
+        if (!categoryFilterActive) {
+            state.items
+        } else {
+            state.items.mapNotNull { day ->
+                day.photos
+                    .filter { it.category in visibleMealCategories }
+                    .takeIf(List<MealCalendarPhoto>::isNotEmpty)
+                    ?.let { day.copy(photos = it) }
+            }
+        }
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.refreshMealCalendar()
@@ -423,6 +454,17 @@ fun MealCalendarScreen(
                         IconButton(onClick = { calculateAllDialog = true }) {
                             Icon(Icons.Outlined.Calculate, tr("计算未计算的热量", "Calculate missing calories"))
                         }
+                    }
+                    IconButton(onClick = { showCategoryFilter = true }) {
+                        Icon(
+                            Icons.Outlined.FilterAlt,
+                            tr("筛选餐别", "Filter meal categories"),
+                            tint = if (categoryFilterActive) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                LocalContentColor.current
+                            },
+                        )
                     }
                     MealFilterToolbarButton(
                         enabled = normalizedFilterSettings.enabled,
@@ -484,7 +526,17 @@ fun MealCalendarScreen(
                                 }
                             }
                         }
-                        items(state.items, key = { it.dateIso }) { day ->
+                        if (categoryFilterActive && filteredItems.isEmpty()) {
+                            item(key = "meal-calendar-filter-empty") {
+                                Text(
+                                    tr("当前筛选下没有照片", "No photos match the current filter"),
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        items(filteredItems, key = { it.dateIso }) { day ->
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically) {
@@ -496,39 +548,62 @@ fun MealCalendarScreen(
                                         Icon(Icons.Outlined.Calculate, tr("重新计算 ${day.dateIso} 的热量", "Recalculate ${day.dateIso}"))
                                     }
                                 }
-                                LazyRow(
-                                    contentPadding = PaddingValues(horizontal = 16.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                ) {
-                                    itemsIndexed(
-                                        items = day.photos,
-                                        key = { index, photo -> "${photo.uri}#$index" },
-                                    ) { _, photo ->
-                                        val displayCaption = photo.caption.ifBlank {
-                                            tr(photo.category.chineseLabel, photo.category.englishLabel)
-                                        }
-                                        Card(
-                                            modifier = Modifier.width(148.dp),
-                                            shape = if (organic) visuals.mediaShape else MaterialTheme.shapes.medium,
-                                        ) {
-                                            AsyncImage(
-                                                model = photo.uri,
-                                                contentDescription = displayCaption,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .heightIn(max = settings.mealCalendarImageMaxHeightDp.dp),
-                                                contentScale = ContentScale.Crop,
-                                                colorFilter = mealPhotoColorFilter,
-                                            )
-                                            if (settings.mealCalendarShowCaptions) {
-                                                Text(
-                                                    text = displayCaption,
-                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                )
+                                if (settings.mealCalendarWrapEnabled) {
+                                    // Wrapped rows live inside the outer LazyColumn, so plain
+                                    // Rows are required here instead of a nested LazyRow.
+                                    val rowSizes = mealPhotoRowSizes(
+                                        count = day.photos.size,
+                                        mode = settings.mealCalendarPhotosPerRow,
+                                    )
+                                    val slotsPerRow = when (settings.mealCalendarPhotosPerRow) {
+                                        MealPhotosPerRow.TWO -> 2
+                                        MealPhotosPerRow.THREE -> 3
+                                        MealPhotosPerRow.SMART -> 0
+                                    }
+                                    var photoOffset = 0
+                                    Column(
+                                        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        rowSizes.forEach { rowSize ->
+                                            val rowPhotos = day.photos.subList(photoOffset, photoOffset + rowSize)
+                                            photoOffset += rowSize
+                                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                rowPhotos.forEach { photo ->
+                                                    MealPhotoCard(
+                                                        photo = photo,
+                                                        settings = settings,
+                                                        colorFilter = mealPhotoColorFilter,
+                                                        organic = organic,
+                                                        mediaShape = visuals.mediaShape,
+                                                        modifier = Modifier.weight(1f),
+                                                        onClick = { zoomedPhoto = photo },
+                                                    )
+                                                }
+                                                repeat(
+                                                    (slotsPerRow - rowSize).coerceAtLeast(0),
+                                                ) { Spacer(Modifier.weight(1f)) }
                                             }
+                                        }
+                                    }
+                                } else {
+                                    LazyRow(
+                                        contentPadding = PaddingValues(horizontal = 16.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        itemsIndexed(
+                                            items = day.photos,
+                                            key = { index, photo -> "${photo.uri}#$index" },
+                                        ) { _, photo ->
+                                            MealPhotoCard(
+                                                photo = photo,
+                                                settings = settings,
+                                                colorFilter = mealPhotoColorFilter,
+                                                organic = organic,
+                                                mediaShape = visuals.mediaShape,
+                                                modifier = Modifier.width(148.dp),
+                                                onClick = { zoomedPhoto = photo },
+                                            )
                                         }
                                     }
                                 }
@@ -541,6 +616,56 @@ fun MealCalendarScreen(
                 }
             }
         }
+    }
+    if (showCategoryFilter) {
+        AlertDialog(
+            onDismissRequest = { showCategoryFilter = false },
+            title = { Text(tr("筛选餐别", "Filter meal categories")) },
+            text = {
+                Column {
+                    MealCategory.entries.forEach { category ->
+                        val checked = category in visibleMealCategories
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .combinedClickable(onClick = {
+                                    visibleMealCategories = if (checked) {
+                                        visibleMealCategories - category
+                                    } else {
+                                        visibleMealCategories + category
+                                    }
+                                }),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = { isChecked ->
+                                    visibleMealCategories = if (isChecked) {
+                                        visibleMealCategories + category
+                                    } else {
+                                        visibleMealCategories - category
+                                    }
+                                },
+                            )
+                            Text(tr(category.chineseLabel, category.englishLabel))
+                        }
+                    }
+                    Text(
+                        tr("全部取消时不显示任何照片。", "Unchecking everything hides all photos."),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showCategoryFilter = false }) { Text(tr("完成", "Done")) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { visibleMealCategories = MealCategory.entries.toSet() },
+                ) { Text(tr("全部显示", "Show all")) }
+            },
+        )
     }
     if (calculateAllDialog) AlertDialog(
         onDismissRequest = { calculateAllDialog = false },
@@ -556,6 +681,61 @@ fun MealCalendarScreen(
         confirmButton = { TextButton(onClick = { calculateDateDialog = null; viewModel.calculateUncalculatedCalories(date, true) }) { Text(tr("重新计算", "Recalculate")) } },
         dismissButton = { TextButton(onClick = { calculateDateDialog = null }) { Text(tr("取消", "Cancel")) } },
     ) }
+    zoomedPhoto?.let { photo ->
+        val zoomCaption = photo.caption.ifBlank {
+            tr(photo.category.chineseLabel, photo.category.englishLabel)
+        }
+        ZoomableImageDialog(
+            model = photo.uri,
+            contentDescription = zoomCaption,
+            colorFilter = mealPhotoColorFilter,
+            caption = listOfNotNull(
+                zoomCaption,
+                photo.energyKj?.let { "$it kJ" },
+                photo.locationName,
+            ).joinToString(" · "),
+            onDismiss = { zoomedPhoto = null },
+        )
+    }
+}
+
+@Composable
+private fun MealPhotoCard(
+    photo: MealCalendarPhoto,
+    settings: AppSettings,
+    colorFilter: ColorFilter?,
+    organic: Boolean,
+    mediaShape: Shape,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val displayCaption = photo.caption.ifBlank {
+        tr(photo.category.chineseLabel, photo.category.englishLabel)
+    }
+    Card(
+        onClick = onClick,
+        modifier = modifier,
+        shape = if (organic) mediaShape else MaterialTheme.shapes.medium,
+    ) {
+        AsyncImage(
+            model = photo.uri,
+            contentDescription = displayCaption,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = settings.mealCalendarImageMaxHeightDp.dp),
+            contentScale = ContentScale.Crop,
+            colorFilter = colorFilter,
+        )
+        if (settings.mealCalendarShowCaptions) {
+            Text(
+                text = displayCaption,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 @Composable
@@ -586,7 +766,7 @@ private fun MealFilterToolbarButton(
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            imageVector = Icons.Outlined.FilterAlt,
+            imageVector = Icons.Outlined.AutoFixHigh,
             contentDescription = tr("照片滤镜", "Photo filter"),
             tint = if (enabled) MaterialTheme.colorScheme.onPrimaryContainer
             else MaterialTheme.colorScheme.onSurfaceVariant,

@@ -15,8 +15,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SavedPoemEntity::class,
         AiConversationEntity::class,
         AiMessageEntity::class,
+        VaultItemEntity::class,
+        GameStateEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -27,6 +29,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun dateRecordDao(): DateRecordDao
     abstract fun savedPoemDao(): SavedPoemDao
     abstract fun aiChatDao(): AiChatDao
+    abstract fun vaultItemDao(): VaultItemDao
+    abstract fun gameStateDao(): GameStateDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -149,6 +153,36 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL(
                     "CREATE INDEX IF NOT EXISTS `index_ai_messages_conversationId` " +
                         "ON `ai_messages` (`conversationId`)",
+                )
+            }
+        }
+
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `flash_thoughts` ADD COLUMN `highlighted` INTEGER NOT NULL DEFAULT 0",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `vault_items` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `cipherText` TEXT NOT NULL,
+                        `iv` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `game_states` (
+                        `gameId` TEXT NOT NULL,
+                        `highScore` INTEGER NOT NULL DEFAULT 0,
+                        `saveJson` TEXT,
+                        `updatedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`gameId`)
+                    )
+                    """.trimIndent(),
                 )
             }
         }

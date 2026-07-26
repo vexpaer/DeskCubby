@@ -28,6 +28,9 @@ data class DailyPoem(
     val content: String,
     val source: String,
     val updatedAt: Long = 0L,
+    /** All lines of the origin poem joined with newlines; empty when unknown. */
+    val fullContent: String = "",
+    val dynasty: String = "",
 )
 
 @Singleton
@@ -40,6 +43,8 @@ class PoetryRepository @Inject constructor(
         val content = stringPreferencesKey("content")
         val source = stringPreferencesKey("source")
         val updatedAt = longPreferencesKey("updated_at")
+        val fullContent = stringPreferencesKey("full_content")
+        val dynasty = stringPreferencesKey("dynasty")
     }
 
     val poem: Flow<DailyPoem> = context.poetryDataStore.data.map { prefs ->
@@ -47,6 +52,13 @@ class PoetryRepository @Inject constructor(
             content = prefs[Keys.content] ?: FALLBACK.content,
             source = prefs[Keys.source] ?: FALLBACK.source,
             updatedAt = prefs[Keys.updatedAt] ?: 0L,
+            // Caches written before full-poem support simply have no full content.
+            fullContent = if (prefs[Keys.content] != null) {
+                prefs[Keys.fullContent].orEmpty()
+            } else {
+                FALLBACK.fullContent
+            },
+            dynasty = prefs[Keys.dynasty].orEmpty(),
         )
     }
 
@@ -68,6 +80,8 @@ class PoetryRepository @Inject constructor(
                 prefs[Keys.token] = returnedToken
                 prefs[Keys.content] = parsed.content
                 prefs[Keys.source] = parsed.source
+                prefs[Keys.fullContent] = parsed.fullContent
+                prefs[Keys.dynasty] = parsed.dynasty
                 prefs[Keys.updatedAt] = System.currentTimeMillis()
             }
         }
@@ -101,7 +115,12 @@ class PoetryRepository @Inject constructor(
     companion object {
         private const val TOKEN_URL = "https://v2.jinrishici.com/token"
         private const val SENTENCE_URL = "https://v2.jinrishici.com/sentence"
-        val FALLBACK = DailyPoem("山中何事？松花酿酒，春水煎茶。", "— 张可久《人月圆·山中书事》")
+        val FALLBACK = DailyPoem(
+            content = "山中何事？松花酿酒，春水煎茶。",
+            source = "— 张可久《人月圆·山中书事》",
+            fullContent = "兴亡千古繁华梦，诗眼倦天涯。\n孔林乔木，吴宫蔓草，楚庙寒鸦。\n数间茅舍，藏书万卷，投老村家。\n山中何事？松花酿酒，春水煎茶。",
+            dynasty = "元",
+        )
 
         internal fun parseSentence(raw: String): DailyPoem {
             val root = JSONObject(raw)
@@ -111,7 +130,19 @@ class PoetryRepository @Inject constructor(
             val title = origin?.optString("title").orEmpty()
             val author = origin?.optString("author").orEmpty()
             val source = formatSource(title, author)
-            return DailyPoem(content = data.getString("content"), source = source)
+            val fullContent = origin?.optJSONArray("content")?.let { lines ->
+                buildList {
+                    for (index in 0 until lines.length()) {
+                        (lines.opt(index) as? String)?.takeIf(String::isNotBlank)?.let(::add)
+                    }
+                }.joinToString("\n")
+            }.orEmpty()
+            return DailyPoem(
+                content = data.getString("content"),
+                source = source,
+                fullContent = fullContent,
+                dynasty = origin?.optString("dynasty").orEmpty(),
+            )
         }
 
         internal fun formatSource(title: String, author: String): String = when {

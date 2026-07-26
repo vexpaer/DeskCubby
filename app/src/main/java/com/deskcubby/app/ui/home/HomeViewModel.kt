@@ -88,7 +88,8 @@ class HomeViewModel @Inject constructor(
     fun savePoem(poem: DailyPoem, language: AppLanguage) {
         viewModelScope.launch {
             try {
-                poetryBookRepository.create(poem.content, poem.source)
+                // Prefer the whole origin poem when the API provided it.
+                poetryBookRepository.create(poem.fullContent.ifBlank { poem.content }, poem.source)
                 _message.value = if (language == AppLanguage.ENGLISH) {
                     "Added to poetry book"
                 } else {
@@ -157,7 +158,7 @@ class HomeViewModel @Inject constructor(
                                 diaryFileRepository.scanMealCalendar(settings).asSequence()
                                     .flatMap { it.photos.asSequence() }
                                     .firstOrNull { it.uri.toString() == media.documentUri }
-                                    ?.let { diaryFileRepository.setMealPhotoEnergy(it, energy) }
+                                    ?.let { diaryFileRepository.setMealPhotoEnergy(it, energy, settings) }
                                 _message.value = "${_message.value} · ${energy}kJ"
                             } catch (error: Exception) {
                                 _message.value = "${_message.value} · 热量估算失败：${error.message.orEmpty()}"

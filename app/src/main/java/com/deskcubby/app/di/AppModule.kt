@@ -8,8 +8,10 @@ import com.deskcubby.app.data.local.BrowserRecordDao
 import com.deskcubby.app.data.local.DiaryIndexDao
 import com.deskcubby.app.data.local.DateRecordDao
 import com.deskcubby.app.data.local.FlashThoughtDao
+import com.deskcubby.app.data.local.GameStateDao
 import com.deskcubby.app.data.local.SavedPoemDao
 import com.deskcubby.app.data.local.ThoughtCategoryDao
+import com.deskcubby.app.data.local.VaultItemDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -30,6 +32,7 @@ object AppModule {
                 AppDatabase.MIGRATION_3_4,
                 AppDatabase.MIGRATION_4_5,
                 AppDatabase.MIGRATION_5_6,
+                AppDatabase.MIGRATION_6_7,
             )
             .build()
 
@@ -40,4 +43,6 @@ object AppModule {
     @Provides fun provideDateRecordDao(db: AppDatabase): DateRecordDao = db.dateRecordDao()
     @Provides fun provideSavedPoemDao(db: AppDatabase): SavedPoemDao = db.savedPoemDao()
     @Provides fun provideAiChatDao(db: AppDatabase): AiChatDao = db.aiChatDao()
+    @Provides fun provideVaultItemDao(db: AppDatabase): VaultItemDao = db.vaultItemDao()
+    @Provides fun provideGameStateDao(db: AppDatabase): GameStateDao = db.gameStateDao()
 }

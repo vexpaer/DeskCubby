@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +31,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.EventNote
@@ -37,6 +40,7 @@ import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.WbSunny
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -81,6 +85,7 @@ import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.DailyPoem
 import com.deskcubby.app.ui.theme.GlassPanel
+import com.deskcubby.app.ui.theme.LocalCompactMode
 import com.deskcubby.app.ui.daily.DailyEventRecorder
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
@@ -283,11 +288,16 @@ fun HomeScreen(
             )
         },
     ) { inner ->
+        val compact = LocalCompactMode.current
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = PaddingValues(if (compact) 10.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(
-                if (settings.homeWidgetBordersEnabled) 12.dp else 0.dp,
+                when {
+                    !settings.homeWidgetBordersEnabled -> 0.dp
+                    compact -> 6.dp
+                    else -> 12.dp
+                },
             ),
         ) {
             items(settings.homeWidgets, key = { it }) { id ->
@@ -357,8 +367,13 @@ private fun HomeWidget(
             }
         }
         "poem" -> WidgetCard(tr("每日诗词", "Daily poem"), showTitle, settings.homeWidgetBordersEnabled) {
+            var showFullPoem by remember { mutableStateOf(false) }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .clickable { showFullPoem = true },
+                ) {
                     Text(poem.content, style = MaterialTheme.typography.titleMedium)
                     Text(poem.source, style = MaterialTheme.typography.bodySmall)
                 }
@@ -370,6 +385,49 @@ private fun HomeWidget(
                         Icon(Icons.Outlined.Send, tr("加入诗词本", "Save to poetry book"))
                     }
                 }
+            }
+            if (showFullPoem) {
+                val sourceLine = if (poem.dynasty.isBlank()) {
+                    poem.source
+                } else {
+                    "${poem.source}（${poem.dynasty}）"
+                }
+                AlertDialog(
+                    onDismissRequest = { showFullPoem = false },
+                    title = { Text(tr("完整诗词", "Full poem")) },
+                    text = {
+                        Column(Modifier.verticalScroll(rememberScrollState())) {
+                            Text(
+                                poem.fullContent.ifBlank { poem.content },
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text(sourceLine, style = MaterialTheme.typography.bodySmall)
+                            if (poem.fullContent.isBlank()) {
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    tr(
+                                        "完整内容会在下次刷新诗词时获取。",
+                                        "The full poem is fetched the next time the poem refreshes.",
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                onSavePoem()
+                                showFullPoem = false
+                            },
+                        ) { Text(tr("加入诗词本", "Save to poetry book")) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showFullPoem = false }) { Text(tr("关闭", "Close")) }
+                    },
+                )
             }
         }
         "today" -> WidgetCard(tr("今天", "Today"), showTitle, settings.homeWidgetBordersEnabled) {

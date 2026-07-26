@@ -1,15 +1,20 @@
 package com.deskcubby.app.data.repository
 
 import android.content.ContentResolver
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
+import android.location.Geocoder
 import android.media.ExifInterface
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
@@ -42,6 +47,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.roundToInt
+import org.json.JSONObject
 
 class ExternalFileConflictException(
     val diskDocument: DiaryEditorDocument,
@@ -54,6 +60,17 @@ data class MealCalendarPhoto(
     val diaryUri: Uri,
     val markdown: String,
     val energyKj: Int? = null,
+    /** Lower-cased media file name; the key into the media metadata JSON. */
+    val fileName: String = "",
+    val locationName: String? = null,
+)
+
+/** One entry of the `deskcubby-media.json` sidecar kept in the media directory. */
+data class MediaMetaEntry(
+    val energyKj: Int? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val place: String? = null,
 )
 
 data class MealCalendarDay(
@@ -157,6 +174,10 @@ class DiaryFileRepository @Inject constructor(
             }
             .toMap()
 
+        val mediaMetaEntries = settings.mediaTreeUri?.let(::tree)
+            ?.let { root -> runCatching { readMediaMetaEntries(root) }.getOrDefault(emptyMap()) }
+            .orEmpty()
+
         val photosByDate = linkedMapOf<String, MutableList<MealCalendarPhoto>>()
         val diaries = diaryRoot.listFiles()
             .asSequence()
@@ -190,9 +211,26 @@ class DiaryFileRepository @Inject constructor(
                     ?: mealCategoryFromFileName(target)
                     ?: continue
                 val mediaUri = resolveMealMediaUri(target, mediaByName) ?: continue
+                val metaKey = decodedTargetFileName(target)?.lowercase(Locale.ROOT).orEmpty()
+                val meta = mediaMetaEntries[metaKey]
                 photosByDate.getOrPut(dateIso) { mutableListOf() }
-                    .add(MealCalendarPhoto(uri = mediaUri, caption = caption, category = category,
-                        diaryUri = diary.uri, markdown = match.value, energyKj = energyFromCaption(caption)))
+                    .add(
+                        MealCalendarPhoto(
+                            uri = mediaUri, caption = caption, category = category,
+                            diaryUri = diary.uri, markdown = match.value,
+                            // The JSON sidecar wins; captions written by older releases
+                            // (e.g. "午餐-800kJ") remain readable as a fallback.
+                            energyKj = meta?.energyKj ?: energyFromCaption(caption),
+                            fileName = metaKey,
+                            locationName = meta?.place ?: meta?.let { entry ->
+                                entry.latitude?.let { lat ->
+                                    entry.longitude?.let { lng ->
+                                        "%.4f, %.4f".format(Locale.ROOT, lat, lng)
+                                    }
+                                }
+                            },
+                        ),
+                    )
             }
         }
 
@@ -210,19 +248,120 @@ class DiaryFileRepository @Inject constructor(
         load(Uri.parse(uri))
     }
 
-    suspend fun setMealPhotoEnergy(photo: MealCalendarPhoto, energyKj: Int) = writeMutex.withLock {
+    /**
+     * Records the estimated energy in the media-directory JSON sidecar instead of
+     * rewriting the Markdown caption. Old captions like "午餐-800kJ" stay untouched
+     * and continue to work as a read-only fallback.
+     */
+    suspend fun setMealPhotoEnergy(
+        photo: MealCalendarPhoto,
+        energyKj: Int,
+        settings: AppSettings,
+    ) = mediaMutex.withLock {
         withContext(Dispatchers.IO) {
-            val content = readText(photo.diaryUri)
-            require(content.contains(photo.markdown)) { "日记中的图片记录已发生变化，请刷新后重试" }
-            val baseCaption = photo.caption.replace(ENERGY_SUFFIX_REGEX, "").trimEnd('-', ' ')
-            val replacement = photo.markdown.replaceFirst(
-                Regex("!\\[[^]]*]"), "![${baseCaption.replace("]", "")}-${energyKj}kJ]",
-            )
-            val updated = content.replaceFirst(photo.markdown, replacement)
-            writeText(photo.diaryUri, updated)
-            check(readText(photo.diaryUri) == updated) { "热量写回日记后的校验失败" }
+            val root = settings.mediaTreeUri?.let(::tree) ?: error("请先在设置中选择媒体目录")
+            val key = photo.fileName.takeIf(String::isNotBlank)
+                ?: error("无法确定图片文件名，热量未记录")
+            updateMediaMetaEntryUnlocked(root, key) { entry -> entry.copy(energyKj = energyKj) }
         }
     }
+
+    private fun mediaMetaFile(root: DocumentFile): DocumentFile? = root.listFiles()
+        .firstOrNull { it.isFile && it.name.equals(MEDIA_META_FILE_NAME, ignoreCase = true) }
+
+    private fun readMediaMetaEntries(root: DocumentFile): Map<String, MediaMetaEntry> {
+        val file = mediaMetaFile(root) ?: return emptyMap()
+        val raw = runCatching { readText(file.uri) }.getOrNull() ?: return emptyMap()
+        return parseMediaMeta(raw)
+    }
+
+    private fun parseMediaMeta(raw: String): Map<String, MediaMetaEntry> = runCatching {
+        val entriesJson = JSONObject(raw).optJSONObject("entries") ?: return@runCatching emptyMap()
+        buildMap {
+            entriesJson.keys().forEach { key ->
+                val item = entriesJson.optJSONObject(key) ?: return@forEach
+                put(
+                    key.lowercase(Locale.ROOT),
+                    MediaMetaEntry(
+                        energyKj = if (item.has("energyKj")) item.optInt("energyKj") else null,
+                        latitude = if (item.has("lat")) item.optDouble("lat") else null,
+                        longitude = if (item.has("lng")) item.optDouble("lng") else null,
+                        place = item.optString("place").takeIf(String::isNotBlank),
+                    ),
+                )
+            }
+        }
+    }.getOrDefault(emptyMap())
+
+    private fun encodeMediaMeta(entries: Map<String, MediaMetaEntry>): String {
+        val entriesJson = JSONObject()
+        entries.toSortedMap().forEach { (key, entry) ->
+            val item = JSONObject()
+            entry.energyKj?.let { item.put("energyKj", it) }
+            entry.latitude?.takeIf(Double::isFinite)?.let { item.put("lat", it) }
+            entry.longitude?.takeIf(Double::isFinite)?.let { item.put("lng", it) }
+            entry.place?.takeIf(String::isNotBlank)?.let { item.put("place", it) }
+            if (item.length() > 0) entriesJson.put(key, item)
+        }
+        return JSONObject().put("version", 1).put("entries", entriesJson).toString(2)
+    }
+
+    /** Caller must hold [mediaMutex]. Read-modify-write with read-back verification. */
+    private fun updateMediaMetaEntryUnlocked(
+        root: DocumentFile,
+        key: String,
+        transform: (MediaMetaEntry) -> MediaMetaEntry,
+    ) {
+        val normalizedKey = key.lowercase(Locale.ROOT)
+        val current = readMediaMetaEntries(root).toMutableMap()
+        current[normalizedKey] = transform(current[normalizedKey] ?: MediaMetaEntry())
+        val encoded = encodeMediaMeta(current)
+        val target = mediaMetaFile(root)
+            ?: root.createFile("application/json", MEDIA_META_FILE_NAME)
+            ?: error("无法在媒体目录创建 $MEDIA_META_FILE_NAME")
+        writeText(target.uri, encoded)
+        check(readText(target.uri) == encoded) { "媒体信息 JSON 写入后的校验失败" }
+    }
+
+    private fun readPhotoLatLong(sourceUri: Uri): DoubleArray? {
+        val candidates = buildList {
+            // MediaStore redacts EXIF location on API 29+ unless the original is requested
+            // (needs ACCESS_MEDIA_LOCATION; best-effort when denied).
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                sourceUri.authority == MediaStore.AUTHORITY
+            ) {
+                runCatching { MediaStore.setRequireOriginal(sourceUri) }.getOrNull()?.let(::add)
+            }
+            add(sourceUri)
+        }
+        candidates.forEach { uri ->
+            val latLong = runCatching {
+                resolver.openInputStream(uri)?.use { input ->
+                    val output = FloatArray(2)
+                    if (ExifInterface(input).getLatLong(output)) {
+                        doubleArrayOf(output[0].toDouble(), output[1].toDouble())
+                    } else {
+                        null
+                    }
+                }
+            }.getOrNull()
+            if (latLong != null) return latLong
+        }
+        return null
+    }
+
+    private fun geocodePlaceName(latitude: Double, longitude: Double): String? = runCatching {
+        if (!Geocoder.isPresent()) return@runCatching null
+        @Suppress("DEPRECATION")
+        val address = Geocoder(context, Locale.getDefault())
+            .getFromLocation(latitude, longitude, 1)
+            ?.firstOrNull()
+            ?: return@runCatching null
+        listOfNotNull(address.adminArea, address.locality, address.subLocality, address.thoroughfare)
+            .distinct()
+            .joinToString("")
+            .takeIf(String::isNotBlank)
+    }.getOrNull()
 
     suspend fun enterToday(
         settings: AppSettings,
@@ -497,6 +636,31 @@ class DiaryFileRepository @Inject constructor(
                 }
 
                 val actualName = destination.name ?: fileName
+                if (settings.saveOriginalToGallery) {
+                    // Best-effort: a gallery failure must never fail or roll back the SAF write.
+                    runCatching {
+                        saveOriginalToGallery(
+                            sourceUri = sourceUri,
+                            mime = sourceMime,
+                            displayName = actualName.substringBeforeLast('.') + "." + sourceExtension,
+                        )
+                    }
+                }
+                if (settings.photoLocationEnabled) {
+                    // Best-effort EXIF location capture into the media JSON sidecar.
+                    // mediaMutex is already held here.
+                    runCatching {
+                        readPhotoLatLong(sourceUri)?.let { latLong ->
+                            updateMediaMetaEntryUnlocked(root, actualName) { entry ->
+                                entry.copy(
+                                    latitude = latLong[0],
+                                    longitude = latLong[1],
+                                    place = geocodePlaceName(latLong[0], latLong[1]) ?: entry.place,
+                                )
+                            }
+                        }
+                    }
+                }
                 ImportedMedia(
                     documentUri = destination.uri.toString(),
                     fileName = actualName,
@@ -512,6 +676,51 @@ class DiaryFileRepository @Inject constructor(
             withContext(NonCancellable + Dispatchers.IO) {
                 runCatching { compressedFile?.delete() }
             }
+        }
+    }
+
+    /**
+     * Copies the untouched source image into the system gallery (MediaStore.Images).
+     * On API 29+ this needs no permission; on API 26-28 it relies on
+     * WRITE_EXTERNAL_STORAGE being granted and otherwise fails, which callers treat
+     * as best-effort.
+     */
+    private fun saveOriginalToGallery(sourceUri: Uri, mime: String, displayName: String) {
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(
+                    MediaStore.MediaColumns.RELATIVE_PATH,
+                    Environment.DIRECTORY_PICTURES + "/DeskCubby",
+                )
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+        }
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            @Suppress("DEPRECATION")
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+        val itemUri = resolver.insert(collection, values) ?: error("无法写入系统相册")
+        try {
+            resolver.openInputStream(sourceUri).use { input ->
+                requireNotNull(input) { "无法读取所选图片" }
+                resolver.openOutputStream(itemUri, "w").use { output ->
+                    requireNotNull(output) { "无法写入系统相册" }
+                    input.copyTo(output)
+                    output.flush()
+                }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(itemUri, values, null, null)
+            }
+        } catch (error: Exception) {
+            runCatching { resolver.delete(itemUri, null, null) }
+            throw error
         }
     }
 
@@ -1230,6 +1439,7 @@ class DiaryFileRepository @Inject constructor(
             """!\[([^\]\r\n]*)]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:\s+(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\([^\)\r\n]*\)))?\s*\)""",
         )
         private val ENERGY_SUFFIX_REGEX = Regex("[-–—]\\s*(\\d+)\\s*kJ\\s*$", RegexOption.IGNORE_CASE)
+        private const val MEDIA_META_FILE_NAME = "deskcubby-media.json"
         private val COMPRESSIBLE_IMAGE_MIMES = setOf(
             "image/jpeg",
             "image/jpg",

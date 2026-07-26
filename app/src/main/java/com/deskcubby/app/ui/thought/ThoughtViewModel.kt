@@ -129,6 +129,19 @@ class ThoughtViewModel @Inject constructor(
     }
 
     fun togglePinned(id: Long) = viewModelScope.launch { repository.togglePinned(id) }
+    fun toggleHighlighted(id: Long) = viewModelScope.launch { repository.toggleHighlighted(id) }
+
+    /** Creates a category from the picker and immediately assigns the thought to it. */
+    fun createCategoryAndAssign(
+        thoughtId: Long,
+        name: String,
+        colorArgb: Int,
+        onDone: (Boolean) -> Unit = {},
+    ) = viewModelScope.launch {
+        val newCategoryId = repository.createCategory(name, colorArgb)
+        if (newCategoryId != null) repository.setCategory(thoughtId, newCategoryId)
+        onDone(newCategoryId != null)
+    }
     fun delete(id: Long) = viewModelScope.launch { repository.delete(id) }
     fun restore(id: Long) = viewModelScope.launch { repository.restore(id) }
     fun permanentlyDelete(id: Long) = viewModelScope.launch { repository.permanentlyDelete(id) }

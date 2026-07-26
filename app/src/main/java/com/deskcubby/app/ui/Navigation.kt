@@ -28,6 +28,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.SportsEsports
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -51,10 +53,13 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import com.deskcubby.app.syncLauncherAlias
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -99,9 +104,13 @@ import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.PanelRole
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
+import com.deskcubby.app.ui.games.GamesScreen
+import com.deskcubby.app.ui.games.GamesViewModel
 import com.deskcubby.app.ui.thought.ThoughtScreen
 import com.deskcubby.app.ui.thought.ThoughtTrashScreen
 import com.deskcubby.app.ui.thought.ThoughtViewModel
+import com.deskcubby.app.ui.vault.VaultScreen
+import com.deskcubby.app.ui.vault.VaultViewModel
 
 object Routes {
     const val EDITOR = "diary_editor"
@@ -126,6 +135,8 @@ fun DeskCubbyRoot(
     rssViewModel: RssViewModel = hiltViewModel(),
     aiChatViewModel: AiChatViewModel = hiltViewModel(),
     dailyRecordViewModel: DailyRecordViewModel = hiltViewModel(),
+    vaultViewModel: VaultViewModel = hiltViewModel(),
+    gamesViewModel: GamesViewModel = hiltViewModel(),
 ) {
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val ready by settingsViewModel.ready.collectAsStateWithLifecycle()
@@ -137,6 +148,10 @@ fun DeskCubbyRoot(
             return@DeskCubbyTheme
         }
         val navController = rememberNavController()
+        val aliasContext = LocalContext.current
+        LaunchedEffect(settings.useChineseLauncherName) {
+            syncLauncherAlias(aliasContext, settings.useChineseLauncherName)
+        }
         var introDismissedForSession by remember { mutableStateOf(false) }
         var settingsSubpageOpen by remember { mutableStateOf(false) }
         val initialStartDestination = remember { settings.defaultPage.route }
@@ -268,6 +283,12 @@ fun DeskCubbyRoot(
                             viewModel = aiChatViewModel,
                             onOpenSettings = { navController.navigate(Routes.AI_SETTINGS) },
                         )
+                    }
+                    composable(NavItemId.VAULT.route) {
+                        VaultScreen(padding = padding, viewModel = vaultViewModel)
+                    }
+                    composable(NavItemId.GAMES.route) {
+                        GamesScreen(padding = padding, viewModel = gamesViewModel)
                     }
                     composable(NavItemId.MORE.route) {
                         MoreHubScreen(
@@ -513,5 +534,7 @@ fun iconFor(key: String): ImageVector = when (key) {
     "rss" -> Icons.Outlined.RssFeed
     "ai" -> Icons.Outlined.SmartToy
     "apps" -> Icons.Outlined.Apps
+    "lock" -> Icons.Outlined.Lock
+    "game" -> Icons.Outlined.SportsEsports
     else -> Icons.Outlined.MenuBook
 }

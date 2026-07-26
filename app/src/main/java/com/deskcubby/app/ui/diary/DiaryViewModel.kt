@@ -154,7 +154,7 @@ class DiaryViewModel @Inject constructor(
                     .flatMap { it.photos }.filter { force || it.energyKj == null }
                 selected.forEach { photo ->
                     val energy = calorieRepository.estimate(photo.uri.toString(), settings.value)
-                    repository.setMealPhotoEnergy(photo, energy)
+                    repository.setMealPhotoEnergy(photo, energy, settings.value)
                 }
                 _mealCalendarState.value = MealCalendarState(items = repository.scanMealCalendar(settings.value))
                 _message.value = if (selected.isEmpty()) "没有需要计算的饮食图片" else "已完成 ${selected.size} 张图片的热量估算"

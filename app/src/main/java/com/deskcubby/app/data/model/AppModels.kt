@@ -12,6 +12,26 @@ enum class ThoughtReopenMode { LAST_VISITED, ALL }
 
 enum class ThoughtDisplayMode { SINGLE_LINE, FULL }
 
+enum class MealPhotosPerRow { TWO, THREE, SMART }
+
+/**
+ * Row sizes for wrapped meal-calendar photos. SMART mixes rows of 3 and 2 so the
+ * last row is never left with a single dangling photo (4=2+2, 5=3+2, 7=3+2+2).
+ */
+fun mealPhotoRowSizes(count: Int, mode: MealPhotosPerRow): List<Int> {
+    if (count <= 0) return emptyList()
+    return when (mode) {
+        MealPhotosPerRow.TWO -> List(count / 2) { 2 } + if (count % 2 == 1) listOf(1) else emptyList()
+        MealPhotosPerRow.THREE -> List(count / 3) { 3 } + if (count % 3 != 0) listOf(count % 3) else emptyList()
+        MealPhotosPerRow.SMART -> when {
+            count == 1 -> listOf(1)
+            count % 3 == 0 -> List(count / 3) { 3 }
+            count % 3 == 1 -> List((count - 4) / 3) { 3 } + listOf(2, 2)
+            else -> List(count / 3) { 3 } + listOf(2)
+        }
+    }
+}
+
 enum class AiModelType { TEXT, IMAGE }
 
 data class AiModelConfig(
@@ -72,6 +92,10 @@ const val MIN_THEME_SECONDARY_COLOR_COUNT: Int = 2
 const val MAX_THEME_SECONDARY_COLOR_COUNT: Int = 5
 const val MIN_APP_FONT_SCALE: Float = 0.8f
 const val MAX_APP_FONT_SCALE: Float = 1.3f
+const val DEFAULT_THOUGHT_HIGHLIGHT_COLOR_ARGB: Int = 0xFFF6E3A1.toInt()
+const val MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP: Int = 96
+const val MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP: Int = 400
+const val DEFAULT_THOUGHT_EDITOR_MAX_HEIGHT_DP: Int = 168
 
 enum class NavItemId(
     val route: String,
@@ -124,6 +148,22 @@ enum class NavItemId(
         defaultVisible = false,
         defaultShowInMore = true,
     ),
+    VAULT(
+        "vault",
+        "收藏夹",
+        "Vault",
+        "lock",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
+    GAMES(
+        "games",
+        "小游戏",
+        "Games",
+        "game",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
     MORE("more", "导航", "More", "apps", defaultVisible = false),
     SETTINGS("settings", "设置", "Settings", "settings"),
 }
@@ -144,6 +184,8 @@ data class AppSettings(
     val themeColorArgb: Int = DEFAULT_THEME_COLOR_ARGB,
     val themeSecondaryColorsArgb: List<Int> = DEFAULT_THEME_SECONDARY_COLORS_ARGB,
     val fontScale: Float = 1f,
+    val compactMode: Boolean = false,
+    val useChineseLauncherName: Boolean = false,
     val backupTreeUri: String? = null,
     val cloudSyncEnabled: Boolean = false,
     val cloudSyncConfigs: List<CloudSyncConfig> = emptyList(),
@@ -156,6 +198,8 @@ data class AppSettings(
     val imageMaxHeightDp: Int = 640,
     val mealImageCompressionEnabled: Boolean = true,
     val mealImageCompressionQuality: Int = 80,
+    val saveOriginalToGallery: Boolean = false,
+    val photoLocationEnabled: Boolean = false,
     val browserHomeUrl: String = "https://www.google.com",
     val lastBrowserUrl: String? = null,
     val browserTheme: BrowserTheme = BrowserTheme.SYSTEM,
@@ -165,8 +209,12 @@ data class AppSettings(
     val thoughtReopenMode: ThoughtReopenMode = ThoughtReopenMode.ALL,
     val lastThoughtPageKey: String = "all",
     val thoughtDisplayMode: ThoughtDisplayMode = ThoughtDisplayMode.SINGLE_LINE,
+    val thoughtHighlightColorArgb: Int = DEFAULT_THOUGHT_HIGHLIGHT_COLOR_ARGB,
+    val thoughtEditorMaxHeightDp: Int = DEFAULT_THOUGHT_EDITOR_MAX_HEIGHT_DP,
     val mealCalendarImageMaxHeightDp: Int = 124,
     val mealCalendarShowCaptions: Boolean = true,
+    val mealCalendarWrapEnabled: Boolean = false,
+    val mealCalendarPhotosPerRow: MealPhotosPerRow = MealPhotosPerRow.SMART,
     val mealPhotoFilter: MealPhotoFilterSettings = MealPhotoFilterSettings(),
     val mealButtonsUseIcons: Boolean = false,
     val mealButtonIcons: List<String> = DEFAULT_MEAL_BUTTON_ICONS,
@@ -193,18 +241,14 @@ data class AppSettings(
     val defaultPage: NavItemId = NavItemId.HOME,
     val bottomNavShowLabels: Boolean = true,
     val homeWidgetBordersEnabled: Boolean = true,
+    // First-launch preset: a deliberately small home page. Everything else stays
+    // available in the settings catalog.
     val homeWidgets: List<String> = listOf(
         "today",
         "poem",
-        "year_progress",
-        "month_diaries",
-        "recent_diary",
-        "recent_thought",
-        "date_records",
         "quick_input",
-        "daily_records",
         "meal_photos",
-        "website",
+        "year_progress",
     ),
     val homeWidgetTitles: List<String> = listOf(
         "calendar",

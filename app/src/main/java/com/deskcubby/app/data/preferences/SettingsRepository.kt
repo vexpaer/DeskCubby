@@ -26,6 +26,9 @@ import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DEFAULT_MEAL_BUTTON_ICONS
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
@@ -67,6 +70,8 @@ class SettingsRepository @Inject constructor(
         val themeColorArgb = intPreferencesKey("theme_color_argb")
         val themeSecondaryColorsArgb = stringPreferencesKey("theme_secondary_colors_argb")
         val fontScale = floatPreferencesKey("font_scale")
+        val compactMode = booleanPreferencesKey("compact_mode")
+        val useChineseLauncherName = booleanPreferencesKey("use_chinese_launcher_name")
         val backupTreeUri = stringPreferencesKey("backup_tree_uri")
         val cloudSyncEnabled = booleanPreferencesKey("cloud_sync_enabled")
         val cloudSyncConfigs = stringPreferencesKey("cloud_sync_configs_v1")
@@ -79,6 +84,8 @@ class SettingsRepository @Inject constructor(
         val imageMaxHeightDp = intPreferencesKey("image_max_height_dp")
         val mealImageCompressionEnabled = booleanPreferencesKey("meal_image_compression_enabled")
         val mealImageCompressionQuality = intPreferencesKey("meal_image_compression_quality")
+        val saveOriginalToGallery = booleanPreferencesKey("save_original_to_gallery")
+        val photoLocationEnabled = booleanPreferencesKey("photo_location_enabled")
         val browserHomeUrl = stringPreferencesKey("browser_home_url")
         val lastBrowserUrl = stringPreferencesKey("last_browser_url")
         val browserTheme = stringPreferencesKey("browser_theme")
@@ -88,8 +95,12 @@ class SettingsRepository @Inject constructor(
         val thoughtReopenMode = stringPreferencesKey("thought_reopen_mode")
         val lastThoughtPageKey = stringPreferencesKey("last_thought_page_key")
         val thoughtDisplayMode = stringPreferencesKey("thought_display_mode")
+        val thoughtHighlightColorArgb = intPreferencesKey("thought_highlight_color_argb")
+        val thoughtEditorMaxHeightDp = intPreferencesKey("thought_editor_max_height_dp")
         val mealCalendarImageMaxHeightDp = intPreferencesKey("meal_calendar_image_max_height_dp")
         val mealCalendarShowCaptions = booleanPreferencesKey("meal_calendar_show_captions")
+        val mealCalendarWrapEnabled = booleanPreferencesKey("meal_calendar_wrap_enabled")
+        val mealCalendarPhotosPerRow = stringPreferencesKey("meal_calendar_photos_per_row")
         val mealPhotoFilterEnabled = booleanPreferencesKey("meal_photo_filter_enabled")
         val mealPhotoFilterBrightness = floatPreferencesKey("meal_photo_filter_brightness")
         val mealPhotoFilterContrast = floatPreferencesKey("meal_photo_filter_contrast")
@@ -163,6 +174,9 @@ class SettingsRepository @Inject constructor(
                 defaults.themeSecondaryColorsArgb,
             ),
             fontScale = normalizeFontScale(prefs[Keys.fontScale], defaults.fontScale),
+            compactMode = prefs[Keys.compactMode] ?: defaults.compactMode,
+            useChineseLauncherName = prefs[Keys.useChineseLauncherName]
+                ?: defaults.useChineseLauncherName,
             backupTreeUri = prefs[Keys.backupTreeUri]?.takeIf(::hasPersistedTreeAccess),
             cloudSyncEnabled = (prefs[Keys.cloudSyncEnabled] ?: false) &&
                 cloudSyncConfigs.any { it.enabled && it.selectedContents.isNotEmpty() },
@@ -179,6 +193,10 @@ class SettingsRepository @Inject constructor(
                 ?: defaults.mealImageCompressionEnabled,
             mealImageCompressionQuality = (prefs[Keys.mealImageCompressionQuality]
                 ?: defaults.mealImageCompressionQuality).coerceIn(30, 95),
+            saveOriginalToGallery = prefs[Keys.saveOriginalToGallery]
+                ?: defaults.saveOriginalToGallery,
+            photoLocationEnabled = prefs[Keys.photoLocationEnabled]
+                ?: defaults.photoLocationEnabled,
             browserHomeUrl = prefs[Keys.browserHomeUrl]?.takeIf { it.isNotBlank() } ?: defaults.browserHomeUrl,
             lastBrowserUrl = prefs[Keys.lastBrowserUrl],
             browserTheme = prefs[Keys.browserTheme].enumValueOr(defaults.browserTheme),
@@ -190,10 +208,19 @@ class SettingsRepository @Inject constructor(
                 prefs[Keys.lastThoughtPageKey] ?: defaults.lastThoughtPageKey,
             ),
             thoughtDisplayMode = prefs[Keys.thoughtDisplayMode].enumValueOr(defaults.thoughtDisplayMode),
+            thoughtHighlightColorArgb = (prefs[Keys.thoughtHighlightColorArgb]
+                ?: defaults.thoughtHighlightColorArgb) or 0xFF000000.toInt(),
+            thoughtEditorMaxHeightDp = (prefs[Keys.thoughtEditorMaxHeightDp]
+                ?: defaults.thoughtEditorMaxHeightDp)
+                .coerceIn(MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP, MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP),
             mealCalendarImageMaxHeightDp = (prefs[Keys.mealCalendarImageMaxHeightDp]
                 ?: defaults.mealCalendarImageMaxHeightDp).coerceIn(80, 320),
             mealCalendarShowCaptions = prefs[Keys.mealCalendarShowCaptions]
                 ?: defaults.mealCalendarShowCaptions,
+            mealCalendarWrapEnabled = prefs[Keys.mealCalendarWrapEnabled]
+                ?: defaults.mealCalendarWrapEnabled,
+            mealCalendarPhotosPerRow = prefs[Keys.mealCalendarPhotosPerRow]
+                .enumValueOr(defaults.mealCalendarPhotosPerRow),
             mealPhotoFilter = MealPhotoFilterSettings(
                 enabled = prefs[Keys.mealPhotoFilterEnabled] ?: defaults.mealPhotoFilter.enabled,
                 brightness = prefs[Keys.mealPhotoFilterBrightness]
@@ -234,17 +261,27 @@ class SettingsRepository @Inject constructor(
             bottomNavShowLabels = prefs[Keys.bottomNavShowLabels] ?: defaults.bottomNavShowLabels,
             homeWidgetBordersEnabled = prefs[Keys.homeWidgetBordersEnabled]
                 ?: defaults.homeWidgetBordersEnabled,
-            homeWidgets = migrateDailyRecordsWidget(
-                items = migrateMealPhotosWidget(
-                    items = decodeWidgets(prefs[Keys.homeWidgets], defaults.homeWidgets),
-                    migrated = prefs[Keys.mealPhotosWidgetMigrated] == true,
-                ),
-                migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
-            ),
-            homeWidgetTitles = migrateDailyRecordsWidget(
-                items = decodeStringList(prefs[Keys.homeWidgetTitles], defaults.homeWidgetTitles),
-                migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
-            ),
+            // The widget migrations only apply to users with a stored list from an older
+            // release; a fresh install must keep the small first-launch preset untouched.
+            homeWidgets = if (prefs[Keys.homeWidgets] == null) {
+                defaults.homeWidgets
+            } else {
+                migrateDailyRecordsWidget(
+                    items = migrateMealPhotosWidget(
+                        items = decodeWidgets(prefs[Keys.homeWidgets], defaults.homeWidgets),
+                        migrated = prefs[Keys.mealPhotosWidgetMigrated] == true,
+                    ),
+                    migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
+                )
+            },
+            homeWidgetTitles = if (prefs[Keys.homeWidgetTitles] == null) {
+                defaults.homeWidgetTitles
+            } else {
+                migrateDailyRecordsWidget(
+                    items = decodeStringList(prefs[Keys.homeWidgetTitles], defaults.homeWidgetTitles),
+                    migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
+                )
+            },
         )
     }
 
@@ -258,6 +295,8 @@ class SettingsRepository @Inject constructor(
         encodeThemeSecondaryColors(normalizeThemeSecondaryColors(value)),
     )
     suspend fun setFontScale(value: Float) = set(Keys.fontScale, normalizeFontScale(value))
+    suspend fun setCompactMode(value: Boolean) = set(Keys.compactMode, value)
+    suspend fun setUseChineseLauncherName(value: Boolean) = set(Keys.useChineseLauncherName, value)
     suspend fun setBackupTreeUri(value: String?) {
         context.settingsDataStore.edit {
             it.setOrRemove(Keys.backupTreeUri, value?.takeIf(String::isNotBlank))
@@ -287,6 +326,8 @@ class SettingsRepository @Inject constructor(
         set(Keys.mealImageCompressionEnabled, value)
     suspend fun setMealImageCompressionQuality(value: Int) =
         set(Keys.mealImageCompressionQuality, value.coerceIn(30, 95))
+    suspend fun setSaveOriginalToGallery(value: Boolean) = set(Keys.saveOriginalToGallery, value)
+    suspend fun setPhotoLocationEnabled(value: Boolean) = set(Keys.photoLocationEnabled, value)
     suspend fun setBrowserHomeUrl(value: String) = set(Keys.browserHomeUrl, normalizeUrl(value))
     suspend fun setLastBrowserUrl(value: String) = set(Keys.lastBrowserUrl, value)
     suspend fun setBrowserTheme(value: BrowserTheme) = set(Keys.browserTheme, value.name)
@@ -301,16 +342,27 @@ class SettingsRepository @Inject constructor(
         rowHeightDp: Int,
         reopenMode: ThoughtReopenMode,
         displayMode: ThoughtDisplayMode,
+        highlightColorArgb: Int,
+        editorMaxHeightDp: Int,
     ) {
         context.settingsDataStore.edit { prefs ->
             prefs[Keys.thoughtRowHeightDp] = rowHeightDp.coerceIn(48, 120)
             prefs[Keys.thoughtReopenMode] = reopenMode.name
             prefs[Keys.thoughtDisplayMode] = displayMode.name
+            prefs[Keys.thoughtHighlightColorArgb] = highlightColorArgb or 0xFF000000.toInt()
+            prefs[Keys.thoughtEditorMaxHeightDp] = editorMaxHeightDp
+                .coerceIn(MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP, MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP)
         }
     }
     suspend fun setMealCalendarImageMaxHeight(value: Int) =
         set(Keys.mealCalendarImageMaxHeightDp, value.coerceIn(80, 320))
     suspend fun setMealCalendarShowCaptions(value: Boolean) = set(Keys.mealCalendarShowCaptions, value)
+    suspend fun setMealCalendarWrap(enabled: Boolean, photosPerRow: MealPhotosPerRow) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.mealCalendarWrapEnabled] = enabled
+            prefs[Keys.mealCalendarPhotosPerRow] = photosPerRow.name
+        }
+    }
     suspend fun setMealPhotoFilter(value: MealPhotoFilterSettings) {
         val normalized = value.normalized()
         context.settingsDataStore.edit { prefs ->
@@ -447,6 +499,8 @@ class SettingsRepository @Inject constructor(
                 normalizeThemeSecondaryColors(value.themeSecondaryColorsArgb),
             )
             prefs[Keys.fontScale] = normalizeFontScale(value.fontScale)
+            prefs[Keys.compactMode] = value.compactMode
+            prefs[Keys.useChineseLauncherName] = value.useChineseLauncherName
             prefs[Keys.cloudSyncConfigs] = encodeCloudSyncConfigs(normalizedCloudSyncConfigs)
             prefs[Keys.cloudSyncEnabled] = value.cloudSyncEnabled &&
                 normalizedCloudSyncConfigs.any {
@@ -467,6 +521,8 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.imageMaxHeightDp] = value.imageMaxHeightDp.coerceIn(120, 2400)
             prefs[Keys.mealImageCompressionEnabled] = value.mealImageCompressionEnabled
             prefs[Keys.mealImageCompressionQuality] = value.mealImageCompressionQuality.coerceIn(30, 95)
+            prefs[Keys.saveOriginalToGallery] = value.saveOriginalToGallery
+            prefs[Keys.photoLocationEnabled] = value.photoLocationEnabled
             prefs[Keys.browserHomeUrl] = normalizeUrl(value.browserHomeUrl)
             prefs.setOrRemove(Keys.lastBrowserUrl, value.lastBrowserUrl)
             prefs[Keys.browserTheme] = value.browserTheme.name
@@ -475,8 +531,14 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.thoughtRowHeightDp] = value.thoughtRowHeightDp.coerceIn(48, 120)
             prefs[Keys.thoughtReopenMode] = value.thoughtReopenMode.name
             prefs[Keys.thoughtDisplayMode] = value.thoughtDisplayMode.name
+            prefs[Keys.thoughtHighlightColorArgb] =
+                value.thoughtHighlightColorArgb or 0xFF000000.toInt()
+            prefs[Keys.thoughtEditorMaxHeightDp] = value.thoughtEditorMaxHeightDp
+                .coerceIn(MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP, MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP)
             prefs[Keys.mealCalendarImageMaxHeightDp] = value.mealCalendarImageMaxHeightDp.coerceIn(80, 320)
             prefs[Keys.mealCalendarShowCaptions] = value.mealCalendarShowCaptions
+            prefs[Keys.mealCalendarWrapEnabled] = value.mealCalendarWrapEnabled
+            prefs[Keys.mealCalendarPhotosPerRow] = value.mealCalendarPhotosPerRow.name
             prefs[Keys.mealPhotoFilterEnabled] = normalizedMealPhotoFilter.enabled
             prefs[Keys.mealPhotoFilterBrightness] = normalizedMealPhotoFilter.brightness
             prefs[Keys.mealPhotoFilterContrast] = normalizedMealPhotoFilter.contrast

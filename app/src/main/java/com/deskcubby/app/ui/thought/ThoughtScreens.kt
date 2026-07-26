@@ -9,8 +9,6 @@ import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,7 +22,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.imeNestedScroll
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -47,12 +44,14 @@ import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -75,19 +74,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -132,6 +127,7 @@ fun ThoughtScreen(
     var editor by remember { mutableStateOf("") }
     var actionItem by remember { mutableStateOf<FlashThoughtEntity?>(null) }
     var categorizingItem by remember { mutableStateOf<FlashThoughtEntity?>(null) }
+    var creatingCategoryForItem by remember { mutableStateOf<FlashThoughtEntity?>(null) }
     var draggingThoughtId by remember { mutableStateOf<Long?>(null) }
     var draggingDistancePx by remember { mutableStateOf(0f) }
     var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
@@ -148,17 +144,7 @@ fun ThoughtScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val shareChooserTitle = tr("分享小巧思", "Share thought")
     val shareFailedMessage = tr("没有可用的分享应用", "No app is available for sharing")
-    val dismissKeyboardOnListScroll = remember(focusManager, keyboardController) {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (available.y != 0f) {
-                    focusManager.clearFocus(force = true)
-                    keyboardController?.hide()
-                }
-                return Offset.Zero
-            }
-        }
-    }
+    val emptyCategoryExportMessage = tr("该分类还没有小巧思", "This category has no thoughts yet")
     val thoughtDateFormatter = remember { DateTimeFormatter.ofPattern("yyyy/M/d HH:mm") }
 
     fun findDragTargetIndex(itemId: Long, verticalDistancePx: Float): Int? {
@@ -244,7 +230,9 @@ fun ThoughtScreen(
                 )
             },
         ) { inner ->
-            Box(Modifier.fillMaxSize().padding(inner).imePadding().imeNestedScroll()) {
+            // The IME must only open on an explicit tap and close from the keyboard's own
+            // dismiss action, so no scroll-driven IME connections here.
+            Box(Modifier.fillMaxSize().padding(inner).imePadding()) {
                 Column(Modifier.fillMaxSize()) {
                     Box(Modifier.fillMaxWidth().weight(1f)) {
                         if (items.isEmpty()) {
@@ -265,7 +253,7 @@ fun ThoughtScreen(
                         } else {
                             LazyColumn(
                                 state = listState,
-                                modifier = Modifier.fillMaxSize().nestedScroll(dismissKeyboardOnListScroll),
+                                modifier = Modifier.fillMaxSize(),
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
@@ -276,6 +264,7 @@ fun ThoughtScreen(
                                             .fillMaxWidth()
                                             .zIndex(if (isDragging) 1f else 0f),
                                     ) {
+                                        val highlightColor = Color(settings.thoughtHighlightColorArgb)
                                         Card(
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -287,6 +276,18 @@ fun ThoughtScreen(
                                                     onClick = { selected = item; editor = item.content },
                                                     onLongClick = { actionItem = item },
                                                 ),
+                                            colors = if (item.highlighted) {
+                                                CardDefaults.cardColors(
+                                                    containerColor = highlightColor,
+                                                    contentColor = if (highlightColor.luminance() > 0.5f) {
+                                                        Color.Black
+                                                    } else {
+                                                        Color.White
+                                                    },
+                                                )
+                                            } else {
+                                                CardDefaults.cardColors()
+                                            },
                                         ) {
                                             Row(
                                                 Modifier
@@ -409,52 +410,11 @@ fun ThoughtScreen(
                             onValueChange = { editor = it },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 168.dp)
-                                .onFocusChanged { isEditorFocused = it.isFocused }
-                                .pointerInput(
-                                    listState,
-                                    focusManager,
-                                    keyboardController,
-                                    isEditorFocused,
-                                ) {
-                                    if (isEditorFocused) return@pointerInput
-                                    awaitEachGesture {
-                                        val down = awaitFirstDown(
-                                            requireUnconsumed = false,
-                                            pass = PointerEventPass.Initial,
-                                        )
-                                        var totalX = 0f
-                                        var totalY = 0f
-                                        var isVerticalDrag: Boolean? = null
-                                        var dragStarted = false
-                                        while (true) {
-                                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                            if (!change.pressed) break
-                                            val delta = change.positionChange()
-                                            totalX += delta.x
-                                            totalY += delta.y
-                                            if (isVerticalDrag == null &&
-                                                (abs(totalX) > viewConfiguration.touchSlop ||
-                                                    abs(totalY) > viewConfiguration.touchSlop)
-                                            ) {
-                                                isVerticalDrag = abs(totalY) > abs(totalX)
-                                            }
-                                            if (isVerticalDrag == true) {
-                                                if (!dragStarted) {
-                                                    dragStarted = true
-                                                    focusManager.clearFocus(force = true)
-                                                    keyboardController?.hide()
-                                                }
-                                                change.consume()
-                                                listState.dispatchRawDelta(-delta.y)
-                                            }
-                                        }
-                                    }
-                                },
+                                .heightIn(max = settings.thoughtEditorMaxHeightDp.dp)
+                                .onFocusChanged { isEditorFocused = it.isFocused },
                             placeholder = { Text(tr("此刻在想什么？", "What's on your mind?")) },
                             minLines = 1,
-                            maxLines = 6,
+                            maxLines = Int.MAX_VALUE,
                             shape = if (organic) visuals.featureShape else RoundedCornerShape(28.dp),
                             trailingIcon = {
                                 ThoughtSendButton(
@@ -498,6 +458,11 @@ fun ThoughtScreen(
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     TextButton(onClick = { viewModel.togglePinned(item.id); actionItem = null }) {
                         Icon(Icons.Outlined.PushPin, null); Spacer(Modifier.width(8.dp)); Text(if (item.pinned) tr("取消置顶", "Unpin") else tr("置顶", "Pin"))
+                    }
+                    TextButton(onClick = { viewModel.toggleHighlighted(item.id); actionItem = null }) {
+                        Icon(Icons.Outlined.Star, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (item.highlighted) tr("取消重点", "Remove highlight") else tr("标记重点", "Mark as highlight"))
                     }
                     TextButton(onClick = { categorizingItem = item; actionItem = null }) {
                         Icon(Icons.Outlined.DriveFileMove, null)
@@ -549,6 +514,21 @@ fun ThoughtScreen(
                 }
                 categorizingItem = null
             },
+            onCreateNew = {
+                creatingCategoryForItem = item
+                categorizingItem = null
+            },
+        )
+    }
+
+    creatingCategoryForItem?.let { item ->
+        ThoughtCategoryEditorDialog(
+            category = null,
+            categories = categories,
+            onDismiss = { creatingCategoryForItem = null },
+            onSave = { name, color, onResult ->
+                viewModel.createCategoryAndAssign(item.id, name, color, onResult)
+            },
         )
     }
 
@@ -595,6 +575,25 @@ fun ThoughtScreen(
             onDelete = {
                 viewModel.deleteCategory(it.id)
                 editingCategory = null
+            },
+            onExport = { exporting ->
+                val contents = activeState.items
+                    .filter { it.categoryId == exporting.id }
+                    .map(FlashThoughtEntity::content)
+                if (contents.isEmpty()) {
+                    Toast.makeText(context, emptyCategoryExportMessage, Toast.LENGTH_SHORT).show()
+                } else {
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, exporting.name)
+                        putExtra(Intent.EXTRA_TEXT, contents.joinToString("\n\n"))
+                    }
+                    runCatching {
+                        context.startActivity(Intent.createChooser(shareIntent, shareChooserTitle))
+                    }.onFailure {
+                        Toast.makeText(context, shareFailedMessage, Toast.LENGTH_SHORT).show()
+                    }
+                }
             },
         )
     }

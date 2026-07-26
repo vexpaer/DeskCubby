@@ -54,6 +54,10 @@ val LocalVisualStyle: ProvidableCompositionLocal<VisualStyle> =
 val LocalAppLanguage: ProvidableCompositionLocal<AppLanguage> =
     staticCompositionLocalOf { AppLanguage.CHINESE }
 
+/** Compact mode tightens list/settings paddings across the app. */
+val LocalCompactMode: ProvidableCompositionLocal<Boolean> =
+    staticCompositionLocalOf { false }
+
 private val MaterialLight = lightColorScheme(
     primary = Color(0xFF42664D),
     onPrimary = Color.White,
@@ -143,6 +147,7 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
     androidx.compose.runtime.CompositionLocalProvider(
         LocalVisualStyle provides settings.visualStyle,
         LocalAppLanguage provides settings.appLanguage,
+        LocalCompactMode provides settings.compactMode,
         LocalDeskCubbyVisuals provides visualTokens,
         LocalOrganicFuturePrimaryColor provides Color(settings.themeColorArgb or 0xFF000000.toInt()),
         LocalOrganicFutureAccentColors provides organicFutureAccentColors(
@@ -176,18 +181,31 @@ internal fun resolveColorScheme(
     if (visualStyle == VisualStyle.ORGANIC_FUTURE) {
         return baseScheme
     }
+    // Material and Liquid Glass share the same primary + secondary color settings as
+    // Organic Future: the first two secondary colors drive the secondary/tertiary roles.
     val accent = Color(themeColorArgb)
-    val onAccent = if (accent.luminance() > 0.48f) Color.Black else Color.White
+    val accents = organicFutureAccentColors(themeSecondaryColorsArgb)
+    val secondary = accents[0]
+    val tertiary = accents[1]
+    fun onColor(color: Color) = if (color.luminance() > 0.48f) Color.Black else Color.White
+    fun container(color: Color) = lerp(
+        color,
+        if (dark) Color.Black else Color.White,
+        if (dark) 0.48f else 0.72f,
+    )
     return baseScheme.copy(
         primary = accent,
-        onPrimary = onAccent,
-        primaryContainer = lerp(
-            accent,
-            if (dark) Color.Black else Color.White,
-            if (dark) 0.48f else 0.72f,
-        ),
+        onPrimary = onColor(accent),
+        primaryContainer = container(accent),
         onPrimaryContainer = if (dark) Color.White else Color.Black,
-        secondary = lerp(accent, baseScheme.onSurface, 0.35f),
+        secondary = secondary,
+        onSecondary = onColor(secondary),
+        secondaryContainer = container(secondary),
+        onSecondaryContainer = if (dark) Color.White else Color.Black,
+        tertiary = tertiary,
+        onTertiary = onColor(tertiary),
+        tertiaryContainer = container(tertiary),
+        onTertiaryContainer = if (dark) Color.White else Color.Black,
     )
 }
 

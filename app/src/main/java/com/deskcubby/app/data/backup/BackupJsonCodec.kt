@@ -20,8 +20,10 @@ import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
+import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
+import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.preferences.migrateMealPhotosWidget
 import com.deskcubby.app.data.preferences.migrateDailyRecordsWidget
@@ -36,7 +38,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 13,
+    val formatVersion: Int = 14,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -56,7 +58,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 13
+    const val FORMAT_VERSION: Int = 14
 
     private const val FORMAT_NAME = "DeskCubby"
     private const val MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -152,6 +154,7 @@ object BackupJsonCodec {
         val thoughts = decodeThoughts(
             json = root.requiredArray("thoughts"),
             includeCategoryId = version >= 3,
+            includeHighlighted = version >= 14,
         )
         validateCategoryReferences(thoughts, categories)
         val favorites = decodeFavorites(root.requiredArray("favorites"))
@@ -184,6 +187,8 @@ object BackupJsonCodec {
         .put("themeColorArgb", settings.themeColorArgb)
         .put("themeSecondaryColorsArgb", settings.themeSecondaryColorsArgb.toJsonIntArray())
         .put("fontScale", settings.fontScale)
+        .put("compactMode", settings.compactMode)
+        .put("useChineseLauncherName", settings.useChineseLauncherName)
         // Credentials are device-local. Imports must be explicitly re-enabled after review.
         .put("cloudSyncEnabled", false)
         .put("cloudSyncConfigs", encodeCloudSyncConfigs(settings.cloudSyncConfigs))
@@ -196,6 +201,8 @@ object BackupJsonCodec {
         .put("imageMaxHeightDp", settings.imageMaxHeightDp)
         .put("mealImageCompressionEnabled", settings.mealImageCompressionEnabled)
         .put("mealImageCompressionQuality", settings.mealImageCompressionQuality)
+        .put("saveOriginalToGallery", settings.saveOriginalToGallery)
+        .put("photoLocationEnabled", settings.photoLocationEnabled)
         .put("browserHomeUrl", settings.browserHomeUrl)
         .putNullable("lastBrowserUrl", settings.lastBrowserUrl)
         .put("browserTheme", settings.browserTheme.name)
@@ -204,8 +211,12 @@ object BackupJsonCodec {
         .put("thoughtRowHeightDp", settings.thoughtRowHeightDp)
         .put("thoughtReopenMode", settings.thoughtReopenMode.name)
         .put("thoughtDisplayMode", settings.thoughtDisplayMode.name)
+        .put("thoughtHighlightColorArgb", settings.thoughtHighlightColorArgb)
+        .put("thoughtEditorMaxHeightDp", settings.thoughtEditorMaxHeightDp)
         .put("mealCalendarImageMaxHeightDp", settings.mealCalendarImageMaxHeightDp)
         .put("mealCalendarShowCaptions", settings.mealCalendarShowCaptions)
+        .put("mealCalendarWrapEnabled", settings.mealCalendarWrapEnabled)
+        .put("mealCalendarPhotosPerRow", settings.mealCalendarPhotosPerRow.name)
         .put("mealPhotoFilter", JSONObject()
             .put("enabled", settings.mealPhotoFilter.enabled)
             .put("brightness", settings.mealPhotoFilter.brightness)
@@ -419,6 +430,16 @@ object BackupJsonCodec {
             } else {
                 defaults.fontScale
             },
+            compactMode = if (version >= 14) {
+                json.requiredBoolean("compactMode")
+            } else {
+                defaults.compactMode
+            },
+            useChineseLauncherName = if (version >= 14) {
+                json.requiredBoolean("useChineseLauncherName")
+            } else {
+                defaults.useChineseLauncherName
+            },
             cloudSyncEnabled = if (version >= 13) {
                 json.requiredBoolean("cloudSyncEnabled")
                 false
@@ -448,6 +469,16 @@ object BackupJsonCodec {
             } else {
                 defaults.mealImageCompressionQuality
             },
+            saveOriginalToGallery = if (version >= 14) {
+                json.requiredBoolean("saveOriginalToGallery")
+            } else {
+                defaults.saveOriginalToGallery
+            },
+            photoLocationEnabled = if (version >= 14) {
+                json.requiredBoolean("photoLocationEnabled")
+            } else {
+                defaults.photoLocationEnabled
+            },
             browserHomeUrl = json.requiredString("browserHomeUrl")
                 .requireMaxLength("browserHomeUrl", MAX_URL_CHARS)
                 .also { requireValidBrowserUrl(it, "browserHomeUrl") },
@@ -464,6 +495,20 @@ object BackupJsonCodec {
             else defaults.thoughtReopenMode,
             thoughtDisplayMode = if (version >= 9) json.requiredEnum("thoughtDisplayMode")
             else defaults.thoughtDisplayMode,
+            thoughtHighlightColorArgb = if (version >= 14) {
+                json.requiredInt("thoughtHighlightColorArgb") or 0xFF000000.toInt()
+            } else {
+                defaults.thoughtHighlightColorArgb
+            },
+            thoughtEditorMaxHeightDp = if (version >= 14) {
+                json.requiredCoercedInt(
+                    "thoughtEditorMaxHeightDp",
+                    MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP,
+                    MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP,
+                )
+            } else {
+                defaults.thoughtEditorMaxHeightDp
+            },
             mealCalendarImageMaxHeightDp = if (version >= 9) {
                 json.requiredCoercedInt("mealCalendarImageMaxHeightDp", 80, 320)
             } else {
@@ -473,6 +518,16 @@ object BackupJsonCodec {
                 json.requiredBoolean("mealCalendarShowCaptions")
             } else {
                 defaults.mealCalendarShowCaptions
+            },
+            mealCalendarWrapEnabled = if (version >= 14) {
+                json.requiredBoolean("mealCalendarWrapEnabled")
+            } else {
+                defaults.mealCalendarWrapEnabled
+            },
+            mealCalendarPhotosPerRow = if (version >= 14) {
+                json.requiredEnum("mealCalendarPhotosPerRow")
+            } else {
+                defaults.mealCalendarPhotosPerRow
             },
             mealPhotoFilter = if (version >= 13) {
                 decodeMealPhotoFilter(json.requiredObject("mealPhotoFilter"))
@@ -738,7 +793,8 @@ object BackupJsonCodec {
                     .put("pinned", thought.pinned)
                     .putNullable("deletedAt", thought.deletedAt)
                     .put("sortOrder", thought.sortOrder)
-                    .putNullable("categoryId", thought.categoryId),
+                    .putNullable("categoryId", thought.categoryId)
+                    .put("highlighted", thought.highlighted),
             )
         }
     }
@@ -746,6 +802,7 @@ object BackupJsonCodec {
     private fun decodeThoughts(
         json: JSONArray,
         includeCategoryId: Boolean,
+        includeHighlighted: Boolean,
     ): List<FlashThoughtEntity> {
         require(json.length() <= MAX_THOUGHTS) { "Backup contains too many thoughts" }
         val ids = HashSet<Long>(json.length())
@@ -778,6 +835,11 @@ object BackupJsonCodec {
                             item.requiredNullableLong("categoryId")
                         } else {
                             null
+                        },
+                        highlighted = if (includeHighlighted) {
+                            item.requiredBoolean("highlighted")
+                        } else {
+                            false
                         },
                     ),
                 )
