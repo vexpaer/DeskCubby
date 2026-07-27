@@ -102,12 +102,16 @@ class AppBackupRepository @Inject constructor(
         withContext(Dispatchers.IO) { loadCurrentContent() }
     }
 
-    /** Produces the same validated UTF-8 snapshot used by manual and automatic backups. */
-    suspend fun encodeCurrentBackupForSync(): ByteArray = operationMutex.withLock {
+    /** Produces the same validated JSON snapshot used by preview, manual and automatic backups. */
+    suspend fun currentBackupJson(): String = operationMutex.withLock {
         withContext(Dispatchers.IO) {
-            BackupJsonCodec.encode(loadCurrentContent().toBackup()).toByteArray(Charsets.UTF_8)
+            BackupJsonCodec.encode(loadCurrentContent().toBackup())
         }
     }
+
+    /** Produces the same validated UTF-8 snapshot used by cloud synchronization. */
+    suspend fun encodeCurrentBackupForSync(): ByteArray =
+        currentBackupJson().toByteArray(Charsets.UTF_8)
 
     /** Imports a user-confirmed JSON file previously staged by cloud sync. */
     suspend fun importStagedBackupJson(raw: String): BackupSummary = operationMutex.withLock {
@@ -213,6 +217,11 @@ class AppBackupRepository @Inject constructor(
             ),
             current = previousSettings,
             formatVersion = backup.formatVersion,
+        ).copy(
+            // Usage access and health-data authorization are device-local grants. Imports
+            // never activate sensitive collection on a device that has not confirmed them.
+            usageTrackingEnabled = false,
+            stepTrackingEnabled = false,
         )
         try {
             settingsRepository.restoreFromBackup(restoredSettings)

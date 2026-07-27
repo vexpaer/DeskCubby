@@ -1,0 +1,223 @@
+package com.deskcubby.app.data.statistics
+
+import android.content.Context
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.HealthConnectFeatures
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.request.AggregateRequest
+import androidx.health.connect.client.time.TimeRangeFilter
+import dagger.hilt.android.qualifiers.ApplicationContext
+import java.time.Clock
+import java.time.LocalDate
+import java.time.ZoneId
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+@Singleton
+class StepStatisticsRepository @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val store: StepStatisticsStore,
+) {
+    private val refreshMutex = Mutex()
+    private val mutableCollectionState = MutableStateFlow(StatisticsCollectionState())
+
+    val history: StateFlow<StepStatisticsHistory> = store.history
+    val collectionState: StateFlow<StatisticsCollectionState> =
+        mutableCollectionState.asStateFlow()
+
+    fun sdkStatus(): Int = HealthConnectClient.getSdkStatus(context)
+
+    fun permissionsToRequest(): Set<String> =
+        StepHealthConnectAccess.permissionsToRequest(context)
+
+    fun healthConnectAction(): StepHealthConnectAction =
+        StepHealthConnectAccess.action(context)
+
+    suspend fun hasStepReadPermission(): Boolean {
+        if (sdkStatus() != HealthConnectClient.SDK_AVAILABLE) return false
+        return StepHealthConnectAccess.stepReadPermission in
+            HealthConnectClient.getOrCreate(context)
+                .permissionController
+                .getGrantedPermissions()
+    }
+
+    suspend fun canReadInBackground(): Boolean {
+        if (sdkStatus() != HealthConnectClient.SDK_AVAILABLE) return false
+        val client = HealthConnectClient.getOrCreate(context)
+        val featureAvailable = client.features.getFeatureStatus(
+            HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND,
+        ) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+        if (!featureAvailable) return false
+        return HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND in
+            client.permissionController.getGrantedPermissions()
+    }
+
+    suspend fun refresh(
+        clock: Clock = Clock.systemDefaultZone(),
+        fromBackground: Boolean = false,
+    ): StatisticsRefreshOutcome = refreshMutex.withLock {
+        val availability = sdkStatus()
+        if (availability != HealthConnectClient.SDK_AVAILABLE) {
+            mutableCollectionState.value = StatisticsCollectionState(
+                phase = StatisticsCollectionPhase.UNAVAILABLE,
+                technicalDetail = if (
+                    availability == HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED
+                ) {
+                    DETAIL_PROVIDER_UPDATE_REQUIRED
+                } else {
+                    DETAIL_SDK_UNAVAILABLE
+                },
+            )
+            return@withLock StatisticsRefreshOutcome.UNAVAILABLE
+        }
+        mutableCollectionState.value = mutableCollectionState.value.copy(
+            phase = StatisticsCollectionPhase.REFRESHING,
+            technicalDetail = null,
+        )
+        try {
+            val client = HealthConnectClient.getOrCreate(context)
+            val granted = client.permissionController.getGrantedPermissions()
+            if (StepHealthConnectAccess.stepReadPermission !in granted) {
+                mutableCollectionState.value = StatisticsCollectionState(
+                    phase = StatisticsCollectionPhase.PERMISSION_REQUIRED,
+                    technicalDetail = DETAIL_STEP_PERMISSION,
+                )
+                return@withLock StatisticsRefreshOutcome.PERMISSION_REQUIRED
+            }
+            if (
+                fromBackground &&
+                client.features.getFeatureStatus(
+                    HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND,
+                ) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE &&
+                HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND !in granted
+            ) {
+                mutableCollectionState.value = StatisticsCollectionState(
+                    phase = StatisticsCollectionPhase.PERMISSION_REQUIRED,
+                    technicalDetail = DETAIL_BACKGROUND_PERMISSION,
+                )
+                return@withLock StatisticsRefreshOutcome.PERMISSION_REQUIRED
+            }
+
+            val zone = clock.zone
+            val today = LocalDate.now(clock)
+            val current = store.history.value
+            val firstDate = current.trackingStartedOn ?: today
+            val replacements = mutableMapOf<LocalDate, StepStatisticsDay>()
+            var date = firstDate
+            while (!date.isAfter(today)) {
+                val existing = current.days.firstOrNull { it.date == date }
+                if (existing?.state != StatisticsDayState.FINAL) {
+                    replacements[date] = queryDay(
+                        client = client,
+                        date = date,
+                        today = today,
+                        zone = zone,
+                        nowMillis = clock.millis(),
+                    )
+                }
+                date = date.plusDays(1)
+            }
+            val refreshed = store.update { latest ->
+                val byDate = latest.days.associateBy(StepStatisticsDay::date).toMutableMap()
+                replacements.forEach { (replacementDate, replacement) ->
+                    if (byDate[replacementDate]?.state != StatisticsDayState.FINAL) {
+                        byDate[replacementDate] = replacement
+                    }
+                }
+                latest.copy(
+                    trackingStartedOn = latest.trackingStartedOn ?: firstDate,
+                    days = byDate.values.sortedBy(StepStatisticsDay::date),
+                )
+            }
+            val refreshedAt = refreshed.days.maxOfOrNull(StepStatisticsDay::collectedAtEpochMillis)
+                ?: clock.millis()
+            mutableCollectionState.value = StatisticsCollectionState(
+                phase = StatisticsCollectionPhase.READY,
+                lastSuccessfulRefreshEpochMillis = refreshedAt,
+            )
+            StatisticsRefreshOutcome.SUCCESS
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: SecurityException) {
+            mutableCollectionState.value = StatisticsCollectionState(
+                phase = StatisticsCollectionPhase.PERMISSION_REQUIRED,
+                technicalDetail = DETAIL_STEP_PERMISSION,
+            )
+            StatisticsRefreshOutcome.PERMISSION_REQUIRED
+        } catch (error: UnsupportedOperationException) {
+            mutableCollectionState.value = StatisticsCollectionState(
+                phase = StatisticsCollectionPhase.UNAVAILABLE,
+                technicalDetail = DETAIL_SDK_UNAVAILABLE,
+            )
+            StatisticsRefreshOutcome.UNAVAILABLE
+        } catch (error: Exception) {
+            mutableCollectionState.value = StatisticsCollectionState(
+                phase = StatisticsCollectionPhase.ERROR,
+                technicalDetail = error.message,
+            )
+            StatisticsRefreshOutcome.ERROR
+        }
+    }
+
+    fun markDisabled() {
+        mutableCollectionState.value = mutableCollectionState.value.copy(
+            phase = StatisticsCollectionPhase.DISABLED,
+            technicalDetail = null,
+        )
+    }
+
+    fun reportHealthConnectOpenFailure() {
+        mutableCollectionState.value = mutableCollectionState.value.copy(
+            phase = StatisticsCollectionPhase.ERROR,
+            technicalDetail = DETAIL_OPEN_HEALTH_CONNECT_FAILED,
+        )
+    }
+
+    private suspend fun queryDay(
+        client: HealthConnectClient,
+        date: LocalDate,
+        today: LocalDate,
+        zone: ZoneId,
+        nowMillis: Long,
+    ): StepStatisticsDay {
+        val start = date.atStartOfDay(zone).toInstant()
+        val naturalEnd = date.plusDays(1).atStartOfDay(zone).toInstant()
+        val end = if (date == today) {
+            java.time.Instant.ofEpochMilli(nowMillis).coerceAtMost(naturalEnd)
+        } else {
+            naturalEnd
+        }
+        val safeEnd = if (end.isAfter(start)) end else start.plusMillis(1)
+        val aggregate = client.aggregate(
+            AggregateRequest(
+                metrics = setOf(StepsRecord.COUNT_TOTAL),
+                timeRangeFilter = TimeRangeFilter.between(start, safeEnd),
+            ),
+        )
+        return StepStatisticsDay(
+            date = date,
+            zoneId = zone.id,
+            state = if (date == today) StatisticsDayState.OPEN else StatisticsDayState.FINAL,
+            collectedAtEpochMillis = nowMillis,
+            steps = aggregate[StepsRecord.COUNT_TOTAL],
+        )
+    }
+
+    companion object {
+        const val DETAIL_SDK_UNAVAILABLE = "health_connect_unavailable"
+        const val DETAIL_PROVIDER_UPDATE_REQUIRED = "health_connect_update_required"
+        const val DETAIL_STEP_PERMISSION = "step_permission_required"
+        const val DETAIL_BACKGROUND_PERMISSION = "background_permission_required"
+        const val DETAIL_OPEN_HEALTH_CONNECT_FAILED = "health_connect_open_failed"
+    }
+}
+
+private fun java.time.Instant.coerceAtMost(maximum: java.time.Instant): java.time.Instant =
+    if (isAfter(maximum)) maximum else this

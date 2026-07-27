@@ -3,6 +3,10 @@
 package com.deskcubby.app.ui
 
 import android.animation.ValueAnimator
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
@@ -27,6 +31,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.SportsEsports
@@ -34,6 +39,7 @@ import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Create
+import androidx.compose.material.icons.outlined.DirectionsWalk
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Language
@@ -96,6 +102,10 @@ import com.deskcubby.app.ui.settings.SettingsStartPage
 import com.deskcubby.app.ui.settings.SettingsViewModel
 import com.deskcubby.app.ui.rss.RssScreen
 import com.deskcubby.app.ui.rss.RssViewModel
+import com.deskcubby.app.ui.steps.StepStatisticsScreen
+import com.deskcubby.app.ui.steps.StepStatisticsViewModel
+import com.deskcubby.app.ui.usage.UsageStatisticsScreen
+import com.deskcubby.app.ui.usage.UsageStatisticsViewModel
 import com.deskcubby.app.ui.ai.AiChatScreen
 import com.deskcubby.app.ui.ai.AiChatViewModel
 import com.deskcubby.app.ui.theme.DeskCubbyTheme
@@ -111,6 +121,7 @@ import com.deskcubby.app.ui.thought.ThoughtTrashScreen
 import com.deskcubby.app.ui.thought.ThoughtViewModel
 import com.deskcubby.app.ui.vault.VaultScreen
 import com.deskcubby.app.ui.vault.VaultViewModel
+import com.deskcubby.app.data.statistics.StepHealthConnectAccess
 
 object Routes {
     const val EDITOR = "diary_editor"
@@ -120,6 +131,9 @@ object Routes {
     const val DAILY_RECORDS = "daily_records"
     const val DAILY_RECORDS_TODAY = "daily_records/today"
     const val NAVIGATION_SETTINGS = "settings/navigation"
+    const val MORE_PAGE_SETTINGS = "settings/more-page"
+    const val USAGE_SETTINGS = "settings/usage-statistics"
+    const val STEPS_SETTINGS = "settings/step-statistics"
     const val AI_SETTINGS = "settings/ai"
 }
 
@@ -137,6 +151,8 @@ fun DeskCubbyRoot(
     dailyRecordViewModel: DailyRecordViewModel = hiltViewModel(),
     vaultViewModel: VaultViewModel = hiltViewModel(),
     gamesViewModel: GamesViewModel = hiltViewModel(),
+    usageStatisticsViewModel: UsageStatisticsViewModel = hiltViewModel(),
+    stepStatisticsViewModel: StepStatisticsViewModel = hiltViewModel(),
 ) {
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val ready by settingsViewModel.ready.collectAsStateWithLifecycle()
@@ -149,8 +165,12 @@ fun DeskCubbyRoot(
         }
         val navController = rememberNavController()
         val aliasContext = LocalContext.current
-        LaunchedEffect(settings.useChineseLauncherName) {
-            syncLauncherAlias(aliasContext, settings.useChineseLauncherName)
+        LaunchedEffect(settings.useChineseLauncherName, settings.launcherIcon) {
+            syncLauncherAlias(
+                aliasContext,
+                settings.useChineseLauncherName,
+                settings.launcherIcon,
+            )
         }
         var introDismissedForSession by remember { mutableStateOf(false) }
         var settingsSubpageOpen by remember { mutableStateOf(false) }
@@ -290,6 +310,30 @@ fun DeskCubbyRoot(
                     composable(NavItemId.GAMES.route) {
                         GamesScreen(padding = padding, viewModel = gamesViewModel)
                     }
+                    composable(NavItemId.USAGE.route) {
+                        UsageStatisticsScreen(
+                            padding = padding,
+                            viewModel = usageStatisticsViewModel,
+                            onRequestUsageAccess = { openUsageAccessSettings(aliasContext) },
+                            onOpenTrackingSettings = {
+                                navController.navigate(Routes.USAGE_SETTINGS)
+                            },
+                        )
+                    }
+                    composable(NavItemId.STEPS.route) {
+                        StepStatisticsScreen(
+                            padding = padding,
+                            viewModel = stepStatisticsViewModel,
+                            onOpenTrackingSettings = {
+                                navController.navigate(Routes.STEPS_SETTINGS)
+                            },
+                            onOpenHealthConnect = {
+                                if (StepHealthConnectAccess.open(aliasContext).isFailure) {
+                                    stepStatisticsViewModel.onHealthConnectOpenFailed()
+                                }
+                            },
+                        )
+                    }
                     composable(NavItemId.MORE.route) {
                         MoreHubScreen(
                             padding = padding,
@@ -299,13 +343,14 @@ fun DeskCubbyRoot(
                                     item.id != NavItemId.MORE &&
                                     item.id != NavItemId.SETTINGS
                             },
+                            showDescriptions = settings.morePageShowDescriptions,
                             onOpenPage = { itemId ->
                                 navController.navigate(itemId.route) {
                                     launchSingleTop = true
                                 }
                             },
                             onOpenNavigationSettings = {
-                                navController.navigate(Routes.NAVIGATION_SETTINGS)
+                                navController.navigate(Routes.MORE_PAGE_SETTINGS)
                             },
                         )
                     }
@@ -375,6 +420,30 @@ fun DeskCubbyRoot(
                             onExit = { navController.popBackStack() },
                         )
                     }
+                    composable(Routes.MORE_PAGE_SETTINGS) {
+                        SettingsScreen(
+                            padding = padding,
+                            viewModel = settingsViewModel,
+                            startPage = SettingsStartPage.MORE_PAGE,
+                            onExit = { navController.popBackStack() },
+                        )
+                    }
+                    composable(Routes.USAGE_SETTINGS) {
+                        SettingsScreen(
+                            padding = padding,
+                            viewModel = settingsViewModel,
+                            startPage = SettingsStartPage.USAGE,
+                            onExit = { navController.popBackStack() },
+                        )
+                    }
+                    composable(Routes.STEPS_SETTINGS) {
+                        SettingsScreen(
+                            padding = padding,
+                            viewModel = settingsViewModel,
+                            startPage = SettingsStartPage.STEPS,
+                            onExit = { navController.popBackStack() },
+                        )
+                    }
                     composable(Routes.AI_SETTINGS) {
                         SettingsScreen(
                             padding = padding,
@@ -422,6 +491,17 @@ fun DeskCubbyRoot(
             )
         }
     }
+}
+
+private fun openUsageAccessSettings(context: Context) {
+    val packageIntent = Intent(
+        Settings.ACTION_USAGE_ACCESS_SETTINGS,
+        Uri.parse("package:${context.packageName}"),
+    )
+    runCatching { context.startActivity(packageIntent) }
+        .recoverCatching {
+            context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+        }
 }
 
 @Composable
@@ -536,5 +616,7 @@ fun iconFor(key: String): ImageVector = when (key) {
     "apps" -> Icons.Outlined.Apps
     "lock" -> Icons.Outlined.Lock
     "game" -> Icons.Outlined.SportsEsports
+    "usage" -> Icons.Outlined.AccessTime
+    "steps" -> Icons.Outlined.DirectionsWalk
     else -> Icons.Outlined.MenuBook
 }

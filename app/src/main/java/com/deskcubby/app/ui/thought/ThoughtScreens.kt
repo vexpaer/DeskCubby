@@ -43,11 +43,13 @@ import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Notes
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.ShortText
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -220,6 +222,25 @@ fun ThoughtScreen(
                         )
                     },
                     actions = {
+                        TextButton(onClick = { viewModel.toggleDisplayMode() }) {
+                            Icon(
+                                imageVector = if (settings.thoughtDisplayMode == ThoughtDisplayMode.FULL) {
+                                    Icons.Outlined.Notes
+                                } else {
+                                    Icons.Outlined.ShortText
+                                },
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                if (settings.thoughtDisplayMode == ThoughtDisplayMode.FULL) {
+                                    tr("完整", "Full")
+                                } else {
+                                    tr("一行", "1 line")
+                                },
+                            )
+                        }
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
                             Icon(Icons.Outlined.Menu, tr("查看分类", "View categories"))
                         }

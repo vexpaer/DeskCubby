@@ -1,8 +1,11 @@
 package com.deskcubby.app.data.vault
 
+import com.deskcubby.app.data.repository.isValidNewVaultPassword
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VaultCryptoTest {
@@ -86,5 +89,31 @@ class VaultCryptoTest {
         assertEquals(120_000, VaultCrypto.DEFAULT_KDF_ITERATIONS)
         assertEquals(16, VaultCrypto.SALT_BYTES)
         assertEquals(16, VaultCrypto.generateSalt().size)
+    }
+
+    @Test
+    fun `new password minimum counts Unicode code points rather than UTF-16 units`() {
+        assertFalse(isValidNewVaultPassword("🔐🔑🎯"))
+        assertTrue(isValidNewVaultPassword("🔐🔑🎯✨"))
+        assertTrue(isValidNewVaultPassword("密碼安全"))
+    }
+
+    @Test
+    fun `new passwords have no maximum length`() {
+        assertTrue(isValidNewVaultPassword("很".repeat(100_000)))
+    }
+
+    @Test
+    fun `legacy short password remains usable by crypto for unlock compatibility`() {
+        val legacyPassword = "🔐"
+        assertFalse(isValidNewVaultPassword(legacyPassword))
+        val salt = VaultCrypto.generateSalt()
+        val key = VaultCrypto.deriveKey(legacyPassword, salt, testIterations)
+        val encrypted = VaultCrypto.encrypt(key, "legacy entry")
+
+        assertEquals(
+            "legacy entry",
+            VaultCrypto.decrypt(key, encrypted.cipherBase64, encrypted.ivBase64),
+        )
     }
 }

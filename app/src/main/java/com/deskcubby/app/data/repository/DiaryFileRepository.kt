@@ -7,7 +7,13 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.location.Geocoder
 import android.media.ExifInterface
 import android.net.Uri
@@ -25,10 +31,24 @@ import com.deskcubby.app.data.model.DiaryDocument
 import com.deskcubby.app.data.model.DiaryEditorDocument
 import com.deskcubby.app.data.model.DiaryTrashItem
 import com.deskcubby.app.data.model.ImportedMedia
+import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.MealCategory
+import com.deskcubby.app.ui.diary.filter.MealCalendarExportLayout
+import com.deskcubby.app.ui.diary.filter.isDateInMealExportRange
+import com.deskcubby.app.ui.diary.filter.mealCalendarExportLayout
+import com.deskcubby.app.ui.diary.filter.mealPhotoFilterMatrix
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.InputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -52,6 +72,14 @@ import org.json.JSONObject
 class ExternalFileConflictException(
     val diskDocument: DiaryEditorDocument,
 ) : IllegalStateException("日记已被其他应用修改")
+
+internal class DiaryTextLimitExceededException(
+    val maxBytes: Int,
+) : IOException("Diary text exceeds the $maxBytes-byte read limit")
+
+internal class DiaryTextInvalidUtf8Exception(
+    cause: Throwable,
+) : IOException("Diary text is not valid UTF-8", cause)
 
 data class MealCalendarPhoto(
     val uri: Uri,
@@ -77,6 +105,18 @@ data class MealCalendarDay(
     val dateIso: String,
     val photos: List<MealCalendarPhoto>,
 ) { val totalEnergyKj: Int? get() = photos.mapNotNull { it.energyKj }.takeIf(List<Int>::isNotEmpty)?.sum() }
+
+data class DiaryPreviewMedia(
+    val uri: Uri?,
+    val locationName: String? = null,
+)
+
+data class MealCalendarExportResult(
+    val width: Int,
+    val height: Int,
+    val dayCount: Int,
+    val photoCount: Int,
+)
 
 enum class DiaryCloudSyncArea {
     DIARY,
@@ -163,20 +203,11 @@ class DiaryFileRepository @Inject constructor(
      */
     suspend fun scanMealCalendar(settings: AppSettings): List<MealCalendarDay> = withContext(Dispatchers.IO) {
         val diaryRoot = settings.diaryTreeUri?.let(::tree) ?: return@withContext emptyList()
-        val mediaByName = settings.mediaTreeUri
-            ?.let(::tree)
-            ?.listFiles()
-            .orEmpty()
-            .asSequence()
-            .filter { it.isFile }
-            .mapNotNull { file ->
-                file.name?.let { name -> name.lowercase(Locale.ROOT) to file.uri }
-            }
-            .toMap()
-
-        val mediaMetaEntries = settings.mediaTreeUri?.let(::tree)
-            ?.let { root -> runCatching { readMediaMetaEntries(root) }.getOrDefault(emptyMap()) }
-            .orEmpty()
+        val mediaSnapshot = settings.mediaTreeUri?.let(::tree)?.let { root ->
+            mediaMutex.withLock { snapshotMediaDirectoryUnlocked(root) }
+        } ?: MediaDirectorySnapshot()
+        val mediaByName = mediaSnapshot.byName
+        val mediaMetaEntries = mediaSnapshot.metaEntries
 
         val photosByDate = linkedMapOf<String, MutableList<MealCalendarPhoto>>()
         val diaries = diaryRoot.listFiles()
@@ -196,6 +227,7 @@ class DiaryFileRepository @Inject constructor(
             )
 
         for ((diary, _, diaryDate) in diaries) {
+            currentCoroutineContext().ensureActive()
             val content = try {
                 readText(diary.uri)
             } catch (cancelled: CancellationException) {
@@ -205,6 +237,7 @@ class DiaryFileRepository @Inject constructor(
             }
             val dateIso = diaryDate.toString()
             for (match in MARKDOWN_IMAGE_REGEX.findAll(content)) {
+                currentCoroutineContext().ensureActive()
                 val caption = match.groupValues[1].trim()
                 val target = match.groupValues[2].ifBlank { match.groupValues[3] }
                 val category = mealCategoryFromCaption(caption)
@@ -222,13 +255,7 @@ class DiaryFileRepository @Inject constructor(
                             // (e.g. "午餐-800kJ") remain readable as a fallback.
                             energyKj = meta?.energyKj ?: energyFromCaption(caption),
                             fileName = metaKey,
-                            locationName = meta?.place ?: meta?.let { entry ->
-                                entry.latitude?.let { lat ->
-                                    entry.longitude?.let { lng ->
-                                        "%.4f, %.4f".format(Locale.ROOT, lat, lng)
-                                    }
-                                }
-                            },
+                            locationName = meta?.let(::mediaMetaDisplayLocation),
                         ),
                     )
             }
@@ -244,9 +271,542 @@ class DiaryFileRepository @Inject constructor(
             .sortedByDescending(MealCalendarDay::dateIso)
     }
 
+    /**
+     * Renders an inclusive day range of the current meal-category selection to one bounded PNG.
+     *
+     * The bitmap dimensions are calculated and checked before allocation. Source photos are
+     * sampled to their card size and a corrupt individual image is rendered as a placeholder.
+     * The PNG is first written to app cache, decoded for dimension validation, then copied to the
+     * CreateDocument URI and read back for an exact byte-count and SHA-256 check.
+     */
+    suspend fun exportMealCalendarPng(
+        destinationUri: Uri,
+        settings: AppSettings,
+        startInclusive: LocalDate,
+        endInclusive: LocalDate,
+        categories: Set<MealCategory>,
+    ): MealCalendarExportResult = withContext(Dispatchers.IO) {
+        var committed = false
+        try {
+            require(!startInclusive.isAfter(endInclusive)) { "开始日期不能晚于结束日期" }
+            require(categories.isNotEmpty()) { "请至少选择一个餐别" }
+            val selectedDays = scanMealCalendar(settings).mapNotNull { day ->
+                currentCoroutineContext().ensureActive()
+                val date = runCatching { LocalDate.parse(day.dateIso) }.getOrNull()
+                    ?: return@mapNotNull null
+                if (!isDateInMealExportRange(date, startInclusive, endInclusive)) {
+                    return@mapNotNull null
+                }
+                day.photos.filter { it.category in categories }
+                    .takeIf(List<MealCalendarPhoto>::isNotEmpty)
+                    ?.let { day.copy(photos = it) }
+            }
+            require(selectedDays.isNotEmpty()) {
+                "所选日期和餐别下没有可导出的饮食照片"
+            }
+
+            // This pure preflight rejects excessive height/pixel count before createBitmap().
+            val layout = mealCalendarExportLayout(
+                photoCounts = selectedDays.map { it.photos.size },
+                imageMaxHeight = settings.mealCalendarImageMaxHeightDp,
+                showCaptions = settings.mealCalendarShowCaptions,
+                photosPerRow = settings.mealCalendarPhotosPerRow,
+            )
+            currentCoroutineContext().ensureActive()
+            val bitmap = try {
+                Bitmap.createBitmap(layout.width, layout.height, Bitmap.Config.ARGB_8888)
+            } catch (_: OutOfMemoryError) {
+                error("没有足够内存生成这张长图，请缩短日期范围")
+            }
+
+            var cachedPng: File? = null
+            try {
+                renderMealCalendarExport(
+                    bitmap = bitmap,
+                    layout = layout,
+                    days = selectedDays,
+                    settings = settings,
+                    startInclusive = startInclusive,
+                    endInclusive = endInclusive,
+                    categories = categories,
+                )
+                currentCoroutineContext().ensureActive()
+                cachedPng = writeAndValidateMealExportCache(bitmap, layout)
+                // The remaining SAF copy and read-back verification only need the cache file.
+                // Release the potentially ~45 MiB export bitmap before entering provider I/O.
+                bitmap.recycle()
+                copyMealExportToDocumentAndVerify(cachedPng, destinationUri)
+                committed = true
+                MealCalendarExportResult(
+                    width = layout.width,
+                    height = layout.height,
+                    dayCount = selectedDays.size,
+                    photoCount = selectedDays.sumOf { it.photos.size },
+                )
+            } finally {
+                if (!bitmap.isRecycled) bitmap.recycle()
+                withContext(NonCancellable + Dispatchers.IO) {
+                    runCatching { cachedPng?.delete() }
+                }
+            }
+        } catch (error: Throwable) {
+            if (!committed) {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    deleteCreatedExportDocument(destinationUri)
+                }
+            }
+            throw error
+        }
+    }
+
+    private suspend fun renderMealCalendarExport(
+        bitmap: Bitmap,
+        layout: MealCalendarExportLayout,
+        days: List<MealCalendarDay>,
+        settings: AppSettings,
+        startInclusive: LocalDate,
+        endInclusive: LocalDate,
+        categories: Set<MealCategory>,
+    ) {
+        val canvas = Canvas(bitmap)
+        val backgroundColor = Color.rgb(248, 248, 246)
+        val cardColor = Color.WHITE
+        val textColor = Color.rgb(35, 39, 42)
+        val mutedTextColor = Color.rgb(95, 99, 104)
+        val primaryColor = settings.themeColorArgb.withOpaqueAlpha()
+        val secondaryColor = settings.themeSecondaryColorsArgb.firstOrNull()
+            ?.withOpaqueAlpha()
+            ?: primaryColor
+        val primaryTextColor = contrastTextColor(primaryColor)
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = primaryTextColor
+            textSize = 38f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val headerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = primaryColor
+            style = Paint.Style.FILL
+        }
+        val headerDetailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = primaryTextColor
+            textSize = 21f
+        }
+        val datePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = textColor
+            textSize = 30f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val energyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = secondaryColor
+            textSize = 22f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val captionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = textColor
+            textSize = 21f
+        }
+        val placeholderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = mutedTextColor
+            textSize = 20f
+            textAlign = Paint.Align.CENTER
+        }
+        val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = cardColor
+            style = Paint.Style.FILL
+        }
+        val photoPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        val normalizedFilter = settings.mealPhotoFilter.normalized()
+        if (normalizedFilter.enabled && normalizedFilter.hasVisibleAdjustment()) {
+            photoPaint.colorFilter = ColorMatrixColorFilter(
+                ColorMatrix(mealPhotoFilterMatrix(normalizedFilter)),
+            )
+        }
+
+        canvas.drawColor(backgroundColor)
+        val padding = MealCalendarExportLayout.CONTENT_PADDING.toFloat()
+        val headerBottom = padding + MealCalendarExportLayout.HEADER_HEIGHT - 12f
+        canvas.drawRoundRect(
+            RectF(padding, padding, layout.width - padding, headerBottom),
+            24f,
+            24f,
+            headerPaint,
+        )
+        val isEnglish = settings.appLanguage == AppLanguage.ENGLISH
+        canvas.drawText(
+            if (isEnglish) "Meal calendar" else "吃历",
+            padding + 24f,
+            padding + 44f,
+            titlePaint,
+        )
+        canvas.drawText(
+            "$startInclusive  —  $endInclusive",
+            padding + 24f,
+            padding + 73f,
+            headerDetailPaint,
+        )
+        val categoryText = categories.sortedBy(MealCategory::sortOrder).joinToString(
+            separator = if (isEnglish) " · " else "、",
+        ) { category -> if (isEnglish) category.englishLabel else category.chineseLabel }
+        drawEllipsizedText(
+            canvas = canvas,
+            text = categoryText,
+            x = padding + 24f,
+            baseline = padding + 100f,
+            maxWidth = layout.width - padding * 2f - 48f,
+            paint = headerDetailPaint,
+        )
+
+        var y = padding + MealCalendarExportLayout.HEADER_HEIGHT
+        val availableWidth = layout.width - MealCalendarExportLayout.CONTENT_PADDING * 2
+        days.forEachIndexed { dayIndex, day ->
+            currentCoroutineContext().ensureActive()
+            canvas.drawText(
+                day.dateIso,
+                padding,
+                y + 35f,
+                datePaint,
+            )
+            day.totalEnergyKj?.let { energy ->
+                val dateWidth = datePaint.measureText(day.dateIso)
+                canvas.drawText(
+                    " · $energy kJ",
+                    padding + dateWidth + 8f,
+                    y + 35f,
+                    energyPaint,
+                )
+            }
+            y += MealCalendarExportLayout.DAY_HEADER_HEIGHT
+
+            var photoOffset = 0
+            val rowSizes = layout.rowsPerDay[dayIndex]
+            rowSizes.forEachIndexed { rowIndex, rowSize ->
+                val totalCellGaps = MealCalendarExportLayout.CELL_GAP * (rowSize - 1)
+                val cellWidth = (availableWidth - totalCellGaps).toFloat() / rowSize.toFloat()
+                repeat(rowSize) { column ->
+                    currentCoroutineContext().ensureActive()
+                    val photo = day.photos[photoOffset++]
+                    val left = padding +
+                        column * (cellWidth + MealCalendarExportLayout.CELL_GAP)
+                    val cardRect = RectF(
+                        left,
+                        y,
+                        left + cellWidth,
+                        y + layout.cardHeight,
+                    )
+                    canvas.drawRoundRect(cardRect, 14f, 14f, cardPaint)
+                    val imageRect = RectF(
+                        cardRect.left,
+                        cardRect.top,
+                        cardRect.right,
+                        cardRect.top + layout.imageHeight,
+                    )
+                    val source = decodeMealExportBitmap(
+                        uri = photo.uri,
+                        targetWidth = cellWidth.roundToInt().coerceAtLeast(1),
+                        targetHeight = layout.imageHeight,
+                    )
+                    if (source == null) {
+                        val placeholder = if (isEnglish) "Image unavailable" else "图片损坏"
+                        val oldColor = cardPaint.color
+                        cardPaint.color = Color.rgb(226, 229, 232)
+                        canvas.drawRect(imageRect, cardPaint)
+                        cardPaint.color = oldColor
+                        canvas.drawText(
+                            placeholder,
+                            imageRect.centerX(),
+                            imageRect.centerY() - (placeholderPaint.ascent() + placeholderPaint.descent()) / 2f,
+                            placeholderPaint,
+                        )
+                    } else {
+                        try {
+                            canvas.drawBitmap(
+                                source,
+                                centerCropSourceRect(source.width, source.height, imageRect),
+                                imageRect,
+                                photoPaint,
+                            )
+                        } finally {
+                            source.recycle()
+                        }
+                    }
+                    if (layout.captionHeight > 0) {
+                        val caption = photo.caption.ifBlank {
+                            if (isEnglish) photo.category.englishLabel else photo.category.chineseLabel
+                        }
+                        drawEllipsizedText(
+                            canvas = canvas,
+                            text = caption,
+                            x = cardRect.left + 10f,
+                            baseline = imageRect.bottom + 29f,
+                            maxWidth = cardRect.width() - 20f,
+                            paint = captionPaint,
+                        )
+                    }
+                }
+                y += layout.cardHeight
+                if (rowIndex != rowSizes.lastIndex) {
+                    y += MealCalendarExportLayout.ROW_GAP
+                }
+            }
+            y += MealCalendarExportLayout.DAY_GAP
+        }
+    }
+
+    private suspend fun decodeMealExportBitmap(
+        uri: Uri,
+        targetWidth: Int,
+        targetHeight: Int,
+    ): Bitmap? {
+        currentCoroutineContext().ensureActive()
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        try {
+            resolver.openInputStream(uri).use { input ->
+                requireNotNull(input) { "无法读取图片" }
+                BitmapFactory.decodeStream(input, null, bounds)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return null
+        }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = imageSampleSize(
+                bounds.outWidth,
+                bounds.outHeight,
+                CompressedImageSize(targetWidth, targetHeight),
+            )
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        currentCoroutineContext().ensureActive()
+        var decoded: Bitmap? = try {
+            resolver.openInputStream(uri).use { input ->
+                requireNotNull(input) { "无法读取图片" }
+                BitmapFactory.decodeStream(input, null, options)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: OutOfMemoryError) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+        decoded ?: return null
+        return try {
+            currentCoroutineContext().ensureActive()
+            val oriented = applyExifOrientation(decoded, readExifOrientation(uri))
+            if (oriented !== decoded) decoded.recycle()
+            decoded = null
+            oriented
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: OutOfMemoryError) {
+            null
+        } catch (_: Exception) {
+            null
+        } finally {
+            decoded?.recycle()
+        }
+    }
+
+    private fun centerCropSourceRect(
+        bitmapWidth: Int,
+        bitmapHeight: Int,
+        destination: RectF,
+    ): Rect {
+        val sourceAspect = bitmapWidth.toFloat() / bitmapHeight.toFloat()
+        val destinationAspect = destination.width() / destination.height()
+        return if (sourceAspect > destinationAspect) {
+            val cropWidth = (bitmapHeight * destinationAspect).roundToInt().coerceAtLeast(1)
+            val left = ((bitmapWidth - cropWidth) / 2).coerceAtLeast(0)
+            Rect(left, 0, (left + cropWidth).coerceAtMost(bitmapWidth), bitmapHeight)
+        } else {
+            val cropHeight = (bitmapWidth / destinationAspect).roundToInt().coerceAtLeast(1)
+            val top = ((bitmapHeight - cropHeight) / 2).coerceAtLeast(0)
+            Rect(0, top, bitmapWidth, (top + cropHeight).coerceAtMost(bitmapHeight))
+        }
+    }
+
+    private fun drawEllipsizedText(
+        canvas: Canvas,
+        text: String,
+        x: Float,
+        baseline: Float,
+        maxWidth: Float,
+        paint: Paint,
+    ) {
+        if (paint.measureText(text) <= maxWidth) {
+            canvas.drawText(text, x, baseline, paint)
+            return
+        }
+        val ellipsis = "…"
+        val available = (maxWidth - paint.measureText(ellipsis)).coerceAtLeast(0f)
+        var end = paint.breakText(text, true, available, null).coerceIn(0, text.length)
+        if (end in 1 until text.length && Character.isHighSurrogate(text[end - 1])) end--
+        canvas.drawText(text.take(end) + ellipsis, x, baseline, paint)
+    }
+
+    private fun writeAndValidateMealExportCache(
+        bitmap: Bitmap,
+        layout: MealCalendarExportLayout,
+    ): File {
+        val directory = File(context.cacheDir, "meal-calendar-exports").apply {
+            check(exists() || mkdirs()) { "无法创建吃历导出缓存" }
+        }
+        deleteStaleMealExportCaches(directory)
+        val file = File.createTempFile(
+            MEAL_EXPORT_CACHE_PREFIX,
+            MEAL_EXPORT_CACHE_SUFFIX,
+            directory,
+        )
+        try {
+            FileOutputStream(file).use { raw ->
+                val output = raw.buffered()
+                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "无法生成 PNG" }
+                output.flush()
+                raw.fd.sync()
+            }
+            check(file.length() > 0L) { "生成的 PNG 为空" }
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            FileInputStream(file).use { input -> BitmapFactory.decodeStream(input, null, bounds) }
+            check(bounds.outWidth == layout.width && bounds.outHeight == layout.height) {
+                "PNG 缓存校验失败"
+            }
+            check(bounds.outMimeType.equals("image/png", ignoreCase = true)) {
+                "PNG 缓存格式校验失败"
+            }
+            val validationBitmap = BitmapFactory.decodeFile(
+                file.absolutePath,
+                BitmapFactory.Options().apply {
+                    inSampleSize = sampledValidationSize(layout.width, layout.height)
+                    inPreferredConfig = Bitmap.Config.RGB_565
+                },
+            ) ?: error("PNG 缓存无法完整解码")
+            try {
+                check(validationBitmap.width > 0 && validationBitmap.height > 0) {
+                    "PNG 缓存像素校验失败"
+                }
+            } finally {
+                validationBitmap.recycle()
+            }
+            return file
+        } catch (_: OutOfMemoryError) {
+            runCatching { file.delete() }
+            error("没有足够内存校验这张长图，请缩短日期范围")
+        } catch (error: Exception) {
+            runCatching { file.delete() }
+            throw error
+        }
+    }
+
+    private fun deleteStaleMealExportCaches(directory: File) {
+        val staleBefore = System.currentTimeMillis() - MEAL_EXPORT_CACHE_MAX_AGE_MS
+        val canonicalDirectory = runCatching { directory.canonicalFile }.getOrNull() ?: return
+        directory.listFiles().orEmpty().forEach { candidate ->
+            val ownedTemporaryPng =
+                candidate.isFile &&
+                    candidate.name.startsWith(MEAL_EXPORT_CACHE_PREFIX) &&
+                    candidate.name.endsWith(MEAL_EXPORT_CACHE_SUFFIX, ignoreCase = true) &&
+                    runCatching { candidate.canonicalFile.parentFile == canonicalDirectory }
+                        .getOrDefault(false)
+            if (ownedTemporaryPng && candidate.lastModified() <= staleBefore) {
+                runCatching { candidate.delete() }
+            }
+        }
+    }
+
+    private fun sampledValidationSize(width: Int, height: Int): Int {
+        var sampleSize = 1
+        while (
+            width / sampleSize > MEAL_EXPORT_VALIDATION_MAX_EDGE ||
+            height / sampleSize > MEAL_EXPORT_VALIDATION_MAX_EDGE
+        ) {
+            if (sampleSize > Int.MAX_VALUE / 2) return sampleSize
+            sampleSize *= 2
+        }
+        return sampleSize
+    }
+
+    private suspend fun copyMealExportToDocumentAndVerify(source: File, destination: Uri) {
+        val expected = sha256AndSize(source)
+        val stream = runCatching { resolver.openOutputStream(destination, "rwt") }.getOrNull()
+            ?: resolver.openOutputStream(destination, "wt")
+        stream.use { output ->
+            requireNotNull(output) { "无法写入导出文件" }
+            FileInputStream(source).use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val count = input.read(buffer)
+                    currentCoroutineContext().ensureActive()
+                    if (count < 0) break
+                    output.write(buffer, 0, count)
+                }
+            }
+            output.flush()
+        }
+        val actual = sha256AndSize(destination, expected.first)
+        check(actual == expected) { "导出文件写入后的校验失败" }
+    }
+
+    private fun deleteCreatedExportDocument(destination: Uri) {
+        val deleted = runCatching {
+            if (DocumentsContract.isDocumentUri(context, destination)) {
+                DocumentsContract.deleteDocument(resolver, destination)
+            } else {
+                false
+            }
+        }.getOrDefault(false)
+        if (!deleted) runCatching { resolver.delete(destination, null, null) }
+    }
+
+    private suspend fun sha256AndSize(file: File): Pair<Long, String> =
+        FileInputStream(file).use { input -> sha256AndSize(input = input, maxBytes = file.length()) }
+
+    private suspend fun sha256AndSize(uri: Uri, expectedMaxBytes: Long): Pair<Long, String> =
+        resolver.openInputStream(uri).use { input ->
+            requireNotNull(input) { "无法回读导出文件" }
+            sha256AndSize(input = input, maxBytes = expectedMaxBytes)
+        }
+
+    private suspend fun sha256AndSize(
+        input: java.io.InputStream,
+        maxBytes: Long,
+    ): Pair<Long, String> {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var total = 0L
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val count = input.read(buffer)
+            currentCoroutineContext().ensureActive()
+            if (count < 0) break
+            total += count
+            check(total <= maxBytes) { "导出文件写入后的大小校验失败" }
+            digest.update(buffer, 0, count)
+        }
+        return total to digest.digest().joinToString("") { "%02x".format(Locale.ROOT, it) }
+    }
+
     suspend fun load(uri: String): DiaryEditorDocument = withContext(Dispatchers.IO) {
         load(Uri.parse(uri))
     }
+
+    /**
+     * Reads diary text for bounded consumers such as AI context import.
+     *
+     * The Room index size is deliberately not consulted: SAF providers may report an unknown
+     * length and the index may be stale after an external edit. The stream itself is capped
+     * before bytes are retained, and malformed UTF-8 is rejected instead of replacement-decoded.
+     */
+    internal suspend fun readDiaryTextBounded(uri: String, maxBytes: Int): String =
+        withContext(Dispatchers.IO) {
+            require(maxBytes > 0) { "maxBytes must be positive" }
+            val parsed = Uri.parse(uri)
+            val input = resolver.openInputStream(parsed)
+                ?: throw IOException("Unable to open diary text")
+            input.use { stream -> stream.readUtf8Bounded(maxBytes) }
+        }
 
     /**
      * Records the estimated energy in the media-directory JSON sidecar instead of
@@ -269,6 +829,35 @@ class DiaryFileRepository @Inject constructor(
     private fun mediaMetaFile(root: DocumentFile): DocumentFile? = root.listFiles()
         .firstOrNull { it.isFile && it.name.equals(MEDIA_META_FILE_NAME, ignoreCase = true) }
 
+    private data class MediaDirectorySnapshot(
+        val byName: Map<String, Uri> = emptyMap(),
+        val metaEntries: Map<String, MediaMetaEntry> = emptyMap(),
+    )
+
+    /** Caller must hold [mediaMutex]. */
+    private fun snapshotMediaDirectoryUnlocked(root: DocumentFile): MediaDirectorySnapshot {
+        val files = root.listFiles()
+        val byName = files.asSequence()
+            .filter(DocumentFile::isFile)
+            .mapNotNull { file ->
+                file.name?.let { name -> name.lowercase(Locale.ROOT) to file.uri }
+            }
+            .toMap()
+        val metaFile = files.firstOrNull {
+            it.isFile && it.name.equals(MEDIA_META_FILE_NAME, ignoreCase = true)
+        }
+        val metaEntries = metaFile?.let { file ->
+            try {
+                parseMediaMeta(readText(file.uri))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        }.orEmpty()
+        return MediaDirectorySnapshot(byName = byName, metaEntries = metaEntries)
+    }
+
     private fun readMediaMetaEntries(root: DocumentFile): Map<String, MediaMetaEntry> {
         val file = mediaMetaFile(root) ?: return emptyMap()
         val raw = runCatching { readText(file.uri) }.getOrNull() ?: return emptyMap()
@@ -286,7 +875,11 @@ class DiaryFileRepository @Inject constructor(
                         energyKj = if (item.has("energyKj")) item.optInt("energyKj") else null,
                         latitude = if (item.has("lat")) item.optDouble("lat") else null,
                         longitude = if (item.has("lng")) item.optDouble("lng") else null,
-                        place = item.optString("place").takeIf(String::isNotBlank),
+                        place = if (item.has("place") && !item.isNull("place")) {
+                            item.optString("place").trim().takeIf(String::isNotBlank)
+                        } else {
+                            null
+                        },
                     ),
                 )
             }
@@ -362,6 +955,18 @@ class DiaryFileRepository @Inject constructor(
             .joinToString("")
             .takeIf(String::isNotBlank)
     }.getOrNull()
+
+    private fun Int.withOpaqueAlpha(): Int =
+        if (Color.alpha(this) == 0) this or Color.BLACK else this
+
+    private fun contrastTextColor(background: Int): Int {
+        val luminance = (
+            0.2126 * Color.red(background) +
+                0.7152 * Color.green(background) +
+                0.0722 * Color.blue(background)
+            ) / 255.0
+        return if (luminance > 0.56) Color.rgb(28, 31, 34) else Color.WHITE
+    }
 
     suspend fun enterToday(
         settings: AppSettings,
@@ -826,10 +1431,34 @@ class DiaryFileRepository @Inject constructor(
         }
     }
 
-    suspend fun resolveMedia(markdownTarget: String, settings: AppSettings): Uri? = withContext(Dispatchers.IO) {
-        val root = settings.mediaTreeUri?.let(::tree) ?: return@withContext null
-        val fileName = Uri.decode(markdownTarget.trim('<', '>').substringAfterLast('/'))
-        root.listFiles().firstOrNull { it.name == fileName }?.uri
+    suspend fun resolveMedia(markdownTarget: String, settings: AppSettings): Uri? =
+        resolveDiaryPreviewMedia(listOf(markdownTarget), settings)[markdownTarget]?.uri
+
+    /**
+     * Resolves every Markdown image in one media-directory snapshot. File names and sidecar keys
+     * are matched case-insensitively, and the sidecar is read while holding [mediaMutex] so a
+     * concurrent metadata update cannot expose a half-old/half-new preview.
+     */
+    suspend fun resolveDiaryPreviewMedia(
+        markdownTargets: Collection<String>,
+        settings: AppSettings,
+    ): Map<String, DiaryPreviewMedia> = withContext(Dispatchers.IO) {
+        val targets = markdownTargets.distinct()
+        if (targets.isEmpty()) return@withContext emptyMap()
+        val snapshot = settings.mediaTreeUri?.let(::tree)?.let { root ->
+            mediaMutex.withLock { snapshotMediaDirectoryUnlocked(root) }
+        } ?: MediaDirectorySnapshot()
+        buildMap {
+            targets.forEach { target ->
+                currentCoroutineContext().ensureActive()
+                val fileName = decodedTargetFileName(target)?.lowercase(Locale.ROOT)
+                val uri = resolveMealMediaUri(target, snapshot.byName)
+                val location = fileName
+                    ?.let(snapshot.metaEntries::get)
+                    ?.let(::mediaMetaDisplayLocation)
+                put(target, DiaryPreviewMedia(uri = uri, locationName = location))
+            }
+        }
     }
 
     /**
@@ -1440,6 +2069,10 @@ class DiaryFileRepository @Inject constructor(
         )
         private val ENERGY_SUFFIX_REGEX = Regex("[-–—]\\s*(\\d+)\\s*kJ\\s*$", RegexOption.IGNORE_CASE)
         private const val MEDIA_META_FILE_NAME = "deskcubby-media.json"
+        private const val MEAL_EXPORT_CACHE_PREFIX = "meal-calendar-"
+        private const val MEAL_EXPORT_CACHE_SUFFIX = ".png"
+        private const val MEAL_EXPORT_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L
+        private const val MEAL_EXPORT_VALIDATION_MAX_EDGE = 256
         private val COMPRESSIBLE_IMAGE_MIMES = setOf(
             "image/jpeg",
             "image/jpg",
@@ -1462,6 +2095,44 @@ class DiaryFileRepository @Inject constructor(
         private const val TRASH_SUFFIX = "deskcubby-trash"
         private const val TRASH_DIRECTORY = ".DeskCubby Trash"
     }
+}
+
+internal suspend fun InputStream.readUtf8Bounded(maxBytes: Int): String {
+    require(maxBytes > 0) { "maxBytes must be positive" }
+    val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_SIZE))
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var total = 0
+    while (true) {
+        currentCoroutineContext().ensureActive()
+        val count = read(buffer, 0, minOf(buffer.size, maxBytes - total + 1))
+        currentCoroutineContext().ensureActive()
+        if (count < 0) break
+        if (count > maxBytes - total) {
+            throw DiaryTextLimitExceededException(maxBytes)
+        }
+        output.write(buffer, 0, count)
+        total += count
+    }
+    return try {
+        StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(output.toByteArray()))
+            .toString()
+    } catch (error: CharacterCodingException) {
+        throw DiaryTextInvalidUtf8Exception(error)
+    }
+}
+
+internal fun mediaMetaDisplayLocation(entry: MediaMetaEntry): String? {
+    entry.place?.trim()?.takeIf(String::isNotBlank)?.let { return it }
+    val latitude = entry.latitude
+        ?.takeIf { it.isFinite() && it in -90.0..90.0 }
+        ?: return null
+    val longitude = entry.longitude
+        ?.takeIf { it.isFinite() && it in -180.0..180.0 }
+        ?: return null
+    return "%.4f, %.4f".format(Locale.ROOT, latitude, longitude)
 }
 
 internal data class CompressedImageSize(val width: Int, val height: Int)

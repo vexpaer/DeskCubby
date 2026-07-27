@@ -272,7 +272,11 @@ fun HomeScreen(
                 title = {
                     Column {
                         Text(
-                            text = homeGreeting(settings),
+                            text = HomeGreeting.forDate(
+                                date = LocalDate.now(),
+                                language = settings.appLanguage,
+                                userName = settings.userName,
+                            ),
                             style = if (organic) MaterialTheme.typography.headlineSmall
                             else MaterialTheme.typography.titleLarge,
                             maxLines = 1,
@@ -795,16 +799,6 @@ private fun MealPhotosWidget(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-    }
-}
-
-private fun homeGreeting(settings: AppSettings): String {
-    val name = settings.userName.trim()
-    return when {
-        settings.appLanguage == AppLanguage.ENGLISH && name.isBlank() -> "Hello!"
-        settings.appLanguage == AppLanguage.ENGLISH -> "Hello, $name!"
-        name.isBlank() -> "你好！"
-        else -> "你好，$name！"
     }
 }
 

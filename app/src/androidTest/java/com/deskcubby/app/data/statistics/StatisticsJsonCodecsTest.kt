@@ -1,0 +1,120 @@
+package com.deskcubby.app.data.statistics
+
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import java.time.LocalDate
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class StatisticsJsonCodecsTest {
+    @Test
+    fun usageRoundTripIsDeterministic() {
+        val history = UsageStatisticsHistory(
+            trackingStartedOn = LocalDate.parse("2026-07-26"),
+            days = listOf(
+                UsageStatisticsDay(
+                    date = LocalDate.parse("2026-07-27"),
+                    zoneId = "Asia/Shanghai",
+                    state = StatisticsDayState.OPEN,
+                    collectedAtEpochMillis = 42,
+                    apps = listOf(
+                        UsageAppDuration("a.example", 8_000),
+                        UsageAppDuration("z.example", 12_000),
+                    ),
+                ),
+            ),
+        )
+
+        val encoded = UsageStatisticsJsonCodec.encode(history)
+        val decoded = UsageStatisticsJsonCodec.decode(encoded)
+
+        assertEquals(history, decoded)
+        assertEquals(encoded, UsageStatisticsJsonCodec.encode(decoded))
+    }
+
+    @Test
+    fun stepsPreserveNoAggregateAsNull() {
+        val history = StepStatisticsHistory(
+            trackingStartedOn = LocalDate.parse("2026-07-27"),
+            days = listOf(
+                StepStatisticsDay(
+                    date = LocalDate.parse("2026-07-27"),
+                    zoneId = "Europe/Paris",
+                    state = StatisticsDayState.OPEN,
+                    collectedAtEpochMillis = 42,
+                    steps = null,
+                ),
+            ),
+        )
+
+        val decoded = StepStatisticsJsonCodec.decode(
+            StepStatisticsJsonCodec.encode(history),
+        )
+
+        assertNull(decoded.days.single().steps)
+    }
+
+    @Test
+    fun rejectsUnknownField() {
+        val root = JSONObject(
+            StepStatisticsJsonCodec.encode(StepStatisticsHistory()),
+        ).put("unexpected", true)
+
+        assertThrows(StatisticsJsonException::class.java) {
+            StepStatisticsJsonCodec.decode(root.toString())
+        }
+    }
+
+    @Test
+    fun rejectsDuplicateDates() {
+        val day = StepStatisticsDay(
+            date = LocalDate.parse("2026-07-27"),
+            zoneId = "UTC",
+            state = StatisticsDayState.FINAL,
+            collectedAtEpochMillis = 1,
+            steps = 10,
+        )
+
+        assertThrows(StatisticsJsonException::class.java) {
+            StepStatisticsJsonCodec.encode(
+                StepStatisticsHistory(
+                    trackingStartedOn = day.date,
+                    days = listOf(day, day),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun rejectsFractionalAndNegativeNumbers() {
+        val valid = JSONObject(
+            StepStatisticsJsonCodec.encode(
+                StepStatisticsHistory(
+                    trackingStartedOn = LocalDate.parse("2026-07-27"),
+                    days = listOf(
+                        StepStatisticsDay(
+                            date = LocalDate.parse("2026-07-27"),
+                            zoneId = "UTC",
+                            state = StatisticsDayState.FINAL,
+                            collectedAtEpochMillis = 1,
+                            steps = 10,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        valid.getJSONArray("days").getJSONObject(0).put("steps", -1)
+        assertThrows(StatisticsJsonException::class.java) {
+            StepStatisticsJsonCodec.decode(valid.toString())
+        }
+
+        valid.getJSONArray("days").getJSONObject(0).put("steps", 1.5)
+        assertThrows(StatisticsJsonException::class.java) {
+            StepStatisticsJsonCodec.decode(valid.toString())
+        }
+    }
+}

@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.ui.DeskCubbyRoot
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -21,13 +22,24 @@ class MainActivity : ComponentActivity() {
 
 /**
  * Keeps exactly one launcher alias enabled so the launcher label matches the
- * "Desk Cubby" / "桌洞" choice in About settings. The desired alias is enabled
- * before the other is disabled so a launcher entry always exists.
+ * selected label and icon. The desired alias is enabled before the others are
+ * disabled so a launcher entry always exists while launchers refresh their cache.
  */
-fun syncLauncherAlias(context: Context, useChineseName: Boolean) {
+fun syncLauncherAlias(
+    context: Context,
+    useChineseName: Boolean,
+    launcherIcon: LauncherIcon,
+) {
     val packageManager = context.packageManager
-    val defaultAlias = ComponentName(context, "com.deskcubby.app.LauncherDefault")
-    val chineseAlias = ComponentName(context, "com.deskcubby.app.LauncherChinese")
+    val aliases = listOf(
+        LauncherAlias("LauncherDefault", chinese = false, LauncherIcon.CURRENT),
+        LauncherAlias("LauncherChinese", chinese = true, LauncherIcon.CURRENT),
+        LauncherAlias("LauncherBookDefault", chinese = false, LauncherIcon.MAGIC_BOOK),
+        LauncherAlias("LauncherBookChinese", chinese = true, LauncherIcon.MAGIC_BOOK),
+    )
+    val desired = aliases.first { alias ->
+        alias.chinese == useChineseName && alias.icon == launcherIcon
+    }
 
     fun setEnabled(component: ComponentName, enabled: Boolean) {
         val target = if (enabled) {
@@ -40,11 +52,17 @@ fun syncLauncherAlias(context: Context, useChineseName: Boolean) {
         }
     }
 
-    if (useChineseName) {
-        setEnabled(chineseAlias, true)
-        setEnabled(defaultAlias, false)
-    } else {
-        setEnabled(defaultAlias, true)
-        setEnabled(chineseAlias, false)
+    fun component(alias: LauncherAlias) =
+        ComponentName(context, "${context.packageName}.${alias.className}")
+
+    setEnabled(component(desired), true)
+    aliases.filterNot { it == desired }.forEach { alias ->
+        setEnabled(component(alias), false)
     }
 }
+
+private data class LauncherAlias(
+    val className: String,
+    val chinese: Boolean,
+    val icon: LauncherIcon,
+)

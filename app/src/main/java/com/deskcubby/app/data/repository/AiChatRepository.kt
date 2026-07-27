@@ -37,6 +37,8 @@ import org.json.JSONObject
 enum class AiChatRole(val apiValue: String) {
     USER("user"),
     ASSISTANT("assistant"),
+    /** A frozen local-data snapshot persisted in Room and sent as a system message. */
+    CONTEXT("system"),
 }
 
 data class AiChatMessage(
@@ -139,6 +141,59 @@ class AiChatRepository @Inject constructor(
                     createdAt = now,
                 ),
             )
+        } catch (error: Exception) {
+            if (imagePermission?.newlyAcquired == true) {
+                image?.uri?.let(::releaseImagePermission)
+            }
+            throw error
+        }
+    }
+
+    /**
+     * Persists the optional frozen context and its user message as one logical turn.
+     *
+     * Persistable image permission is acquired before entering Room's transaction. If the
+     * transaction fails, a permission newly acquired for this turn is released and neither
+     * message remains in the conversation.
+     */
+    suspend fun appendUserTurn(
+        conversationId: Long,
+        frozenContext: String?,
+        content: String,
+        image: AiChatImage? = null,
+        now: Long = System.currentTimeMillis(),
+    ): Long = withContext(Dispatchers.IO) {
+        val imagePermission = image?.let { persistImagePermission(it) }
+        try {
+            val messages = buildList {
+                frozenContext?.takeIf(String::isNotBlank)?.let { encoded ->
+                    add(
+                        AiMessageEntity(
+                            conversationId = conversationId,
+                            role = AiChatRole.CONTEXT.apiValue,
+                            content = encoded,
+                            reasoning = "",
+                            imageUri = null,
+                            imageMimeType = null,
+                            imagePermissionOwned = false,
+                            createdAt = now,
+                        ),
+                    )
+                }
+                add(
+                    AiMessageEntity(
+                        conversationId = conversationId,
+                        role = AiChatRole.USER.apiValue,
+                        content = content,
+                        reasoning = "",
+                        imageUri = image?.uri,
+                        imageMimeType = image?.mimeType,
+                        imagePermissionOwned = imagePermission?.ownedByChat ?: false,
+                        createdAt = now,
+                    ),
+                )
+            }
+            aiChatDao.insertUserTurnAndTouch(messages).last()
         } catch (error: Exception) {
             if (imagePermission?.newlyAcquired == true) {
                 image?.uri?.let(::releaseImagePermission)
@@ -282,7 +337,7 @@ class AiChatRepository @Inject constructor(
                 apiKey = config?.apiKey?.trim().orEmpty(),
                 allowInsecureHttp = config?.allowInsecureHttp ?: settings.aiAllowInsecureHttp,
             )
-            parseAssistantContent(response)
+            parseAssistantContent(response, config?.apiKey?.trim().orEmpty())
         } catch (error: AiChatException) {
             throw error
         } catch (error: IOException) {
@@ -318,7 +373,7 @@ class AiChatRepository @Inject constructor(
             .toString().toByteArray(StandardCharsets.UTF_8)
         if (body.size > MAX_IMAGE_REQUEST_BODY_BYTES) throw AiChatException(AiChatFailure.CONFIGURATION, "图片过大，无法发送。")
         val response = executeRequest(endpoint, body, config.apiKey.trim(), config.allowInsecureHttp)
-        parseAssistantContent(response).content
+        parseAssistantContent(response, config.apiKey.trim()).content
     }
 
     private suspend fun executeRequest(
@@ -406,7 +461,7 @@ class AiChatRepository @Inject constructor(
                         )
                         if (status !in 200..299) {
                             val remoteMessage = parseRemoteError(responseBody)
-                                ?.let { redactRemoteSecrets(it, apiKey) }
+                                ?.let { sanitizeAiRemoteError(it, apiKey) }
                             val suffix = remoteMessage?.let { "：$it" }.orEmpty()
                             throw AiChatException(
                                 AiChatFailure.REMOTE,
@@ -511,7 +566,7 @@ class AiChatRepository @Inject constructor(
         }
     }
 
-    private fun parseAssistantContent(responseBody: String): AiChatCompletion {
+    internal fun parseAssistantContent(responseBody: String, apiKey: String): AiChatCompletion {
         val root = try {
             JSONObject(responseBody)
         } catch (error: JSONException) {
@@ -522,7 +577,7 @@ class AiChatRepository @Inject constructor(
             )
         }
         root.optJSONObject("error")?.let { errorObject ->
-            val message = errorObject.optString("message").trim()
+            val message = sanitizeAiRemoteError(errorObject.optString("message"), apiKey)
             throw AiChatException(
                 AiChatFailure.REMOTE,
                 message.takeIf(String::isNotEmpty) ?: "AI 服务返回了错误。",
@@ -586,16 +641,7 @@ class AiChatRepository @Inject constructor(
                 ?.takeIf(String::isNotBlank)
                 ?: root.optString("message").takeIf(String::isNotBlank)
         }.getOrNull()
-        return message?.replace(Regex("\\s+"), " ")?.trim()?.take(MAX_ERROR_MESSAGE_CHARS)
-    }
-
-    private fun redactRemoteSecrets(message: String, apiKey: String): String {
-        var redacted = message.replace(
-            Regex("(?i)Bearer\\s+[^\\s\"']+"),
-            "Bearer [REDACTED]",
-        )
-        if (apiKey.isNotEmpty()) redacted = redacted.replace(apiKey, "[REDACTED]")
-        return redacted
+        return message
     }
 
     private fun parseAndValidateEndpoint(rawValue: String, allowInsecureHttp: Boolean): URL {
@@ -660,10 +706,21 @@ class AiChatRepository @Inject constructor(
         const val READ_BUFFER_BYTES = 8 * 1024
         const val WRITE_BUFFER_BYTES = 8 * 1024
         const val MAX_REDIRECTS = 3
-        const val MAX_ERROR_MESSAGE_CHARS = 500
         const val MAX_TITLE_CHARS = 80
         val REDIRECT_STATUS_CODES = setOf(301, 302, 303, 307, 308)
     }
+}
+
+internal fun sanitizeAiRemoteError(message: String, apiKey: String): String {
+    var redacted = message.replace(
+        Regex("(?i)Bearer\\s+[^\\s\"']+"),
+        "Bearer [REDACTED]",
+    )
+    if (apiKey.isNotEmpty()) redacted = redacted.replace(apiKey, "[REDACTED]")
+    return redacted
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .take(500)
 }
 
 internal fun generateConversationTitle(message: String, hasImage: Boolean): String {

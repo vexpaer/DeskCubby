@@ -18,6 +18,7 @@ import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
@@ -63,6 +64,12 @@ data class BackupFolderConflict(
     val summary: BackupSummary,
 )
 
+data class BackupJsonPreviewState(
+    val busy: Boolean = false,
+    val json: String? = null,
+    val error: String? = null,
+)
+
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val repository: SettingsRepository,
@@ -91,6 +98,8 @@ class SettingsViewModel @Inject constructor(
 
     private val _backupOperation = MutableStateFlow(BackupOperationState())
     val backupOperation: StateFlow<BackupOperationState> = _backupOperation.asStateFlow()
+    private val _backupJsonPreview = MutableStateFlow(BackupJsonPreviewState())
+    val backupJsonPreview: StateFlow<BackupJsonPreviewState> = _backupJsonPreview.asStateFlow()
     val autoBackupStatus: StateFlow<AutoBackupStatus> = autoBackupCoordinator.status
     val cloudSyncStatus: StateFlow<AppCloudSyncStatus> = cloudSyncService.status
 
@@ -137,6 +146,11 @@ class SettingsViewModel @Inject constructor(
     fun setCompactMode(value: Boolean) = launch { repository.setCompactMode(value) }
     fun setUseChineseLauncherName(value: Boolean) =
         launch { repository.setUseChineseLauncherName(value) }
+    fun setLauncherIcon(value: LauncherIcon) = launch { repository.setLauncherIcon(value) }
+    fun setUsageTrackingEnabled(value: Boolean) =
+        launch { repository.setUsageTrackingEnabled(value) }
+    fun setStepTrackingEnabled(value: Boolean) =
+        launch { repository.setStepTrackingEnabled(value) }
     fun setSaveOriginalToGallery(value: Boolean) =
         launch { repository.setSaveOriginalToGallery(value) }
     fun setPhotoLocationEnabled(value: Boolean) =
@@ -351,6 +365,8 @@ class SettingsViewModel @Inject constructor(
         items: List<NavItemConfig>,
         showLabels: Boolean,
     ) = launch { repository.setNavigationSettings(defaultPage, items, showLabels) }
+    fun setMorePageSettings(showDescriptions: Boolean, items: List<NavItemConfig>) =
+        launch { repository.setMorePageSettings(showDescriptions, items) }
     fun setRssSettings(maxItemsPerFeed: Int, showSummaries: Boolean) =
         launch { repository.setRssSettings(maxItemsPerFeed, showSummaries) }
     fun saveAiConfig(config: AiModelConfig, onDone: (Boolean) -> Unit = {}) =
@@ -575,6 +591,30 @@ class SettingsViewModel @Inject constructor(
             actionEn = "JSON imported",
             summary = summary,
         )
+    }
+
+    fun openBackupJsonPreview() {
+        if (_backupJsonPreview.value.busy) return
+        viewModelScope.launch {
+            _backupJsonPreview.value = BackupJsonPreviewState(busy = true)
+            try {
+                _backupJsonPreview.value = BackupJsonPreviewState(
+                    json = backupRepository.currentBackupJson(),
+                )
+            } catch (error: CancellationException) {
+                _backupJsonPreview.value = BackupJsonPreviewState()
+                throw error
+            } catch (error: Exception) {
+                _backupJsonPreview.value = BackupJsonPreviewState(
+                    error = error.message?.takeIf(String::isNotBlank)
+                        ?: "无法生成 JSON / Could not build JSON",
+                )
+            }
+        }
+    }
+
+    fun closeBackupJsonPreview() {
+        _backupJsonPreview.value = BackupJsonPreviewState()
     }
 
     fun saveBackupNow() = runBackupOperation {

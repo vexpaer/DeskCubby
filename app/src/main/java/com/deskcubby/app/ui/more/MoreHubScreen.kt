@@ -14,14 +14,13 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Tune
@@ -60,6 +59,7 @@ import com.deskcubby.app.ui.theme.tr
 fun MoreHubScreen(
     padding: PaddingValues,
     items: List<NavItemConfig>,
+    showDescriptions: Boolean,
     onOpenPage: (NavItemId) -> Unit,
     onOpenNavigationSettings: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -110,8 +110,8 @@ fun MoreHubScreen(
                 onOpenNavigationSettings = onOpenNavigationSettings,
             )
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 156.dp),
+            LazyVerticalStaggeredGrid(
+                columns = StaggeredGridCells.Fixed(2),
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding),
@@ -122,7 +122,7 @@ fun MoreHubScreen(
                     bottom = 28.dp,
                 ),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalItemSpacing = 12.dp,
             ) {
                 itemsIndexed(
                     items = items,
@@ -131,6 +131,7 @@ fun MoreHubScreen(
                     MorePageCard(
                         item = item,
                         index = index,
+                        showDescription = showDescriptions,
                         onClick = { onOpenPage(item.id) },
                     )
                 }
@@ -143,6 +144,7 @@ fun MoreHubScreen(
 private fun MorePageCard(
     item: NavItemConfig,
     index: Int,
+    showDescription: Boolean,
     onClick: () -> Unit,
 ) {
     val label = item.localizedLabel()
@@ -165,7 +167,6 @@ private fun MorePageCard(
     GlassPanel(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 148.dp)
             .clickable(
                 onClickLabel = tr("打开$label", "Open $label"),
                 role = Role.Button,
@@ -193,21 +194,25 @@ private fun MorePageCard(
                     modifier = Modifier.size(25.dp),
                 )
             }
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(18.dp))
             Text(
                 text = label,
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = item.id.localizedDescription(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            item.localizedDescription()
+                .takeIf { showDescription && it.isNotBlank() }
+                ?.let { description ->
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
         }
     }
 }
@@ -268,17 +273,11 @@ private fun String.isDefaultLabelFor(id: NavItemId): Boolean =
         (id == NavItemId.THOUGHT && this == "闪思")
 
 @Composable
-private fun NavItemId.localizedDescription(): String = when (this) {
-    NavItemId.HOME -> tr("今日概览与快捷记录", "Overview and quick capture")
-    NavItemId.DIARY -> tr("浏览、编辑日记与吃历", "Diaries and meal calendar")
-    NavItemId.BLOG -> tr("在应用内浏览网页", "Browse the web in the app")
-    NavItemId.THOUGHT -> tr("记录与整理瞬间想法", "Capture and organize thoughts")
-    NavItemId.DATE -> tr("追踪纪念日与目标日期", "Track occasions and target dates")
-    NavItemId.POETRY -> tr("收藏喜欢的诗词", "Keep your favorite poems")
-    NavItemId.RSS -> tr("阅读订阅源的最新文章", "Read the latest from your feeds")
-    NavItemId.AI_CHAT -> tr("与已配置的模型聊天", "Chat with a configured model")
-    NavItemId.VAULT -> tr("密码保护的私密收藏", "Password-protected private notes")
-    NavItemId.GAMES -> tr("2048、贪吃蛇与俄罗斯方块", "2048, Snake and Tetris")
-    NavItemId.SETTINGS -> tr("调整应用与页面设置", "Adjust app and page settings")
-    else -> tr("从这里打开此页面", "Open this page from here")
+private fun NavItemConfig.localizedDescription(): String {
+    val language = LocalAppLanguage.current
+    return if (language == AppLanguage.ENGLISH && moreDescription == id.defaultDescription) {
+        id.englishDescription
+    } else {
+        moreDescription
+    }
 }

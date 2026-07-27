@@ -14,6 +14,7 @@ import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DailyEventTemplate
+import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.RssSubscription
@@ -41,6 +42,7 @@ class BackupJsonCodecTest {
                 0xFFA26A4A.toInt(),
             ),
             fontScale = 1.15f,
+            launcherIcon = LauncherIcon.MAGIC_BOOK,
             backupTreeUri = "content://device-only-backup-folder",
             diaryTreeUri = "content://diaries",
             mediaTreeUri = "content://media",
@@ -77,6 +79,16 @@ class BackupJsonCodecTest {
             calorieEstimationEnabled = true,
             calorieTextConfigId = "text-1",
             calorieImageConfigId = "image-1",
+            usageTrackingEnabled = true,
+            stepTrackingEnabled = true,
+            morePageShowDescriptions = false,
+            navItems = AppSettings().navItems.map { item ->
+                if (item.id == NavItemId.THOUGHT) {
+                    item.copy(moreDescription = "随手记录，也可完整展开")
+                } else {
+                    item
+                }
+            },
             homeWidgets = emptyList(),
             homeWidgetTitles = emptyList(),
         )
@@ -151,12 +163,12 @@ class BackupJsonCodecTest {
         assertEquals(VisualStyle.ORGANIC_FUTURE, decoded.settings.visualStyle)
         assertEquals(settings.themeSecondaryColorsArgb, decoded.settings.themeSecondaryColorsArgb)
         assertEquals(settings.fontScale, decoded.settings.fontScale)
-        assertEquals(13, decoded.formatVersion)
+        assertEquals(BackupJsonCodec.FORMAT_VERSION, decoded.formatVersion)
         assertEquals(40L, decoded.exportedAt)
     }
 
     @Test
-    fun versionThirteenPreservesNavigationFilterAndCloudMetadataWithoutCredentials() {
+    fun currentVersionPreservesNavigationFilterAndCloudMetadataWithoutCredentials() {
         val webDav = CloudSyncConfig(
             id = "webdav",
             name = "Personal WebDAV",
@@ -241,7 +253,7 @@ class BackupJsonCodecTest {
 
         val decoded = BackupJsonCodec.decode(encoded)
 
-        assertEquals(13, decoded.formatVersion)
+        assertEquals(BackupJsonCodec.FORMAT_VERSION, decoded.formatVersion)
         assertEquals(false, decoded.settings.cloudSyncEnabled)
         assertEquals(
             listOf(
@@ -262,6 +274,46 @@ class BackupJsonCodecTest {
         )
         assertEquals(filter, decoded.settings.mealPhotoFilter)
         assertEquals(navItems, decoded.settings.navItems)
+    }
+
+    @Test
+    fun versionFourteenUsesSafeDefaultsForVersionFifteenSettings() {
+        val current = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 14,
+                    settings = AppSettings(
+                        launcherIcon = LauncherIcon.MAGIC_BOOK,
+                        usageTrackingEnabled = true,
+                        stepTrackingEnabled = true,
+                        morePageShowDescriptions = false,
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        current.put("version", 14)
+        val settings = current.getJSONObject("settings")
+        settings.remove("launcherIcon")
+        settings.remove("usageTrackingEnabled")
+        settings.remove("stepTrackingEnabled")
+        settings.remove("morePageShowDescriptions")
+        val navItems = settings.getJSONArray("navItems")
+        for (index in 0 until navItems.length()) {
+            navItems.getJSONObject(index).remove("moreDescription")
+        }
+
+        val decoded = BackupJsonCodec.decode(current.toString())
+
+        assertEquals(14, decoded.formatVersion)
+        assertEquals(LauncherIcon.CURRENT, decoded.settings.launcherIcon)
+        assertFalse(decoded.settings.usageTrackingEnabled)
+        assertFalse(decoded.settings.stepTrackingEnabled)
+        assertEquals(true, decoded.settings.morePageShowDescriptions)
+        decoded.settings.navItems.forEach { item ->
+            assertEquals(item.id.defaultDescription, item.moreDescription)
+        }
     }
 
     @Test

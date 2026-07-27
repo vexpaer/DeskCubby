@@ -42,11 +42,13 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,7 +62,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.deskcubby.app.games.Game2048
 import com.deskcubby.app.games.SnakeGame
 import com.deskcubby.app.games.TetrisGame
@@ -75,6 +80,10 @@ import kotlinx.coroutines.isActive
 @Composable
 fun GamesScreen(padding: PaddingValues, viewModel: GamesViewModel) {
     var launch by remember { mutableStateOf<GameLaunch?>(null) }
+    val onLaunch: (String, Boolean) -> Unit = { gameId, resume ->
+        if (!resume) viewModel.clearSave(gameId)
+        launch = GameLaunch(gameId, resume)
+    }
     Box(
         Modifier
             .fillMaxSize()
@@ -82,13 +91,13 @@ fun GamesScreen(padding: PaddingValues, viewModel: GamesViewModel) {
     ) {
         val current = launch
         if (current == null) {
-            GameListPage(viewModel) { gameId, resume -> launch = GameLaunch(gameId, resume) }
+            GameListPage(viewModel, onLaunch)
         } else {
             when (current.gameId) {
                 GamesViewModel.GAME_2048 -> Game2048Page(viewModel, current.resume) { launch = null }
                 GamesViewModel.GAME_SNAKE -> SnakePage(viewModel, current.resume) { launch = null }
                 GamesViewModel.GAME_TETRIS -> TetrisPage(viewModel, current.resume) { launch = null }
-                else -> GameListPage(viewModel) { gameId, resume -> launch = GameLaunch(gameId, resume) }
+                else -> GameListPage(viewModel, onLaunch)
             }
         }
     }
@@ -275,6 +284,29 @@ private fun PauseOverlay() {
     }
 }
 
+/**
+ * Pauses before the host leaves the foreground and persists once more when this game page leaves
+ * composition. The latest callback is used without reinstalling the lifecycle observer on every
+ * frame, which keeps fast-moving games from producing disposal writes during recomposition.
+ */
+@Composable
+private fun GameAutoPauseEffect(onPauseAndSave: () -> Unit) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val latestPauseAndSave by rememberUpdatedState(onPauseAndSave)
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                latestPauseAndSave()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            latestPauseAndSave()
+        }
+    }
+}
+
 @Composable
 private fun GameOverDialog(score: Int, onRestart: () -> Unit, onExit: () -> Unit) {
     AlertDialog(
@@ -376,6 +408,18 @@ private fun Game2048Page(viewModel: GamesViewModel, resume: Boolean, onExit: () 
         if (!current.isGameOver) viewModel.saveProgress(gameId, current.toJson(), current.score)
     }
 
+    fun pauseAndSave() {
+        paused = true
+        val current = engine ?: return
+        if (current.isGameOver) {
+            viewModel.recordScore(gameId, current.score)
+            return
+        }
+        viewModel.saveProgress(gameId, current.toJson(), current.score)
+    }
+
+    GameAutoPauseEffect(onPauseAndSave = ::pauseAndSave)
+
     GameFrame(
         title = tr("2048", "2048"),
         score = score,
@@ -460,14 +504,14 @@ private fun Board2048(
 @Composable
 private fun Tile2048(value: Int, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
-    // Tile shade deepens with log2(value); 2048 (= 2^11) reaches full primary.
+    // Tile shade moves only between the user-selected secondary and primary colors.
     val fraction = if (value <= 0) 0f else (log2(value.toFloat()) / 11f).coerceIn(0.08f, 1f)
     val background = if (value <= 0) {
         scheme.surface.copy(alpha = 0.6f)
     } else {
-        lerp(scheme.surfaceVariant, scheme.primary, fraction)
+        lerp(scheme.secondary, scheme.primary, fraction)
     }
-    val textColor = if (fraction > 0.55f) scheme.onPrimary else scheme.onSurface
+    val textColor = if (fraction > 0.5f) scheme.onPrimary else scheme.onSecondary
     Box(
         modifier
             .clip(RoundedCornerShape(10.dp))
@@ -524,6 +568,7 @@ private fun SnakePage(viewModel: GamesViewModel, resume: Boolean, onExit: () -> 
         if (paused || current.isGameOver) return@LaunchedEffect
         while (isActive && !current.isGameOver) {
             delay(SNAKE_TICK_MILLIS)
+            if (paused || current.isGameOver) break
             current.tick()
             frame++
         }
@@ -534,11 +579,23 @@ private fun SnakePage(viewModel: GamesViewModel, resume: Boolean, onExit: () -> 
         if (!current.isGameOver) viewModel.saveProgress(gameId, current.toJson(), current.score)
     }
 
+    fun pauseAndSave() {
+        paused = true
+        val current = engine ?: return
+        if (current.isGameOver) {
+            viewModel.recordScore(gameId, current.score)
+            return
+        }
+        viewModel.saveProgress(gameId, current.toJson(), current.score)
+    }
+
     fun steer(direction: SnakeGame.Direction) {
         val current = engine ?: return
         if (paused || current.isGameOver) return
         current.setDirection(direction)
     }
+
+    GameAutoPauseEffect(onPauseAndSave = ::pauseAndSave)
 
     GameFrame(
         title = tr("贪吃蛇", "Snake"),
@@ -614,14 +671,18 @@ private fun SnakeBoard(
         val cellH = size.height / gridHeight
         food?.let {
             drawCircle(
-                color = scheme.tertiary,
+                color = scheme.secondary,
                 radius = min(cellW, cellH) * 0.32f,
                 center = Offset((it.x + 0.5f) * cellW, (it.y + 0.5f) * cellH),
             )
         }
         snake.forEachIndexed { index, cell ->
             drawRoundRect(
-                color = if (index == 0) scheme.primary else lerp(scheme.primary, scheme.surfaceVariant, 0.35f),
+                color = if (index == 0) {
+                    scheme.primary
+                } else {
+                    lerp(scheme.primary, scheme.secondary, 0.42f)
+                },
                 topLeft = Offset(cell.x * cellW + 1f, cell.y * cellH + 1f),
                 size = Size(cellW - 2f, cellH - 2f),
                 cornerRadius = CornerRadius(cellW * 0.3f),
@@ -670,17 +731,9 @@ private fun TetrisPage(viewModel: GamesViewModel, resume: Boolean, onExit: () ->
     var scoreRecorded by remember { mutableStateOf(false) }
     val meta by viewModel.meta(gameId).collectAsStateWithLifecycle()
     val scheme = MaterialTheme.colorScheme
-    // Piece colors derived from the theme instead of a hardcoded palette.
+    // All piece colors are interpolated strictly between the configured primary and secondary.
     val pieceColors = remember(scheme) {
-        listOf(
-            scheme.primary,
-            lerp(scheme.primary, scheme.tertiary, 0.35f),
-            lerp(scheme.primary, scheme.tertiary, 0.7f),
-            scheme.tertiary,
-            lerp(scheme.tertiary, scheme.secondary, 0.5f),
-            scheme.secondary,
-            lerp(scheme.secondary, scheme.primary, 0.5f),
-        )
+        List(7) { index -> lerp(scheme.primary, scheme.secondary, index / 6f) }
     }
 
     LaunchedEffect(Unit) {
@@ -724,6 +777,7 @@ private fun TetrisPage(viewModel: GamesViewModel, resume: Boolean, onExit: () ->
                 (TETRIS_BASE_TICK_MILLIS - TETRIS_LEVEL_STEP_MILLIS * current.level)
                     .coerceAtLeast(TETRIS_MIN_TICK_MILLIS),
             )
+            if (paused || current.isGameOver) break
             current.tick()
             frame++
         }
@@ -734,12 +788,24 @@ private fun TetrisPage(viewModel: GamesViewModel, resume: Boolean, onExit: () ->
         if (!current.isGameOver) viewModel.saveProgress(gameId, current.toJson(), current.score)
     }
 
+    fun pauseAndSave() {
+        paused = true
+        val current = engine ?: return
+        if (current.isGameOver) {
+            viewModel.recordScore(gameId, current.score)
+            return
+        }
+        viewModel.saveProgress(gameId, current.toJson(), current.score)
+    }
+
     fun act(action: (TetrisGame) -> Unit) {
         val current = engine ?: return
         if (paused || current.isGameOver) return
         action(current)
         frame++
     }
+
+    GameAutoPauseEffect(onPauseAndSave = ::pauseAndSave)
 
     GameFrame(
         title = tr("俄罗斯方块", "Tetris"),

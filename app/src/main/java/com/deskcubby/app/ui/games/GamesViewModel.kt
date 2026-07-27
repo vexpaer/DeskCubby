@@ -7,6 +7,8 @@ import com.deskcubby.app.data.local.GameStateEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -19,6 +21,35 @@ class GamesViewModel @Inject constructor(
 ) : ViewModel() {
 
     data class GameMeta(val highScore: Int = 0, val hasSave: Boolean = false)
+
+    private sealed interface PersistenceCommand {
+        val gameId: String
+
+        data class Load(
+            override val gameId: String,
+            val result: CompletableDeferred<String?>,
+        ) : PersistenceCommand
+
+        data class Save(
+            override val gameId: String,
+            val saveJson: String,
+            val score: Int,
+        ) : PersistenceCommand
+
+        data class Finish(
+            override val gameId: String,
+            val score: Int,
+        ) : PersistenceCommand
+
+        data class Clear(override val gameId: String) : PersistenceCommand
+    }
+
+    /**
+     * A single consumer preserves the exact order of pause, finish, clear and subsequent load
+     * operations. In particular, immediately reopening a game cannot read past a queued pause
+     * snapshot, and an older pause write cannot overtake a newer game-over write.
+     */
+    private val persistenceCommands = Channel<PersistenceCommand>(Channel.UNLIMITED)
 
     private val metas: Map<String, StateFlow<GameMeta>> = GAME_IDS.associateWith { gameId ->
         gameStateDao.observe(gameId)
@@ -35,30 +66,64 @@ class GamesViewModel @Inject constructor(
             )
     }
 
+    init {
+        viewModelScope.launch {
+            for (command in persistenceCommands) {
+                try {
+                    when (command) {
+                        is PersistenceCommand.Load -> {
+                            command.result.complete(gameStateDao.get(command.gameId)?.saveJson)
+                        }
+
+                        is PersistenceCommand.Save -> {
+                            upsert(command.gameId, command.saveJson, command.score)
+                        }
+
+                        is PersistenceCommand.Finish -> {
+                            upsert(command.gameId, saveJson = null, score = command.score)
+                        }
+
+                        is PersistenceCommand.Clear -> {
+                            gameStateDao.clearSave(command.gameId, System.currentTimeMillis())
+                        }
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    if (command is PersistenceCommand.Load) {
+                        command.result.complete(null)
+                    }
+                    // Persistence remains best-effort; gameplay must never crash on a DB failure.
+                }
+            }
+        }
+    }
+
     /** High score and saved-game availability for one of [GAME_IDS]. */
     fun meta(gameId: String): StateFlow<GameMeta> = metas.getValue(gameId)
 
-    /** Returns the serialized paused-game snapshot, or null when there is none. */
-    suspend fun loadSave(gameId: String): String? = try {
-        gameStateDao.get(gameId)?.saveJson
-    } catch (error: CancellationException) {
-        throw error
-    } catch (_: Exception) {
-        null
+    /**
+     * Returns the serialized paused-game snapshot after every previously enqueued persistence
+     * operation has completed, or null when there is no usable snapshot.
+     */
+    suspend fun loadSave(gameId: String): String? {
+        val result = CompletableDeferred<String?>()
+        persistenceCommands.send(PersistenceCommand.Load(gameId, result))
+        return result.await()
     }
 
     /** Stores an in-progress snapshot and raises the high score when [score] exceeds it. */
     fun saveProgress(gameId: String, saveJson: String, score: Int) {
-        launchWrite { upsert(gameId, saveJson, score) }
+        persistenceCommands.trySend(PersistenceCommand.Save(gameId, saveJson, score))
     }
 
     /** Called when a run ends: updates the high score and clears the saved snapshot. */
     fun recordScore(gameId: String, score: Int) {
-        launchWrite { upsert(gameId, saveJson = null, score = score) }
+        persistenceCommands.trySend(PersistenceCommand.Finish(gameId, score))
     }
 
     fun clearSave(gameId: String) {
-        launchWrite { gameStateDao.clearSave(gameId, System.currentTimeMillis()) }
+        persistenceCommands.trySend(PersistenceCommand.Clear(gameId))
     }
 
     private suspend fun upsert(gameId: String, saveJson: String?, score: Int) {
@@ -71,18 +136,6 @@ class GamesViewModel @Inject constructor(
                 updatedAt = System.currentTimeMillis(),
             ),
         )
-    }
-
-    private fun launchWrite(block: suspend () -> Unit) {
-        viewModelScope.launch {
-            try {
-                block()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                // Game persistence is best-effort; a failed write must never crash gameplay.
-            }
-        }
     }
 
     companion object {

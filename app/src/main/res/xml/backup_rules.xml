@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Device usage and health statistics remain on this device unless the user
+         explicitly exports them through a future dedicated flow. -->
+    <exclude
+        domain="file"
+        path="statistics/" />
+    <exclude
+        domain="file"
+        path="usage-statistics.json" />
+    <exclude
+        domain="file"
+        path="usage-statistics.json.bak" />
+    <exclude
+        domain="file"
+        path="usage-statistics.json.new" />
+    <exclude
+        domain="file"
+        path="step-statistics.json" />
+    <exclude
+        domain="file"
+        path="step-statistics.json.bak" />
+    <exclude
+        domain="file"
+        path="step-statistics.json.new" />
+</full-backup-content>

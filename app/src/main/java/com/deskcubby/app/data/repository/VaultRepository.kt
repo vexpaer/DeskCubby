@@ -37,6 +37,12 @@ private val Context.vaultMetaDataStore by preferencesDataStore(name = "vault_met
 
 enum class VaultLockState { NOT_SET, LOCKED, UNLOCKED }
 
+internal const val MIN_VAULT_PASSWORD_CODE_POINTS = 4
+
+/** New and replacement passwords have no maximum length; astral symbols count as one code point. */
+internal fun isValidNewVaultPassword(password: String): Boolean =
+    password.codePointCount(0, password.length) >= MIN_VAULT_PASSWORD_CODE_POINTS
+
 /** Decrypted vault entry. Exists only in memory while the vault is unlocked. */
 data class VaultItem(
     val id: Long,
@@ -98,6 +104,7 @@ class VaultRepository @Inject constructor(
     /** First-time setup. Only valid while NOT_SET; leaves the vault UNLOCKED on success. */
     suspend fun setupPassword(password: String) = operationMutex.withLock {
         withContext(Dispatchers.Default) {
+            if (!isValidNewVaultPassword(password)) return@withContext
             if (mutableLockState.value != VaultLockState.NOT_SET) return@withContext
             if (context.vaultMetaDataStore.data.first()[Keys.saltBase64] != null) {
                 mutableLockState.value = VaultLockState.LOCKED
@@ -150,6 +157,7 @@ class VaultRepository @Inject constructor(
     suspend fun changePassword(oldPassword: String, newPassword: String): Boolean =
         operationMutex.withLock {
             withContext(Dispatchers.Default) {
+                if (!isValidNewVaultPassword(newPassword)) return@withContext false
                 val meta = readMeta() ?: return@withContext false
                 val oldKey = VaultCrypto.deriveKey(oldPassword, meta.salt, meta.iterations)
                 val oldVerified =

@@ -8,6 +8,8 @@ enum class BrowserTheme { SYSTEM, LIGHT, DARK }
 
 enum class AppLanguage { CHINESE, ENGLISH }
 
+enum class LauncherIcon { CURRENT, MAGIC_BOOK }
+
 enum class ThoughtReopenMode { LAST_VISITED, ALL }
 
 enum class ThoughtDisplayMode { SINGLE_LINE, FULL }
@@ -102,25 +104,38 @@ enum class NavItemId(
     val defaultLabel: String,
     val englishLabel: String,
     val defaultIcon: String,
+    val defaultDescription: String,
+    val englishDescription: String,
     val defaultVisible: Boolean = true,
     val defaultShowInMore: Boolean = false,
 ) {
-    HOME("home", "首页", "Home", "home"),
-    DIARY("diary", "日记", "Diary", "book"),
+    HOME("home", "首页", "Home", "home", "今日概览与快捷记录", "Overview and quick capture"),
+    DIARY("diary", "日记", "Diary", "book", "浏览、编辑日记与吃历", "Diaries and meal calendar"),
     BLOG(
         "blog",
         "浏览器",
         "Browser",
         "language",
+        "在应用内浏览网页",
+        "Browse the web in the app",
         defaultVisible = false,
         defaultShowInMore = true,
     ),
-    THOUGHT("thought", "小巧思", "Thoughts", "bolt"),
+    THOUGHT(
+        "thought",
+        "小巧思",
+        "Thoughts",
+        "bolt",
+        "记录与整理瞬间想法",
+        "Capture and organize thoughts",
+    ),
     DATE(
         "date_records",
         "日期记录",
         "Dates",
         "event",
+        "追踪纪念日与目标日期",
+        "Track occasions and target dates",
         defaultVisible = false,
         defaultShowInMore = true,
     ),
@@ -129,6 +144,8 @@ enum class NavItemId(
         "诗词本",
         "Poetry book",
         "poetry",
+        "收藏喜欢的诗词",
+        "Keep your favorite poems",
         defaultVisible = false,
         defaultShowInMore = true,
     ),
@@ -137,6 +154,8 @@ enum class NavItemId(
         "RSS 订阅",
         "RSS",
         "rss",
+        "阅读订阅源的最新文章",
+        "Read the latest from your feeds",
         defaultVisible = false,
         defaultShowInMore = true,
     ),
@@ -145,6 +164,8 @@ enum class NavItemId(
         "AI 聊天",
         "AI chat",
         "ai",
+        "选择本机记录作为上下文并与模型分析",
+        "Analyze selected local records with AI",
         defaultVisible = false,
         defaultShowInMore = true,
     ),
@@ -153,6 +174,8 @@ enum class NavItemId(
         "收藏夹",
         "Vault",
         "lock",
+        "密码保护的私密收藏",
+        "Password-protected private notes",
         defaultVisible = false,
         defaultShowInMore = true,
     ),
@@ -161,11 +184,48 @@ enum class NavItemId(
         "小游戏",
         "Games",
         "game",
+        "2048、贪吃蛇与俄罗斯方块",
+        "2048, Snake and Tetris",
         defaultVisible = false,
         defaultShowInMore = true,
     ),
-    MORE("more", "导航", "More", "apps", defaultVisible = false),
-    SETTINGS("settings", "设置", "Settings", "settings"),
+    USAGE(
+        "usage_statistics",
+        "手机使用时间",
+        "Screen time",
+        "usage",
+        "按天查看各应用的使用时长",
+        "Daily usage time by app",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
+    STEPS(
+        "step_statistics",
+        "步数记录",
+        "Steps",
+        "steps",
+        "自动读取并可视化每日步数",
+        "Automatically chart daily steps",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
+    MORE(
+        "more",
+        "导航",
+        "More",
+        "apps",
+        "打开收纳的页面",
+        "Open collected pages",
+        defaultVisible = false,
+    ),
+    SETTINGS(
+        "settings",
+        "设置",
+        "Settings",
+        "settings",
+        "调整应用与页面设置",
+        "Adjust app and page settings",
+    ),
 }
 
 data class NavItemConfig(
@@ -174,6 +234,7 @@ data class NavItemConfig(
     val iconKey: String = id.defaultIcon,
     val visible: Boolean = id.defaultVisible,
     val showInMore: Boolean = id.defaultShowInMore,
+    val moreDescription: String = id.defaultDescription,
 )
 
 data class AppSettings(
@@ -186,6 +247,7 @@ data class AppSettings(
     val fontScale: Float = 1f,
     val compactMode: Boolean = false,
     val useChineseLauncherName: Boolean = false,
+    val launcherIcon: LauncherIcon = LauncherIcon.CURRENT,
     val backupTreeUri: String? = null,
     val cloudSyncEnabled: Boolean = false,
     val cloudSyncConfigs: List<CloudSyncConfig> = emptyList(),
@@ -234,12 +296,15 @@ data class AppSettings(
     val calorieImageConfigId: String? = null,
     val calorieVisionPrompt: String = DEFAULT_CALORIE_VISION_PROMPT,
     val calorieTextPrompt: String = DEFAULT_CALORIE_TEXT_PROMPT,
+    val usageTrackingEnabled: Boolean = false,
+    val stepTrackingEnabled: Boolean = false,
     val navigationIntroAcknowledged: Boolean = false,
     val navItems: List<NavItemConfig> = NavItemId.entries.map { id ->
         NavItemConfig(id = id, visible = id.defaultVisible || id == NavItemId.MORE)
     },
     val defaultPage: NavItemId = NavItemId.HOME,
     val bottomNavShowLabels: Boolean = true,
+    val morePageShowDescriptions: Boolean = true,
     val homeWidgetBordersEnabled: Boolean = true,
     // First-launch preset: a deliberately small home page. Everything else stays
     // available in the settings catalog.

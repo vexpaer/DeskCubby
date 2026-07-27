@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
@@ -20,6 +21,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class ThoughtListState(
     val isLoaded: Boolean = false,
@@ -57,6 +60,7 @@ class ThoughtViewModel @Inject constructor(
         SharingStarted.Eagerly,
         AppSettings(),
     )
+    private val displayModeMutex = Mutex()
     private var hasExplicitCategorySelection = false
 
     init {
@@ -168,6 +172,22 @@ class ThoughtViewModel @Inject constructor(
     }
 
     fun setSplitRatio(value: Float) = viewModelScope.launch { settingsRepository.setThoughtSplitRatio(value) }
+
+    /**
+     * Reads the persisted value inside a mutex before writing its opposite. Rapid taps therefore
+     * remain lossless instead of toggling twice from the same stale Compose snapshot.
+     */
+    fun toggleDisplayMode() = viewModelScope.launch {
+        displayModeMutex.withLock {
+            val current = settingsRepository.settings.first().thoughtDisplayMode
+            settingsRepository.setThoughtDisplayMode(
+                when (current) {
+                    ThoughtDisplayMode.SINGLE_LINE -> ThoughtDisplayMode.FULL
+                    ThoughtDisplayMode.FULL -> ThoughtDisplayMode.SINGLE_LINE
+                },
+            )
+        }
+    }
 
     fun move(id: Long, targetIndex: Int) {
         val selected = mutableSelectedCategory.value

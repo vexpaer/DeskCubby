@@ -3,6 +3,7 @@ package com.deskcubby.app
 import android.app.Application
 import com.deskcubby.app.data.backup.AutoBackupCoordinator
 import com.deskcubby.app.data.repository.PoetryRepository
+import com.deskcubby.app.data.statistics.StatisticsScheduler
 import com.deskcubby.app.data.sync.CloudSyncScheduler
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
@@ -17,12 +18,14 @@ class DeskCubbyApplication : Application() {
     @Inject lateinit var autoBackupCoordinator: AutoBackupCoordinator
     @Inject lateinit var poetryRepository: PoetryRepository
     @Inject lateinit var cloudSyncScheduler: CloudSyncScheduler
+    @Inject lateinit var statisticsScheduler: StatisticsScheduler
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
         autoBackupCoordinator.start()
         cloudSyncScheduler.start()
+        statisticsScheduler.start()
         applicationScope.launch {
             try {
                 poetryRepository.refresh(force = true)

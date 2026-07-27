@@ -14,6 +14,7 @@ import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DailyEventTemplate
+import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.RssSubscription
@@ -38,7 +39,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 14,
+    val formatVersion: Int = 15,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -58,7 +59,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 14
+    const val FORMAT_VERSION: Int = 15
 
     private const val FORMAT_NAME = "DeskCubby"
     private const val MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -82,6 +83,7 @@ object BackupJsonCodec {
     private const val MAX_RSS_SUBSCRIPTIONS = 100
     private const val MAX_AI_API_KEY_CHARS = 8_192
     private const val MAX_CLOUD_SYNC_CONFIGS = 20
+    private const val MAX_MORE_DESCRIPTION_CODE_POINTS = 160
 
     fun encode(backup: AppBackup): String {
         require(backup.formatVersion == FORMAT_VERSION) {
@@ -189,6 +191,7 @@ object BackupJsonCodec {
         .put("fontScale", settings.fontScale)
         .put("compactMode", settings.compactMode)
         .put("useChineseLauncherName", settings.useChineseLauncherName)
+        .put("launcherIcon", settings.launcherIcon.name)
         // Credentials are device-local. Imports must be explicitly re-enabled after review.
         .put("cloudSyncEnabled", false)
         .put("cloudSyncConfigs", encodeCloudSyncConfigs(settings.cloudSyncConfigs))
@@ -268,6 +271,10 @@ object BackupJsonCodec {
         .putNullable("calorieImageConfigId", settings.calorieImageConfigId)
         .put("calorieVisionPrompt", settings.calorieVisionPrompt)
         .put("calorieTextPrompt", settings.calorieTextPrompt)
+        // These are preferences only. Permission grants and the sensitive statistics files
+        // remain device-local and are intentionally excluded from application JSON backups.
+        .put("usageTrackingEnabled", settings.usageTrackingEnabled)
+        .put("stepTrackingEnabled", settings.stepTrackingEnabled)
         .put("navItems", JSONArray().apply {
             settings.navItems.forEach { item ->
                 put(
@@ -276,12 +283,14 @@ object BackupJsonCodec {
                         .put("label", item.label)
                         .put("iconKey", item.iconKey)
                         .put("visible", item.visible)
-                        .put("showInMore", item.showInMore),
+                        .put("showInMore", item.showInMore)
+                        .put("moreDescription", item.moreDescription),
                 )
             }
         })
         .put("defaultPage", settings.defaultPage.name)
         .put("bottomNavShowLabels", settings.bottomNavShowLabels)
+        .put("morePageShowDescriptions", settings.morePageShowDescriptions)
         .put("homeWidgets", settings.homeWidgets.toJsonArray())
         .put("homeWidgetTitles", settings.homeWidgetTitles.toJsonArray())
 
@@ -439,6 +448,11 @@ object BackupJsonCodec {
                 json.requiredBoolean("useChineseLauncherName")
             } else {
                 defaults.useChineseLauncherName
+            },
+            launcherIcon = if (version >= 15) {
+                json.requiredEnum<LauncherIcon>("launcherIcon")
+            } else {
+                defaults.launcherIcon
             },
             cloudSyncEnabled = if (version >= 13) {
                 json.requiredBoolean("cloudSyncEnabled")
@@ -609,9 +623,24 @@ object BackupJsonCodec {
             calorieImageConfigId = if (version >= 11) json.requiredNullableString("calorieImageConfigId")?.requireMaxLength("calorieImageConfigId", 80) else null,
             calorieVisionPrompt = if (version >= 10) json.requiredString("calorieVisionPrompt").requireMaxLength("calorieVisionPrompt", 20_000) else defaults.calorieVisionPrompt,
             calorieTextPrompt = if (version >= 10) json.requiredString("calorieTextPrompt").requireMaxLength("calorieTextPrompt", 20_000) else defaults.calorieTextPrompt,
+            usageTrackingEnabled = if (version >= 15) {
+                json.requiredBoolean("usageTrackingEnabled")
+            } else {
+                defaults.usageTrackingEnabled
+            },
+            stepTrackingEnabled = if (version >= 15) {
+                json.requiredBoolean("stepTrackingEnabled")
+            } else {
+                defaults.stepTrackingEnabled
+            },
             navItems = decodeNavItems(json.requiredArray("navItems"), version),
             defaultPage = json.requiredEnum("defaultPage"),
             bottomNavShowLabels = json.requiredBoolean("bottomNavShowLabels"),
+            morePageShowDescriptions = if (version >= 15) {
+                json.requiredBoolean("morePageShowDescriptions")
+            } else {
+                defaults.morePageShowDescriptions
+            },
             homeWidgets = homeWidgets,
             homeWidgetTitles = homeWidgetTitles,
         )
@@ -776,6 +805,15 @@ object BackupJsonCodec {
                             id == NavItemId.SETTINGS -> false
                         version >= 13 -> item.requiredBoolean("showInMore")
                         else -> id.defaultShowInMore && !visible
+                    },
+                    moreDescription = if (version >= 15) {
+                        item.requiredString("moreDescription")
+                            .requireMaxCodePoints(
+                                "navItems[$index].moreDescription",
+                                MAX_MORE_DESCRIPTION_CODE_POINTS,
+                            )
+                    } else {
+                        id.defaultDescription
                     },
                 ),
             )

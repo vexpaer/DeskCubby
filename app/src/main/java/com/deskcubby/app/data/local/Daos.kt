@@ -402,6 +402,22 @@ interface AiChatDao {
         return id
     }
 
+    /**
+     * Persists one logical user turn atomically. A frozen system-context message, when present,
+     * must never survive without the user message it was attached to.
+     */
+    @Transaction
+    suspend fun insertUserTurnAndTouch(messages: List<AiMessageEntity>): List<Long> {
+        require(messages.isNotEmpty()) { "A user turn must contain at least one message" }
+        val conversationId = messages.first().conversationId
+        require(messages.all { it.conversationId == conversationId }) {
+            "Every message in a user turn must belong to the same conversation"
+        }
+        val ids = messages.map { insertMessage(it) }
+        touchConversation(conversationId, messages.maxOf(AiMessageEntity::createdAt))
+        return ids
+    }
+
     @Query(
         "UPDATE ai_conversations SET title = :title, updatedAt = :updatedAt WHERE id = :id",
     )

@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -166,12 +167,15 @@ fun AiChatScreen(
             ChatComposer(
                 value = uiState.draft,
                 image = uiState.pendingImage,
+                contextCount = uiState.pendingContextKeys.size,
                 isSending = uiState.isSending,
                 isPreparingImage = uiState.isPreparingImage,
                 configured = configured,
                 onValueChange = viewModel::updateDraft,
                 onPickImage = { imagePicker.launch(arrayOf("image/*")) },
+                onPickContext = viewModel::openContextPicker,
                 onRemoveImage = viewModel::removePendingImage,
+                onClearContext = viewModel::clearPendingContexts,
                 onSend = viewModel::sendMessage,
             )
         },
@@ -230,8 +234,8 @@ fun AiChatScreen(
                     },
                     description = if (configured) {
                         tr(
-                            "文字、图片和 AI 回答会保存在本机，可从右上角历史记录继续。",
-                            "Messages, images, and AI replies are saved locally and can be continued from History.",
+                            "可导入日记等本机记录作为上下文；文字、图片、上下文快照和 AI 回答会随对话保存在本机。",
+                            "You can import local records such as diaries as context. Messages, images, frozen context, and AI replies are saved locally with the conversation.",
                         )
                     } else {
                         tr(
@@ -315,6 +319,20 @@ fun AiChatScreen(
             dismissButton = {
                 TextButton(onClick = { deleteTarget = null }) { Text(tr("取消", "Cancel")) }
             },
+        )
+    }
+    if (uiState.isContextPickerVisible) {
+        AiContextPickerDialog(
+            candidates = uiState.contextCandidates,
+            selectedKeys = uiState.pendingContextKeys,
+            isLoading = uiState.isLoadingContextCandidates,
+            isLoadingPreview = uiState.isLoadingContextPreview,
+            preview = uiState.contextPreview,
+            onDismiss = viewModel::closeContextPicker,
+            onRefresh = viewModel::refreshContextCandidates,
+            onToggle = viewModel::toggleContextCandidate,
+            onPreview = viewModel::previewContextCandidate,
+            onDismissPreview = viewModel::dismissContextPreview,
         )
     }
 }
@@ -449,6 +467,10 @@ private fun ConfigurationNotice(onOpenSettings: () -> Unit) {
 
 @Composable
 private fun ChatMessageBubble(message: AiChatMessage) {
+    if (message.role == AiChatRole.CONTEXT) {
+        ContextMessageCard(message.id, message.content)
+        return
+    }
     val isUser = message.role == AiChatRole.USER
     Box(
         modifier = Modifier.fillMaxWidth(),
@@ -574,12 +596,15 @@ private fun TypingBubble() {
 private fun ChatComposer(
     value: String,
     image: AiChatImage?,
+    contextCount: Int,
     isSending: Boolean,
     isPreparingImage: Boolean,
     configured: Boolean,
     onValueChange: (String) -> Unit,
     onPickImage: () -> Unit,
+    onPickContext: () -> Unit,
     onRemoveImage: () -> Unit,
+    onClearContext: () -> Unit,
     onSend: () -> Unit,
 ) {
     val canSend = configured && (value.isNotBlank() || image != null) &&
@@ -592,6 +617,14 @@ private fun ChatComposer(
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
+            if (contextCount > 0) {
+                PendingContextSummary(
+                    count = contextCount,
+                    onOpen = onPickContext,
+                    onClear = onClearContext,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
             image?.let {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -628,6 +661,12 @@ private fun ChatComposer(
             Row(verticalAlignment = Alignment.Bottom) {
                 IconButton(
                     enabled = !isSending && !isPreparingImage,
+                    onClick = onPickContext,
+                ) {
+                    Icon(Icons.Outlined.Description, tr("导入上下文", "Import context"))
+                }
+                IconButton(
+                    enabled = !isSending && !isPreparingImage,
                     onClick = onPickImage,
                 ) {
                     if (isPreparingImage) {
@@ -643,8 +682,14 @@ private fun ChatComposer(
                     modifier = Modifier.weight(1f),
                     placeholder = {
                         Text(
-                            if (configured) tr("输入消息，可附带一张图片", "Message, with an optional image")
-                            else tr("请先完成 AI 配置", "Configure AI first"),
+                            if (configured) {
+                                tr(
+                                    "输入消息，可附带上下文或一张图片",
+                                    "Message, with optional context or one image",
+                                )
+                            } else {
+                                tr("请先完成 AI 配置", "Configure AI first")
+                            },
                         )
                     },
                     minLines = 1,

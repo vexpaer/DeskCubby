@@ -26,6 +26,7 @@ import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DEFAULT_MEAL_BUTTON_ICONS
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotosPerRow
@@ -72,6 +73,7 @@ class SettingsRepository @Inject constructor(
         val fontScale = floatPreferencesKey("font_scale")
         val compactMode = booleanPreferencesKey("compact_mode")
         val useChineseLauncherName = booleanPreferencesKey("use_chinese_launcher_name")
+        val launcherIcon = stringPreferencesKey("launcher_icon")
         val backupTreeUri = stringPreferencesKey("backup_tree_uri")
         val cloudSyncEnabled = booleanPreferencesKey("cloud_sync_enabled")
         val cloudSyncConfigs = stringPreferencesKey("cloud_sync_configs_v1")
@@ -125,10 +127,13 @@ class SettingsRepository @Inject constructor(
         val calorieImageConfigId = stringPreferencesKey("calorie_image_config_id")
         val calorieVisionPrompt = stringPreferencesKey("calorie_vision_prompt")
         val calorieTextPrompt = stringPreferencesKey("calorie_text_prompt")
+        val usageTrackingEnabled = booleanPreferencesKey("usage_tracking_enabled")
+        val stepTrackingEnabled = booleanPreferencesKey("step_tracking_enabled")
         val navigationIntroAcknowledged = booleanPreferencesKey("navigation_intro_acknowledged")
         val navItems = stringPreferencesKey("nav_items")
         val defaultPage = stringPreferencesKey("default_page")
         val bottomNavShowLabels = booleanPreferencesKey("bottom_nav_show_labels")
+        val morePageShowDescriptions = booleanPreferencesKey("more_page_show_descriptions")
         val homeWidgetBordersEnabled = booleanPreferencesKey("home_widget_borders_enabled")
         val homeWidgets = stringPreferencesKey("home_widgets")
         val mealPhotosWidgetMigrated = booleanPreferencesKey("meal_photos_widget_migrated")
@@ -177,6 +182,7 @@ class SettingsRepository @Inject constructor(
             compactMode = prefs[Keys.compactMode] ?: defaults.compactMode,
             useChineseLauncherName = prefs[Keys.useChineseLauncherName]
                 ?: defaults.useChineseLauncherName,
+            launcherIcon = prefs[Keys.launcherIcon].enumValueOr(defaults.launcherIcon),
             backupTreeUri = prefs[Keys.backupTreeUri]?.takeIf(::hasPersistedTreeAccess),
             cloudSyncEnabled = (prefs[Keys.cloudSyncEnabled] ?: false) &&
                 cloudSyncConfigs.any { it.enabled && it.selectedContents.isNotEmpty() },
@@ -254,11 +260,17 @@ class SettingsRepository @Inject constructor(
             calorieImageConfigId = calorieImageId,
             calorieVisionPrompt = prefs[Keys.calorieVisionPrompt] ?: defaults.calorieVisionPrompt,
             calorieTextPrompt = prefs[Keys.calorieTextPrompt] ?: defaults.calorieTextPrompt,
+            usageTrackingEnabled = prefs[Keys.usageTrackingEnabled]
+                ?: defaults.usageTrackingEnabled,
+            stepTrackingEnabled = prefs[Keys.stepTrackingEnabled]
+                ?: defaults.stepTrackingEnabled,
             navigationIntroAcknowledged = prefs[Keys.navigationIntroAcknowledged]
                 ?: defaults.navigationIntroAcknowledged,
             navItems = nav,
             defaultPage = requestedDefault.takeIf { it in visibleIds } ?: visibleIds.firstOrNull() ?: NavItemId.SETTINGS,
             bottomNavShowLabels = prefs[Keys.bottomNavShowLabels] ?: defaults.bottomNavShowLabels,
+            morePageShowDescriptions = prefs[Keys.morePageShowDescriptions]
+                ?: defaults.morePageShowDescriptions,
             homeWidgetBordersEnabled = prefs[Keys.homeWidgetBordersEnabled]
                 ?: defaults.homeWidgetBordersEnabled,
             // The widget migrations only apply to users with a stored list from an older
@@ -297,6 +309,7 @@ class SettingsRepository @Inject constructor(
     suspend fun setFontScale(value: Float) = set(Keys.fontScale, normalizeFontScale(value))
     suspend fun setCompactMode(value: Boolean) = set(Keys.compactMode, value)
     suspend fun setUseChineseLauncherName(value: Boolean) = set(Keys.useChineseLauncherName, value)
+    suspend fun setLauncherIcon(value: LauncherIcon) = set(Keys.launcherIcon, value.name)
     suspend fun setBackupTreeUri(value: String?) {
         context.settingsDataStore.edit {
             it.setOrRemove(Keys.backupTreeUri, value?.takeIf(String::isNotBlank))
@@ -428,6 +441,8 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.calorieTextPrompt] = textPrompt.take(MAX_AI_SYSTEM_PROMPT_CHARS)
         }
     }
+    suspend fun setUsageTrackingEnabled(value: Boolean) = set(Keys.usageTrackingEnabled, value)
+    suspend fun setStepTrackingEnabled(value: Boolean) = set(Keys.stepTrackingEnabled, value)
     suspend fun acknowledgeNavigationIntro() = set(Keys.navigationIntroAcknowledged, true)
     suspend fun setDefaultPage(value: NavItemId) = set(Keys.defaultPage, value.name)
     suspend fun setBottomNavShowLabels(value: Boolean) = set(Keys.bottomNavShowLabels, value)
@@ -480,6 +495,17 @@ class SettingsRepository @Inject constructor(
         }
     }
 
+    suspend fun setMorePageSettings(
+        showDescriptions: Boolean,
+        items: List<NavItemConfig>,
+    ) {
+        val normalized = normalizeNavItems(items)
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.navItems] = encodeNav(normalized)
+            prefs[Keys.morePageShowDescriptions] = showDescriptions
+        }
+    }
+
     suspend fun restoreFromBackup(value: AppSettings) {
         val normalizedNav = normalizeNavItems(value.navItems)
         val normalizedMealPhotoFilter = value.mealPhotoFilter.normalized()
@@ -501,6 +527,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.fontScale] = normalizeFontScale(value.fontScale)
             prefs[Keys.compactMode] = value.compactMode
             prefs[Keys.useChineseLauncherName] = value.useChineseLauncherName
+            prefs[Keys.launcherIcon] = value.launcherIcon.name
             prefs[Keys.cloudSyncConfigs] = encodeCloudSyncConfigs(normalizedCloudSyncConfigs)
             prefs[Keys.cloudSyncEnabled] = value.cloudSyncEnabled &&
                 normalizedCloudSyncConfigs.any {
@@ -568,9 +595,12 @@ class SettingsRepository @Inject constructor(
             prefs.setOrRemove(Keys.calorieImageConfigId, value.calorieImageConfigId)
             prefs[Keys.calorieVisionPrompt] = value.calorieVisionPrompt.take(MAX_AI_SYSTEM_PROMPT_CHARS)
             prefs[Keys.calorieTextPrompt] = value.calorieTextPrompt.take(MAX_AI_SYSTEM_PROMPT_CHARS)
+            prefs[Keys.usageTrackingEnabled] = value.usageTrackingEnabled
+            prefs[Keys.stepTrackingEnabled] = value.stepTrackingEnabled
             prefs[Keys.navItems] = encodeNav(normalizedNav)
             prefs[Keys.defaultPage] = normalizedDefaultPage.name
             prefs[Keys.bottomNavShowLabels] = value.bottomNavShowLabels
+            prefs[Keys.morePageShowDescriptions] = value.morePageShowDescriptions
             prefs[Keys.homeWidgetBordersEnabled] = value.homeWidgetBordersEnabled
             prefs[Keys.homeWidgets] = encodeStringList(value.homeWidgets.distinct())
             prefs[Keys.mealPhotosWidgetMigrated] = true
@@ -629,6 +659,9 @@ class SettingsRepository @Inject constructor(
                             item.has("showInMore") -> item.optBoolean("showInMore")
                             else -> id.defaultShowInMore && !visible
                         },
+                        moreDescription = normalizeMoreDescription(
+                            item.optString("moreDescription", id.defaultDescription),
+                        ),
                     ),
                 )
             }
@@ -647,7 +680,8 @@ class SettingsRepository @Inject constructor(
                         "showInMore",
                         item.showInMore && item.id != NavItemId.HOME &&
                             item.id != NavItemId.MORE && item.id != NavItemId.SETTINGS,
-                    ),
+                    )
+                    .put("moreDescription", normalizeMoreDescription(item.moreDescription)),
             )
         }
     }.toString()
@@ -1056,6 +1090,13 @@ private const val MAX_CLOUD_SYNC_PATH_CHARS = 1_024
 private const val MAX_CLOUD_SYNC_USERNAME_CHARS = 512
 private const val MAX_CLOUD_SYNC_BUCKET_CHARS = 255
 private const val MAX_CLOUD_SYNC_REGION_CHARS = 128
+internal const val MAX_MORE_DESCRIPTION_CODE_POINTS = 160
+
+internal fun normalizeMoreDescription(value: String): String =
+    value.trim()
+        .replace(Regex("[\\r\\n\\t]+"), " ")
+        .replace(Regex(" {2,}"), " ")
+        .takeCodePoints(MAX_MORE_DESCRIPTION_CODE_POINTS)
 
 internal fun normalizeNavItems(items: List<NavItemConfig>): List<NavItemConfig> {
     val distinctItems = items.distinctBy(NavItemConfig::id).map { item ->
@@ -1065,6 +1106,7 @@ internal fun normalizeNavItems(items: List<NavItemConfig>): List<NavItemConfig> 
                 item.id != NavItemId.HOME &&
                 item.id != NavItemId.MORE &&
                 item.id != NavItemId.SETTINGS,
+            moreDescription = normalizeMoreDescription(item.moreDescription),
         )
     }
     val presentIds = distinctItems.map(NavItemConfig::id).toSet()

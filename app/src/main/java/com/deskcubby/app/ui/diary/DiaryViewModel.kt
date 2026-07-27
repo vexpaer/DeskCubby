@@ -8,13 +8,16 @@ import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.DiaryDocument
 import com.deskcubby.app.data.model.DiaryEditorDocument
 import com.deskcubby.app.data.model.DiaryTrashItem
+import com.deskcubby.app.data.model.MealCategory
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.CalorieEstimationRepository
+import com.deskcubby.app.data.repository.DiaryPreviewMedia
 import com.deskcubby.app.data.repository.DiaryTextUtils
 import com.deskcubby.app.data.repository.ExternalFileConflictException
 import com.deskcubby.app.data.repository.MealCalendarDay
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.LocalDate
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
@@ -76,6 +79,9 @@ class DiaryViewModel @Inject constructor(
 
     private val _mealCalendarState = MutableStateFlow(MealCalendarState())
     val mealCalendarState: StateFlow<MealCalendarState> = _mealCalendarState.asStateFlow()
+
+    private val _mealCalendarExporting = MutableStateFlow(false)
+    val mealCalendarExporting: StateFlow<Boolean> = _mealCalendarExporting.asStateFlow()
 
     private val _expandedMonth = MutableStateFlow<String?>(null)
     val expandedMonth: StateFlow<String?> = _expandedMonth.asStateFlow()
@@ -160,6 +166,38 @@ class DiaryViewModel @Inject constructor(
                 _message.value = if (selected.isEmpty()) "没有需要计算的饮食图片" else "已完成 ${selected.size} 张图片的热量估算"
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { _mealCalendarState.value = _mealCalendarState.value.copy(loading = false, error = error.userMessage()) }
+        }
+    }
+
+    fun exportMealCalendar(
+        destinationUri: Uri,
+        startInclusive: LocalDate,
+        endInclusive: LocalDate,
+        categories: Set<MealCategory>,
+    ) {
+        if (_mealCalendarExporting.value) return
+        _mealCalendarExporting.value = true
+        val selectedCategories = categories.toSet()
+        viewModelScope.launch {
+            try {
+                val result = repository.exportMealCalendarPng(
+                    destinationUri = destinationUri,
+                    settings = settings.value,
+                    startInclusive = startInclusive,
+                    endInclusive = endInclusive,
+                    categories = selectedCategories,
+                )
+                _message.value = localized(
+                    "已导出 ${result.dayCount} 天、${result.photoCount} 张照片",
+                    "Exported ${result.photoCount} photos across ${result.dayCount} days",
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _message.value = error.userMessage()
+            } finally {
+                _mealCalendarExporting.value = false
+            }
         }
     }
 
@@ -332,6 +370,10 @@ class DiaryViewModel @Inject constructor(
     }
 
     suspend fun resolveMedia(target: String): Uri? = repository.resolveMedia(target, settings.value)
+
+    suspend fun resolveDiaryPreviewMedia(
+        targets: Collection<String>,
+    ): Map<String, DiaryPreviewMedia> = repository.resolveDiaryPreviewMedia(targets, settings.value)
 
     fun rename(uri: String, fileName: String) {
         viewModelScope.launch {

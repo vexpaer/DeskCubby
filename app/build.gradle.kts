@@ -60,8 +60,8 @@ android {
         applicationId = "com.deskcubby.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.3.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -154,6 +154,7 @@ dependencies {
     androidTestImplementation("androidx.room:room-testing:2.8.4")
     implementation("androidx.datastore:datastore-preferences:1.2.1")
     implementation("androidx.documentfile:documentfile:1.1.0")
+    implementation("androidx.health.connect:connect-client:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.11.2")
     implementation("androidx.webkit:webkit:1.16.0")
 

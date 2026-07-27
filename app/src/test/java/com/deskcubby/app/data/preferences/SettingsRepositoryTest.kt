@@ -112,6 +112,19 @@ class SettingsRepositoryTest {
     }
 
     @Test
+    fun normalizeMoreDescriptionCollapsesWhitespaceAndLimitsUnicodeCodePoints() {
+        assertEquals(
+            "日记与 小巧思",
+            normalizeMoreDescription("  日记与\n\t小巧思  "),
+        )
+        val emoji = "😀".repeat(MAX_MORE_DESCRIPTION_CODE_POINTS + 1)
+        assertEquals(
+            "😀".repeat(MAX_MORE_DESCRIPTION_CODE_POINTS),
+            normalizeMoreDescription(emoji),
+        )
+    }
+
+    @Test
     fun normalizeCloudSyncConfigsTrimsMetadataNormalizesPathAndKeepsFirstId() {
         val first = CloudSyncConfig(
             id = " primary ",

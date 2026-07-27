@@ -66,6 +66,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.repository.VaultItem
 import com.deskcubby.app.data.repository.VaultLockState
+import com.deskcubby.app.data.repository.MIN_VAULT_PASSWORD_CODE_POINTS
+import com.deskcubby.app.data.repository.isValidNewVaultPassword
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
@@ -75,8 +77,6 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
-
-private const val MIN_VAULT_PASSWORD_CHARS = 4
 
 @Composable
 fun VaultScreen(
@@ -116,9 +116,10 @@ private fun VaultSetupContent(
     var confirm by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
 
-    val tooShort = password.isNotEmpty() && password.length < MIN_VAULT_PASSWORD_CHARS
+    val passwordIsValid = isValidNewVaultPassword(password)
+    val tooShort = password.isNotEmpty() && !passwordIsValid
     val mismatch = confirm.isNotEmpty() && confirm != password
-    val canSubmit = password.length >= MIN_VAULT_PASSWORD_CHARS && confirm == password
+    val canSubmit = passwordIsValid && confirm == password
 
     Column(
         modifier = Modifier
@@ -174,7 +175,10 @@ private fun VaultSetupContent(
                     onToggleVisibility = { showPassword = !showPassword },
                     isError = tooShort,
                     supportingText = if (tooShort) {
-                        tr("密码至少 $MIN_VAULT_PASSWORD_CHARS 位", "At least $MIN_VAULT_PASSWORD_CHARS characters")
+                        tr(
+                            "至少 $MIN_VAULT_PASSWORD_CODE_POINTS 个 Unicode 字符，长度不限",
+                            "At least $MIN_VAULT_PASSWORD_CODE_POINTS Unicode characters; no maximum",
+                        )
                     } else {
                         null
                     },
@@ -526,10 +530,11 @@ private fun VaultChangePasswordDialog(
     var confirm by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
 
-    val tooShort = newPassword.isNotEmpty() && newPassword.length < MIN_VAULT_PASSWORD_CHARS
+    val newPasswordIsValid = isValidNewVaultPassword(newPassword)
+    val tooShort = newPassword.isNotEmpty() && !newPasswordIsValid
     val mismatch = confirm.isNotEmpty() && confirm != newPassword
     val canSubmit = oldPassword.isNotEmpty() &&
-        newPassword.length >= MIN_VAULT_PASSWORD_CHARS &&
+        newPasswordIsValid &&
         confirm == newPassword
 
     AlertDialog(
@@ -574,7 +579,10 @@ private fun VaultChangePasswordDialog(
                     onToggleVisibility = { showPassword = !showPassword },
                     isError = tooShort,
                     supportingText = if (tooShort) {
-                        tr("密码至少 $MIN_VAULT_PASSWORD_CHARS 位", "At least $MIN_VAULT_PASSWORD_CHARS characters")
+                        tr(
+                            "至少 $MIN_VAULT_PASSWORD_CODE_POINTS 个 Unicode 字符，长度不限",
+                            "At least $MIN_VAULT_PASSWORD_CODE_POINTS Unicode characters; no maximum",
+                        )
                     } else {
                         null
                     },

@@ -10,6 +10,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -41,12 +42,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DirectionsWalk
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Home
@@ -119,10 +122,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.BuildConfig
+import com.deskcubby.app.R
 import com.deskcubby.app.takeCodePoints
 import com.deskcubby.app.data.backup.AutoBackupStatus
 import com.deskcubby.app.data.model.AppSettings
@@ -135,6 +140,7 @@ import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
@@ -179,14 +185,20 @@ private enum class SettingsPage {
     AI,
     AI_DETAIL,
     NAVIGATION,
+    MORE_PAGE,
+    USAGE,
+    STEPS,
     ABOUT,
 }
 
-enum class SettingsStartPage { MAIN, NAVIGATION, RSS, AI }
+enum class SettingsStartPage { MAIN, NAVIGATION, MORE_PAGE, USAGE, STEPS, RSS, AI }
 
 private fun SettingsStartPage.toSettingsPage(): SettingsPage = when (this) {
     SettingsStartPage.MAIN -> SettingsPage.MAIN
     SettingsStartPage.NAVIGATION -> SettingsPage.NAVIGATION
+    SettingsStartPage.MORE_PAGE -> SettingsPage.MORE_PAGE
+    SettingsStartPage.USAGE -> SettingsPage.USAGE
+    SettingsStartPage.STEPS -> SettingsPage.STEPS
     SettingsStartPage.RSS -> SettingsPage.RSS
     SettingsStartPage.AI -> SettingsPage.AI
 }
@@ -314,6 +326,7 @@ fun SettingsScreen(
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val backupOperation by viewModel.backupOperation.collectAsStateWithLifecycle()
+    val backupJsonPreview by viewModel.backupJsonPreview.collectAsStateWithLifecycle()
     val autoBackupStatus by viewModel.autoBackupStatus.collectAsStateWithLifecycle()
     val cloudSyncStatus by viewModel.cloudSyncStatus.collectAsStateWithLifecycle()
     val settingsError by viewModel.settingsError.collectAsStateWithLifecycle()
@@ -520,6 +533,9 @@ fun SettingsScreen(
                 onDisableAutoBackup = viewModel::disableAutoBackup,
                 onExport = viewModel::exportBackup,
                 onImport = viewModel::importBackup,
+                jsonPreview = backupJsonPreview,
+                onOpenJsonPreview = viewModel::openBackupJsonPreview,
+                onCloseJsonPreview = viewModel::closeBackupJsonPreview,
             )
 
             SettingsPage.DIARY -> DiarySettingsPage(
@@ -636,6 +652,46 @@ fun SettingsScreen(
                 },
             )
 
+            SettingsPage.MORE_PAGE -> MorePageSettingsPage(
+                settings = settings,
+                contentPadding = inner,
+                saveCoordinator = saveCoordinator,
+                onSave = { showDescriptions, navItems ->
+                    viewModel.setMorePageSettings(showDescriptions, navItems)
+                    completeSave(SettingsPage.MAIN)
+                },
+            )
+
+            SettingsPage.USAGE -> DeviceTrackingSettingsPage(
+                title = tr("手机使用时间", "Screen time"),
+                explanation = tr(
+                    "读取系统提供的应用使用事件，按天写入本机独立 JSON。统计明细不会进入应用备份或云同步。",
+                    "Reads system app-usage events into a separate on-device JSON file. Statistics are excluded from app backups and cloud sync.",
+                ),
+                enabled = settings.usageTrackingEnabled,
+                contentPadding = inner,
+                saveCoordinator = saveCoordinator,
+                onSave = { enabled ->
+                    viewModel.setUsageTrackingEnabled(enabled)
+                    completeSave(SettingsPage.SUBPAGES)
+                },
+            )
+
+            SettingsPage.STEPS -> DeviceTrackingSettingsPage(
+                title = tr("步数记录", "Step tracking"),
+                explanation = tr(
+                    "经你授权后从系统健康数据读取每日步数，结果写入本机独立 JSON。健康数据不会进入应用备份或云同步。",
+                    "With your permission, reads daily steps from system health data into a separate on-device JSON file. Health data is excluded from app backups and cloud sync.",
+                ),
+                enabled = settings.stepTrackingEnabled,
+                contentPadding = inner,
+                saveCoordinator = saveCoordinator,
+                onSave = { enabled ->
+                    viewModel.setStepTrackingEnabled(enabled)
+                    completeSave(SettingsPage.SUBPAGES)
+                },
+            )
+
             SettingsPage.ABOUT -> AboutSettingsPage(
                 settings = settings,
                 contentPadding = inner,
@@ -743,6 +799,24 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
         tr("显示方式、默认页、排序、名称与图标", "Display, default page, order, labels and icons"),
         "navigation bottom bar 导航 底栏 图标 默认页",
         SettingsPage.NAVIGATION,
+    ),
+    SettingsSearchEntry(
+        tr("导航页", "Navigation page"),
+        tr("收纳页面、双列卡片与自定义描述", "Collected pages, two-column cards and custom descriptions"),
+        "more navigation page description staggered 导航页 描述 双列 收纳",
+        SettingsPage.MORE_PAGE,
+    ),
+    SettingsSearchEntry(
+        tr("手机使用时间", "Screen time"),
+        tr("应用时长统计、系统授权与本机 JSON", "App usage, system access and on-device JSON"),
+        "usage screen time statistics 手机 使用 时间 时长 统计",
+        SettingsPage.USAGE,
+    ),
+    SettingsSearchEntry(
+        tr("步数记录", "Step tracking"),
+        tr("系统健康数据授权与每日步数", "System health permission and daily steps"),
+        "steps health connect 步数 健康 统计",
+        SettingsPage.STEPS,
     ),
     SettingsSearchEntry(
         tr("关于", "About"),
@@ -882,10 +956,22 @@ private fun SettingsMainPage(
         }
         item {
             SettingsMenuItem(
+                title = tr("导航页", "Navigation page"),
+                description = tr(
+                    "收纳页面、双列卡片与自定义描述",
+                    "Collected pages, two-column cards and custom descriptions",
+                ),
+                icon = { Icon(Icons.Outlined.Tune, contentDescription = null) },
+                accentColor = settings.menuAccentColor(5),
+                onClick = { onOpen(SettingsPage.MORE_PAGE) },
+            )
+        }
+        item {
+            SettingsMenuItem(
                 title = tr("关于", "About"),
                 description = tr("版本、检查更新与应用显示名称", "Version, update check and app display name"),
                 icon = { Icon(Icons.Outlined.Info, contentDescription = null) },
-                accentColor = settings.menuAccentColor(5),
+                accentColor = settings.menuAccentColor(6),
                 onClick = { onOpen(SettingsPage.ABOUT) },
             )
         }
@@ -960,6 +1046,32 @@ private fun SubpageSettingsPage(
                 icon = { Icon(Icons.Outlined.SmartToy, contentDescription = null) },
                 accentColor = settings.menuAccentColor(5),
                 onClick = { onOpen(SettingsPage.AI) },
+            )
+        }
+        item {
+            SettingsMenuItem(
+                title = tr("手机使用时间", "Screen time"),
+                description = if (settings.usageTrackingEnabled) {
+                    tr("已开启本机按日统计", "On-device daily tracking is enabled")
+                } else {
+                    tr("权限、开关与本机 JSON", "Permission, switch and on-device JSON")
+                },
+                icon = { Icon(Icons.Outlined.AccessTime, contentDescription = null) },
+                accentColor = settings.menuAccentColor(6),
+                onClick = { onOpen(SettingsPage.USAGE) },
+            )
+        }
+        item {
+            SettingsMenuItem(
+                title = tr("步数记录", "Step tracking"),
+                description = if (settings.stepTrackingEnabled) {
+                    tr("已开启系统步数读取", "System step reading is enabled")
+                } else {
+                    tr("健康数据权限与本机 JSON", "Health permission and on-device JSON")
+                },
+                icon = { Icon(Icons.Outlined.DirectionsWalk, contentDescription = null) },
+                accentColor = settings.menuAccentColor(7),
+                onClick = { onOpen(SettingsPage.STEPS) },
             )
         }
     }
@@ -1680,6 +1792,9 @@ private fun BackupSettingsPage(
     onDisableAutoBackup: () -> Unit,
     onExport: (Uri) -> Unit,
     onImport: (Uri) -> Unit,
+    jsonPreview: BackupJsonPreviewState,
+    onOpenJsonPreview: () -> Unit,
+    onCloseJsonPreview: () -> Unit,
 ) {
     var pendingImportUri by rememberSaveable { mutableStateOf<String?>(null) }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -1694,6 +1809,57 @@ private fun BackupSettingsPage(
         pendingImportUri = uri?.toString()
     }
     val busy = operation.busy || autoBackupStatus.isSaving
+
+    if (jsonPreview.busy || jsonPreview.json != null || jsonPreview.error != null) {
+        AlertDialog(
+            onDismissRequest = onCloseJsonPreview,
+            title = { Text(tr("整体 JSON", "Complete JSON")) },
+            text = {
+                when {
+                    jsonPreview.busy -> Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AppLoadingIndicator(size = 20.dp, strokeWidth = 2.dp)
+                        Text(tr("正在生成完整快照…", "Building the complete snapshot…"))
+                    }
+
+                    jsonPreview.error != null -> Text(
+                        jsonPreview.error,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+
+                    else -> {
+                        val chunks = remember(jsonPreview.json) {
+                            jsonPreview.json.orEmpty().chunked(JSON_PREVIEW_CHUNK_CHARS)
+                        }
+                        SelectionContainer {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 220.dp, max = 520.dp),
+                                verticalArrangement = Arrangement.spacedBy(0.dp),
+                            ) {
+                                itemsIndexed(chunks) { _, chunk ->
+                                    Text(
+                                        chunk,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onCloseJsonPreview) {
+                    Text(tr("关闭", "Close"))
+                }
+            },
+        )
+    }
 
     operation.folderConflict?.let { conflict ->
         AlertDialog(
@@ -1816,8 +1982,8 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "包含应用设置（含 AI API Key、同步服务元数据与吃历滤镜）、小巧思及其分类、浏览器收藏夹、日期记录、诗词本，以及日记和媒体目录路径；不包含日记正文、媒体文件、AI 对话历史或云端凭据。",
-                        "Includes app settings (including AI API keys, sync-service metadata and meal filters), thoughts and categories, browser bookmarks, date records, the poetry book, and diary/media folder paths; diary files, media, AI chat history and cloud credentials are excluded.",
+                        "包含应用设置（含 AI API Key、同步服务元数据与吃历滤镜）、小巧思及其分类、浏览器收藏夹、日期记录、诗词本，以及日记和媒体目录路径；不包含日记正文、媒体文件、AI 对话历史、云端凭据、手机使用时长或步数统计。",
+                        "Includes app settings (including AI API keys, sync-service metadata and meal filters), thoughts and categories, browser bookmarks, date records, the poetry book, and diary/media folder paths; diary files, media, AI chat history, cloud credentials, screen-time history and step history are excluded.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -1857,6 +2023,11 @@ private fun BackupSettingsPage(
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text(tr("导入 JSON", "Import JSON")) }
+                OutlinedButton(
+                    onClick = onOpenJsonPreview,
+                    enabled = !busy && !jsonPreview.busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(tr("查看整体 JSON", "View complete JSON")) }
             }
         }
         item {
@@ -3890,6 +4061,180 @@ private fun NavigationSettingsPage(
 }
 
 @Composable
+private fun MorePageSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onSave: (Boolean, List<NavItemConfig>) -> Unit,
+) {
+    var showDescriptions by remember(settings.morePageShowDescriptions) {
+        mutableStateOf(settings.morePageShowDescriptions)
+    }
+    var navItems by remember(settings.navItems) {
+        mutableStateOf(settings.navItems.map { it.copy() })
+    }
+    val language = LocalAppLanguage.current
+    val editableItems = navItems.withIndex().filter { (_, item) ->
+        item.id != NavItemId.HOME &&
+            item.id != NavItemId.MORE &&
+            item.id != NavItemId.SETTINGS
+    }
+
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = showDescriptions != settings.morePageShowDescriptions ||
+            navItems != settings.navItems,
+    ) {
+        onSave(showDescriptions, navItems)
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            SettingsSection(tr("描述显示", "Descriptions")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("显示页面描述", "Show page descriptions"))
+                        Text(
+                            tr(
+                                "关闭后导航卡片只显示图标和名称。",
+                                "When off, navigation cards show only their icon and name.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = showDescriptions,
+                        onCheckedChange = { showDescriptions = it },
+                    )
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("导航页内容", "Navigation page content")) {
+                Text(
+                    tr(
+                        "左右两列会分别按卡片实际高度连续排列。可单独收纳页面并修改描述；留空会隐藏该页描述。",
+                        "The two columns flow independently by each card's real height. Choose pages and customize descriptions; leave one empty to hide it.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                editableItems.forEachIndexed { position, indexed ->
+                    val index = indexed.index
+                    val item = indexed.value
+                    if (position > 0) HorizontalDivider()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(iconFor(item.iconKey), contentDescription = null)
+                        Spacer(Modifier.width(10.dp))
+                        Text(localizedNavLabel(item), modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = item.showInMore,
+                            onCheckedChange = { checked ->
+                                navItems = navItems.toMutableList().apply {
+                                    set(index, item.copy(showInMore = checked))
+                                }
+                            },
+                        )
+                    }
+                    OutlinedTextField(
+                        value = if (
+                            language == AppLanguage.ENGLISH &&
+                            item.moreDescription == item.id.defaultDescription
+                        ) {
+                            item.id.englishDescription
+                        } else {
+                            item.moreDescription
+                        },
+                        onValueChange = { value ->
+                            navItems = navItems.toMutableList().apply {
+                                set(index, item.copy(moreDescription = value))
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(tr("描述", "Description")) },
+                        minLines = 1,
+                        maxLines = 3,
+                        supportingText = {
+                            Text(
+                                tr(
+                                    "最多 160 个字符",
+                                    "Up to 160 characters",
+                                ),
+                            )
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeviceTrackingSettingsPage(
+    title: String,
+    explanation: String,
+    enabled: Boolean,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onSave: (Boolean) -> Unit,
+) {
+    var draftEnabled by remember(enabled) { mutableStateOf(enabled) }
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = draftEnabled != enabled,
+    ) { onSave(draftEnabled) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            SettingsSection(title) {
+                Text(
+                    explanation,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (draftEnabled) tr("统计已开启", "Tracking enabled")
+                        else tr("统计已关闭", "Tracking disabled"),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(
+                        checked = draftEnabled,
+                        onCheckedChange = { draftEnabled = it },
+                    )
+                }
+                Text(
+                    tr(
+                        "开启后仍需在系统授权页面授予相应访问权限；拒绝或撤销权限不会写入零值，也不会把未完成日期标记为已统计。",
+                        "You must still grant the corresponding system access. Refusing or revoking access never writes a fake zero or finalizes an incomplete day.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun AboutSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
@@ -4012,6 +4357,62 @@ private fun AboutSettingsPage(
                 }
             }
         }
+        item {
+            SettingsSection(tr("软件图标", "App icon")) {
+                Text(
+                    tr(
+                        "选择桌面启动图标。部分启动器可能需要片刻刷新缓存。",
+                        "Choose the launcher icon. Some launchers may take a moment to refresh their cache.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                LauncherIcon.entries.forEach { icon ->
+                    val selected = settings.launcherIcon == icon
+                    val label = when (icon) {
+                        LauncherIcon.CURRENT -> tr("经典图标", "Classic icon")
+                        LauncherIcon.MAGIC_BOOK -> tr("魔法书图标", "Magic book icon")
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.setLauncherIcon(icon) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = selected,
+                            onClick = { viewModel.setLauncherIcon(icon) },
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(52.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (icon == LauncherIcon.CURRENT) Color.Black
+                                    else Color(0xFFFFFDF8),
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Image(
+                                painter = painterResource(
+                                    if (icon == LauncherIcon.CURRENT) {
+                                        R.drawable.ic_launcher_art
+                                    } else {
+                                        R.drawable.ic_launcher_book_foreground
+                                    },
+                                ),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(if (icon == LauncherIcon.CURRENT) 8.dp else 2.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Text(label)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -4110,7 +4511,7 @@ private fun NavConfigRow(
     val icons = listOf(
         "home", "book", "poetry", "language", "bolt", "settings", "calendar",
         "event", "rss", "ai", "apps", "star", "write", "sparkle", "day",
-        "lock", "game",
+        "lock", "game", "usage", "steps",
     )
     val visibilityDescription = tr(
         "${item.id.defaultLabel}是否显示在底栏",
@@ -4207,6 +4608,9 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.AI -> tr("AI 配置", "AI configurations")
     SettingsPage.AI_DETAIL -> tr("AI 配置详情", "AI configuration")
     SettingsPage.NAVIGATION -> tr("底部导航", "Bottom navigation")
+    SettingsPage.MORE_PAGE -> tr("导航页", "Navigation page")
+    SettingsPage.USAGE -> tr("手机使用时间", "Screen time")
+    SettingsPage.STEPS -> tr("步数记录", "Step tracking")
     SettingsPage.ABOUT -> tr("关于", "About")
 }
 
@@ -4217,6 +4621,8 @@ private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
     SettingsPage.THOUGHT,
     SettingsPage.RSS,
     SettingsPage.AI,
+    SettingsPage.USAGE,
+    SettingsPage.STEPS,
     -> SettingsPage.SUBPAGES
 
     SettingsPage.AI_DETAIL -> SettingsPage.AI
@@ -4228,6 +4634,7 @@ private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
     SettingsPage.BACKUP,
     SettingsPage.SYNC,
     SettingsPage.NAVIGATION,
+    SettingsPage.MORE_PAGE,
     SettingsPage.ABOUT,
     -> SettingsPage.MAIN
 }
@@ -4237,6 +4644,8 @@ private fun defaultBackupFileName(): String =
 
 private fun formatBackupTime(timestamp: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(timestamp))
+
+private const val JSON_PREVIEW_CHUNK_CHARS = 2_048
 
 private fun parseThemeColor(raw: String): Int? {
     val hex = raw.trim().removePrefix("#")

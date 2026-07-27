@@ -58,9 +58,11 @@ import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.FilterAlt
+import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Source
@@ -71,6 +73,8 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -79,6 +83,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -87,6 +92,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -94,6 +100,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -107,6 +114,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextLayoutResult
@@ -126,6 +135,7 @@ import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.mealPhotoRowSizes
 import com.deskcubby.app.data.repository.MealCalendarPhoto
+import com.deskcubby.app.data.repository.DiaryPreviewMedia
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.FourDotDragHandle
@@ -139,8 +149,12 @@ import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.organicFutureAccentColors
 import com.deskcubby.app.ui.theme.tr
 import com.deskcubby.app.ui.diary.filter.asComposeColorFilter
+import com.deskcubby.app.ui.diary.filter.mealCalendarExportLayout
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.HtmlRenderer
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -409,7 +423,11 @@ fun MealCalendarScreen(
     onOpenFilterSettings: () -> Unit = {},
 ) {
     val state by viewModel.mealCalendarState.collectAsStateWithLifecycle()
+    val exporting by viewModel.mealCalendarExporting.collectAsStateWithLifecycle()
+    val operationMessage by viewModel.message.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val mealOperationsEnabled = !exporting && !state.loading
+    val snackbarHostState = remember { SnackbarHostState() }
     val normalizedFilterSettings = remember(filterSettings) { filterSettings.normalized() }
     val mealPhotoColorFilter = remember(normalizedFilterSettings) {
         normalizedFilterSettings.asComposeColorFilter()
@@ -420,6 +438,12 @@ fun MealCalendarScreen(
     var calculateDateDialog by remember { mutableStateOf<String?>(null) }
     var zoomedPhoto by remember { mutableStateOf<MealCalendarPhoto?>(null) }
     var showCategoryFilter by remember { mutableStateOf(false) }
+    var showExportRange by remember { mutableStateOf(false) }
+    // The system document picker may recreate the Activity. Keep the pending request in
+    // Bundle-safe primitives so its result never becomes an unexplained empty document.
+    var pendingExportStartIso by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingExportEndIso by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingExportCategories by rememberSaveable { mutableStateOf<String?>(null) }
     var visibleMealCategories by remember { mutableStateOf(MealCategory.entries.toSet()) }
     val categoryFilterActive = visibleMealCategories.size < MealCategory.entries.size
     val filteredItems = remember(state.items, visibleMealCategories) {
@@ -434,13 +458,45 @@ fun MealCalendarScreen(
             }
         }
     }
+    val exportDocumentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("image/png"),
+    ) { uri ->
+        val start = pendingExportStartIso?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+        val end = pendingExportEndIso?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+        val categoryNames = pendingExportCategories
+            ?.split(',')
+            ?.filter(String::isNotBlank)
+            ?.toSet()
+            .orEmpty()
+        val categories = MealCategory.entries.filterTo(mutableSetOf()) {
+            it.name in categoryNames
+        }
+        pendingExportStartIso = null
+        pendingExportEndIso = null
+        pendingExportCategories = null
+        if (uri != null && start != null && end != null && categories.isNotEmpty()) {
+            viewModel.exportMealCalendar(
+                destinationUri = uri,
+                startInclusive = start,
+                endInclusive = end,
+                categories = categories,
+            )
+        }
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.refreshMealCalendar()
     }
+    LaunchedEffect(operationMessage) {
+        operationMessage?.let { message ->
+            snackbarHostState.showSnackbar(message)
+            viewModel.consumeMessage()
+        }
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(tr("吃历", "Meal calendar")) },
@@ -451,9 +507,18 @@ fun MealCalendarScreen(
                 },
                 actions = {
                     if (settings.calorieEstimationEnabled) {
-                        IconButton(onClick = { calculateAllDialog = true }) {
+                        IconButton(
+                            enabled = mealOperationsEnabled,
+                            onClick = { calculateAllDialog = true },
+                        ) {
                             Icon(Icons.Outlined.Calculate, tr("计算未计算的热量", "Calculate missing calories"))
                         }
+                    }
+                    IconButton(
+                        enabled = mealOperationsEnabled && filteredItems.isNotEmpty(),
+                        onClick = { showExportRange = true },
+                    ) {
+                        Icon(Icons.Outlined.FileDownload, tr("导出长图", "Export long image"))
                     }
                     IconButton(onClick = { showCategoryFilter = true }) {
                         Icon(
@@ -473,7 +538,10 @@ fun MealCalendarScreen(
                         },
                         onOpenSettings = onOpenFilterSettings,
                     )
-                    IconButton(onClick = viewModel::refreshMealCalendar) {
+                    IconButton(
+                        enabled = mealOperationsEnabled,
+                        onClick = viewModel::refreshMealCalendar,
+                    ) {
                         Icon(Icons.Outlined.Refresh, tr("刷新", "Refresh"))
                     }
                 },
@@ -544,8 +612,19 @@ fun MealCalendarScreen(
                                         color = MaterialTheme.colorScheme.onSurface)
                                     day.totalEnergyKj?.let { Text("  ·  $it kJ", color = MaterialTheme.colorScheme.primary) }
                                     Spacer(Modifier.weight(1f))
-                                    if (settings.calorieEstimationEnabled) IconButton(onClick = { calculateDateDialog = day.dateIso }) {
-                                        Icon(Icons.Outlined.Calculate, tr("重新计算 ${day.dateIso} 的热量", "Recalculate ${day.dateIso}"))
+                                    if (settings.calorieEstimationEnabled) {
+                                        IconButton(
+                                            enabled = mealOperationsEnabled,
+                                            onClick = { calculateDateDialog = day.dateIso },
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Calculate,
+                                                tr(
+                                                    "重新计算 ${day.dateIso} 的热量",
+                                                    "Recalculate ${day.dateIso}",
+                                                ),
+                                            )
+                                        }
                                     }
                                 }
                                 if (settings.mealCalendarWrapEnabled) {
@@ -615,6 +694,9 @@ fun MealCalendarScreen(
                     }
                 }
             }
+            if (exporting) {
+                LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+            }
         }
     }
     if (showCategoryFilter) {
@@ -667,18 +749,90 @@ fun MealCalendarScreen(
             },
         )
     }
+    if (showExportRange) {
+        val availableDates = filteredItems.mapNotNull { day ->
+            runCatching { LocalDate.parse(day.dateIso) }.getOrNull()
+        }
+        val defaultStart = availableDates.minOrNull()
+        val defaultEnd = availableDates.maxOrNull()
+        val noPhotosError = tr(
+            "所选日期和餐别下没有照片",
+            "No photos match this range and category filter",
+        )
+        val tooTallError = tr(
+            "所选范围生成的长图过高，请缩短日期范围",
+            "The resulting image is too tall; choose a shorter range",
+        )
+        if (defaultStart != null && defaultEnd != null) {
+            MealCalendarExportRangeDialog(
+                initialStart = defaultStart,
+                initialEnd = defaultEnd,
+                selectedCategoryCount = visibleMealCategories.size,
+                actionsEnabled = mealOperationsEnabled,
+                onDismiss = { showExportRange = false },
+                onConfirm = { start, end ->
+                    val selectedDays = filteredItems.filter { day ->
+                        val date = runCatching { LocalDate.parse(day.dateIso) }.getOrNull()
+                        date != null && !date.isBefore(start) && !date.isAfter(end)
+                    }
+                    val preflightError = when {
+                        selectedDays.isEmpty() -> noPhotosError
+                        runCatching {
+                            mealCalendarExportLayout(
+                                photoCounts = selectedDays.map { it.photos.size },
+                                imageMaxHeight = settings.mealCalendarImageMaxHeightDp,
+                                showCaptions = settings.mealCalendarShowCaptions,
+                                photosPerRow = settings.mealCalendarPhotosPerRow,
+                            )
+                        }.isFailure -> tooTallError
+                        else -> null
+                    }
+                    if (preflightError == null) {
+                        showExportRange = false
+                        pendingExportStartIso = start.toString()
+                        pendingExportEndIso = end.toString()
+                        pendingExportCategories = visibleMealCategories
+                            .sortedBy(MealCategory::sortOrder)
+                            .joinToString(",") { it.name }
+                        exportDocumentLauncher.launch(
+                            "DeskCubby-meals-${start}_to_${end}.png",
+                        )
+                    }
+                    preflightError
+                },
+            )
+        } else {
+            LaunchedEffect(Unit) { showExportRange = false }
+        }
+    }
     if (calculateAllDialog) AlertDialog(
         onDismissRequest = { calculateAllDialog = false },
         title = { Text(tr("计算热量", "Calculate calories")) },
         text = { Text(tr("是否计算所有未计算过的热量", "Calculate all calories not calculated yet?")) },
-        confirmButton = { TextButton(onClick = { calculateAllDialog = false; viewModel.calculateUncalculatedCalories() }) { Text(tr("计算", "Calculate")) } },
+        confirmButton = {
+            TextButton(
+                enabled = mealOperationsEnabled,
+                onClick = {
+                    calculateAllDialog = false
+                    viewModel.calculateUncalculatedCalories()
+                },
+            ) { Text(tr("计算", "Calculate")) }
+        },
         dismissButton = { TextButton(onClick = { calculateAllDialog = false }) { Text(tr("取消", "Cancel")) } },
     )
     calculateDateDialog?.let { date -> AlertDialog(
         onDismissRequest = { calculateDateDialog = null },
         title = { Text(tr("重新计算热量", "Recalculate calories")) },
         text = { Text(tr("是否重新计算${date}的食物热量", "Recalculate food calories for $date?")) },
-        confirmButton = { TextButton(onClick = { calculateDateDialog = null; viewModel.calculateUncalculatedCalories(date, true) }) { Text(tr("重新计算", "Recalculate")) } },
+        confirmButton = {
+            TextButton(
+                enabled = mealOperationsEnabled,
+                onClick = {
+                    calculateDateDialog = null
+                    viewModel.calculateUncalculatedCalories(date, true)
+                },
+            ) { Text(tr("重新计算", "Recalculate")) }
+        },
         dismissButton = { TextButton(onClick = { calculateDateDialog = null }) { Text(tr("取消", "Cancel")) } },
     ) }
     zoomedPhoto?.let { photo ->
@@ -696,6 +850,145 @@ fun MealCalendarScreen(
             ).joinToString(" · "),
             onDismiss = { zoomedPhoto = null },
         )
+    }
+}
+
+@Composable
+private fun MealCalendarExportRangeDialog(
+    initialStart: LocalDate,
+    initialEnd: LocalDate,
+    selectedCategoryCount: Int,
+    actionsEnabled: Boolean,
+    onDismiss: () -> Unit,
+    /** Returns a user-facing validation error, or null after launching CreateDocument. */
+    onConfirm: (LocalDate, LocalDate) -> String?,
+) {
+    var startIso by rememberSaveable { mutableStateOf(initialStart.toString()) }
+    var endIso by rememberSaveable { mutableStateOf(initialEnd.toString()) }
+    var pickingStart by rememberSaveable { mutableStateOf(false) }
+    var pickingEnd by rememberSaveable { mutableStateOf(false) }
+    var selectionError by rememberSaveable { mutableStateOf<String?>(null) }
+    val start = remember(startIso) { LocalDate.parse(startIso) }
+    val end = remember(endIso) { LocalDate.parse(endIso) }
+    val reversed = start.isAfter(end)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("导出吃历长图", "Export meal-calendar image")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    tr(
+                        "选择按天计算的时间范围，首尾日期都会包含。导出会沿用当前餐别筛选、照片滤镜、每行数量和说明显示设置。",
+                        "Choose an inclusive day range. The export uses the current meal-category filter, photo filter, row count, and caption setting.",
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedButton(
+                    onClick = { pickingStart = true },
+                    enabled = actionsEnabled,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(tr("开始：$start", "Start: $start"))
+                }
+                OutlinedButton(
+                    onClick = { pickingEnd = true },
+                    enabled = actionsEnabled,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(tr("结束：$end", "End: $end"))
+                }
+                Text(
+                    tr(
+                        "当前已选择 $selectedCategoryCount 个餐别",
+                        "$selectedCategoryCount meal categories selected",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (reversed) {
+                    Text(
+                        tr("开始日期不能晚于结束日期", "The start date cannot be after the end date"),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    selectionError?.let { error ->
+                        Text(
+                            error,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = actionsEnabled && !reversed,
+                onClick = { selectionError = onConfirm(start, end) },
+            ) { Text(tr("选择保存位置", "Choose destination")) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) }
+        },
+    )
+
+    if (pickingStart) {
+        MealCalendarDatePickerDialog(
+            initialDate = start,
+            onDismiss = { pickingStart = false },
+            onConfirm = {
+                startIso = it.toString()
+                selectionError = null
+                pickingStart = false
+            },
+        )
+    }
+    if (pickingEnd) {
+        MealCalendarDatePickerDialog(
+            initialDate = end,
+            onDismiss = { pickingEnd = false },
+            onConfirm = {
+                endIso = it.toString()
+                selectionError = null
+                pickingEnd = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun MealCalendarDatePickerDialog(
+    initialDate: LocalDate,
+    onDismiss: () -> Unit,
+    onConfirm: (LocalDate) -> Unit,
+) {
+    val pickerState = rememberDatePickerState(
+        initialSelectedDateMillis = initialDate
+            .atStartOfDay(ZoneOffset.UTC)
+            .toInstant()
+            .toEpochMilli(),
+    )
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val selected = pickerState.selectedDateMillis
+                        ?.let { millis ->
+                            Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
+                        }
+                        ?: initialDate
+                    onConfirm(selected)
+                },
+            ) { Text(tr("确定", "OK")) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) }
+        },
+    ) {
+        DatePicker(state = pickerState, showModeToggle = true)
     }
 }
 
@@ -910,7 +1203,8 @@ fun DiaryEditorScreen(
                     content = state.content,
                     maxWidth = settings.imageMaxWidthDp,
                     maxHeight = settings.imageMaxHeightDp,
-                    resolveMedia = viewModel::resolveMedia,
+                    mediaTreeUri = settings.mediaTreeUri,
+                    resolveMediaBatch = viewModel::resolveDiaryPreviewMedia,
                     onEditCaption = { markdown, caption -> captionTarget = markdown to caption },
                 )
                 else -> MarkdownSourceEditor(
@@ -1194,7 +1488,8 @@ private fun MarkdownPreview(
     content: String,
     maxWidth: Int,
     maxHeight: Int,
-    resolveMedia: suspend (String) -> Uri?,
+    mediaTreeUri: String?,
+    resolveMediaBatch: suspend (Collection<String>) -> Map<String, DiaryPreviewMedia>,
     onEditCaption: (String, String) -> Unit,
 ) {
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
@@ -1213,6 +1508,22 @@ private fun MarkdownPreview(
             if (cursor < content.length) add(PreviewPart.Text(content.substring(cursor)))
         }
     }
+    val mediaTargets = remember(parts) {
+        parts.filterIsInstance<PreviewPart.Image>().map(PreviewPart.Image::target).distinct()
+    }
+    val resolvedMedia by produceState<Map<String, DiaryPreviewMedia>>(
+        initialValue = emptyMap(),
+        mediaTargets,
+        mediaTreeUri,
+    ) {
+        value = try {
+            resolveMediaBatch(mediaTargets)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(18.dp),
@@ -1226,7 +1537,7 @@ private fun MarkdownPreview(
                     if (plain.isNotBlank()) Text(plain, style = MaterialTheme.typography.bodyLarge)
                 }
                 is PreviewPart.Image -> {
-                    val uri by produceState<Uri?>(initialValue = null, part.target) { value = resolveMedia(part.target) }
+                    val media = resolvedMedia[part.target]
                     GlassPanel(
                         modifier = Modifier.fillMaxWidth(),
                         role = PanelRole.MEDIA,
@@ -1234,7 +1545,7 @@ private fun MarkdownPreview(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             AsyncImage(
-                                model = uri,
+                                model = media?.uri,
                                 contentDescription = part.caption,
                                 modifier = Modifier
                                     .widthIn(max = maxWidth.dp)
@@ -1243,6 +1554,38 @@ private fun MarkdownPreview(
                                     .then(if (organic) Modifier.clip(visuals.mediaShape) else Modifier),
                                 contentScale = ContentScale.Fit,
                             )
+                            media?.locationName?.let { location ->
+                                val locationDescription = tr(
+                                    "拍摄地点：$location",
+                                    "Photo location: $location",
+                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp)
+                                        .clearAndSetSemantics {
+                                            contentDescription = locationDescription
+                                        },
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Place,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        location,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
                             TextButton(onClick = { onEditCaption(part.fullMarkdown, part.caption) }) {
                                 Text(part.caption.ifBlank { tr("点击添加图片说明", "Tap to add a caption") })
                             }

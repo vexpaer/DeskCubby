@@ -85,6 +85,42 @@ class AiRequestJsonTest {
     }
 
     @Test
+    fun frozenContextStaysInsideMessagesAndUsesSystemRole() {
+        val encodedContext = AiContextCodec.encode(
+            AiContextSnapshot(
+                listOf(
+                    AiContextItem(
+                        source = AiContextSource.DIARY,
+                        title = "周记",
+                        date = "2026-07-27",
+                        content = "本周完成了测试。",
+                    ),
+                ),
+            ),
+        )
+        val body = buildTextChatRequestJson(
+            model = "text-model",
+            temperature = 0.7f,
+            systemPrompt = "回答要简洁",
+            messages = listOf(
+                AiChatMessage(1, AiChatRole.CONTEXT, encodedContext),
+                AiChatMessage(2, AiChatRole.USER, "请分析这一周"),
+            ),
+        )
+
+        assertEquals(
+            setOf("model", "messages", "temperature", "stream"),
+            body.keys().asSequence().toSet(),
+        )
+        val messages = body.getJSONArray("messages")
+        assertEquals(3, messages.length())
+        assertEquals("system", messages.getJSONObject(0).getString("role"))
+        assertEquals("system", messages.getJSONObject(1).getString("role"))
+        assertEquals(encodedContext, messages.getJSONObject(1).getString("content"))
+        assertEquals("user", messages.getJSONObject(2).getString("role"))
+    }
+
+    @Test
     fun thinkingTagsAreSeparatedFromFinalAnswer() {
         val parsed = splitAiThinkingContent(
             "<think>先识别问题，再检查答案。</think>\n最终答案",
@@ -114,5 +150,21 @@ class AiRequestJsonTest {
         assertFalse(preview.contains("SHOULD_NEVER_APPEAR"))
         assertFalse(preview.contains("Authorization", ignoreCase = true))
         assertFalse(preview.contains("Bearer", ignoreCase = true))
+    }
+
+    @Test
+    fun remoteErrorSanitizerRedactsBeforeLengthLimit() {
+        val apiKey = "SECRETLEAK-123456789"
+        val message = "x".repeat(495) + apiKey
+
+        val sanitized = sanitizeAiRemoteError(message, apiKey)
+
+        assertTrue(sanitized.length <= 500)
+        assertFalse(sanitized.contains(apiKey))
+        assertFalse(sanitized.contains("SECRE"))
+        assertEquals(
+            "Bearer [REDACTED]",
+            sanitizeAiRemoteError("Bearer $apiKey", apiKey),
+        )
     }
 }
