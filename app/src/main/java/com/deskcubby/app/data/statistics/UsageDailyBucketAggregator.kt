@@ -17,6 +17,32 @@ internal data class RawDailyUsageBucket(
 )
 
 /**
+ * One package summary returned by an Android query whose requested bounds are already known.
+ * Provider timestamps are intentionally not trusted: several OEMs return the surrounding
+ * aggregation interval instead of the exact requested civil-day bounds.
+ */
+internal data class RawQueriedUsage(
+    val packageName: String,
+    val foregroundMillis: Long,
+)
+
+internal fun exactDayUsageBuckets(
+    values: List<RawQueriedUsage>,
+    dayStartMillis: Long,
+    dayEndMillis: Long,
+): List<RawDailyUsageBucket> {
+    require(dayStartMillis >= 0L && dayEndMillis > dayStartMillis)
+    return values.map { value ->
+        RawDailyUsageBucket(
+            beginEpochMillis = dayStartMillis,
+            endEpochMillis = dayEndMillis,
+            packageName = value.packageName,
+            foregroundMillis = value.foregroundMillis,
+        )
+    }
+}
+
+/**
  * Converts only real INTERVAL_DAILY buckets into persisted civil-day rows.
  *
  * A completed day is accepted only when the bucket begins no later than that

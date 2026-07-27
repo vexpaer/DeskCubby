@@ -153,60 +153,97 @@ class UsageStatisticsRepository @Inject constructor(
         val requestedDayCount = ChronoUnit.DAYS.between(beginDate, today) + 1L
         require(requestedDayCount in 1L..MAX_USAGE_BACKFILL_DAYS)
         val result = ArrayList<RawDailyUsageBucket>()
-        var chunkStartDate = beginDate
-        while (!chunkStartDate.isAfter(today)) {
+        var discoveryStartDate = beginDate
+        while (!discoveryStartDate.isAfter(today)) {
             currentCoroutineContext().ensureActive()
-            val chunkEndDateExclusive = minOf(
-                chunkStartDate.plusDays(MAX_USAGE_QUERY_SPAN_DAYS),
+            val discoveryEndDateExclusive = minOf(
+                discoveryStartDate.plusDays(MAX_USAGE_DISCOVERY_SPAN_DAYS),
                 today.plusDays(1L),
             )
-            val beginMillis = chunkStartDate.atStartOfDay(zone).toInstant().toEpochMilli()
-            val endMillis = if (chunkEndDateExclusive.isAfter(today)) {
+            val discoveryBeginMillis =
+                discoveryStartDate.atStartOfDay(zone).toInstant().toEpochMilli()
+            val discoveryEndMillis = if (discoveryEndDateExclusive.isAfter(today)) {
                 nowMillis
             } else {
-                chunkEndDateExclusive.atStartOfDay(zone).toInstant().toEpochMilli()
+                discoveryEndDateExclusive.atStartOfDay(zone).toInstant().toEpochMilli()
             }
-            if (endMillis <= beginMillis) {
-                // Exactly at local midnight there is no real current-day
-                // interval to ask Android for yet.
-                chunkStartDate = chunkEndDateExclusive
+            if (discoveryEndMillis <= discoveryBeginMillis) {
+                discoveryStartDate = discoveryEndDateExclusive
                 continue
             }
-            require(beginMillis >= 0L && endMillis > beginMillis)
-            val values = usageStatsManager.queryUsageStats(
-                UsageStatsManager.INTERVAL_DAILY,
-                beginMillis,
-                endMillis,
-            ) ?: throw IllegalStateException("Daily usage query returned no result.")
-            if (
-                values.size > MAX_USAGE_BUCKETS_PER_QUERY ||
-                values.size > MAX_USAGE_BUCKETS_TOTAL - result.size
-            ) {
-                throw IllegalStateException("Daily usage query exceeded the safety limit.")
-            }
-            values.forEachIndexed { index, value ->
-                if (index % CANCELLATION_CHECK_INTERVAL == 0) {
+
+            // A short broad query only discovers whether Android still exposes anything in this
+            // period. Its UsageStats timestamps cannot safely be treated as individual days:
+            // some OEMs return one summary spanning the whole requested range.
+            val discoveryValues = queryUsageStats(
+                beginMillis = discoveryBeginMillis,
+                endMillis = discoveryEndMillis,
+            )
+            if (discoveryValues.isNotEmpty()) {
+                var date = discoveryStartDate
+                while (date.isBefore(discoveryEndDateExclusive) && !date.isAfter(today)) {
                     currentCoroutineContext().ensureActive()
+                    val dayStartMillis =
+                        date.atStartOfDay(zone).toInstant().toEpochMilli()
+                    val naturalDayEndMillis =
+                        date.plusDays(1L).atStartOfDay(zone).toInstant().toEpochMilli()
+                    val dayEndMillis = if (date == today) {
+                        nowMillis.coerceAtMost(naturalDayEndMillis)
+                    } else {
+                        naturalDayEndMillis
+                    }
+                    if (dayEndMillis > dayStartMillis) {
+                        val dayValues = if (
+                            discoveryStartDate == date &&
+                            discoveryEndDateExclusive == date.plusDays(1L)
+                        ) {
+                            discoveryValues
+                        } else {
+                            queryUsageStats(dayStartMillis, dayEndMillis)
+                        }
+                        val remainingCapacity = MAX_USAGE_BUCKETS_TOTAL - result.size
+                        if (dayValues.size > remainingCapacity) {
+                            throw IllegalStateException(
+                                "Daily usage query exceeded the safety limit.",
+                            )
+                        }
+                        result += exactDayUsageBuckets(
+                            values = dayValues.map { value ->
+                                RawQueriedUsage(
+                                    packageName = value.packageName.orEmpty(),
+                                    foregroundMillis = value.totalTimeInForeground,
+                                )
+                            },
+                            dayStartMillis = dayStartMillis,
+                            dayEndMillis = dayEndMillis,
+                        )
+                    }
+                    date = date.plusDays(1L)
                 }
-                result.add(
-                    RawDailyUsageBucket(
-                        beginEpochMillis = value.firstTimeStamp,
-                        endEpochMillis = value.lastTimeStamp,
-                        packageName = value.packageName.orEmpty(),
-                        foregroundMillis = value.totalTimeInForeground,
-                    ),
-                )
             }
-            chunkStartDate = chunkEndDateExclusive
+            discoveryStartDate = discoveryEndDateExclusive
         }
         result
     }
 
+    private suspend fun queryUsageStats(
+        beginMillis: Long,
+        endMillis: Long,
+    ) = usageStatsManager.queryUsageStats(
+        UsageStatsManager.INTERVAL_DAILY,
+        beginMillis,
+        endMillis,
+    )?.also { values ->
+        if (values.size > MAX_USAGE_BUCKETS_PER_QUERY) {
+            throw IllegalStateException("Daily usage query exceeded the safety limit.")
+        }
+        currentCoroutineContext().ensureActive()
+    } ?: throw IllegalStateException("Daily usage query returned no result.")
+
     private companion object {
         const val MAX_USAGE_BUCKETS_PER_QUERY = 100_000
         const val MAX_USAGE_BUCKETS_TOTAL = 100_000
-        const val MAX_USAGE_QUERY_SPAN_DAYS = 366L
-        const val CANCELLATION_CHECK_INTERVAL = 512
+        const val MAX_USAGE_DISCOVERY_SPAN_DAYS = 31L
     }
 }
 

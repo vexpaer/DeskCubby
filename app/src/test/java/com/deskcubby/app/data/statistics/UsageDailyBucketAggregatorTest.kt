@@ -1,5 +1,6 @@
 package com.deskcubby.app.data.statistics
 
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
@@ -7,6 +8,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UsageDailyBucketAggregatorTest {
+    @Test
+    fun `exact day query uses requested bounds instead of provider interval timestamps`() {
+        val start = Instant.parse("2026-07-26T00:00:00Z").toEpochMilli()
+        val end = Instant.parse("2026-07-27T00:00:00Z").toEpochMilli()
+
+        val buckets = exactDayUsageBuckets(
+            values = listOf(
+                RawQueriedUsage("example.app", 12_000L),
+            ),
+            dayStartMillis = start,
+            dayEndMillis = end,
+        )
+
+        assertEquals(start, buckets.single().beginEpochMillis)
+        assertEquals(end, buckets.single().endEpochMillis)
+        assertEquals(12_000L, buckets.single().foregroundMillis)
+    }
+
     @Test
     fun partialFirstBucketIsSkippedWhileCompleteFollowingDayIsFinal() {
         val zone = ZoneId.of("Asia/Shanghai")

@@ -62,8 +62,37 @@ class StatisticsJsonCodecsTest {
         assertEquals(StatisticsDayState.FINAL, migrated.days.single().state)
         assertNull(migrated.backfillCompletedThrough)
         val reencoded = JSONObject(UsageStatisticsJsonCodec.encode(migrated))
-        assertEquals(2, reencoded.getInt("schemaVersion"))
+        assertEquals(3, reencoded.getInt("schemaVersion"))
         assertEquals(true, reencoded.has("backfillCompletedThrough"))
+    }
+
+    @Test
+    fun usageV2MigrationPreservesRowsAndForcesCorrectedBackfill() {
+        val history = UsageStatisticsHistory(
+            trackingStartedOn = LocalDate.parse("2026-07-26"),
+            days = listOf(
+                UsageStatisticsDay(
+                    date = LocalDate.parse("2026-07-26"),
+                    zoneId = "Asia/Shanghai",
+                    state = StatisticsDayState.FINAL,
+                    collectedAtEpochMillis = 42,
+                    apps = listOf(UsageAppDuration("example.app", 8_000)),
+                ),
+            ),
+            backfillCompletedThrough = LocalDate.parse("2026-07-26"),
+        )
+        val versionTwo = JSONObject(UsageStatisticsJsonCodec.encode(history))
+            .put("schemaVersion", 2)
+
+        val migrated = UsageStatisticsJsonCodec.decode(versionTwo.toString())
+
+        assertEquals(history.days, migrated.days)
+        assertNull(migrated.backfillCompletedThrough)
+        assertEquals(
+            3,
+            JSONObject(UsageStatisticsJsonCodec.encode(migrated))
+                .getInt("schemaVersion"),
+        )
     }
 
     @Test
