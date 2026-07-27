@@ -146,14 +146,7 @@ fun DeskCubbyRoot(
     blogViewModel: BlogViewModel = hiltViewModel(),
     homeViewModel: HomeViewModel = hiltViewModel(),
     dateRecordViewModel: DateRecordViewModel = hiltViewModel(),
-    poetryBookViewModel: PoetryBookViewModel = hiltViewModel(),
-    rssViewModel: RssViewModel = hiltViewModel(),
-    aiChatViewModel: AiChatViewModel = hiltViewModel(),
     dailyRecordViewModel: DailyRecordViewModel = hiltViewModel(),
-    vaultViewModel: VaultViewModel = hiltViewModel(),
-    gamesViewModel: GamesViewModel = hiltViewModel(),
-    usageStatisticsViewModel: UsageStatisticsViewModel = hiltViewModel(),
-    stepStatisticsViewModel: StepStatisticsViewModel = hiltViewModel(),
 ) {
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val ready by settingsViewModel.ready.collectAsStateWithLifecycle()
@@ -297,9 +290,11 @@ fun DeskCubbyRoot(
                         DateRecordScreen(padding = padding, viewModel = dateRecordViewModel)
                     }
                     composable(NavItemId.POETRY.route) {
+                        val poetryBookViewModel: PoetryBookViewModel = hiltViewModel()
                         PoetryBookScreen(padding = padding, viewModel = poetryBookViewModel)
                     }
                     composable(NavItemId.RSS.route) {
+                        val rssViewModel: RssViewModel = hiltViewModel()
                         RssScreen(
                             padding = padding,
                             viewModel = rssViewModel,
@@ -316,6 +311,7 @@ fun DeskCubbyRoot(
                         )
                     }
                     composable(NavItemId.AI_CHAT.route) {
+                        val aiChatViewModel: AiChatViewModel = hiltViewModel()
                         AiChatScreen(
                             padding = padding,
                             viewModel = aiChatViewModel,
@@ -323,12 +319,15 @@ fun DeskCubbyRoot(
                         )
                     }
                     composable(NavItemId.VAULT.route) {
+                        val vaultViewModel: VaultViewModel = hiltViewModel()
                         VaultScreen(padding = padding, viewModel = vaultViewModel)
                     }
                     composable(NavItemId.GAMES.route) {
+                        val gamesViewModel: GamesViewModel = hiltViewModel()
                         GamesScreen(padding = padding, viewModel = gamesViewModel)
                     }
                     composable(NavItemId.USAGE.route) {
+                        val usageStatisticsViewModel: UsageStatisticsViewModel = hiltViewModel()
                         UsageStatisticsScreen(
                             padding = padding,
                             viewModel = usageStatisticsViewModel,
@@ -339,6 +338,7 @@ fun DeskCubbyRoot(
                         )
                     }
                     composable(NavItemId.STEPS.route) {
+                        val stepStatisticsViewModel: StepStatisticsViewModel = hiltViewModel()
                         StepStatisticsScreen(
                             padding = padding,
                             viewModel = stepStatisticsViewModel,

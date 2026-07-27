@@ -23,6 +23,18 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class VaultRepositoryFailureBoundaryTest {
     @Test
+    fun `metadata read failure during construction keeps vault locked`() = runBlocking {
+        val store = FakeVaultMetadataStore().apply {
+            nextReadFailure = true
+        }
+
+        val repository = VaultRepository(FakeVaultItemDao(), store)
+        delay(100)
+
+        assertEquals(VaultLockState.LOCKED, repository.lockState.value)
+    }
+
+    @Test
     fun `prepared metadata write failure leaves old password and rows untouched`() = runBlocking {
         val fixture = seededVault()
         fixture.store.nextPreparedFailure = FailureMode.BEFORE_COMMIT
@@ -209,11 +221,19 @@ class VaultRepositoryFailureBoundaryTest {
         @Volatile
         var nextStableFailure: FailureMode? = null
 
-        override suspend fun read(): VaultMetadataReadResult =
-            VaultMetadataReadResult(
+        @Volatile
+        var nextReadFailure: Boolean = false
+
+        override suspend fun read(): VaultMetadataReadResult {
+            if (nextReadFailure) {
+                nextReadFailure = false
+                error("injected metadata read failure")
+            }
+            return VaultMetadataReadResult(
                 metadata = metadata,
                 hasStoredMetadata = metadata != null,
             )
+        }
 
         override suspend fun writePrepared(
             active: VaultKeyMetadata,

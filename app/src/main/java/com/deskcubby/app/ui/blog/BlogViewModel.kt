@@ -474,7 +474,12 @@ internal fun trustedHttpsUrlOrNull(raw: String): String? {
     val uri = runCatching { URI(candidate) }.getOrNull() ?: return null
     if (uri.scheme?.lowercase(Locale.ROOT) != "https") return null
     if (uri.host.isNullOrBlank() || uri.userInfo != null) return null
-    return uri.normalize().toASCIIString()
+    val normalized = uri.normalize().toASCIIString()
+    return normalized.replaceRange(
+        startIndex = 0,
+        endIndex = normalized.indexOf(':'),
+        replacement = "https",
+    )
 }
 
 /**

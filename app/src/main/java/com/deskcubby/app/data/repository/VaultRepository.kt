@@ -205,9 +205,19 @@ class VaultRepository internal constructor(
     init {
         // Start pessimistically LOCKED, then downgrade only when absolutely no metadata exists.
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            val stored = metadataStore.read()
-            if (!stored.hasStoredMetadata) {
-                mutableLockState.compareAndSet(VaultLockState.LOCKED, VaultLockState.NOT_SET)
+            try {
+                val stored = metadataStore.read()
+                if (!stored.hasStoredMetadata) {
+                    mutableLockState.compareAndSet(
+                        VaultLockState.LOCKED,
+                        VaultLockState.NOT_SET,
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // Keep the vault locked. A corrupt or temporarily unreadable metadata file must
+                // never crash app startup, be mistaken for first-time setup, or be overwritten.
             }
         }
     }

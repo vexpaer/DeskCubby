@@ -2,7 +2,7 @@
 
 DeskCubby 是一个本地优先的 Android 原生个人记录应用。日记正文始终保存在用户通过 Storage Access Framework 授权的 Markdown 文件中；Room 保存可重建索引、小巧思、浏览器记录、AI 会话等结构化数据。可选云端同步不会改变本地文件的 source of truth 地位。
 
-当前版本：**0.3.2**
+当前版本：**0.3.3**
 
 ## 当前功能
 
@@ -166,7 +166,7 @@ Release 任务在签名配置缺失或不完整时会直接失败，不会误生
 .\gradlew.bat :app:assembleDebug :app:lintDebug --offline
 ```
 
-0.3.2（2026-07-27）按发布要求未运行单元测试、仪器测试或独立 Lint；仅执行签名 `assembleRelease`，期间 Android Gradle Plugin 自动完成 `lintVitalRelease` 发布门禁。Usage Access、Health Connect、后台日结、RSS 阅读器、更新安装、收藏夹改密恢复及游戏后台自动暂停仍建议在真实设备上逐项验证。
+0.3.3（2026-07-27）修复 0.3.2 升级后可能在打开应用时闪退的问题：可选页面改为进入时才创建 ViewModel，收藏夹旧元数据读取失败会保持锁定且不再终止进程；同时修复 RSS HTTPS 地址规范化。已通过 JVM 单元测试、Android 测试源码编译、Debug/Release 构建与 Release 签名校验；因当前未连接设备，仍建议安装后做一次真实设备冷启动验证。
 
 本次发布产物：
 
