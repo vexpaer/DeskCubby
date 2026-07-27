@@ -28,7 +28,9 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -54,7 +56,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -268,28 +269,22 @@ fun HomeScreen(
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = HomeGreeting.forDate(
-                                date = LocalDate.now(),
-                                language = settings.appLanguage,
-                                userName = settings.userName,
-                            ),
-                            style = if (organic) MaterialTheme.typography.headlineSmall
-                            else MaterialTheme.typography.titleLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = "DeskCubby",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-            )
+            Surface(color = MaterialTheme.colorScheme.surface) {
+                Text(
+                    text = HomeGreeting.forDate(
+                        date = LocalDate.now(),
+                        language = settings.appLanguage,
+                        userName = settings.userName,
+                        templates = settings.homeGreetings,
+                    ),
+                    style = if (organic) MaterialTheme.typography.titleMedium
+                    else MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                )
+            }
         },
     ) { inner ->
         val compact = LocalCompactMode.current

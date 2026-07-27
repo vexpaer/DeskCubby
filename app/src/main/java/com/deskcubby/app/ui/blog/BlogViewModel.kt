@@ -9,6 +9,8 @@ import com.deskcubby.app.data.model.BrowserTheme
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.BrowserRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.net.URI
+import java.util.Locale
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +45,17 @@ data class BrowserTabState(
     val canGoBack: Boolean = false,
     val canGoForward: Boolean = false,
     val renderProcessGone: Boolean = false,
+    /**
+     * True only while this tab is showing an article opened through the RSS
+     * boundary. Main-frame navigation must remain HTTPS until the user
+     * deliberately starts a normal browser navigation from the browser chrome.
+     */
+    val httpsOnly: Boolean = false,
+    /**
+     * RSS articles live in an ephemeral tab so opening one never overwrites the user's current
+     * browser tab, history position, or persisted last address.
+     */
+    val temporaryRssReader: Boolean = false,
 ) {
     fun toBrowserUiState() = BrowserUiState(
         url = url,
@@ -88,11 +101,15 @@ class BlogViewModel @Inject constructor(
     private val _tabsState = MutableStateFlow(BrowserTabsState())
     val tabsState: StateFlow<BrowserTabsState> = _tabsState.asStateFlow()
     private var nextTabId = 1L
+    private var pendingTrustedArticleUrl: String? = null
 
     init {
         viewModelScope.launch {
             val initialSettings = settingsRepository.settings.first()
             _settings.value = initialSettings
+            val trustedArticleUrl = pendingTrustedArticleUrl?.also {
+                pendingTrustedArticleUrl = null
+            }
             val initialUrl = SettingsRepository.normalizeUrl(
                 initialSettings.lastBrowserUrl
                     ?.takeUnless { it.isBlank() || it.equals(BROWSER_BLANK_URL, ignoreCase = true) }
@@ -105,12 +122,22 @@ class BlogViewModel @Inject constructor(
                 url = initialUrl,
                 loading = !initialIsBlank,
             )
+            val trustedArticleTab = trustedArticleUrl?.let { url ->
+                BrowserTabState(
+                    id = nextTabId++,
+                    addressDraft = url,
+                    url = url,
+                    loading = true,
+                    httpsOnly = true,
+                    temporaryRssReader = true,
+                )
+            }
             _tabsState.value = BrowserTabsState(
                 ready = true,
-                tabs = listOf(initialTab),
-                currentTabId = initialTab.id,
+                tabs = listOfNotNull(initialTab, trustedArticleTab),
+                currentTabId = trustedArticleTab?.id ?: initialTab.id,
             )
-            _uiState.value = initialTab.toBrowserUiState()
+            _uiState.value = (trustedArticleTab ?: initialTab).toBrowserUiState()
 
             settingsRepository.settings.collect { _settings.value = it }
         }
@@ -176,6 +203,83 @@ class BlogViewModel @Inject constructor(
         updateTab(tabId) { it.copy(addressDraft = value, addressDirty = true) }
     }
 
+    fun isTabHttpsOnly(tabId: Long): Boolean =
+        _tabsState.value.tabs.firstOrNull { it.id == tabId }?.httpsOnly == true
+
+    fun isTemporaryRssReader(tabId: Long): Boolean =
+        _tabsState.value.tabs.firstOrNull { it.id == tabId }?.temporaryRssReader == true
+
+    /**
+     * Prepares an untrusted external article for the app's WebView. The RSS
+     * screen validates the URL first; this second check keeps the browser
+     * boundary safe if another caller is added later.
+     */
+    fun openTrustedArticleUrl(url: String): Boolean {
+        val normalizedUrl = trustedHttpsUrlOrNull(url) ?: return false
+        val state = _tabsState.value
+        val currentTab = state.currentTab
+        if (!state.ready || currentTab == null) {
+            pendingTrustedArticleUrl = normalizedUrl
+            return true
+        }
+        val existingReader = currentTab.takeIf(BrowserTabState::temporaryRssReader)
+        if (existingReader != null) {
+            updateTab(existingReader.id) {
+                it.copy(
+                    addressDraft = normalizedUrl,
+                    addressDirty = false,
+                    url = normalizedUrl,
+                    title = "",
+                    progress = 0,
+                    loading = true,
+                    canGoBack = false,
+                    canGoForward = false,
+                    renderProcessGone = false,
+                    httpsOnly = true,
+                )
+            }
+            return true
+        }
+        val readerTab = BrowserTabState(
+            id = nextTabId++,
+            addressDraft = normalizedUrl,
+            addressDirty = false,
+            url = normalizedUrl,
+            title = "",
+            progress = 0,
+            loading = true,
+            canGoBack = false,
+            canGoForward = false,
+            renderProcessGone = false,
+            httpsOnly = true,
+            temporaryRssReader = true,
+        )
+        _tabsState.value = state.copy(
+            tabs = state.tabs + readerTab,
+            currentTabId = readerTab.id,
+        )
+        _uiState.value = readerTab.toBrowserUiState()
+        return true
+    }
+
+    /**
+     * Closes only the ephemeral reader. The caller can then pop the navigation stack back to RSS.
+     */
+    fun closeTemporaryRssReader(): Boolean {
+        val tab = _tabsState.value.currentTab?.takeIf(BrowserTabState::temporaryRssReader)
+            ?: return false
+        return closeTab(tab.id)
+    }
+
+    fun markLoadFailed(tabId: Long) {
+        updateTab(tabId) {
+            it.copy(
+                loading = false,
+                progress = 0,
+            )
+        }
+    }
+
     fun commitAddress(tabId: Long, rawAddress: String): String {
         val normalized = SettingsRepository.normalizeUrl(rawAddress)
         val isBlankPage = normalized.equals(BROWSER_BLANK_URL, ignoreCase = true)
@@ -191,6 +295,9 @@ class BlogViewModel @Inject constructor(
                 canGoBack = if (isBlankPage || wasRecovering) false else it.canGoBack,
                 canGoForward = if (isBlankPage || wasRecovering) false else it.canGoForward,
                 renderProcessGone = false,
+                // Entering an address, opening Home, a bookmark, or a history
+                // item is an explicit transition back to ordinary browsing.
+                httpsOnly = false,
             )
         }
         return normalized
@@ -205,7 +312,13 @@ class BlogViewModel @Inject constructor(
         canGoForward: Boolean? = null,
     ) {
         updateTab(tabId) { old ->
-            val committedUrl = url?.takeIf(String::isNotBlank) ?: old.url
+            val suppliedUrl = url?.takeIf(String::isNotBlank)
+            if (suppliedUrl != null &&
+                !isTrustedArticleMainFrameNavigationAllowed(old.httpsOnly, suppliedUrl)
+            ) {
+                return@updateTab old
+            }
+            val committedUrl = suppliedUrl ?: old.url
             val isBlankPage = committedUrl.equals(BROWSER_BLANK_URL, ignoreCase = true)
             old.copy(
                 addressDraft = if (old.addressDirty) {
@@ -232,6 +345,11 @@ class BlogViewModel @Inject constructor(
         canGoBack: Boolean,
         canGoForward: Boolean,
     ) {
+        val tab = _tabsState.value.tabs.firstOrNull { it.id == tabId } ?: return
+        if (!isTrustedArticleMainFrameNavigationAllowed(tab.httpsOnly, url)) {
+            markInsecureNavigationBlocked(tabId)
+            return
+        }
         updateTabBrowserState(
             tabId = tabId,
             url = url,
@@ -241,6 +359,7 @@ class BlogViewModel @Inject constructor(
             canGoForward = canGoForward,
         )
         if (url.isBlank() || url.equals(BROWSER_BLANK_URL, ignoreCase = true)) return
+        if (tab.temporaryRssReader) return
         val isActive = _tabsState.value.currentTabId == tabId
         launchPersistenceOperation("record browser visit") {
             repository.recordVisit(url, title)
@@ -248,6 +367,26 @@ class BlogViewModel @Inject constructor(
         if (isActive) {
             launchPersistenceOperation("save last browser URL") {
                 settingsRepository.setLastBrowserUrl(url)
+            }
+        }
+    }
+
+    /**
+     * Keeps a rejected downgrade out of observable state and persistence.
+     * WebView performs the network-side rejection; this is the state-side
+     * defence in depth for late or device-specific callbacks.
+     */
+    fun markInsecureNavigationBlocked(tabId: Long) {
+        updateTab(tabId) { tab ->
+            if (!tab.httpsOnly) {
+                tab
+            } else {
+                tab.copy(
+                    loading = false,
+                    progress = 0,
+                    canGoBack = false,
+                    canGoForward = false,
+                )
             }
         }
     }
@@ -328,3 +467,21 @@ class BlogViewModel @Inject constructor(
 }
 
 private const val BLOG_VIEW_MODEL_TAG = "BlogViewModel"
+
+internal fun trustedHttpsUrlOrNull(raw: String): String? {
+    val candidate = raw.trim()
+    if (candidate.isEmpty() || candidate.length > 8_192) return null
+    val uri = runCatching { URI(candidate) }.getOrNull() ?: return null
+    if (uri.scheme?.lowercase(Locale.ROOT) != "https") return null
+    if (uri.host.isNullOrBlank() || uri.userInfo != null) return null
+    return uri.normalize().toASCIIString()
+}
+
+/**
+ * Policy shared by the browser state holder and WebView callbacks. Ordinary
+ * browser tabs intentionally keep their existing navigation behaviour.
+ */
+internal fun isTrustedArticleMainFrameNavigationAllowed(
+    httpsOnly: Boolean,
+    rawUrl: String,
+): Boolean = !httpsOnly || trustedHttpsUrlOrNull(rawUrl) != null

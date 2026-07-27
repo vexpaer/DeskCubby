@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- User-initiated GitHub Release updates still require Android's per-source
+         "install unknown apps" confirmation on API 26+. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Only needed on API 26-28 to insert the original photo into MediaStore. -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
@@ -39,7 +42,7 @@
         android:usesCleartextTraffic="true">
 
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name=".DeskCubbyFileProvider"
             android:authorities="${applicationId}.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">

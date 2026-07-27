@@ -4,6 +4,7 @@ import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
+import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
@@ -277,6 +278,44 @@ class SettingsRepositoryTest {
         assertEquals("Ada", normalizeUserName("  Ada  "))
         assertEquals(32, normalizeUserName("a".repeat(40)).length)
         assertEquals("😀".repeat(32), normalizeUserName("😀".repeat(33)))
+    }
+
+    @Test
+    fun normalizeHomeGreetingsSupportsDeletionFallbackAndUnicodeLimits() {
+        val normalized = normalizeHomeGreetings(
+            listOf(
+                HomeGreetingTemplate("  今天开始  ", ""),
+                HomeGreetingTemplate("", "Start today"),
+                HomeGreetingTemplate("", ""),
+                HomeGreetingTemplate(
+                    "😀".repeat(MAX_HOME_GREETING_CODE_POINTS + 1),
+                    "emoji",
+                ),
+            ),
+        )
+
+        assertEquals(
+            HomeGreetingTemplate("今天开始", ""),
+            normalized[0],
+        )
+        assertEquals(
+            HomeGreetingTemplate("", "Start today"),
+            normalized[1],
+        )
+        assertEquals(
+            "😀".repeat(MAX_HOME_GREETING_CODE_POINTS),
+            normalized[2].chinese,
+        )
+        assertTrue(normalizeHomeGreetings(emptyList()).isEmpty())
+    }
+
+    @Test
+    fun normalizeHomeGreetingsLimitsCount() {
+        val input = List(MAX_HOME_GREETINGS + 5) { index ->
+            HomeGreetingTemplate("问候$index", "Greeting $index")
+        }
+
+        assertEquals(MAX_HOME_GREETINGS, normalizeHomeGreetings(input).size)
     }
 
     @Test

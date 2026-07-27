@@ -93,17 +93,15 @@ private class AtomicStatisticsStore<T>(
             // process restart can never be silently overwritten by stale state.
             val current = readOrEmpty()
             val next = transform(current)
-            val encoded = encode(next)
-            if (encoded.toByteArray(StandardCharsets.UTF_8).size > MAX_STATISTICS_JSON_BYTES) {
-                throw StatisticsJsonException(
-                    "Statistics JSON exceeds $MAX_STATISTICS_JSON_BYTES bytes.",
-                )
-            }
+            // Verify the exact bytes before committing them. Once AtomicFile.finishWrite()
+            // succeeds, the refresh has durably succeeded and must not be reported as a
+            // failure merely because an additional post-commit read happens to fail.
+            val (encoded, verified) = encodeAndVerifyStatisticsValue(
+                value = next,
+                encode = encode,
+                decode = decode,
+            )
             writeAtomically(encoded)
-            val verified = readRequired()
-            if (verified != next) {
-                throw StatisticsJsonException("Statistics file verification failed.")
-            }
             mutableValue.value = verified
             verified
         }
@@ -157,3 +155,21 @@ private class AtomicStatisticsStore<T>(
 
 const val USAGE_STATISTICS_FILE_NAME = "usage-statistics.json"
 const val STEP_STATISTICS_FILE_NAME = "step-statistics.json"
+
+internal fun <T> encodeAndVerifyStatisticsValue(
+    value: T,
+    encode: (T) -> String,
+    decode: (String) -> T,
+    maximumBytes: Int = MAX_STATISTICS_JSON_BYTES,
+): Pair<String, T> {
+    require(maximumBytes > 0)
+    val encoded = encode(value)
+    if (encoded.toByteArray(StandardCharsets.UTF_8).size > maximumBytes) {
+        throw StatisticsJsonException("Statistics JSON exceeds $maximumBytes bytes.")
+    }
+    val decoded = decode(encoded)
+    if (decoded != value) {
+        throw StatisticsJsonException("Statistics serialization verification failed.")
+    }
+    return encoded to decoded
+}

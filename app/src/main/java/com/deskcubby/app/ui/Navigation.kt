@@ -78,6 +78,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.ui.blog.BlogScreen
@@ -279,7 +280,11 @@ fun DeskCubbyRoot(
                         )
                     }
                     composable(NavItemId.BLOG.route) {
-                        BlogScreen(padding = padding, viewModel = blogViewModel)
+                        BlogScreen(
+                            padding = padding,
+                            viewModel = blogViewModel,
+                            onCloseTrustedArticle = { navController.popBackStack() },
+                        )
                     }
                     composable(NavItemId.THOUGHT.route) {
                         ThoughtScreen(
@@ -295,7 +300,20 @@ fun DeskCubbyRoot(
                         PoetryBookScreen(padding = padding, viewModel = poetryBookViewModel)
                     }
                     composable(NavItemId.RSS.route) {
-                        RssScreen(padding = padding, viewModel = rssViewModel)
+                        RssScreen(
+                            padding = padding,
+                            viewModel = rssViewModel,
+                            onOpenArticle = { articleUrl ->
+                                if (blogViewModel.openTrustedArticleUrl(articleUrl)) {
+                                    navController.navigate(NavItemId.BLOG.route) {
+                                        launchSingleTop = true
+                                    }
+                                    true
+                                } else {
+                                    false
+                                }
+                            },
+                        )
                     }
                     composable(NavItemId.AI_CHAT.route) {
                         AiChatScreen(
@@ -337,17 +355,25 @@ fun DeskCubbyRoot(
                     composable(NavItemId.MORE.route) {
                         MoreHubScreen(
                             padding = padding,
-                            items = settings.navItems.filter { item ->
-                                item.showInMore &&
-                                    item.id != NavItemId.HOME &&
-                                    item.id != NavItemId.MORE &&
-                                    item.id != NavItemId.SETTINGS
-                            },
+                            items = orderedMorePageItems(
+                                allItems = settings.navItems,
+                                order = settings.morePageOrder,
+                            ),
                             showDescriptions = settings.morePageShowDescriptions,
                             onOpenPage = { itemId ->
                                 navController.navigate(itemId.route) {
                                     launchSingleTop = true
                                 }
+                            },
+                            onItemsReordered = { reorderedIds, onDone ->
+                                settingsViewModel.setMorePageOrder(
+                                    mergeVisibleMorePageOrder(
+                                        allItems = settings.navItems,
+                                        currentOrder = settings.morePageOrder,
+                                        visibleOrder = reorderedIds,
+                                    ),
+                                    onDone,
+                                )
                             },
                             onOpenNavigationSettings = {
                                 navController.navigate(Routes.MORE_PAGE_SETTINGS)
@@ -463,9 +489,9 @@ fun DeskCubbyRoot(
                 text = {
                     Text(
                         if (settings.appLanguage == AppLanguage.ENGLISH) {
-                            "DeskCubby has several pages. Bottom navigation settings can show, hide, rename and reorder them, or place less-used pages on the More page."
+                            "DeskCubby has several pages. Bottom navigation settings control the bottom bar; Navigation page settings under Subpage settings control the More page."
                         } else {
-                            "DeskCubby 包含多个页面，你可以在“底部导航”设置中开关、改名和排序，也可把较少使用的页面收进导航页。"
+                            "DeskCubby 包含多个页面。“底部导航”设置管理底栏；“子页面设置 → 导航页”管理导航页中的入口。"
                         },
                     )
                 },
@@ -502,6 +528,46 @@ private fun openUsageAccessSettings(context: Context) {
         .recoverCatching {
             context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
         }
+}
+
+internal fun orderedMorePageItems(
+    allItems: List<NavItemConfig>,
+    order: List<NavItemId>,
+): List<NavItemConfig> {
+    val byId = allItems.associateBy(NavItemConfig::id)
+    return normalizeMorePageOrder(order, allItems)
+        .mapNotNull(byId::get)
+        .filter(NavItemConfig::showInMore)
+}
+
+/**
+ * Reorders only the pages currently shown on the navigation page. Hidden pages keep their slots
+ * in the complete order so enabling one later does not make bottom-navigation edits affect it.
+ */
+internal fun mergeVisibleMorePageOrder(
+    allItems: List<NavItemConfig>,
+    currentOrder: List<NavItemId>,
+    visibleOrder: List<NavItemId>,
+): List<NavItemId> {
+    val normalized = normalizeMorePageOrder(currentOrder, allItems)
+    val visibleIds = allItems.asSequence()
+        .filter(NavItemConfig::showInMore)
+        .map(NavItemConfig::id)
+        .filter(normalized::contains)
+        .toSet()
+    if (visibleIds.isEmpty()) return normalized
+
+    val replacements = buildList {
+        visibleOrder.forEach { id ->
+            if (id in visibleIds && id !in this) add(id)
+        }
+        normalized.forEach { id ->
+            if (id in visibleIds && id !in this) add(id)
+        }
+    }.iterator()
+    return normalized.map { id ->
+        if (id in visibleIds) replacements.next() else id
+    }
 }
 
 @Composable

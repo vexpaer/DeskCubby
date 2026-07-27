@@ -1,11 +1,16 @@
 package com.deskcubby.app.ui.games
 
+import android.animation.ValueAnimator
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -45,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,13 +60,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -74,6 +84,7 @@ import com.deskcubby.app.ui.theme.tr
 import kotlin.math.abs
 import kotlin.math.log2
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -383,6 +394,8 @@ private fun Game2048Page(viewModel: GamesViewModel, resume: Boolean, onExit: () 
     var frame by remember { mutableIntStateOf(0) }
     var paused by remember { mutableStateOf(false) }
     var scoreRecorded by remember { mutableStateOf(false) }
+    var transition by remember { mutableStateOf<Game2048.MoveResult?>(null) }
+    var transitionSequence by remember { mutableIntStateOf(0) }
     val meta by viewModel.meta(gameId).collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
@@ -410,6 +423,8 @@ private fun Game2048Page(viewModel: GamesViewModel, resume: Boolean, onExit: () 
 
     fun pauseAndSave() {
         paused = true
+        transition = null
+        transitionSequence++
         val current = engine ?: return
         if (current.isGameOver) {
             viewModel.recordScore(gameId, current.score)
@@ -428,7 +443,11 @@ private fun Game2048Page(viewModel: GamesViewModel, resume: Boolean, onExit: () 
         paused = paused,
         onTogglePause = {
             paused = !paused
-            if (paused) saveIfRunning()
+            if (paused) {
+                transition = null
+                transitionSequence++
+                saveIfRunning()
+            }
         },
         onBack = {
             saveIfRunning()
@@ -444,7 +463,21 @@ private fun Game2048Page(viewModel: GamesViewModel, resume: Boolean, onExit: () 
             Board2048(
                 board = board,
                 enabled = engine != null && !paused && !gameOver,
-                onMove = { direction -> engine?.let { if (it.move(direction)) frame++ } },
+                transition = transition,
+                transitionSequence = transitionSequence,
+                animate = !paused,
+                onMove = { direction ->
+                    val current = engine
+                    if (current != null && !paused && !current.isGameOver) {
+                        current.moveWithResult(direction)?.let { result ->
+                            // Commit every swipe immediately. A later swipe cancels only the
+                            // previous visual transition, never its already-persistable state.
+                            transition = result
+                            transitionSequence++
+                            frame++
+                        }
+                    }
+                },
                 modifier = Modifier.aspectRatio(1f),
             )
             if (paused) PauseOverlay()
@@ -456,6 +489,8 @@ private fun Game2048Page(viewModel: GamesViewModel, resume: Boolean, onExit: () 
             score = score,
             onRestart = {
                 engine = Game2048()
+                transition = null
+                transitionSequence++
                 frame++
                 paused = false
                 scoreRecorded = false
@@ -465,39 +500,149 @@ private fun Game2048Page(viewModel: GamesViewModel, resume: Boolean, onExit: () 
     }
 }
 
+internal fun shouldAnimate2048Transition(
+    animate: Boolean,
+    hasTransition: Boolean,
+    systemAnimationsEnabled: Boolean,
+): Boolean = animate && hasTransition && systemAnimationsEnabled
+
 @Composable
 private fun Board2048(
     board: List<Int>,
     enabled: Boolean,
+    transition: Game2048.MoveResult?,
+    transitionSequence: Int,
+    animate: Boolean,
     onMove: (Game2048.Direction) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
-    Column(
+    val shouldAnimate = shouldAnimate2048Transition(
+        animate = animate,
+        hasTransition = transition != null,
+        systemAnimationsEnabled = ValueAnimator.areAnimatorsEnabled(),
+    )
+    val progress = remember(transitionSequence, shouldAnimate) {
+        Animatable(if (shouldAnimate) 0f else 1f)
+    }
+
+    LaunchedEffect(progress, shouldAnimate) {
+        if (!shouldAnimate) {
+            progress.snapTo(1f)
+        } else {
+            progress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(
+                    durationMillis = GAME_2048_ANIMATION_MILLIS,
+                    easing = FastOutSlowInEasing,
+                ),
+            )
+        }
+    }
+
+    BoxWithConstraints(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
             .background(scheme.surfaceVariant.copy(alpha = 0.5f))
-            .swipeInput(enabled) { swipe -> onMove(swipe.to2048Direction()) }
-            .padding(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .swipeInput(enabled) { swipe -> onMove(swipe.to2048Direction()) },
     ) {
-        for (row in 0 until Game2048.SIZE) {
-            Row(
+        val cellGap = 8.dp
+        val boardPadding = 8.dp
+        val tileSize = (maxWidth - boardPadding * 2 - cellGap * (Game2048.SIZE - 1)) /
+            Game2048.SIZE
+        val density = LocalDensity.current
+        val paddingPx = with(density) { boardPadding.toPx() }
+        val stepPx = with(density) { (tileSize + cellGap).toPx() }
+
+        fun cellOffset(index: Int): IntOffset {
+            val column = index % Game2048.SIZE
+            val row = index / Game2048.SIZE
+            return IntOffset(
+                x = (paddingPx + column * stepPx).roundToInt(),
+                y = (paddingPx + row * stepPx).roundToInt(),
+            )
+        }
+
+        repeat(Game2048.SIZE * Game2048.SIZE) { index ->
+            Box(
                 Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                for (column in 0 until Game2048.SIZE) {
+                    .offset { cellOffset(index) }
+                    .size(tileSize)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(scheme.surface.copy(alpha = 0.6f)),
+            )
+        }
+
+        val currentTransition = transition
+        val animationProgress = progress.value
+        if (currentTransition != null && animationProgress < GAME_2048_SLIDE_END) {
+            val slideProgress = FastOutSlowInEasing.transform(
+                (animationProgress / GAME_2048_SLIDE_END).coerceIn(0f, 1f),
+            )
+            currentTransition.motions.forEachIndexed { order, motion ->
+                val start = cellOffset(motion.fromIndex)
+                val end = cellOffset(motion.toIndex)
+                val animatedOffset = IntOffset(
+                    x = (start.x + (end.x - start.x) * slideProgress).roundToInt(),
+                    y = (start.y + (end.y - start.y) * slideProgress).roundToInt(),
+                )
+                key(transitionSequence, motion.fromIndex, motion.toIndex, order) {
                     Tile2048(
-                        value = board[row * Game2048.SIZE + column],
+                        value = motion.value,
                         modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight(),
+                            .offset { animatedOffset }
+                            .size(tileSize),
+                    )
+                }
+            }
+        } else {
+            val resultBoard = currentTransition?.after ?: board
+            val popProgress = if (currentTransition == null) {
+                1f
+            } else {
+                ((animationProgress - GAME_2048_SLIDE_END) /
+                    (1f - GAME_2048_SLIDE_END)).coerceIn(0f, 1f)
+            }
+            val mergeDestinations = currentTransition?.merges?.mapTo(HashSet<Int>()) { it.toIndex }
+                ?: emptySet()
+            resultBoard.forEachIndexed { index, value ->
+                if (value == 0) return@forEachIndexed
+                val tileScale = when {
+                    currentTransition == null -> 1f
+                    index == currentTransition.spawn.index -> spawnTileScale(popProgress)
+                    index in mergeDestinations -> mergedTileScale(popProgress)
+                    else -> 1f
+                }
+                key(transitionSequence, index, value) {
+                    Tile2048(
+                        value = value,
+                        modifier = Modifier
+                            .offset { cellOffset(index) }
+                            .size(tileSize)
+                            .scale(tileScale),
                     )
                 }
             }
         }
+    }
+}
+
+/** A short overshoot makes a newly generated tile distinct without moving surrounding layout. */
+private fun spawnTileScale(progress: Float): Float {
+    val value = progress.coerceIn(0f, 1f)
+    return if (value < 0.72f) {
+        1.08f * FastOutSlowInEasing.transform(value / 0.72f)
+    } else {
+        1.08f - 0.08f * ((value - 0.72f) / 0.28f)
+    }
+}
+
+/** Merged tiles briefly compress and pop after both source tiles meet. */
+private fun mergedTileScale(progress: Float): Float {
+    val value = progress.coerceIn(0f, 1f)
+    return when {
+        value < 0.46f -> 0.84f + 0.30f * FastOutSlowInEasing.transform(value / 0.46f)
+        else -> 1.14f - 0.14f * ((value - 0.46f) / 0.54f)
     }
 }
 
@@ -954,6 +1099,8 @@ private fun NextPiecePanel(cells: List<TetrisGame.Cell>, color: Color) {
 }
 
 private const val SNAKE_TICK_MILLIS = 220L
+private const val GAME_2048_ANIMATION_MILLIS = 190
+private const val GAME_2048_SLIDE_END = 0.64f
 private const val TETRIS_BASE_TICK_MILLIS = 600L
 private const val TETRIS_LEVEL_STEP_MILLIS = 40L
 private const val TETRIS_MIN_TICK_MILLIS = 120L

@@ -14,6 +14,7 @@ import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DailyEventTemplate
+import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.NavItemId
@@ -49,6 +50,10 @@ class BackupJsonCodecTest {
             markdownTemplate = "# {title}\n\n正文",
             mealButtonsUseIcons = true,
             userName = "书桌主人",
+            homeGreetings = listOf(
+                HomeGreetingTemplate("{name}，开始", "Start, {name}"),
+                HomeGreetingTemplate("看看今天", "Review today"),
+            ),
             homeWidgetBordersEnabled = false,
             mealButtonIcons = listOf("🥐", "🍜", "🍹", "🍲", "🍓", "🍢"),
             mealImageCompressionEnabled = false,
@@ -82,6 +87,10 @@ class BackupJsonCodecTest {
             usageTrackingEnabled = true,
             stepTrackingEnabled = true,
             morePageShowDescriptions = false,
+            morePageOrder = AppSettings().morePageOrder.toMutableList().apply {
+                remove(NavItemId.AI_CHAT)
+                add(0, NavItemId.AI_CHAT)
+            },
             navItems = AppSettings().navItems.map { item ->
                 if (item.id == NavItemId.THOUGHT) {
                     item.copy(moreDescription = "随手记录，也可完整展开")
@@ -156,6 +165,7 @@ class BackupJsonCodecTest {
         assertEquals(listOf(poem), decoded.poems)
         assertEquals(true, decoded.settings.mealButtonsUseIcons)
         assertEquals("书桌主人", decoded.settings.userName)
+        assertEquals(settings.homeGreetings, decoded.settings.homeGreetings)
         assertEquals(false, decoded.settings.homeWidgetBordersEnabled)
         assertEquals(listOf("🥐", "🍜", "🍹", "🍲", "🍓", "🍢"), decoded.settings.mealButtonIcons)
         assertEquals(false, decoded.settings.mealImageCompressionEnabled)
@@ -314,6 +324,47 @@ class BackupJsonCodecTest {
         decoded.settings.navItems.forEach { item ->
             assertEquals(item.id.defaultDescription, item.moreDescription)
         }
+    }
+
+    @Test
+    fun versionFifteenUsesDefaultHomeGreetingsAndMigratesMoreOrderFromNavigation() {
+        val legacyNavItems = AppSettings().navItems.toMutableList().apply {
+            val moved = removeAt(indexOfFirst { it.id == NavItemId.AI_CHAT })
+            add(1, moved)
+        }
+        val current = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 15,
+                    settings = AppSettings(
+                        homeGreetings = listOf(
+                            HomeGreetingTemplate("自定义", "Custom"),
+                        ),
+                        navItems = legacyNavItems,
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        current.put("version", 15)
+        current.getJSONObject("settings").apply {
+            remove("homeGreetings")
+            remove("morePageOrder")
+        }
+
+        val decoded = BackupJsonCodec.decode(current.toString())
+
+        assertEquals(15, decoded.formatVersion)
+        assertEquals(AppSettings().homeGreetings, decoded.settings.homeGreetings)
+        assertEquals(
+            legacyNavItems.map { it.id }.filter { id ->
+                id != NavItemId.HOME &&
+                    id != NavItemId.MORE &&
+                    id != NavItemId.SETTINGS
+            },
+            decoded.settings.morePageOrder,
+        )
     }
 
     @Test
@@ -745,6 +796,44 @@ class BackupJsonCodecTest {
     }
 
     @Test
+    fun rejectsOversizedOrBlankHomeGreetings() {
+        fun currentJson(): JSONObject = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 16,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+
+        val oversized = currentJson().apply {
+            getJSONObject("settings").put(
+                "homeGreetings",
+                JSONArray().put(
+                    JSONObject()
+                        .put("chinese", "问".repeat(41))
+                        .put("english", "Greeting"),
+                ),
+            )
+        }
+        assertDecodeRejected(oversized)
+
+        val blank = currentJson().apply {
+            getJSONObject("settings").put(
+                "homeGreetings",
+                JSONArray().put(
+                    JSONObject()
+                        .put("chinese", " ")
+                        .put("english", ""),
+                ),
+            )
+        }
+        assertDecodeRejected(blank)
+    }
+
+    @Test
     fun rejectsDuplicateCategoryIdsAndNamesCaseInsensitively() {
         val duplicateId = validCategorizedBackupJson().apply {
             getJSONArray("categories").getJSONObject(1).put("id", 1)
@@ -838,6 +927,27 @@ class BackupJsonCodecTest {
         } catch (expected: IllegalArgumentException) {
             // Unsafe schemes never reach the browser database.
         }
+    }
+
+    @Test
+    fun currentVersionRejectsDuplicateOrNonOrderableMorePageIds() {
+        val duplicate = validEmptyBackupJson().apply {
+            getJSONObject("settings").put(
+                "morePageOrder",
+                JSONArray()
+                    .put(NavItemId.THOUGHT.name)
+                    .put(NavItemId.THOUGHT.name),
+            )
+        }
+        assertDecodeRejected(duplicate)
+
+        val reserved = validEmptyBackupJson().apply {
+            getJSONObject("settings").put(
+                "morePageOrder",
+                JSONArray().put(NavItemId.HOME.name),
+            )
+        }
+        assertDecodeRejected(reserved)
     }
 
     @Test

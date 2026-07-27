@@ -18,6 +18,7 @@ import com.deskcubby.app.data.repository.AiContextException
 import com.deskcubby.app.data.repository.AiContextFailure
 import com.deskcubby.app.data.repository.AiContextItemPreview
 import com.deskcubby.app.data.repository.AiContextRepository
+import com.deskcubby.app.data.repository.AiContextSource
 import com.deskcubby.app.data.repository.generateConversationTitle
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -45,6 +46,8 @@ data class AiChatUiState(
     val contextCandidates: List<AiContextCandidate> = emptyList(),
     val contextCandidatesLoaded: Boolean = false,
     val isContextPickerVisible: Boolean = false,
+    val contextPickerSource: AiContextSource? = null,
+    val contextPickerErrorMessage: String? = null,
     val isLoadingContextCandidates: Boolean = false,
     val contextPreview: AiContextItemPreview? = null,
     val isLoadingContextPreview: Boolean = false,
@@ -132,12 +135,18 @@ class AiChatViewModel @Inject constructor(
         mutableUiState.update { it.copy(pendingImage = null) }
     }
 
-    fun openContextPicker() {
+    fun openDiaryContextPicker() = openContextPicker(AiContextSource.DIARY)
+
+    fun openThoughtContextPicker() = openContextPicker(AiContextSource.THOUGHT)
+
+    private fun openContextPicker(source: AiContextSource) {
         val current = mutableUiState.value
         if (current.isSending || current.isPreparingImage) return
         mutableUiState.update {
             it.copy(
                 isContextPickerVisible = true,
+                contextPickerSource = source,
+                contextPickerErrorMessage = null,
                 errorMessage = null,
             )
         }
@@ -151,6 +160,8 @@ class AiChatViewModel @Inject constructor(
         mutableUiState.update {
             it.copy(
                 isContextPickerVisible = false,
+                contextPickerSource = null,
+                contextPickerErrorMessage = null,
                 contextPreview = null,
             )
         }
@@ -159,6 +170,7 @@ class AiChatViewModel @Inject constructor(
     fun refreshContextCandidates() {
         val current = mutableUiState.value
         if (current.isSending || current.isLoadingContextCandidates) return
+        mutableUiState.update { it.copy(contextPickerErrorMessage = null) }
         loadContextCandidates()
     }
 
@@ -172,7 +184,7 @@ class AiChatViewModel @Inject constructor(
         } else if (updated.size > AiContextCodec.MAX_ITEMS) {
             mutableUiState.update {
                 it.copy(
-                    errorMessage = aiContextFailureMessage(
+                    contextPickerErrorMessage = aiContextFailureMessage(
                         AiContextException(
                             failure = AiContextFailure.TOO_MANY_ITEMS,
                             itemCount = updated.size,
@@ -183,12 +195,63 @@ class AiChatViewModel @Inject constructor(
             }
             return
         }
-        mutableUiState.update { it.copy(pendingContextKeys = updated) }
+        mutableUiState.update {
+            it.copy(
+                pendingContextKeys = updated,
+                contextPickerErrorMessage = null,
+            )
+        }
+    }
+
+    fun toggleContextGroup(selectionKeys: Collection<String>) {
+        val current = mutableUiState.value
+        if (current.isSending ||
+            current.isLoadingContextCandidates ||
+            current.contextPickerSource != AiContextSource.THOUGHT
+        ) {
+            return
+        }
+        val availableKeys = current.contextCandidates
+            .asSequence()
+            .filter { it.source == AiContextSource.THOUGHT }
+            .map(AiContextCandidate::selectionKey)
+            .toHashSet()
+        val groupKeys = selectionKeys.filter { it in availableKeys }
+        val result = toggleAiContextGroup(
+            currentSelection = current.pendingContextKeys,
+            groupKeys = groupKeys,
+            maxItems = AiContextCodec.MAX_ITEMS,
+        )
+        if (result.limitExceeded) {
+            mutableUiState.update {
+                it.copy(
+                    contextPickerErrorMessage = aiContextFailureMessage(
+                        AiContextException(
+                            failure = AiContextFailure.TOO_MANY_ITEMS,
+                            itemCount = result.resultingItemCount,
+                        ),
+                        settings.value.appLanguage,
+                    ),
+                )
+            }
+            return
+        }
+        mutableUiState.update {
+            it.copy(
+                pendingContextKeys = result.selection,
+                contextPickerErrorMessage = null,
+            )
+        }
     }
 
     fun clearPendingContexts() {
         if (mutableUiState.value.isSending) return
-        mutableUiState.update { it.copy(pendingContextKeys = emptySet()) }
+        mutableUiState.update {
+            it.copy(
+                pendingContextKeys = emptySet(),
+                contextPickerErrorMessage = null,
+            )
+        }
     }
 
     fun previewContextCandidate(selectionKey: String) {
@@ -199,6 +262,7 @@ class AiChatViewModel @Inject constructor(
             it.copy(
                 isLoadingContextPreview = true,
                 contextPreview = null,
+                contextPickerErrorMessage = null,
                 errorMessage = null,
             )
         }
@@ -211,7 +275,7 @@ class AiChatViewModel @Inject constructor(
             } catch (error: AiContextException) {
                 mutableUiState.update {
                     it.copy(
-                        errorMessage = aiContextFailureMessage(
+                        contextPickerErrorMessage = aiContextFailureMessage(
                             error,
                             settings.value.appLanguage,
                         ),
@@ -220,7 +284,7 @@ class AiChatViewModel @Inject constructor(
             } catch (_: Exception) {
                 mutableUiState.update {
                     it.copy(
-                        errorMessage = aiContextFailureMessage(
+                        contextPickerErrorMessage = aiContextFailureMessage(
                             AiContextException(AiContextFailure.SOURCE_UNAVAILABLE),
                             settings.value.appLanguage,
                         ),
@@ -305,6 +369,8 @@ class AiChatViewModel @Inject constructor(
                             state.pendingContextKeys
                         },
                         isContextPickerVisible = false,
+                        contextPickerSource = null,
+                        contextPickerErrorMessage = null,
                         contextPreview = null,
                     )
                 }
@@ -360,6 +426,8 @@ class AiChatViewModel @Inject constructor(
                 pendingImage = null,
                 pendingContextKeys = emptySet(),
                 isContextPickerVisible = false,
+                contextPickerSource = null,
+                contextPickerErrorMessage = null,
                 contextPreview = null,
                 errorMessage = null,
             )
@@ -436,6 +504,8 @@ class AiChatViewModel @Inject constructor(
                 pendingImage = null,
                 pendingContextKeys = emptySet(),
                 isContextPickerVisible = false,
+                contextPickerSource = null,
+                contextPickerErrorMessage = null,
                 contextPreview = null,
                 errorMessage = if (conversation.modelConfigId.isNotBlank() && !originalConfigAvailable) {
                     "原对话使用的模型配置已不存在；历史仍可查看，继续聊天时将使用当前配置。"
@@ -450,6 +520,7 @@ class AiChatViewModel @Inject constructor(
         mutableUiState.update {
             it.copy(
                 isLoadingContextCandidates = true,
+                contextPickerErrorMessage = null,
                 errorMessage = null,
             )
         }
@@ -470,11 +541,12 @@ class AiChatViewModel @Inject constructor(
                 throw error
             } catch (_: Exception) {
                 mutableUiState.update {
-                    it.copy(
-                        errorMessage = contextCandidateLoadFailureMessage(
-                            settings.value.appLanguage,
-                        ),
-                    )
+                    val message = contextCandidateLoadFailureMessage(settings.value.appLanguage)
+                    if (it.isContextPickerVisible) {
+                        it.copy(contextPickerErrorMessage = message)
+                    } else {
+                        it.copy(errorMessage = message)
+                    }
                 }
             } finally {
                 mutableUiState.update { it.copy(isLoadingContextCandidates = false) }

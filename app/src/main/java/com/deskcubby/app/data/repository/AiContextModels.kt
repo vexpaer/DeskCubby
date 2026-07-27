@@ -17,6 +17,10 @@ data class AiContextCandidate(
     val source: AiContextSource,
     val title: String,
     val subtitle: String = "",
+    /** Local-only grouping metadata used by the thought picker; never frozen or sent. */
+    val groupKey: String = "",
+    val groupTitle: String = "",
+    val groupSortOrder: Long = Long.MAX_VALUE,
     val previewExcerpt: String = "",
     val previewIsExcerpt: Boolean = false,
     val estimatedBytes: Long? = null,

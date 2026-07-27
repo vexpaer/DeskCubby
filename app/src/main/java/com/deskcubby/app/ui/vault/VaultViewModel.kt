@@ -2,8 +2,9 @@ package com.deskcubby.app.ui.vault
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.deskcubby.app.data.repository.VaultItem
+import com.deskcubby.app.data.repository.VaultContentState
 import com.deskcubby.app.data.repository.VaultLockState
+import com.deskcubby.app.data.repository.VaultPasswordChangeResult
 import com.deskcubby.app.data.repository.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -19,7 +20,11 @@ import kotlinx.coroutines.launch
  * UI-facing error codes. Kept as an enum (instead of strings) so the screen can render
  * them bilingually via tr(), and so no secret material can ever leak into a message.
  */
-enum class VaultUiError { WRONG_PASSWORD, OPERATION_FAILED }
+enum class VaultUiError {
+    WRONG_PASSWORD,
+    CORRUPTED_ITEMS,
+    OPERATION_FAILED,
+}
 
 @HiltViewModel
 class VaultViewModel @Inject constructor(
@@ -27,10 +32,10 @@ class VaultViewModel @Inject constructor(
 ) : ViewModel() {
     val lockState: StateFlow<VaultLockState> = repository.lockState
 
-    val items: StateFlow<List<VaultItem>> = repository.items.stateIn(
+    val contentState: StateFlow<VaultContentState> = repository.contentState.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = emptyList(),
+        initialValue = VaultContentState(),
     )
 
     private val mutableError = MutableStateFlow<VaultUiError?>(null)
@@ -38,7 +43,10 @@ class VaultViewModel @Inject constructor(
 
     fun setupPassword(password: String) {
         viewModelScope.launch {
-            runGuarded { repository.setupPassword(password) }
+            val ok = runGuarded { repository.setupPassword(password) } ?: false
+            if (!ok && mutableError.value == null) {
+                mutableError.value = VaultUiError.OPERATION_FAILED
+            }
         }
     }
 
@@ -55,17 +63,27 @@ class VaultViewModel @Inject constructor(
 
     fun changePassword(oldPassword: String, newPassword: String, onDone: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            val ok = runGuarded { repository.changePassword(oldPassword, newPassword) } ?: false
-            if (!ok && mutableError.value == null) {
-                mutableError.value = VaultUiError.WRONG_PASSWORD
+            val result = runGuarded {
+                repository.changePassword(oldPassword, newPassword)
+            }
+            val ok = result == VaultPasswordChangeResult.SUCCESS
+            if (mutableError.value == null) {
+                mutableError.value = when (result) {
+                    VaultPasswordChangeResult.SUCCESS -> null
+                    VaultPasswordChangeResult.WRONG_PASSWORD -> VaultUiError.WRONG_PASSWORD
+                    VaultPasswordChangeResult.CORRUPTED_ITEMS -> VaultUiError.CORRUPTED_ITEMS
+                    VaultPasswordChangeResult.INVALID_NEW_PASSWORD ->
+                        VaultUiError.OPERATION_FAILED
+                    null -> VaultUiError.OPERATION_FAILED
+                }
             }
             onDone(ok)
         }
     }
 
-    fun addItem(title: String, content: String, onDone: (Boolean) -> Unit = {}) {
+    fun addItem(content: String, note: String?, onDone: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            val ok = runGuarded { repository.addItem(title, content) } ?: false
+            val ok = runGuarded { repository.addItem(content, note) } ?: false
             if (!ok && mutableError.value == null) {
                 mutableError.value = VaultUiError.OPERATION_FAILED
             }
@@ -73,9 +91,9 @@ class VaultViewModel @Inject constructor(
         }
     }
 
-    fun updateItem(id: Long, title: String, content: String, onDone: (Boolean) -> Unit = {}) {
+    fun updateItem(id: Long, content: String, note: String?, onDone: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            val ok = runGuarded { repository.updateItem(id, title, content) } ?: false
+            val ok = runGuarded { repository.updateItem(id, content, note) } ?: false
             if (!ok && mutableError.value == null) {
                 mutableError.value = VaultUiError.OPERATION_FAILED
             }

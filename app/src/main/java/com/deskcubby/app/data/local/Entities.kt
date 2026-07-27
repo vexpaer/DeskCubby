@@ -79,6 +79,7 @@ data class DateRecordEntity(
 @Entity(tableName = "saved_poems")
 data class SavedPoemEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** Canonical saved body. List previews must never replace this value with an excerpt. */
     val content: String,
     val source: String = "",
     val createdAt: Long,
@@ -122,9 +123,9 @@ data class AiMessageEntity(
 )
 
 /**
- * A password-protected vault entry. [cipherText] and [iv] are Base64; the plaintext
- * (title + content JSON) is only recoverable with the key derived from the user's
- * vault password. Never stored or backed up in plain form.
+ * A password-protected vault entry. [cipherText] and [iv] are Base64; the versioned
+ * content + optional-note payload is only recoverable with the key derived from the
+ * user's vault password. Never stored or backed up in plain form.
  */
 @Entity(tableName = "vault_items")
 data class VaultItemEntity(

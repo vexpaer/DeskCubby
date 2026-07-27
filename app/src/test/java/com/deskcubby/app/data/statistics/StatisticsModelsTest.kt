@@ -47,11 +47,41 @@ class StatisticsModelsTest {
         assertEquals(0.0, overview.averagePerDataDay, 0.0)
     }
 
+    @Test
+    fun usageOverviewFollowsSelectedRange() {
+        val history = UsageStatisticsHistory(
+            trackingStartedOn = LocalDate.parse("2026-06-01"),
+            days = listOf(
+                usageDay("2026-06-01", 1_000),
+                usageDay("2026-07-25", 2_000),
+                usageDay("2026-07-27", 4_000),
+            ),
+        )
+
+        val overview = history.overview(
+            range = StatisticsRange.LAST_7_DAYS,
+            today = LocalDate.parse("2026-07-27"),
+        )
+
+        assertEquals(LocalDate.parse("2026-07-25"), overview.trackingStartedOn)
+        assertEquals(2, overview.recordedDays)
+        assertEquals(6_000.0, overview.total, 0.0)
+        assertEquals(3_000.0, overview.averagePerDataDay, 0.0)
+    }
+
     private fun stepDay(date: String, steps: Long?) = StepStatisticsDay(
         date = LocalDate.parse(date),
         zoneId = "Asia/Shanghai",
         state = StatisticsDayState.FINAL,
         collectedAtEpochMillis = 1,
         steps = steps,
+    )
+
+    private fun usageDay(date: String, duration: Long) = UsageStatisticsDay(
+        date = LocalDate.parse(date),
+        zoneId = "Asia/Shanghai",
+        state = StatisticsDayState.FINAL,
+        collectedAtEpochMillis = 1,
+        apps = listOf(UsageAppDuration("example.app", duration)),
     )
 }

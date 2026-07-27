@@ -26,6 +26,7 @@ import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DEFAULT_MEAL_BUTTON_ICONS
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
@@ -42,6 +43,7 @@ import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.model.normalizeMorePageOrder
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -68,6 +70,7 @@ class SettingsRepository @Inject constructor(
         val darkMode = stringPreferencesKey("dark_mode")
         val appLanguage = stringPreferencesKey("app_language")
         val userName = stringPreferencesKey("user_name")
+        val homeGreetings = stringPreferencesKey("home_greetings_v1")
         val themeColorArgb = intPreferencesKey("theme_color_argb")
         val themeSecondaryColorsArgb = stringPreferencesKey("theme_secondary_colors_argb")
         val fontScale = floatPreferencesKey("font_scale")
@@ -131,6 +134,7 @@ class SettingsRepository @Inject constructor(
         val stepTrackingEnabled = booleanPreferencesKey("step_tracking_enabled")
         val navigationIntroAcknowledged = booleanPreferencesKey("navigation_intro_acknowledged")
         val navItems = stringPreferencesKey("nav_items")
+        val morePageOrder = stringPreferencesKey("more_page_order")
         val defaultPage = stringPreferencesKey("default_page")
         val bottomNavShowLabels = booleanPreferencesKey("bottom_nav_show_labels")
         val morePageShowDescriptions = booleanPreferencesKey("more_page_show_descriptions")
@@ -173,6 +177,10 @@ class SettingsRepository @Inject constructor(
             darkMode = prefs[Keys.darkMode].enumValueOr(defaults.darkMode),
             appLanguage = prefs[Keys.appLanguage].enumValueOr(defaults.appLanguage),
             userName = normalizeUserName(prefs[Keys.userName] ?: defaults.userName),
+            homeGreetings = decodeHomeGreetings(
+                prefs[Keys.homeGreetings],
+                defaults.homeGreetings,
+            ),
             themeColorArgb = prefs[Keys.themeColorArgb] ?: defaults.themeColorArgb,
             themeSecondaryColorsArgb = decodeThemeSecondaryColors(
                 prefs[Keys.themeSecondaryColorsArgb],
@@ -267,6 +275,7 @@ class SettingsRepository @Inject constructor(
             navigationIntroAcknowledged = prefs[Keys.navigationIntroAcknowledged]
                 ?: defaults.navigationIntroAcknowledged,
             navItems = nav,
+            morePageOrder = decodeMorePageOrder(prefs[Keys.morePageOrder], nav),
             defaultPage = requestedDefault.takeIf { it in visibleIds } ?: visibleIds.firstOrNull() ?: NavItemId.SETTINGS,
             bottomNavShowLabels = prefs[Keys.bottomNavShowLabels] ?: defaults.bottomNavShowLabels,
             morePageShowDescriptions = prefs[Keys.morePageShowDescriptions]
@@ -301,6 +310,15 @@ class SettingsRepository @Inject constructor(
     suspend fun setDarkMode(value: DarkMode) = set(Keys.darkMode, value.name)
     suspend fun setAppLanguage(value: AppLanguage) = set(Keys.appLanguage, value.name)
     suspend fun setUserName(value: String) = set(Keys.userName, normalizeUserName(value))
+    suspend fun setHomeGreetingSettings(
+        userName: String,
+        greetings: List<HomeGreetingTemplate>,
+    ) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.userName] = normalizeUserName(userName)
+            prefs[Keys.homeGreetings] = encodeHomeGreetings(normalizeHomeGreetings(greetings))
+        }
+    }
     suspend fun setThemeColor(value: Int) = set(Keys.themeColorArgb, value or 0xFF000000.toInt())
     suspend fun setThemeSecondaryColors(value: List<Int>) = set(
         Keys.themeSecondaryColorsArgb,
@@ -477,7 +495,10 @@ class SettingsRepository @Inject constructor(
         set(Keys.homeWidgetTitles, encodeStringList(value.distinct()))
 
     suspend fun setNavItems(value: List<NavItemConfig>) {
-        set(Keys.navItems, encodeNav(normalizeNavItems(value)))
+        context.settingsDataStore.edit { prefs ->
+            migrateMorePageOrderIfNeeded(prefs)
+            prefs[Keys.navItems] = encodeNav(normalizeNavItems(value))
+        }
     }
 
     suspend fun setNavigationSettings(
@@ -489,6 +510,7 @@ class SettingsRepository @Inject constructor(
         val visibleIds = normalized.filter { it.visible || it.id == NavItemId.SETTINGS }.map { it.id }.toSet()
         val safeDefault = defaultPage.takeIf { it in visibleIds } ?: visibleIds.firstOrNull() ?: NavItemId.SETTINGS
         context.settingsDataStore.edit { prefs ->
+            migrateMorePageOrderIfNeeded(prefs)
             prefs[Keys.navItems] = encodeNav(normalized)
             prefs[Keys.defaultPage] = safeDefault.name
             prefs[Keys.bottomNavShowLabels] = showLabels
@@ -501,13 +523,24 @@ class SettingsRepository @Inject constructor(
     ) {
         val normalized = normalizeNavItems(items)
         context.settingsDataStore.edit { prefs ->
+            migrateMorePageOrderIfNeeded(prefs)
             prefs[Keys.navItems] = encodeNav(normalized)
             prefs[Keys.morePageShowDescriptions] = showDescriptions
         }
     }
 
+    suspend fun setMorePageOrder(value: List<NavItemId>) {
+        context.settingsDataStore.edit { prefs ->
+            val nav = decodeNav(prefs[Keys.navItems])
+            prefs[Keys.morePageOrder] = encodeMorePageOrder(
+                normalizeMorePageOrder(value, nav),
+            )
+        }
+    }
+
     suspend fun restoreFromBackup(value: AppSettings) {
         val normalizedNav = normalizeNavItems(value.navItems)
+        val normalizedMorePageOrder = normalizeMorePageOrder(value.morePageOrder, normalizedNav)
         val normalizedMealPhotoFilter = value.mealPhotoFilter.normalized()
         val normalizedCloudSyncConfigs = normalizeCloudSyncConfigs(value.cloudSyncConfigs)
         val visibleIds = normalizedNav.filter(NavItemConfig::visible).map(NavItemConfig::id).toSet()
@@ -520,6 +553,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.darkMode] = value.darkMode.name
             prefs[Keys.appLanguage] = value.appLanguage.name
             prefs[Keys.userName] = normalizeUserName(value.userName)
+            prefs[Keys.homeGreetings] = encodeHomeGreetings(
+                normalizeHomeGreetings(value.homeGreetings),
+            )
             prefs[Keys.themeColorArgb] = value.themeColorArgb or 0xFF000000.toInt()
             prefs[Keys.themeSecondaryColorsArgb] = encodeThemeSecondaryColors(
                 normalizeThemeSecondaryColors(value.themeSecondaryColorsArgb),
@@ -598,6 +634,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.usageTrackingEnabled] = value.usageTrackingEnabled
             prefs[Keys.stepTrackingEnabled] = value.stepTrackingEnabled
             prefs[Keys.navItems] = encodeNav(normalizedNav)
+            prefs[Keys.morePageOrder] = encodeMorePageOrder(normalizedMorePageOrder)
             prefs[Keys.defaultPage] = normalizedDefaultPage.name
             prefs[Keys.bottomNavShowLabels] = value.bottomNavShowLabels
             prefs[Keys.morePageShowDescriptions] = value.morePageShowDescriptions
@@ -667,6 +704,38 @@ class SettingsRepository @Inject constructor(
             }
         }.let(::normalizeNavItems)
     }.getOrElse { AppSettings().navItems }
+
+    private fun decodeMorePageOrder(
+        raw: String?,
+        navItems: List<NavItemConfig>,
+    ): List<NavItemId> = runCatching {
+        val array = JSONArray(raw ?: return@runCatching normalizeMorePageOrder(emptyList(), navItems))
+        require(array.length() <= NavItemId.entries.size)
+        val seen = HashSet<NavItemId>(array.length())
+        val decoded = buildList {
+            for (index in 0 until array.length()) {
+                val id = NavItemId.valueOf(array.getString(index))
+                require(
+                    id != NavItemId.HOME &&
+                        id != NavItemId.MORE &&
+                        id != NavItemId.SETTINGS,
+                )
+                require(seen.add(id))
+                add(id)
+            }
+        }
+        normalizeMorePageOrder(decoded, navItems)
+    }.getOrElse { normalizeMorePageOrder(emptyList(), navItems) }
+
+    private fun encodeMorePageOrder(value: List<NavItemId>): String =
+        JSONArray().apply { value.forEach { put(it.name) } }.toString()
+
+    private fun migrateMorePageOrderIfNeeded(prefs: MutablePreferences) {
+        val legacyNav = decodeNav(prefs[Keys.navItems])
+        prefs[Keys.morePageOrder] = encodeMorePageOrder(
+            decodeMorePageOrder(prefs[Keys.morePageOrder], legacyNav),
+        )
+    }
 
     private fun encodeNav(items: List<NavItemConfig>): String = JSONArray().apply {
         items.forEach { item ->
@@ -886,6 +955,41 @@ class SettingsRepository @Inject constructor(
         items.forEach { put(it) }
     }.toString()
 
+    private fun decodeHomeGreetings(
+        raw: String?,
+        fallback: List<HomeGreetingTemplate>,
+    ): List<HomeGreetingTemplate> {
+        if (raw == null) return normalizeHomeGreetings(fallback)
+        return runCatching {
+            val array = JSONArray(raw)
+            require(array.length() <= MAX_HOME_GREETINGS)
+            buildList(array.length()) {
+                for (index in 0 until array.length()) {
+                    val item = array.getJSONObject(index)
+                    add(
+                        HomeGreetingTemplate(
+                            chinese = item.opt("chinese") as? String
+                                ?: throw IllegalArgumentException("Invalid Chinese greeting"),
+                            english = item.opt("english") as? String
+                                ?: throw IllegalArgumentException("Invalid English greeting"),
+                        ),
+                    )
+                }
+            }.let(::normalizeHomeGreetings)
+        }.getOrElse { normalizeHomeGreetings(fallback) }
+    }
+
+    private fun encodeHomeGreetings(items: List<HomeGreetingTemplate>): String =
+        JSONArray().apply {
+            items.forEach { item ->
+                put(
+                    JSONObject()
+                        .put("chinese", item.chinese)
+                        .put("english", item.english),
+                )
+            }
+        }.toString()
+
     private fun migrateLegacyDefaultLabel(id: NavItemId, label: String): String = when {
         id == NavItemId.BLOG && label == "博客" -> id.defaultLabel
         id == NavItemId.THOUGHT && label == "闪思" -> id.defaultLabel
@@ -905,6 +1009,23 @@ class SettingsRepository @Inject constructor(
 }
 
 internal fun normalizeUserName(value: String): String = value.trim().takeCodePoints(MAX_USER_NAME_CHARS)
+
+internal fun normalizeHomeGreetings(
+    items: List<HomeGreetingTemplate>,
+): List<HomeGreetingTemplate> = items.asSequence()
+    .take(MAX_HOME_GREETINGS)
+    .map { item ->
+        val chinese = item.chinese.trim().replaceLineBreaks()
+            .takeCodePoints(MAX_HOME_GREETING_CODE_POINTS)
+        val english = item.english.trim().replaceLineBreaks()
+            .takeCodePoints(MAX_HOME_GREETING_CODE_POINTS)
+        HomeGreetingTemplate(
+            chinese = chinese,
+            english = english,
+        )
+    }
+    .filter { it.chinese.isNotBlank() || it.english.isNotBlank() }
+    .toList()
 
 internal fun resolveAiConfigId(
     configs: List<AiModelConfig>,
@@ -1072,6 +1193,8 @@ internal fun normalizeRssSubscriptions(items: List<RssSubscription>): List<RssSu
 private fun opaqueArgb(value: Int): Int = value or 0xFF000000.toInt()
 
 private const val MAX_USER_NAME_CHARS = 32
+internal const val MAX_HOME_GREETINGS = 100
+internal const val MAX_HOME_GREETING_CODE_POINTS = 40
 private const val MAX_MEAL_BUTTON_ICON_CHARS = 16
 private fun String.replaceLineBreaks(): String = replace('\r', ' ').replace('\n', ' ')
 

@@ -2,7 +2,16 @@
 
 package com.deskcubby.app.ui.usage
 
+import android.content.pm.LauncherApps
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Rect
+import android.graphics.drawable.Drawable
+import android.os.Process
+import android.util.LruCache
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,20 +20,25 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ArrowDropDown
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -32,10 +46,16 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,6 +71,8 @@ import com.deskcubby.app.ui.statistics.StatisticsOverviewPanel
 import com.deskcubby.app.ui.statistics.formatUsageDuration
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.tr
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun UsageStatisticsScreen(
@@ -107,6 +129,7 @@ fun UsageStatisticsScreen(
                     UsageAppSelector(
                         selectedPackage = state.selectedPackage,
                         choices = state.appChoices,
+                        allAppsMillis = state.rangeTotalForegroundMillis.toDouble(),
                         onSelect = viewModel::selectPackage,
                     )
                 }
@@ -148,21 +171,14 @@ fun UsageStatisticsScreen(
                     )
                 }
                 items(
-                    items = state.history.days.sortedByDescending { it.date },
+                    items = state.points.sortedByDescending { it.date },
                     key = { it.date.toString() },
-                ) { day ->
-                    val value = if (state.selectedPackage == null) {
-                        day.totalForegroundMillis.toDouble()
-                    } else {
-                        day.apps.firstOrNull { it.packageName == state.selectedPackage }
-                            ?.foregroundMillis
-                            ?.toDouble()
-                            ?: 0.0
-                    }
+                ) { point ->
                     StatisticsDayRow(
-                        date = day.date.toString(),
-                        value = formatUsageDuration(value),
-                        open = day.state == StatisticsDayState.OPEN,
+                        date = point.date.toString(),
+                        value = formatUsageDuration(point.value ?: 0.0),
+                        open = state.history.days.firstOrNull { it.date == point.date }?.state ==
+                            StatisticsDayState.OPEN,
                     )
                 }
             } else if (
@@ -227,16 +243,16 @@ private fun UsageCollectionMessage(
             StatisticsMessagePanel(
                 title = tr("正在刷新", "Refreshing"),
                 message = tr(
-                    "正在按本地自然日整理前台使用事件。",
-                    "Foreground events are being grouped by local civil day.",
+                    "正在读取系统按天汇总的使用记录。",
+                    "Reading Android's daily usage summaries.",
                 ),
             )
 
         else -> StatisticsMessagePanel(
             title = tr("本机私有统计", "Private on-device statistics"),
             message = tr(
-                "今天的数据可刷新；过去日期成功日结后不会重复计算。统计与权限不会进入应用备份或云同步。",
-                "Today can refresh. Finalized past dates are never recalculated. Statistics and permissions are excluded from backups and cloud sync.",
+                "会补采系统目前仍能访问的既往记录；今天可刷新，成功日结的过去日期不会重复计算。统计与权限不会进入备份或云同步。",
+                "All earlier records still exposed by Android are backfilled. Today stays refreshable, while finalized past dates are never recalculated. Statistics and permissions are excluded from backups and cloud sync.",
             ),
         )
     }
@@ -246,21 +262,27 @@ private fun UsageCollectionMessage(
 private fun UsageAppSelector(
     selectedPackage: String?,
     choices: List<UsageAppChoice>,
+    allAppsMillis: Double,
     onSelect: (String?) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selected = choices.firstOrNull { it.packageName == selectedPackage }
-    Surface(
+    GlassPanel(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { expanded = true },
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        cornerRadius = 22.dp,
+        padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            UsageAppIcon(
+                packageName = selected?.packageName,
+                modifier = Modifier.size(42.dp),
+            )
             Column(Modifier.weight(1f)) {
                 Text(
                     tr("统计对象", "Statistic"),
@@ -272,51 +294,223 @@ private fun UsageAppSelector(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                selected?.let {
-                    if (it.label != it.packageName) {
-                        Text(
-                            it.packageName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+                Text(
+                    formatUsageDuration(selected?.foregroundMillis?.toDouble() ?: allAppsMillis),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                )
             }
             Icon(Icons.Outlined.ArrowDropDown, null)
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                DropdownMenuItem(
-                    text = { Text(tr("全部应用总时长", "All apps total")) },
-                    onClick = {
-                        onSelect(null)
-                        expanded = false
-                    },
+        }
+    }
+    if (expanded) {
+        ModalBottomSheet(onDismissRequest = { expanded = false }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+            ) {
+                Text(
+                    tr("选择统计应用", "Choose an app"),
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
                 )
-                choices.forEach { choice ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(choice.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                if (choice.label != choice.packageName) {
-                                    Text(
-                                        choice.packageName,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                        },
-                        onClick = {
-                            onSelect(choice.packageName)
-                            expanded = false
-                        },
-                    )
+                Text(
+                    tr(
+                        "按当前时间范围内的使用时长排序",
+                        "Sorted by usage in the selected time range",
+                    ),
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 520.dp)
+                        .padding(top = 8.dp),
+                ) {
+                    item(key = "all-apps") {
+                        UsageAppChoiceRow(
+                            packageName = null,
+                            label = tr("全部应用总时长", "All apps total"),
+                            foregroundMillis = allAppsMillis,
+                            selected = selectedPackage == null,
+                            onClick = {
+                                onSelect(null)
+                                expanded = false
+                            },
+                        )
+                    }
+                    if (choices.isNotEmpty()) {
+                        item(key = "divider") {
+                            HorizontalDivider(Modifier.padding(horizontal = 20.dp))
+                        }
+                    }
+                    items(
+                        items = choices,
+                        key = UsageAppChoice::packageName,
+                    ) { choice ->
+                        UsageAppChoiceRow(
+                            packageName = choice.packageName,
+                            label = choice.label,
+                            foregroundMillis = choice.foregroundMillis.toDouble(),
+                            selected = selectedPackage == choice.packageName,
+                            onClick = {
+                                onSelect(choice.packageName)
+                                expanded = false
+                            },
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun UsageAppChoiceRow(
+    packageName: String?,
+    label: String,
+    foregroundMillis: Double,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        UsageAppIcon(packageName = packageName, modifier = Modifier.size(40.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                formatUsageDuration(foregroundMillis),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+        if (selected) {
+            Icon(
+                Icons.Outlined.Check,
+                contentDescription = tr("已选择", "Selected"),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun UsageAppIcon(
+    packageName: String?,
+    modifier: Modifier = Modifier,
+) {
+    if (packageName == null) {
+        Surface(
+            modifier = modifier,
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Outlined.Apps,
+                    contentDescription = null,
+                    modifier = Modifier.padding(9.dp),
+                )
+            }
+        }
+        return
+    }
+    val context = LocalContext.current
+    val bitmap by produceState<ImageBitmap?>(
+        initialValue = null,
+        key1 = packageName,
+    ) {
+        value = withContext(Dispatchers.IO) {
+            loadUsageAppIcon(context, packageName)
+        }
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap!!,
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = modifier.clip(MaterialTheme.shapes.small),
+        )
+    } else {
+        Surface(
+            modifier = modifier,
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Outlined.Apps,
+                    contentDescription = null,
+                    modifier = Modifier.padding(9.dp),
+                )
+            }
+        }
+    }
+}
+
+private fun loadUsageAppIcon(
+    context: android.content.Context,
+    packageName: String,
+): ImageBitmap? {
+    usageAppIconCache.get(packageName)?.let { return it.asImageBitmap() }
+    val launcherIcon = runCatching {
+        context.getSystemService(LauncherApps::class.java)
+            .getActivityList(packageName, Process.myUserHandle())
+            .firstOrNull()
+            ?.getIcon(context.resources.displayMetrics.densityDpi)
+    }.getOrNull()
+    val drawable = launcherIcon ?: runCatching {
+        context.packageManager.getApplicationIcon(packageName)
+    }.getOrNull() ?: return null
+    return drawable.renderBoundedIcon()?.also { bitmap ->
+        usageAppIconCache.put(packageName, bitmap)
+    }?.asImageBitmap()
+}
+
+private fun Drawable.renderBoundedIcon(): Bitmap? = runCatching {
+    val width = intrinsicWidth.takeIf { it > 0 } ?: APP_ICON_RENDER_SIZE_PX
+    val height = intrinsicHeight.takeIf { it > 0 } ?: APP_ICON_RENDER_SIZE_PX
+    val scale = minOf(
+        1f,
+        APP_ICON_RENDER_SIZE_PX.toFloat() / width,
+        APP_ICON_RENDER_SIZE_PX.toFloat() / height,
+    )
+    val targetWidth = (width * scale).toInt().coerceAtLeast(1)
+    val targetHeight = (height * scale).toInt().coerceAtLeast(1)
+    Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888).also { bitmap ->
+        val canvas = Canvas(bitmap)
+        val previousBounds = Rect(bounds)
+        setBounds(0, 0, targetWidth, targetHeight)
+        draw(canvas)
+        setBounds(previousBounds)
+    }
+}.getOrNull()
+
+private val usageAppIconCache = LruCache<String, Bitmap>(64)
+private const val APP_ICON_RENDER_SIZE_PX = 128
 
 @Composable
 private fun StatisticsDayRow(

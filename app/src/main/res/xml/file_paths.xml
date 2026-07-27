@@ -3,4 +3,7 @@
     <cache-path
         name="meal_camera"
         path="meal-camera/" />
+    <cache-path
+        name="verified_updates"
+        path="updates/" />
 </paths>

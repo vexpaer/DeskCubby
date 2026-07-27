@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.MutableContextWrapper
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Build
@@ -19,6 +20,8 @@ import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceError
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -119,6 +122,9 @@ import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.currentOrganicFutureColorScheme
 import com.deskcubby.app.ui.theme.tr
+import java.io.ByteArrayInputStream
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -127,6 +133,7 @@ import kotlinx.coroutines.launch
 fun BlogScreen(
     padding: PaddingValues,
     viewModel: BlogViewModel,
+    onCloseTrustedArticle: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
@@ -145,6 +152,14 @@ fun BlogScreen(
     val noExternalBrowserMessage = tr("没有可用的外部浏览器", "No external browser is available")
     val downloadQueuedMessage = tr("已加入下载队列", "Added to downloads")
     val downloadFailedMessage = tr("下载失败", "Download failed")
+    val insecureArticleNavigationBlockedMessage = tr(
+        "为保护 RSS 阅读安全，已阻止跳转到非 HTTPS 页面",
+        "A non-HTTPS navigation was blocked to keep RSS reading secure",
+    )
+    val articleLoadFailedMessage = tr(
+        "文章加载失败，请检查网络或稍后重试",
+        "The article could not be loaded. Check your connection and try again.",
+    )
 
     fun showBrowserMessage(message: String) {
         coroutineScope.launch { snackbarHostState.showSnackbar(message) }
@@ -245,7 +260,18 @@ fun BlogScreen(
             }
     }
 
-    BackHandler(enabled = currentTab.canGoBack) { currentWebView?.goBack() }
+    fun closeTrustedArticleReader() {
+        if (viewModel.closeTemporaryRssReader()) {
+            onCloseTrustedArticle()
+        }
+    }
+
+    BackHandler(enabled = currentTab.temporaryRssReader) {
+        closeTrustedArticleReader()
+    }
+    BackHandler(enabled = !currentTab.temporaryRssReader && currentTab.canGoBack) {
+        currentWebView?.goBack()
+    }
 
     Scaffold(
         modifier = Modifier.padding(bottom = padding.calculateBottomPadding()).imePadding(),
@@ -340,10 +366,25 @@ fun BlogScreen(
                                 onClick = { toolbarMenu = false; loadInTab(currentTab.id, settings.browserHomeUrl) },
                             )
                             DropdownMenuItem(
-                                text = { Text(tr("后退", "Back")) },
+                                text = {
+                                    Text(
+                                        if (currentTab.temporaryRssReader) {
+                                            tr("返回 RSS", "Back to RSS")
+                                        } else {
+                                            tr("后退", "Back")
+                                        },
+                                    )
+                                },
                                 leadingIcon = { Icon(Icons.AutoMirrored.Outlined.ArrowBack, null) },
-                                enabled = currentTab.canGoBack,
-                                onClick = { toolbarMenu = false; currentWebView?.goBack() },
+                                enabled = currentTab.temporaryRssReader || currentTab.canGoBack,
+                                onClick = {
+                                    toolbarMenu = false
+                                    if (currentTab.temporaryRssReader) {
+                                        closeTrustedArticleReader()
+                                    } else {
+                                        currentWebView?.goBack()
+                                    }
+                                },
                             )
                             DropdownMenuItem(
                                 text = { Text(tr("前进", "Forward")) },
@@ -472,6 +513,7 @@ fun BlogScreen(
                         BrowserWebPage(
                             tabId = tab.id,
                             initialUrl = tab.url,
+                            isHttpsOnly = { viewModel.isTabHttpsOnly(tab.id) },
                             active = tab.id == currentTab.id,
                             dark = browserUsesDarkTheme,
                             desktopMode = settings.browserDesktopMode,
@@ -484,6 +526,14 @@ fun BlogScreen(
                                 }
                             },
                             onRenderProcessGone = viewModel::markRenderProcessGone,
+                            onInsecureNavigationBlocked = { id ->
+                                viewModel.markInsecureNavigationBlocked(id)
+                                showBrowserMessage(insecureArticleNavigationBlockedMessage)
+                            },
+                            onLoadError = { id ->
+                                viewModel.markLoadFailed(id)
+                                showBrowserMessage(articleLoadFailedMessage)
+                            },
                             onStateChanged = { id, url, title, progress, canGoBack, canGoForward ->
                                 viewModel.updateTabBrowserState(
                                     tabId = id,
@@ -785,6 +835,7 @@ private data class PendingFileRequest(
 private fun BrowserWebPage(
     tabId: Long,
     initialUrl: String,
+    isHttpsOnly: () -> Boolean,
     active: Boolean,
     dark: Boolean,
     desktopMode: Boolean,
@@ -792,6 +843,8 @@ private fun BrowserWebPage(
     onWebViewCreated: (Long, WebView) -> Unit,
     onWebViewDisposed: (Long, WebView) -> Unit,
     onRenderProcessGone: (Long, Boolean) -> Unit,
+    onInsecureNavigationBlocked: (Long) -> Unit,
+    onLoadError: (Long) -> Unit,
     onStateChanged: (Long, String, String, Int, Boolean, Boolean) -> Unit,
     onPageFinished: (Long, String, String, Boolean, Boolean) -> Unit,
     onChooseFile: (Long, ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams) -> Boolean,
@@ -802,6 +855,8 @@ private fun BrowserWebPage(
     val latestOnCreated by rememberUpdatedState(onWebViewCreated)
     val latestOnDisposed by rememberUpdatedState(onWebViewDisposed)
     val latestOnRenderProcessGone by rememberUpdatedState(onRenderProcessGone)
+    val latestOnInsecureNavigationBlocked by rememberUpdatedState(onInsecureNavigationBlocked)
+    val latestOnLoadError by rememberUpdatedState(onLoadError)
     val latestOnStateChanged by rememberUpdatedState(onStateChanged)
     val latestOnPageFinished by rememberUpdatedState(onPageFinished)
     val latestOnChooseFile by rememberUpdatedState(onChooseFile)
@@ -826,7 +881,7 @@ private fun BrowserWebPage(
                 settings.domStorageEnabled = true
                 settings.databaseEnabled = true
                 settings.allowFileAccess = false
-                settings.allowContentAccess = true
+                settings.allowContentAccess = !isHttpsOnly()
                 settings.allowFileAccessFromFileURLs = false
                 settings.allowUniversalAccessFromFileURLs = false
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
@@ -836,24 +891,89 @@ private fun BrowserWebPage(
                 applyBrowserRenderingConfig(this, renderConfig)
                 tag = renderConfig
                 latestOnCreated(tabId, this)
-                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                CookieManager.getInstance().setAcceptThirdPartyCookies(this, !isHttpsOnly())
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                     WebView.startSafeBrowsing(ctx, null)
+                }
+
+                val lastBlockedNavigationUrl = AtomicReference<String?>(null)
+                val browserView = this
+                fun notifyBlockedNavigation(url: String) {
+                    if (lastBlockedNavigationUrl.getAndSet(url) == url) return
+                    browserView.post {
+                        latestOnInsecureNavigationBlocked(tabId)
+                    }
                 }
 
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                         val uri = request.url
-                        return if (uri.scheme == "http" || uri.scheme == "https") {
+                        val requestedUrl = uri.toString()
+                        val trustedReader = isHttpsOnly()
+                        val scheme = uri.scheme.orEmpty()
+                        if (trustedReader && request.isForMainFrame &&
+                            !isTrustedArticleMainFrameNavigationAllowed(true, requestedUrl)
+                        ) {
+                            view.stopLoading()
+                            notifyBlockedNavigation(requestedUrl)
+                            return true
+                        }
+                        if (trustedReader && !request.isForMainFrame &&
+                            !isHttpOrHttpsScheme(scheme)
+                        ) {
+                            return true
+                        }
+                        return if (isHttpOrHttpsScheme(scheme)) {
                             false
                         } else {
-                            runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+                            if (shouldOpenExternalNavigation(
+                                    trustedReader = trustedReader,
+                                    isForMainFrame = request.isForMainFrame,
+                                    hasUserGesture = request.hasGesture(),
+                                    scheme = scheme,
+                                )
+                            ) {
+                                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+                            }
                             true
                         }
                     }
 
+                    override fun shouldInterceptRequest(
+                        view: WebView,
+                        request: WebResourceRequest,
+                    ): WebResourceResponse? {
+                        val requestedUrl = request.url.toString()
+                        if (request.isForMainFrame &&
+                            !isTrustedArticleMainFrameNavigationAllowed(isHttpsOnly(), requestedUrl)
+                        ) {
+                            notifyBlockedNavigation(requestedUrl)
+                            return blockedTrustedArticleNavigationResponse()
+                        }
+                        if (isHttpsOnly() && !request.isForMainFrame &&
+                            !isHttpOrHttpsScheme(request.url.scheme.orEmpty())
+                        ) {
+                            return blockedTrustedArticleNavigationResponse()
+                        }
+                        return super.shouldInterceptRequest(view, request)
+                    }
+
+                    override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                        if (!isTrustedArticleMainFrameNavigationAllowed(isHttpsOnly(), url)) {
+                            view.stopLoading()
+                            notifyBlockedNavigation(url)
+                            return
+                        }
+                        lastBlockedNavigationUrl.set(null)
+                        super.onPageStarted(view, url, favicon)
+                    }
+
                     override fun onPageFinished(view: WebView, url: String) {
                         super.onPageFinished(view, url)
+                        if (!isTrustedArticleMainFrameNavigationAllowed(isHttpsOnly(), url)) {
+                            notifyBlockedNavigation(url)
+                            return
+                        }
                         latestOnPageFinished(
                             tabId,
                             url,
@@ -865,6 +985,29 @@ private fun BrowserWebPage(
 
                     override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
                         handler.cancel()
+                        latestOnLoadError(tabId)
+                    }
+
+                    override fun onReceivedError(
+                        view: WebView,
+                        request: WebResourceRequest,
+                        error: WebResourceError,
+                    ) {
+                        super.onReceivedError(view, request, error)
+                        if (request.isForMainFrame) {
+                            latestOnLoadError(tabId)
+                        }
+                    }
+
+                    override fun onReceivedHttpError(
+                        view: WebView,
+                        request: WebResourceRequest,
+                        errorResponse: WebResourceResponse,
+                    ) {
+                        super.onReceivedHttpError(view, request, errorResponse)
+                        if (request.isForMainFrame && errorResponse.statusCode >= 400) {
+                            latestOnLoadError(tabId)
+                        }
                     }
 
                     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
@@ -920,6 +1063,37 @@ private fun BrowserWebPage(
             releaseWebView(view, releaseGuard)
         },
     )
+}
+
+private fun blockedTrustedArticleNavigationResponse(): WebResourceResponse =
+    WebResourceResponse(
+        "text/plain",
+        Charsets.UTF_8.name(),
+        403,
+        "Blocked insecure RSS article navigation",
+        mapOf(
+            "Cache-Control" to "no-store",
+            "Content-Security-Policy" to "default-src 'none'",
+        ),
+        ByteArrayInputStream(ByteArray(0)),
+    )
+
+internal fun isHttpOrHttpsScheme(scheme: String): Boolean =
+    scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)
+
+/**
+ * Web content may only hand a small, explicit set of ordinary-browser links to another app.
+ * RSS reader pages never receive this capability, and iframe/script initiated requests are
+ * always blocked.
+ */
+internal fun shouldOpenExternalNavigation(
+    trustedReader: Boolean,
+    isForMainFrame: Boolean,
+    hasUserGesture: Boolean,
+    scheme: String,
+): Boolean {
+    if (trustedReader || !isForMainFrame || !hasUserGesture) return false
+    return scheme.lowercase(Locale.ROOT) in SAFE_EXTERNAL_NAVIGATION_SCHEMES
 }
 
 private class WebViewReleaseGuard(var released: Boolean = false)
@@ -1056,6 +1230,8 @@ private fun openExternal(context: Context, url: String): Boolean {
     if (url.isBlank()) return false
     return runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.isSuccess
 }
+
+private val SAFE_EXTERNAL_NAVIGATION_SCHEMES = setOf("mailto", "tel", "sms")
 
 private fun enqueueDownload(
     context: Context,

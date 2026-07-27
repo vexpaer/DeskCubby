@@ -14,11 +14,13 @@ import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DailyEventTemplate
+import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
@@ -39,7 +41,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 15,
+    val formatVersion: Int = 16,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -59,7 +61,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 15
+    const val FORMAT_VERSION: Int = 16
 
     private const val FORMAT_NAME = "DeskCubby"
     private const val MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -78,6 +80,8 @@ object BackupJsonCodec {
     private const val MAX_POEM_CONTENT_CHARS = 100_000
     private const val MAX_POEM_SOURCE_CHARS = 4_096
     private const val MAX_USERNAME_CHARS = 32
+    private const val MAX_HOME_GREETINGS = 100
+    private const val MAX_HOME_GREETING_CHARS = 40
     private const val MAX_MEAL_BUTTON_ICON_CHARS = 16
     private const val MAX_DAILY_EVENT_TEMPLATES = 100
     private const val MAX_RSS_SUBSCRIPTIONS = 100
@@ -229,6 +233,7 @@ object BackupJsonCodec {
             .put("tint", settings.mealPhotoFilter.tint))
         .put("mealButtonsUseIcons", settings.mealButtonsUseIcons)
         .put("userName", settings.userName)
+        .put("homeGreetings", encodeHomeGreetings(settings.homeGreetings))
         .put("homeWidgetBordersEnabled", settings.homeWidgetBordersEnabled)
         .put("mealButtonIcons", settings.mealButtonIcons.toJsonArray())
         .put("dailyEventTemplates", JSONArray().apply {
@@ -288,6 +293,13 @@ object BackupJsonCodec {
                 )
             }
         })
+        .put(
+            "morePageOrder",
+            JSONArray().apply {
+                normalizeMorePageOrder(settings.morePageOrder, settings.navItems)
+                    .forEach { put(it.name) }
+            },
+        )
         .put("defaultPage", settings.defaultPage.name)
         .put("bottomNavShowLabels", settings.bottomNavShowLabels)
         .put("morePageShowDescriptions", settings.morePageShowDescriptions)
@@ -401,6 +413,51 @@ object BackupJsonCodec {
         }
     }
 
+    private fun encodeHomeGreetings(items: List<HomeGreetingTemplate>): JSONArray {
+        require(items.size <= MAX_HOME_GREETINGS) { "Too many home greetings" }
+        return JSONArray().apply {
+            items.forEachIndexed { index, item ->
+                require(item.chinese.isNotBlank() || item.english.isNotBlank()) {
+                    "homeGreetings[$index] is blank"
+                }
+                item.chinese.requireMaxCodePoints(
+                    "homeGreetings[$index].chinese",
+                    MAX_HOME_GREETING_CHARS,
+                )
+                item.english.requireMaxCodePoints(
+                    "homeGreetings[$index].english",
+                    MAX_HOME_GREETING_CHARS,
+                )
+                put(
+                    JSONObject()
+                        .put("chinese", item.chinese)
+                        .put("english", item.english),
+                )
+            }
+        }
+    }
+
+    private fun decodeHomeGreetings(json: JSONArray): List<HomeGreetingTemplate> {
+        require(json.length() <= MAX_HOME_GREETINGS) { "Too many home greetings" }
+        return buildList(json.length()) {
+            for (index in 0 until json.length()) {
+                val item = json.getJSONObject(index)
+                val chinese = item.requiredString("chinese").requireMaxCodePoints(
+                    "homeGreetings[$index].chinese",
+                    MAX_HOME_GREETING_CHARS,
+                )
+                val english = item.requiredString("english").requireMaxCodePoints(
+                    "homeGreetings[$index].english",
+                    MAX_HOME_GREETING_CHARS,
+                )
+                require(chinese.isNotBlank() || english.isNotBlank()) {
+                    "homeGreetings[$index] is blank"
+                }
+                add(HomeGreetingTemplate(chinese = chinese, english = english))
+            }
+        }
+    }
+
     private fun decodeSettings(json: JSONObject, version: Int): AppSettings {
         val defaults = AppSettings()
         val homeWidgets = migrateDailyRecordsWidget(
@@ -420,6 +477,7 @@ object BackupJsonCodec {
             items = mealMigratedTitles,
             migrated = version >= 9,
         )
+        val navItems = decodeNavItems(json.requiredArray("navItems"), version)
         return AppSettings(
             visualStyle = decodeVisualStyle(json, version),
             darkMode = json.requiredEnum("darkMode"),
@@ -558,6 +616,11 @@ object BackupJsonCodec {
             } else {
                 defaults.userName
             },
+            homeGreetings = if (version >= 16) {
+                decodeHomeGreetings(json.requiredArray("homeGreetings"))
+            } else {
+                defaults.homeGreetings
+            },
             homeWidgetBordersEnabled = if (version >= 5) {
                 json.requiredBoolean("homeWidgetBordersEnabled")
             } else {
@@ -633,7 +696,12 @@ object BackupJsonCodec {
             } else {
                 defaults.stepTrackingEnabled
             },
-            navItems = decodeNavItems(json.requiredArray("navItems"), version),
+            navItems = navItems,
+            morePageOrder = if (version >= 16) {
+                decodeMorePageOrder(json.requiredArray("morePageOrder"), navItems)
+            } else {
+                normalizeMorePageOrder(emptyList(), navItems)
+            },
             defaultPage = json.requiredEnum("defaultPage"),
             bottomNavShowLabels = json.requiredBoolean("bottomNavShowLabels"),
             morePageShowDescriptions = if (version >= 15) {
@@ -818,6 +886,32 @@ object BackupJsonCodec {
                 ),
             )
         }
+    }
+
+    private fun decodeMorePageOrder(
+        json: JSONArray,
+        navItems: List<NavItemConfig>,
+    ): List<NavItemId> {
+        require(json.length() <= NavItemId.entries.size) {
+            "morePageOrder contains too many items"
+        }
+        val decoded = json.requiredStringList("morePageOrder")
+            .mapIndexed { index, value ->
+                val id = runCatching { NavItemId.valueOf(value) }
+                    .getOrElse { throw IllegalArgumentException("Invalid morePageOrder[$index]", it) }
+                require(
+                    id != NavItemId.HOME &&
+                        id != NavItemId.MORE &&
+                        id != NavItemId.SETTINGS,
+                ) {
+                    "morePageOrder[$index] is not orderable"
+                }
+                id
+            }
+        require(decoded.toSet().size == decoded.size) {
+            "morePageOrder contains duplicate IDs"
+        }
+        return normalizeMorePageOrder(decoded, navItems)
     }
 
     private fun encodeThoughts(thoughts: List<FlashThoughtEntity>): JSONArray = JSONArray().apply {

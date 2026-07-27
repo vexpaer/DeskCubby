@@ -333,6 +333,9 @@ interface SavedPoemDao {
     @Query("SELECT * FROM saved_poems ORDER BY createdAt DESC, id DESC")
     fun observeAll(): Flow<List<SavedPoemEntity>>
 
+    @Query("SELECT * FROM saved_poems WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): SavedPoemEntity?
+
     @Query("SELECT * FROM saved_poems ORDER BY id ASC")
     fun observeAllForBackup(): Flow<List<SavedPoemEntity>>
 
@@ -461,6 +464,9 @@ interface VaultItemDao {
 
     @Query("SELECT * FROM vault_items ORDER BY id ASC")
     suspend fun getAll(): List<VaultItemEntity>
+
+    @Query("SELECT * FROM vault_items WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): VaultItemEntity?
 
     @Insert
     suspend fun insert(item: VaultItemEntity): Long

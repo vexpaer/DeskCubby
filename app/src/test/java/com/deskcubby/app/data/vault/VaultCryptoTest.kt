@@ -92,10 +92,11 @@ class VaultCryptoTest {
     }
 
     @Test
-    fun `new password minimum counts Unicode code points rather than UTF-16 units`() {
-        assertFalse(isValidNewVaultPassword("🔐🔑🎯"))
-        assertTrue(isValidNewVaultPassword("🔐🔑🎯✨"))
-        assertTrue(isValidNewVaultPassword("密碼安全"))
+    fun `new password requires one Unicode code point`() {
+        assertFalse(isValidNewVaultPassword(""))
+        assertTrue(isValidNewVaultPassword("a"))
+        assertTrue(isValidNewVaultPassword("密"))
+        assertTrue(isValidNewVaultPassword("🔐"))
     }
 
     @Test
@@ -104,8 +105,8 @@ class VaultCryptoTest {
     }
 
     @Test
-    fun `legacy short password remains usable by crypto for unlock compatibility`() {
-        val legacyPassword = "🔐"
+    fun `legacy empty password remains usable by crypto for unlock compatibility`() {
+        val legacyPassword = ""
         assertFalse(isValidNewVaultPassword(legacyPassword))
         val salt = VaultCrypto.generateSalt()
         val key = VaultCrypto.deriveKey(legacyPassword, salt, testIterations)

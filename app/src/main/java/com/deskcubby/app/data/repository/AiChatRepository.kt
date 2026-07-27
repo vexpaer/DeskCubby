@@ -26,9 +26,12 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONException
@@ -37,7 +40,10 @@ import org.json.JSONObject
 enum class AiChatRole(val apiValue: String) {
     USER("user"),
     ASSISTANT("assistant"),
-    /** A frozen local-data snapshot persisted in Room and sent as a system message. */
+    /**
+     * Stored as the legacy `system` value for database compatibility. Request construction
+     * deliberately sends its untrusted contents at user privilege.
+     */
     CONTEXT("system"),
 }
 
@@ -89,6 +95,8 @@ class AiChatRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val aiChatDao: AiChatDao,
 ) {
+    private val imagePermissionMutex = Mutex()
+
     fun observeConversations(): Flow<List<AiConversation>> =
         aiChatDao.observeConversations().map { items -> items.map(AiConversationEntity::toDomain) }
 
@@ -127,8 +135,7 @@ class AiChatRepository @Inject constructor(
         image: AiChatImage? = null,
         now: Long = System.currentTimeMillis(),
     ): Long = withContext(Dispatchers.IO) {
-        val imagePermission = image?.let { persistImagePermission(it) }
-        try {
+        withPersistedImagePermission(image) { imagePermission ->
             aiChatDao.insertMessageAndTouch(
                 AiMessageEntity(
                     conversationId = conversationId,
@@ -141,11 +148,6 @@ class AiChatRepository @Inject constructor(
                     createdAt = now,
                 ),
             )
-        } catch (error: Exception) {
-            if (imagePermission?.newlyAcquired == true) {
-                image?.uri?.let(::releaseImagePermission)
-            }
-            throw error
         }
     }
 
@@ -163,8 +165,7 @@ class AiChatRepository @Inject constructor(
         image: AiChatImage? = null,
         now: Long = System.currentTimeMillis(),
     ): Long = withContext(Dispatchers.IO) {
-        val imagePermission = image?.let { persistImagePermission(it) }
-        try {
+        withPersistedImagePermission(image) { imagePermission ->
             val messages = buildList {
                 frozenContext?.takeIf(String::isNotBlank)?.let { encoded ->
                     add(
@@ -194,11 +195,6 @@ class AiChatRepository @Inject constructor(
                 )
             }
             aiChatDao.insertUserTurnAndTouch(messages).last()
-        } catch (error: Exception) {
-            if (imagePermission?.newlyAcquired == true) {
-                image?.uri?.let(::releaseImagePermission)
-            }
-            throw error
         }
     }
 
@@ -214,12 +210,14 @@ class AiChatRepository @Inject constructor(
         }
 
     suspend fun deleteConversation(id: Long): Boolean = withContext(Dispatchers.IO) {
-        val ownedImageUris = aiChatDao.deleteConversationAndGetOwnedImageUris(id)
-            ?: return@withContext false
-        ownedImageUris.forEach { uri ->
-            if (aiChatDao.countImageReferences(uri) == 0) releaseImagePermission(uri)
+        imagePermissionMutex.withLock {
+            val ownedImageUris = aiChatDao.deleteConversationAndGetOwnedImageUris(id)
+                ?: return@withLock false
+            ownedImageUris.forEach { uri ->
+                if (aiChatDao.countImageReferences(uri) == 0) releaseImagePermission(uri)
+            }
+            true
         }
-        true
     }
 
     suspend fun prepareImage(uriValue: String): AiChatImage = withContext(Dispatchers.IO) {
@@ -243,9 +241,11 @@ class AiChatRepository @Inject constructor(
         val alreadyPersisted = resolver.persistedUriPermissions.any {
             it.uri == uri && it.isReadPermission
         }
+        var newlyAcquired = false
         if (!alreadyPersisted) {
             try {
                 resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                newlyAcquired = true
             } catch (error: SecurityException) {
                 throw AiChatException(
                     AiChatFailure.CONFIGURATION,
@@ -254,11 +254,43 @@ class AiChatRepository @Inject constructor(
                 )
             }
         }
-        val alreadyOwnedByChat = alreadyPersisted && aiChatDao.isImagePermissionOwned(image.uri)
-        return PersistedImagePermission(
-            ownedByChat = !alreadyPersisted || alreadyOwnedByChat,
-            newlyAcquired = !alreadyPersisted,
-        )
+        return try {
+            val alreadyOwnedByChat = alreadyPersisted && aiChatDao.isImagePermissionOwned(image.uri)
+            PersistedImagePermission(
+                ownedByChat = newlyAcquired || alreadyOwnedByChat,
+                newlyAcquired = newlyAcquired,
+            )
+        } catch (error: Throwable) {
+            if (newlyAcquired) {
+                releaseImagePermission(image.uri)
+            }
+            throw error
+        }
+    }
+
+    /**
+     * URI grant ownership and Room references form one process-level critical section. Room is
+     * still the durable reference count; on any insert failure or cancellation we check it in a
+     * non-cancellable cleanup before releasing a grant acquired by this operation.
+     */
+    private suspend fun <T> withPersistedImagePermission(
+        image: AiChatImage?,
+        block: suspend (PersistedImagePermission?) -> T,
+    ): T = imagePermissionMutex.withLock {
+        var permission: PersistedImagePermission? = null
+        try {
+            permission = image?.let { persistImagePermission(it) }
+            block(permission)
+        } catch (error: Throwable) {
+            if (image != null && permission?.newlyAcquired == true) {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    if (aiChatDao.countImageReferences(image.uri) == 0) {
+                        releaseImagePermission(image.uri)
+                    }
+                }
+            }
+            throw error
+        }
     }
 
     private fun releaseImagePermission(uriValue: String) {

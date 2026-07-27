@@ -19,12 +19,19 @@ import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserException
@@ -70,10 +77,16 @@ class RssRepository @Inject constructor() {
     fun normalizeFeedUrl(raw: String): String {
         val trimmed = raw.trim()
         if (trimmed.isBlank()) throw RssFetchException("RSS 地址不能为空。")
+        if (trimmed.length > MAX_FEED_URL_CHARS || trimmed.any { it.isISOControl() }) {
+            throw RssFetchException("RSS 地址过长或包含无效字符。")
+        }
         val withScheme = if (runCatching { URI(trimmed).scheme }.getOrNull().isNullOrBlank()) {
             "https://$trimmed"
         } else {
             trimmed
+        }
+        if (withScheme.length > MAX_FEED_URL_CHARS) {
+            throw RssFetchException("RSS 地址过长。")
         }
         val uri = runCatching { URI(withScheme) }.getOrElse {
             throw RssFetchException("RSS 地址格式不正确。", it)
@@ -84,7 +97,11 @@ class RssRepository @Inject constructor() {
             else -> throw RssFetchException("RSS 地址仅支持 HTTPS。")
         }
         if (uri.host.isNullOrBlank()) throw RssFetchException("RSS 地址缺少有效的主机名。")
-        return uri.toASCIIString()
+        if (uri.userInfo != null) throw RssFetchException("RSS 地址不能包含用户名或密码。")
+        if (uri.port != -1 && uri.port !in 1..65_535) {
+            throw RssFetchException("RSS 地址端口无效。")
+        }
+        return uri.normalize().toASCIIString()
     }
 
     suspend fun fetch(
@@ -92,7 +109,13 @@ class RssRepository @Inject constructor() {
         maxItems: Int,
     ): List<RssArticle> = withContext(Dispatchers.IO) {
         val feedUrl = normalizeFeedUrl(subscription.url)
-        val payload = download(feedUrl)
+        val payload = try {
+            withTimeout(RSS_TOTAL_TIMEOUT_MILLIS) {
+                download(feedUrl)
+            }
+        } catch (error: TimeoutCancellationException) {
+            throw RssFetchException("RSS 请求超时。", error)
+        }
         parse(
             bytes = payload.bytes,
             subscription = subscription,
@@ -146,9 +169,10 @@ class RssRepository @Inject constructor() {
         )
     }
 
-    private fun download(initialUrl: String): DownloadedFeed {
+    private suspend fun download(initialUrl: String): DownloadedFeed {
         var currentUrl = initialUrl
-        repeat(MAX_REDIRECTS + 1) { redirectCount ->
+        for (redirectCount in 0..MAX_REDIRECTS) {
+            currentCoroutineContext().ensureActive()
             val normalized = normalizeFeedUrl(currentUrl)
             val connection = (URL(normalized).openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = false
@@ -158,6 +182,13 @@ class RssRepository @Inject constructor() {
                 setRequestProperty("Accept", "application/atom+xml, application/rss+xml, application/xml, text/xml;q=0.9")
                 setRequestProperty("Accept-Encoding", "identity")
                 setRequestProperty("User-Agent", "DeskCubby RSS/1.0")
+            }
+            val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
+                try {
+                    awaitCancellation()
+                } finally {
+                    connection.disconnect()
+                }
             }
             try {
                 val status = connection.responseCode
@@ -171,7 +202,7 @@ class RssRepository @Inject constructor() {
                     currentUrl = URL(URL(normalized), location).toString()
                     // Validate here as well so an HTTPS feed cannot downgrade to HTTP.
                     normalizeFeedUrl(currentUrl)
-                    return@repeat
+                    continue
                 }
                 if (status !in 200..299) {
                     throw RssFetchException("RSS 请求失败（HTTP $status）。")
@@ -180,22 +211,28 @@ class RssRepository @Inject constructor() {
                 if (declaredLength > MAX_RSS_BYTES) {
                     throw RssFetchException("RSS 内容超过 5 MiB 上限。")
                 }
-                return DownloadedFeed(
-                    bytes = connection.inputStream.use(::readLimited),
-                    finalUrl = normalized,
-                )
+                val input: java.io.InputStream = connection.inputStream
+                    ?: throw RssFetchException("RSS 响应没有可读取的内容。")
+                val bytes = try {
+                    readLimited(input)
+                } finally {
+                    input.close()
+                }
+                return DownloadedFeed(bytes = bytes, finalUrl = normalized)
             } finally {
+                cancellationWatcher.cancel()
                 connection.disconnect()
             }
         }
         throw RssFetchException("RSS 地址重定向次数过多。")
     }
 
-    private fun readLimited(input: java.io.InputStream): ByteArray {
+    private suspend fun readLimited(input: java.io.InputStream): ByteArray {
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
         var total = 0
         while (true) {
+            currentCoroutineContext().ensureActive()
             val count = input.read(buffer)
             if (count < 0) break
             total += count
@@ -392,7 +429,9 @@ class RssRepository @Inject constructor() {
                 id = "$feedId:${sha256(stableSource)}",
                 feedId = feedId,
                 feedTitle = feedTitle,
-                title = title.ifBlank { "未命名文章" },
+                // Keep an absent title empty so the Compose UI can provide a
+                // localized Chinese/English fallback.
+                title = title,
                 url = resolvedUrl,
                 summary = summary,
                 publishedAtMillis = parsePublishedAt(publishedRaw),
@@ -450,6 +489,8 @@ class RssRepository @Inject constructor() {
     }
 
     private companion object {
+        const val MAX_FEED_URL_CHARS = 8_192
+        const val RSS_TOTAL_TIMEOUT_MILLIS = 30_000L
         val REDIRECT_CODES = setOf(
             HttpURLConnection.HTTP_MOVED_PERM,
             HttpURLConnection.HTTP_MOVED_TEMP,

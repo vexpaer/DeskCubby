@@ -13,6 +13,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -31,6 +32,19 @@ data class DailyPoem(
     /** All lines of the origin poem joined with newlines; empty when unknown. */
     val fullContent: String = "",
     val dynasty: String = "",
+)
+
+enum class PoemEditContentStatus {
+    STORED_CONTENT,
+    EXPANDED_FROM_DAILY_CACHE,
+    LEGACY_CACHE_WITHOUT_FULL_CONTENT,
+    DAILY_CACHE_UNAVAILABLE,
+    CACHED_FULL_CONTENT_TOO_LONG,
+}
+
+data class PoemEditContentResolution(
+    val content: String,
+    val status: PoemEditContentStatus,
 )
 
 @Singleton
@@ -85,6 +99,29 @@ class PoetryRepository @Inject constructor(
                 prefs[Keys.updatedAt] = System.currentTimeMillis()
             }
         }
+    }
+
+    /**
+     * Expands a verse saved by an older daily-poetry cache only when the current cache proves it
+     * belongs to the same source and sentence. A refresh is deliberately not attempted here:
+     * `/sentence` returns a random poem, so using a fresh response could silently put another
+     * poem's body into this saved row.
+     */
+    suspend fun resolveSavedContentForEdit(
+        storedContent: String,
+        storedSource: String,
+    ): PoemEditContentResolution {
+        val cached = try {
+            poem.first()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return PoemEditContentResolution(
+                content = storedContent,
+                status = PoemEditContentStatus.DAILY_CACHE_UNAVAILABLE,
+            )
+        }
+        return resolveSavedContentForEdit(storedContent, storedSource, cached)
     }
 
     private fun fetchToken(): String {
@@ -152,7 +189,63 @@ class PoetryRepository @Inject constructor(
                 else -> "— 今日诗词"
             }
 
+        internal fun resolveSavedContentForEdit(
+            storedContent: String,
+            storedSource: String,
+            cached: DailyPoem,
+        ): PoemEditContentResolution {
+            val storedMatchText = normalizedPoemText(storedContent)
+            val cachedSentence = normalizedPoemText(cached.content)
+            val sameSource = normalizedPoemSource(storedSource) == normalizedPoemSource(cached.source)
+            if (!sameSource || storedMatchText.isEmpty() || storedMatchText != cachedSentence) {
+                return PoemEditContentResolution(
+                    content = storedContent,
+                    status = PoemEditContentStatus.STORED_CONTENT,
+                )
+            }
+
+            val fullContent = cached.fullContent.trim()
+            if (fullContent.isEmpty()) {
+                return PoemEditContentResolution(
+                    content = storedContent,
+                    status = PoemEditContentStatus.LEGACY_CACHE_WITHOUT_FULL_CONTENT,
+                )
+            }
+            if (fullContent.length > MAX_EDITABLE_POEM_CONTENT_CHARS) {
+                return PoemEditContentResolution(
+                    content = storedContent,
+                    status = PoemEditContentStatus.CACHED_FULL_CONTENT_TOO_LONG,
+                )
+            }
+            if (!normalizedPoemText(fullContent).contains(storedMatchText)) {
+                // A corrupted or unrelated cache must never replace the saved body.
+                return PoemEditContentResolution(
+                    content = storedContent,
+                    status = PoemEditContentStatus.STORED_CONTENT,
+                )
+            }
+            if (normalizedPoemText(fullContent) == storedMatchText) {
+                return PoemEditContentResolution(
+                    content = storedContent,
+                    status = PoemEditContentStatus.STORED_CONTENT,
+                )
+            }
+            return PoemEditContentResolution(
+                content = fullContent,
+                status = PoemEditContentStatus.EXPANDED_FROM_DAILY_CACHE,
+            )
+        }
+
+        private fun normalizedPoemText(value: String): String =
+            value.replace(POEM_WHITESPACE, "")
+
+        private fun normalizedPoemSource(value: String): String =
+            value.trim().trimStart('-', '–', '—').trim()
+
         private fun dateOf(epochMillis: Long): LocalDate =
             Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).toLocalDate()
+
+        private val POEM_WHITESPACE = Regex("\\s+")
+        private const val MAX_EDITABLE_POEM_CONTENT_CHARS = 4_000
     }
 }

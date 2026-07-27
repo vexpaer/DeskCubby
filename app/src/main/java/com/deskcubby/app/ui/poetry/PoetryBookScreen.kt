@@ -7,7 +7,6 @@ package com.deskcubby.app.ui.poetry
 
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -33,7 +32,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -63,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.local.SavedPoemEntity
+import com.deskcubby.app.data.repository.PoemEditContentStatus
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.tr
@@ -74,17 +74,34 @@ fun PoetryBookScreen(
 ) {
     val poems by viewModel.poems.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val editorState by viewModel.editorState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val operationFailedLabel = tr("操作失败", "Operation failed")
+    val errorMessage = when (error) {
+        PoetryOperationFailure.LOAD_FOR_EDIT -> tr(
+            "无法加载完整诗词，编辑器未打开",
+            "Could not load the full poem; the editor was not opened",
+        )
+        PoetryOperationFailure.CREATE -> tr(
+            "诗词保存失败，内容未添加",
+            "Could not save the poem; nothing was added",
+        )
+        PoetryOperationFailure.UPDATE -> tr(
+            "诗词保存失败，原内容未被更新",
+            "Could not save the poem; the original was not updated",
+        )
+        PoetryOperationFailure.DELETE -> tr(
+            "诗词删除失败，条目仍然保留",
+            "Could not delete the poem; the entry was kept",
+        )
+        null -> null
+    }
     var showNewEditor by remember { mutableStateOf(false) }
-    var editorPoem by remember { mutableStateOf<SavedPoemEntity?>(null) }
     var pendingDelete by remember { mutableStateOf<SavedPoemEntity?>(null) }
     var creating by remember { mutableStateOf(false) }
-    var updatingId by remember { mutableStateOf<Long?>(null) }
 
-    LaunchedEffect(error) {
-        error?.let {
-            snackbarHostState.showSnackbar("$operationFailedLabel: $it")
+    LaunchedEffect(error, errorMessage) {
+        if (error != null && errorMessage != null) {
+            snackbarHostState.showSnackbar(errorMessage)
             viewModel.consumeError()
         }
     }
@@ -96,7 +113,12 @@ fun PoetryBookScreen(
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         topBar = { TopAppBar(title = { Text(tr("诗词本", "Poetry book")) }) },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showNewEditor = true }) {
+            FloatingActionButton(
+                onClick = {
+                    viewModel.dismissEditor()
+                    showNewEditor = true
+                },
+            ) {
                 Icon(Icons.Outlined.Add, tr("添加诗词", "Add poem"))
             }
         },
@@ -107,7 +129,10 @@ fun PoetryBookScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(inner),
-                onAdd = { showNewEditor = true },
+                onAdd = {
+                    viewModel.dismissEditor()
+                    showNewEditor = true
+                },
             )
         } else {
             LazyColumn(
@@ -120,7 +145,8 @@ fun PoetryBookScreen(
                 items(poems, key = { it.id }) { poem ->
                     SavedPoemCard(
                         poem = poem,
-                        onEdit = { editorPoem = poem },
+                        loadingForEdit = (editorState as? PoetryEditorState.Loading)?.poemId == poem.id,
+                        onEdit = { viewModel.beginEdit(poem.id) },
                         onDelete = { pendingDelete = poem },
                     )
                 }
@@ -145,20 +171,34 @@ fun PoetryBookScreen(
         )
     }
 
-    editorPoem?.let { poem ->
+    (editorState as? PoetryEditorState.Ready)?.let { ready ->
+        val notice = when (ready.draft.contentStatus) {
+            PoemEditContentStatus.STORED_CONTENT -> null
+            PoemEditContentStatus.EXPANDED_FROM_DAILY_CACHE -> tr(
+                "已根据匹配的每日诗词缓存展开并载入完整正文。",
+                "The complete poem was expanded from the matching daily-poetry cache.",
+            )
+            PoemEditContentStatus.LEGACY_CACHE_WITHOUT_FULL_CONTENT -> tr(
+                "这是旧版缓存条目，无法确认完整原文；已安全载入诗词本中现有的保存内容，请确认后再保存。",
+                "This entry came from an older cache whose full poem is unavailable. The currently saved text was loaded safely; review it before saving.",
+            )
+            PoemEditContentStatus.DAILY_CACHE_UNAVAILABLE -> tr(
+                "每日诗词缓存暂时无法读取；已安全载入诗词本中现有的保存内容。",
+                "The daily-poetry cache is temporarily unavailable. The currently saved text was loaded safely.",
+            )
+            PoemEditContentStatus.CACHED_FULL_CONTENT_TOO_LONG -> tr(
+                "缓存中的完整原文超过支持长度，未自动替换；已载入诗词本中现有的保存内容。",
+                "The cached full poem exceeds the supported length, so it was not substituted. The currently saved text was loaded instead.",
+            )
+        }
         PoemEditorDialog(
-            poem = poem,
-            saving = updatingId == poem.id,
-            onDismiss = { if (updatingId == null) editorPoem = null },
-            onConfirm = { content, source ->
-                if (updatingId == null) {
-                    updatingId = poem.id
-                    viewModel.update(poem.id, content, source) { success ->
-                        updatingId = null
-                        if (success) editorPoem = null
-                    }
-                }
-            },
+            poem = ready.draft.poem,
+            saving = ready.saving,
+            notice = notice,
+            noticeIsInformational =
+                ready.draft.contentStatus == PoemEditContentStatus.EXPANDED_FROM_DAILY_CACHE,
+            onDismiss = viewModel::dismissEditor,
+            onConfirm = viewModel::saveEditor,
         )
     }
 
@@ -209,13 +249,18 @@ private fun EmptyPoetryBook(modifier: Modifier, onAdd: () -> Unit) {
 @Composable
 private fun SavedPoemCard(
     poem: SavedPoemEntity,
+    loadingForEdit: Boolean,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     GlassPanel(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onEdit, onLongClick = onEdit),
+            .combinedClickable(
+                enabled = !loadingForEdit,
+                onClick = onEdit,
+                onLongClick = onEdit,
+            ),
         cornerRadius = 20.dp,
         padding = PaddingValues(horizontal = 16.dp, vertical = 13.dp),
     ) {
@@ -244,11 +289,18 @@ private fun SavedPoemCard(
                 }
             }
             Column {
-                IconButton(onClick = onDelete) {
+                IconButton(onClick = onDelete, enabled = !loadingForEdit) {
                     Icon(Icons.Outlined.Delete, tr("删除", "Delete"))
                 }
-                IconButton(onClick = onEdit) {
-                    Icon(Icons.Outlined.Edit, tr("编辑", "Edit"))
+                IconButton(onClick = onEdit, enabled = !loadingForEdit) {
+                    if (loadingForEdit) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(Icons.Outlined.Edit, tr("编辑", "Edit"))
+                    }
                 }
             }
         }
@@ -259,11 +311,13 @@ private fun SavedPoemCard(
 private fun PoemEditorDialog(
     poem: SavedPoemEntity?,
     saving: Boolean,
+    notice: String? = null,
+    noticeIsInformational: Boolean = false,
     onDismiss: () -> Unit,
     onConfirm: (content: String, source: String) -> Unit,
 ) {
-    var content by remember(poem?.id) { mutableStateOf(poem?.content.orEmpty()) }
-    var source by remember(poem?.id) { mutableStateOf(poem?.source.orEmpty()) }
+    var content by remember(poem?.id, poem?.content) { mutableStateOf(poem?.content.orEmpty()) }
+    var source by remember(poem?.id, poem?.source) { mutableStateOf(poem?.source.orEmpty()) }
     val focusManager = LocalFocusManager.current
     val sourceFocusRequester = remember { FocusRequester() }
 
@@ -279,8 +333,8 @@ private fun PoemEditorDialog(
                 OutlinedTextField(
                     value = content,
                     onValueChange = { content = it.take(MAX_POEM_CONTENT_CHARS) },
-                    label = { Text(tr("诗句", "Verse")) },
-                    placeholder = { Text(tr("输入喜欢的诗句", "Enter a favorite verse")) },
+                    label = { Text(tr("诗词正文", "Poem text")) },
+                    placeholder = { Text(tr("输入完整诗词正文", "Enter the complete poem text")) },
                     minLines = 3,
                     maxLines = 8,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
@@ -299,6 +353,17 @@ private fun PoemEditorDialog(
                         .fillMaxWidth()
                         .focusRequester(sourceFocusRequester),
                 )
+                notice?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (noticeIsInformational) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
             }
         },
         confirmButton = {

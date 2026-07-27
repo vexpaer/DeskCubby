@@ -30,6 +30,13 @@ data class UsageStatisticsDay(
 data class UsageStatisticsHistory(
     val trackingStartedOn: LocalDate? = null,
     val days: List<UsageStatisticsDay> = emptyList(),
+    /**
+     * Last completed civil date covered by a successful history-discovery
+     * query. Null is the explicit v1 migration state and triggers one bounded
+     * wide backfill. It is a scan watermark, not proof that every intervening
+     * date had a usage record.
+     */
+    val backfillCompletedThrough: LocalDate? = null,
 )
 
 /**
@@ -93,6 +100,35 @@ fun <T> List<T>.withinStatisticsRange(
 }
 
 fun UsageStatisticsHistory.overview(packageName: String? = null): StatisticsOverview {
+    return usageOverview(
+        days = days,
+        trackingStartedOn = trackingStartedOn,
+        packageName = packageName,
+    )
+}
+
+fun UsageStatisticsHistory.overview(
+    range: StatisticsRange,
+    today: LocalDate,
+    packageName: String? = null,
+): StatisticsOverview {
+    val rangedDays = days.withinStatisticsRange(
+        range = range,
+        today = today,
+        dateOf = UsageStatisticsDay::date,
+    )
+    return usageOverview(
+        days = rangedDays,
+        trackingStartedOn = rangedDays.firstOrNull()?.date,
+        packageName = packageName,
+    )
+}
+
+private fun usageOverview(
+    days: List<UsageStatisticsDay>,
+    trackingStartedOn: LocalDate?,
+    packageName: String?,
+): StatisticsOverview {
     val values = days.map { day ->
         if (packageName == null) {
             day.totalForegroundMillis.toDouble()

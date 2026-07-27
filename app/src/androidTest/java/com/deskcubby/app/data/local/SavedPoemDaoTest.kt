@@ -71,6 +71,21 @@ class SavedPoemDaoTest {
     }
 
     @Test
+    fun getByIdReturnsCanonicalMultilineBodyAndMissingRowsReturnNull() = runBlocking {
+        val fullContent = "第一行\n第二行\n第三行"
+        val poemId = poemDao.insert(
+            poem(
+                content = fullContent,
+                source = "作者《标题》",
+                createdAt = 10L,
+            ),
+        )
+
+        assertEquals(fullContent, poemDao.getById(poemId)?.content)
+        assertEquals(null, poemDao.getById(poemId + 10_000))
+    }
+
+    @Test
     fun deleteRemovesOnlyRequestedPoem() = runBlocking {
         val deletedId = poemDao.insert(poem(content = "delete me", createdAt = 10L))
         val retainedId = poemDao.insert(poem(content = "keep me", createdAt = 20L))

@@ -1,6 +1,7 @@
 package com.deskcubby.app.data.repository
 
 import android.content.Context
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -9,10 +10,12 @@ import com.deskcubby.app.data.local.VaultItemDao
 import com.deskcubby.app.data.local.VaultItemEntity
 import com.deskcubby.app.data.vault.VaultCrypto
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.util.Base64
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import javax.crypto.SecretKey
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -23,11 +26,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 
 /**
  * Vault metadata lives in its own DataStore file, fully separate from app settings and the
@@ -35,9 +38,89 @@ import org.json.JSONObject
  */
 private val Context.vaultMetaDataStore by preferencesDataStore(name = "vault_meta")
 
+private object VaultMetadataKeys {
+    val metadataVersion = intPreferencesKey("metadata_version")
+    val saltBase64 = stringPreferencesKey("salt_base64")
+    val verifierCipher = stringPreferencesKey("verifier_cipher")
+    val verifierIv = stringPreferencesKey("verifier_iv")
+    val kdfIterations = intPreferencesKey("kdf_iterations")
+    val activeGenerationId = stringPreferencesKey("active_generation_id")
+    val migrationState = stringPreferencesKey("password_migration_state")
+    val pendingSaltBase64 = stringPreferencesKey("pending_salt_base64")
+    val pendingVerifierCipher = stringPreferencesKey("pending_verifier_cipher")
+    val pendingVerifierIv = stringPreferencesKey("pending_verifier_iv")
+    val pendingKdfIterations = intPreferencesKey("pending_kdf_iterations")
+    val pendingGenerationId = stringPreferencesKey("pending_generation_id")
+}
+
+private class DataStoreVaultMetadataStore(
+    context: Context,
+) : VaultMetadataStore {
+    private val dataStore = context.vaultMetaDataStore
+
+    override suspend fun read(): VaultMetadataReadResult {
+        val prefs = dataStore.data.first()
+        return decodeVaultStoredMetadata(
+            VaultStoredMetadataFields(
+                metadataVersion = prefs[VaultMetadataKeys.metadataVersion],
+                saltBase64 = prefs[VaultMetadataKeys.saltBase64],
+                verifierCipher = prefs[VaultMetadataKeys.verifierCipher],
+                verifierIv = prefs[VaultMetadataKeys.verifierIv],
+                kdfIterations = prefs[VaultMetadataKeys.kdfIterations],
+                activeGenerationId = prefs[VaultMetadataKeys.activeGenerationId],
+                migrationState = prefs[VaultMetadataKeys.migrationState],
+                pendingSaltBase64 = prefs[VaultMetadataKeys.pendingSaltBase64],
+                pendingVerifierCipher = prefs[VaultMetadataKeys.pendingVerifierCipher],
+                pendingVerifierIv = prefs[VaultMetadataKeys.pendingVerifierIv],
+                pendingKdfIterations = prefs[VaultMetadataKeys.pendingKdfIterations],
+                pendingGenerationId = prefs[VaultMetadataKeys.pendingGenerationId],
+            ),
+        )
+    }
+
+    override suspend fun writePrepared(
+        active: VaultKeyMetadata,
+        pending: VaultKeyMetadata,
+    ) {
+        require(pending.generationId != null)
+        dataStore.edit { prefs ->
+            prefs.writeActiveVaultMetadata(active)
+            prefs[VaultMetadataKeys.migrationState] = VAULT_MIGRATION_STATE_PREPARED
+            prefs[VaultMetadataKeys.pendingSaltBase64] = encodeVaultSalt(pending.salt)
+            prefs[VaultMetadataKeys.pendingVerifierCipher] = pending.verifierCipher
+            prefs[VaultMetadataKeys.pendingVerifierIv] = pending.verifierIv
+            prefs[VaultMetadataKeys.pendingKdfIterations] = pending.iterations
+            prefs[VaultMetadataKeys.pendingGenerationId] = pending.generationId
+        }
+    }
+
+    override suspend fun writeStable(active: VaultKeyMetadata) {
+        dataStore.edit { prefs ->
+            prefs.writeActiveVaultMetadata(active)
+            prefs.remove(VaultMetadataKeys.migrationState)
+            prefs.remove(VaultMetadataKeys.pendingSaltBase64)
+            prefs.remove(VaultMetadataKeys.pendingVerifierCipher)
+            prefs.remove(VaultMetadataKeys.pendingVerifierIv)
+            prefs.remove(VaultMetadataKeys.pendingKdfIterations)
+            prefs.remove(VaultMetadataKeys.pendingGenerationId)
+        }
+    }
+
+    private fun MutablePreferences.writeActiveVaultMetadata(metadata: VaultKeyMetadata) {
+        this[VaultMetadataKeys.metadataVersion] = VAULT_METADATA_VERSION
+        this[VaultMetadataKeys.saltBase64] = encodeVaultSalt(metadata.salt)
+        this[VaultMetadataKeys.verifierCipher] = metadata.verifierCipher
+        this[VaultMetadataKeys.verifierIv] = metadata.verifierIv
+        this[VaultMetadataKeys.kdfIterations] = metadata.iterations
+        metadata.generationId?.let {
+            this[VaultMetadataKeys.activeGenerationId] = it
+        } ?: remove(VaultMetadataKeys.activeGenerationId)
+    }
+}
+
 enum class VaultLockState { NOT_SET, LOCKED, UNLOCKED }
 
-internal const val MIN_VAULT_PASSWORD_CODE_POINTS = 4
+internal const val MIN_VAULT_PASSWORD_CODE_POINTS = 1
 
 /** New and replacement passwords have no maximum length; astral symbols count as one code point. */
 internal fun isValidNewVaultPassword(password: String): Boolean =
@@ -46,224 +129,441 @@ internal fun isValidNewVaultPassword(password: String): Boolean =
 /** Decrypted vault entry. Exists only in memory while the vault is unlocked. */
 data class VaultItem(
     val id: Long,
-    val title: String,
     val content: String,
+    val note: String?,
     val createdAt: Long,
     val updatedAt: Long,
 )
 
-@Singleton
-class VaultRepository @Inject constructor(
-    @ApplicationContext private val context: Context,
-    private val vaultItemDao: VaultItemDao,
-) {
-    private object Keys {
-        val saltBase64 = stringPreferencesKey("salt_base64")
-        val verifierCipher = stringPreferencesKey("verifier_cipher")
-        val verifierIv = stringPreferencesKey("verifier_iv")
-        val kdfIterations = intPreferencesKey("kdf_iterations")
-    }
+/**
+ * Decryption failures are represented only as a count. Ciphertext, ids and partial plaintext are
+ * never exposed to the UI, and the underlying Room rows remain untouched.
+ */
+data class VaultContentState(
+    val items: List<VaultItem> = emptyList(),
+    val corruptedItemCount: Int = 0,
+)
 
-    private class VaultMeta(
-        val salt: ByteArray,
-        val verifierCipher: String,
-        val verifierIv: String,
-        val iterations: Int,
+enum class VaultPasswordChangeResult {
+    SUCCESS,
+    WRONG_PASSWORD,
+    INVALID_NEW_PASSWORD,
+    CORRUPTED_ITEMS,
+}
+
+internal enum class VaultRekeyFaultPoint {
+    AFTER_JOURNAL_WRITTEN,
+    AFTER_ROWS_REPLACED,
+    AFTER_METADATA_COMMITTED,
+}
+
+internal fun interface VaultRekeyFaultInjector {
+    suspend fun onFaultPoint(point: VaultRekeyFaultPoint)
+}
+
+@Singleton
+class VaultRepository internal constructor(
+    private val vaultItemDao: VaultItemDao,
+    private val metadataStore: VaultMetadataStore,
+) {
+    @Inject
+    constructor(
+        @ApplicationContext context: Context,
+        vaultItemDao: VaultItemDao,
+    ) : this(
+        vaultItemDao = vaultItemDao,
+        metadataStore = DataStoreVaultMetadataStore(context),
     )
 
+    private data class ResolvedKey(
+        val metadata: VaultKeyMetadata,
+        val key: SecretKey,
+    )
+
+    /**
+     * Serializes password changes with every row mutation. This prevents an add/update/delete
+     * from being lost in replaceAll(), being resurrected by it, or writing with the old key
+     * after the table has moved to the new key.
+     */
     private val operationMutex = Mutex()
 
+    /** No-op in production; instrumentation tests inject process-death failures at each boundary. */
+    internal var rekeyFaultInjector = VaultRekeyFaultInjector { }
+
+    /**
+     * [lock] is synchronous and can race a suspended unlock/password change. The epoch prevents
+     * a completion that started before an explicit lock request from resurrecting the session.
+     */
+    private val lockEpoch = AtomicLong(0L)
+
     /** Derived AES key. Memory-only; cleared by [lock], never persisted anywhere. */
-    @Volatile
-    private var sessionKey: SecretKey? = null
+    private val mutableSessionKey = MutableStateFlow<SecretKey?>(null)
 
     private val mutableLockState = MutableStateFlow(VaultLockState.LOCKED)
     val lockState: StateFlow<VaultLockState> = mutableLockState.asStateFlow()
 
     init {
-        // Start pessimistically LOCKED, then downgrade to NOT_SET once we know no password exists.
+        // Start pessimistically LOCKED, then downgrade only when absolutely no metadata exists.
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            val configured = context.vaultMetaDataStore.data.first()[Keys.saltBase64] != null
-            if (!configured) {
+            val stored = metadataStore.read()
+            if (!stored.hasStoredMetadata) {
                 mutableLockState.compareAndSet(VaultLockState.LOCKED, VaultLockState.NOT_SET)
             }
         }
     }
 
-    /** Decrypted items while UNLOCKED; empty list otherwise. Undecryptable rows are skipped. */
-    val items: Flow<List<VaultItem>> =
-        combine(vaultItemDao.observeAll(), mutableLockState) { entities, state ->
-            val key = sessionKey
+    /** Decrypted user items while UNLOCKED; the internal generation marker is never exposed. */
+    val contentState: Flow<VaultContentState> =
+        combine(
+            vaultItemDao.observeAll(),
+            mutableLockState,
+            mutableSessionKey,
+        ) { entities, state, key ->
             if (state != VaultLockState.UNLOCKED || key == null) {
-                emptyList()
+                VaultContentState()
             } else {
-                entities.mapNotNull { entity -> decryptItem(key, entity) }
+                val decryptedItems = ArrayList<VaultItem>(entities.size)
+                var corruptedCount = 0
+                entities
+                    .asSequence()
+                    .filterNot { it.id == VAULT_KEY_MARKER_ENTITY_ID }
+                    .forEach { entity ->
+                        val item = decryptItem(key, entity)
+                        if (item == null) {
+                            corruptedCount += 1
+                        } else {
+                            decryptedItems += item
+                        }
+                    }
+                VaultContentState(
+                    items = decryptedItems,
+                    corruptedItemCount = corruptedCount,
+                )
             }
         }.flowOn(Dispatchers.Default)
 
-    /** First-time setup. Only valid while NOT_SET; leaves the vault UNLOCKED on success. */
-    suspend fun setupPassword(password: String) = operationMutex.withLock {
+    /** Compatibility projection for callers that only need valid entries. */
+    val items: Flow<List<VaultItem>> = contentState.map { state: VaultContentState ->
+        state.items
+    }
+
+    /** First-time setup. Existing or damaged metadata is never overwritten. */
+    suspend fun setupPassword(password: String): Boolean = operationMutex.withLock {
         withContext(Dispatchers.Default) {
-            if (!isValidNewVaultPassword(password)) return@withContext
-            if (mutableLockState.value != VaultLockState.NOT_SET) return@withContext
-            if (context.vaultMetaDataStore.data.first()[Keys.saltBase64] != null) {
-                mutableLockState.value = VaultLockState.LOCKED
-                return@withContext
+            if (!isValidNewVaultPassword(password)) return@withContext false
+            val operationEpoch = lockEpoch.get()
+            val stored = metadataStore.read()
+            if (stored.hasStoredMetadata) {
+                if (mutableSessionKey.value == null) {
+                    mutableLockState.value = VaultLockState.LOCKED
+                }
+                return@withContext false
             }
+
             val salt = VaultCrypto.generateSalt()
             val iterations = VaultCrypto.DEFAULT_KDF_ITERATIONS
             val key = VaultCrypto.deriveKey(password, salt, iterations)
             val verifier = VaultCrypto.encrypt(key, VERIFIER_PLAINTEXT)
-            context.vaultMetaDataStore.edit { prefs ->
-                prefs[Keys.saltBase64] = Base64.getEncoder().encodeToString(salt)
-                prefs[Keys.verifierCipher] = verifier.cipherBase64
-                prefs[Keys.verifierIv] = verifier.ivBase64
-                prefs[Keys.kdfIterations] = iterations
-            }
-            sessionKey = key
-            mutableLockState.value = VaultLockState.UNLOCKED
+            metadataStore.writeStable(
+                VaultKeyMetadata(
+                    salt = salt,
+                    verifierCipher = verifier.cipherBase64,
+                    verifierIv = verifier.ivBase64,
+                    iterations = iterations,
+                    generationId = null,
+                ),
+            )
+            installSessionKey(key, operationEpoch)
+            true
         }
     }
 
-    /** Returns true and moves to UNLOCKED if [password] verifies against the stored verifier. */
+    /**
+     * Verifies [password] against both descriptors when a prior password change was interrupted.
+     * The Room generation marker selects the only descriptor that may unlock, after which the
+     * metadata is best-effort finalized or rolled back to that descriptor.
+     */
     suspend fun unlock(password: String): Boolean = operationMutex.withLock {
         withContext(Dispatchers.Default) {
-            val meta = readMeta() ?: run {
-                mutableLockState.value = VaultLockState.NOT_SET
+            val operationEpoch = lockEpoch.get()
+            val stored = metadataStore.read()
+            val metadata = stored.metadata ?: run {
+                if (!stored.hasStoredMetadata) {
+                    mutableLockState.value = VaultLockState.NOT_SET
+                }
                 return@withContext false
             }
-            val key = VaultCrypto.deriveKey(password, meta.salt, meta.iterations)
-            val verified =
-                VaultCrypto.decrypt(key, meta.verifierCipher, meta.verifierIv) == VERIFIER_PLAINTEXT
-            if (verified) {
-                sessionKey = key
-                mutableLockState.value = VaultLockState.UNLOCKED
-            }
-            verified
+            val resolved = resolvePassword(metadata, password) ?: return@withContext false
+            installSessionKey(resolved.key, operationEpoch)
+            true
         }
     }
 
     /** Drops the in-memory key. No-op when no password has been set yet. */
     fun lock() {
-        sessionKey = null
-        mutableLockState.compareAndSet(VaultLockState.UNLOCKED, VaultLockState.LOCKED)
+        lockEpoch.incrementAndGet()
+        if (mutableLockState.value == VaultLockState.UNLOCKED) {
+            mutableLockState.value = VaultLockState.LOCKED
+        }
+        mutableSessionKey.value = null
     }
 
     /**
-     * Verifies [oldPassword], re-encrypts every row with a fresh salt/key, then atomically
-     * replaces all rows and finally updates the metadata. All new ciphertexts are computed
-     * up front; the metadata write happens only after [VaultItemDao.replaceAll] succeeds.
+     * Recoverable password-change protocol:
+     *
+     * 1. Atomically persist active + pending key descriptions in DataStore.
+     * 2. Atomically replace all Room ciphertext and its hidden generation marker.
+     * 3. Atomically make the pending description canonical and clear migration state.
+     *
+     * A crash or write failure before step 2 leaves the old marker/table; one after step 2 leaves
+     * the new marker/table. Since step 1 durably records both salts/verifiers first, the next
+     * unlock can safely choose and retain whichever password actually owns the complete table.
      */
-    suspend fun changePassword(oldPassword: String, newPassword: String): Boolean =
+    suspend fun changePassword(
+        oldPassword: String,
+        newPassword: String,
+    ): VaultPasswordChangeResult =
         operationMutex.withLock {
             withContext(Dispatchers.Default) {
-                if (!isValidNewVaultPassword(newPassword)) return@withContext false
-                val meta = readMeta() ?: return@withContext false
-                val oldKey = VaultCrypto.deriveKey(oldPassword, meta.salt, meta.iterations)
-                val oldVerified =
-                    VaultCrypto.decrypt(oldKey, meta.verifierCipher, meta.verifierIv) == VERIFIER_PLAINTEXT
-                if (!oldVerified) return@withContext false
+                if (!isValidNewVaultPassword(newPassword)) {
+                    return@withContext VaultPasswordChangeResult.INVALID_NEW_PASSWORD
+                }
+                val operationEpoch = lockEpoch.get()
+                val stored = metadataStore.read()
+                val currentMetadata = stored.metadata
+                    ?: return@withContext VaultPasswordChangeResult.WRONG_PASSWORD
+                val current = resolvePassword(currentMetadata, oldPassword)
+                    ?: return@withContext VaultPasswordChangeResult.WRONG_PASSWORD
+
+                // Validate every user row before publishing PREPARED. A damaged GCM value or
+                // payload aborts the whole operation; it is never carried into a new generation.
+                val plaintextRows = ArrayList<Pair<VaultItemEntity, String>>()
+                vaultItemDao.getAll()
+                    .asSequence()
+                    .filterNot { it.id == VAULT_KEY_MARKER_ENTITY_ID }
+                    .forEach { entity ->
+                        val plaintext = VaultCrypto.decrypt(
+                            current.key,
+                            entity.cipherText,
+                            entity.iv,
+                        ) ?: return@withContext VaultPasswordChangeResult.CORRUPTED_ITEMS
+                        if (decodeVaultItemPayload(plaintext) == null) {
+                            return@withContext VaultPasswordChangeResult.CORRUPTED_ITEMS
+                        }
+                        plaintextRows += entity to plaintext
+                    }
 
                 val newSalt = VaultCrypto.generateSalt()
                 val iterations = VaultCrypto.DEFAULT_KDF_ITERATIONS
                 val newKey = VaultCrypto.deriveKey(newPassword, newSalt, iterations)
-
-                val reEncrypted = vaultItemDao.getAll().map { entity ->
-                    val plaintext = VaultCrypto.decrypt(oldKey, entity.cipherText, entity.iv)
-                        ?: return@map entity // already unrecoverable; carry the row over untouched
-                    val encrypted = VaultCrypto.encrypt(newKey, plaintext)
-                    entity.copy(cipherText = encrypted.cipherBase64, iv = encrypted.ivBase64)
-                }
-                vaultItemDao.replaceAll(reEncrypted)
-
                 val newVerifier = VaultCrypto.encrypt(newKey, VERIFIER_PLAINTEXT)
-                context.vaultMetaDataStore.edit { prefs ->
-                    prefs[Keys.saltBase64] = Base64.getEncoder().encodeToString(newSalt)
-                    prefs[Keys.verifierCipher] = newVerifier.cipherBase64
-                    prefs[Keys.verifierIv] = newVerifier.ivBase64
-                    prefs[Keys.kdfIterations] = iterations
+                val pending = VaultKeyMetadata(
+                    salt = newSalt,
+                    verifierCipher = newVerifier.cipherBase64,
+                    verifierIv = newVerifier.ivBase64,
+                    iterations = iterations,
+                    generationId = UUID.randomUUID().toString(),
+                )
+
+                // Compute everything before publishing PREPARED, while row mutations are blocked.
+                val reEncrypted = plaintextRows
+                    .map { (entity, plaintext) ->
+                        val encrypted = VaultCrypto.encrypt(newKey, plaintext)
+                        entity.copy(
+                            cipherText = encrypted.cipherBase64,
+                            iv = encrypted.ivBase64,
+                        )
+                    }
+                    .toMutableList()
+                val marker = VaultCrypto.encrypt(
+                    newKey,
+                    vaultKeyMarkerPlaintext(checkNotNull(pending.generationId)),
+                )
+                reEncrypted += VaultItemEntity(
+                    id = VAULT_KEY_MARKER_ENTITY_ID,
+                    cipherText = marker.cipherBase64,
+                    iv = marker.ivBase64,
+                    createdAt = 0L,
+                    updatedAt = 0L,
+                )
+
+                var replacementStarted = false
+                try {
+                    // No Room write is allowed until both password descriptions are durable.
+                    metadataStore.writePrepared(active = current.metadata, pending = pending)
+                    rekeyFaultInjector.onFaultPoint(
+                        VaultRekeyFaultPoint.AFTER_JOURNAL_WRITTEN,
+                    )
+
+                    // replaceAll() is one Room transaction, including the generation marker.
+                    replacementStarted = true
+                    vaultItemDao.replaceAll(reEncrypted)
+                    // Switch before the next suspension so the committed-row emission normally
+                    // observes its matching key and does not flash a false corruption warning.
+                    installSessionKey(newKey, operationEpoch)
+                    rekeyFaultInjector.onFaultPoint(
+                        VaultRekeyFaultPoint.AFTER_ROWS_REPLACED,
+                    )
+
+                    metadataStore.writeStable(pending)
+                    rekeyFaultInjector.onFaultPoint(
+                        VaultRekeyFaultPoint.AFTER_METADATA_COMMITTED,
+                    )
+                    installSessionKey(newKey, operationEpoch)
+                    VaultPasswordChangeResult.SUCCESS
+                } catch (error: Throwable) {
+                    if (replacementStarted) {
+                        // A cancelled Room call may have committed before propagating cancellation.
+                        // Do not let an ambiguous in-memory key authorize any later mutation.
+                        mutableSessionKey.value = null
+                        mutableLockState.value = VaultLockState.LOCKED
+                    } else {
+                        installSessionKey(current.key, operationEpoch)
+                    }
+                    throw error
                 }
-                sessionKey = newKey
-                mutableLockState.value = VaultLockState.UNLOCKED
+            }
+        }
+
+    suspend fun addItem(content: String, note: String?): Boolean =
+        operationMutex.withLock {
+            withContext(Dispatchers.Default) {
+                if (content.isBlank()) return@withContext false
+                val key = unlockedKeyForMutation() ?: return@withContext false
+                val now = System.currentTimeMillis()
+                val encrypted = VaultCrypto.encrypt(key, encodeVaultItemPayload(content, note))
+                vaultItemDao.insert(
+                    VaultItemEntity(
+                        cipherText = encrypted.cipherBase64,
+                        iv = encrypted.ivBase64,
+                        createdAt = now,
+                        updatedAt = now,
+                    ),
+                )
                 true
             }
         }
 
-    suspend fun addItem(title: String, content: String): Boolean {
-        val key = unlockedKeyOrNull() ?: return false
-        return withContext(Dispatchers.Default) {
-            val now = System.currentTimeMillis()
-            val encrypted = VaultCrypto.encrypt(key, encodeItemJson(title, content))
-            vaultItemDao.insert(
-                VaultItemEntity(
+    suspend fun updateItem(id: Long, content: String, note: String?): Boolean =
+        operationMutex.withLock {
+            withContext(Dispatchers.Default) {
+                if (id == VAULT_KEY_MARKER_ENTITY_ID || content.isBlank()) {
+                    return@withContext false
+                }
+                val key = unlockedKeyForMutation() ?: return@withContext false
+                val encrypted = VaultCrypto.encrypt(key, encodeVaultItemPayload(content, note))
+                vaultItemDao.update(
+                    id = id,
                     cipherText = encrypted.cipherBase64,
                     iv = encrypted.ivBase64,
-                    createdAt = now,
-                    updatedAt = now,
-                ),
-            )
-            true
+                    updatedAt = System.currentTimeMillis(),
+                ) > 0
+            }
         }
-    }
 
-    suspend fun updateItem(id: Long, title: String, content: String): Boolean {
-        val key = unlockedKeyOrNull() ?: return false
-        return withContext(Dispatchers.Default) {
-            val encrypted = VaultCrypto.encrypt(key, encodeItemJson(title, content))
-            vaultItemDao.update(
-                id = id,
-                cipherText = encrypted.cipherBase64,
-                iv = encrypted.ivBase64,
-                updatedAt = System.currentTimeMillis(),
-            ) > 0
+    suspend fun deleteItem(id: Long): Boolean =
+        operationMutex.withLock {
+            withContext(Dispatchers.Default) {
+                if (id == VAULT_KEY_MARKER_ENTITY_ID) return@withContext false
+                unlockedKeyForMutation() ?: return@withContext false
+                vaultItemDao.delete(id) > 0
+            }
         }
+
+    /**
+     * Re-validates the memory key against metadata and the Room marker before every mutation.
+     * This also protects an in-process session after an ambiguous suspended/failed Room call.
+     */
+    private suspend fun unlockedKeyForMutation(): SecretKey? {
+        if (mutableLockState.value != VaultLockState.UNLOCKED) return null
+        val key = mutableSessionKey.value ?: return null
+        val metadata = metadataStore.read().metadata ?: return null
+        val resolved = resolveExistingKey(metadata, key) ?: return null
+        return resolved.key
     }
 
-    suspend fun deleteItem(id: Long): Boolean {
-        unlockedKeyOrNull() ?: return false
-        return withContext(Dispatchers.Default) { vaultItemDao.delete(id) > 0 }
+    private suspend fun resolvePassword(
+        metadata: VaultMetadata,
+        password: String,
+    ): ResolvedKey? {
+        val candidates = listOfNotNull(metadata.active, metadata.pending)
+        val needsGenerationEvidence = metadata.pending != null
+        candidates.forEach { candidate ->
+            val key = VaultCrypto.deriveKey(password, candidate.salt, candidate.iterations)
+            if (
+                keyVerifies(candidate, key) &&
+                (!needsGenerationEvidence || databaseUsesKey(candidate, key))
+            ) {
+                if (needsGenerationEvidence) bestEffortStabilize(candidate)
+                return ResolvedKey(metadata = candidate, key = key)
+            }
+        }
+        return null
     }
 
-    private fun unlockedKeyOrNull(): SecretKey? =
-        sessionKey.takeIf { mutableLockState.value == VaultLockState.UNLOCKED }
+    private suspend fun resolveExistingKey(
+        metadata: VaultMetadata,
+        key: SecretKey,
+    ): ResolvedKey? {
+        val candidates = listOfNotNull(metadata.active, metadata.pending)
+        val needsGenerationEvidence = metadata.pending != null
+        val candidate = candidates.firstOrNull {
+            keyVerifies(it, key) &&
+                (!needsGenerationEvidence || databaseUsesKey(it, key))
+        } ?: return null
+        if (needsGenerationEvidence) bestEffortStabilize(candidate)
+        return ResolvedKey(metadata = candidate, key = key)
+    }
 
-    private suspend fun readMeta(): VaultMeta? {
-        val prefs = context.vaultMetaDataStore.data.first()
-        val saltBase64 = prefs[Keys.saltBase64] ?: return null
-        val verifierCipher = prefs[Keys.verifierCipher] ?: return null
-        val verifierIv = prefs[Keys.verifierIv] ?: return null
-        val salt = runCatching { Base64.getDecoder().decode(saltBase64) }.getOrNull() ?: return null
-        return VaultMeta(
-            salt = salt,
-            verifierCipher = verifierCipher,
-            verifierIv = verifierIv,
-            iterations = prefs[Keys.kdfIterations] ?: VaultCrypto.DEFAULT_KDF_ITERATIONS,
+    private fun keyVerifies(metadata: VaultKeyMetadata, key: SecretKey): Boolean =
+        VaultCrypto.decrypt(key, metadata.verifierCipher, metadata.verifierIv) ==
+            VERIFIER_PLAINTEXT
+
+    private suspend fun databaseUsesKey(metadata: VaultKeyMetadata, key: SecretKey): Boolean {
+        val marker = vaultItemDao.getById(VAULT_KEY_MARKER_ENTITY_ID)
+        val decryptedMarker = marker?.let {
+            VaultCrypto.decrypt(key, it.cipherText, it.iv)
+        }
+        return vaultDatabaseMarkerMatches(
+            generationId = metadata.generationId,
+            markerPresent = marker != null,
+            decryptedMarker = decryptedMarker,
         )
+    }
+
+    private suspend fun bestEffortStabilize(metadata: VaultKeyMetadata) {
+        try {
+            metadataStore.writeStable(metadata)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // The dual descriptors and Room marker remain sufficient for a later retry.
+        }
+    }
+
+    private fun installSessionKey(key: SecretKey, operationEpoch: Long) {
+        if (operationEpoch != lockEpoch.get()) {
+            mutableSessionKey.value = null
+            mutableLockState.value = VaultLockState.LOCKED
+            return
+        }
+        mutableSessionKey.value = key
+        mutableLockState.value = VaultLockState.UNLOCKED
     }
 
     private fun decryptItem(key: SecretKey, entity: VaultItemEntity): VaultItem? {
         val plaintext = VaultCrypto.decrypt(key, entity.cipherText, entity.iv) ?: return null
-        return try {
-            val json = JSONObject(plaintext)
-            VaultItem(
-                id = entity.id,
-                title = json.optString(JSON_TITLE),
-                content = json.optString(JSON_CONTENT),
-                createdAt = entity.createdAt,
-                updatedAt = entity.updatedAt,
-            )
-        } catch (_: Exception) {
-            // Malformed plaintext JSON: skip the row. Never log or rethrow decrypted content.
-            null
-        }
+        val payload = decodeVaultItemPayload(plaintext) ?: return null
+        return VaultItem(
+            id = entity.id,
+            content = payload.content,
+            note = payload.note,
+            createdAt = entity.createdAt,
+            updatedAt = entity.updatedAt,
+        )
     }
-
-    private fun encodeItemJson(title: String, content: String): String =
-        JSONObject().put(JSON_TITLE, title).put(JSON_CONTENT, content).toString()
 
     private companion object {
         const val VERIFIER_PLAINTEXT = "deskcubby-vault-verifier"
-        const val JSON_TITLE = "title"
-        const val JSON_CONTENT = "content"
     }
 }

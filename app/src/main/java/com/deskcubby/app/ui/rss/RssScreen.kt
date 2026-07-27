@@ -2,8 +2,6 @@
 
 package com.deskcubby.app.ui.rss
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,9 +29,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.RssFeed
 import androidx.compose.material3.AlertDialog
@@ -60,7 +58,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -87,9 +84,9 @@ import kotlinx.coroutines.launch
 fun RssScreen(
     padding: PaddingValues,
     viewModel: RssViewModel,
+    onOpenArticle: (String) -> Boolean,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     var showNewSubscription by remember { mutableStateOf(false) }
@@ -227,8 +224,8 @@ fun RssScreen(
                             ArticleCard(
                                 article = article,
                                 showSummary = state.showSummaries,
-                                onOpen = {
-                                    val opened = openArticle(context, article.url)
+                                onOpen = { articleUrl ->
+                                    val opened = onOpenArticle(articleUrl)
                                     if (!opened) {
                                         scope.launch { snackbarHostState.showSnackbar(openFailedMessage) }
                                     }
@@ -377,14 +374,19 @@ private fun SubscriptionCard(
 private fun ArticleCard(
     article: RssArticle,
     showSummary: Boolean,
-    onOpen: () -> Unit,
+    onOpen: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val language = LocalAppLanguage.current
+    val articleUrl = remember(article.url) { normalizeRssArticleUrl(article.url) }
+    val openableUrl = (articleUrl as? RssArticleUrl.Valid)?.value
     GlassPanel(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(enabled = article.url.isNotBlank(), onClick = onOpen),
+            .clickable(
+                enabled = openableUrl != null,
+                onClick = { openableUrl?.let(onOpen) },
+            ),
         cornerRadius = 20.dp,
         padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
     ) {
@@ -392,7 +394,7 @@ private fun ArticleCard(
             Row(verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = article.title,
+                        text = article.title.ifBlank { tr("未命名文章", "Untitled article") },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 3,
@@ -407,15 +409,37 @@ private fun ArticleCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (article.url.isNotBlank()) {
+                if (openableUrl != null) {
                     Spacer(Modifier.width(8.dp))
                     Icon(
-                        Icons.Outlined.OpenInNew,
-                        contentDescription = null,
+                        Icons.Outlined.Article,
+                        contentDescription = tr("阅读全文", "Read full article"),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(18.dp),
                     )
                 }
+            }
+            when (articleUrl) {
+                RssArticleUrl.Missing -> {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = tr("文章没有可用链接", "This article has no usable link"),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                RssArticleUrl.UnsafeOrUnsupported -> {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = tr(
+                            "文章链接不安全或不受支持",
+                            "The article link is unsafe or unsupported",
+                        ),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                is RssArticleUrl.Valid -> Unit
             }
             if (showSummary && article.summary.isNotBlank()) {
                 Spacer(Modifier.height(9.dp))
@@ -501,13 +525,6 @@ private fun SubscriptionEditorDialog(
             }
         },
     )
-}
-
-private fun openArticle(context: android.content.Context, url: String): Boolean {
-    if (url.isBlank()) return false
-    return runCatching {
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-    }.isSuccess
 }
 
 private fun buildArticleMeta(article: RssArticle, language: AppLanguage): String {

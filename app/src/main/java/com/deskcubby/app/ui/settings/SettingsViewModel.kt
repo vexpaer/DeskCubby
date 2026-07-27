@@ -3,6 +3,8 @@ package com.deskcubby.app.ui.settings
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import com.deskcubby.app.data.backup.AppBackupException
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -18,6 +20,7 @@ import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
@@ -28,7 +31,11 @@ import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.LegacyAiKeyMigrationStore
+import com.deskcubby.app.data.repository.DownloadedUpdate
 import com.deskcubby.app.data.repository.UpdateCheckResult
+import com.deskcubby.app.data.repository.UpdateDownloadFailure
+import com.deskcubby.app.data.repository.UpdateDownloadResult
+import com.deskcubby.app.data.repository.UpdateInstallRequest
 import com.deskcubby.app.data.repository.UpdateRepository
 import com.deskcubby.app.data.sync.AppCloudSyncService
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
@@ -40,16 +47,21 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import java.net.URL
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 
 data class BackupOperationState(
@@ -69,6 +81,28 @@ data class BackupJsonPreviewState(
     val json: String? = null,
     val error: String? = null,
 )
+
+sealed interface UpdateDownloadState {
+    data object Idle : UpdateDownloadState
+    data class Downloading(
+        val downloadedBytes: Long,
+        val totalBytes: Long,
+    ) : UpdateDownloadState
+    data class Preparing(val version: String) : UpdateDownloadState
+    data class AwaitingInstallPermission(val version: String) : UpdateDownloadState
+    data class ReadyToInstall(val version: String) : UpdateDownloadState
+    data class Failed(val reason: UpdateDownloadFailure) : UpdateDownloadState
+}
+
+internal fun UpdateDownloadState.isUpdateOperationInProgress(): Boolean =
+    this is UpdateDownloadState.Downloading || this is UpdateDownloadState.Preparing
+
+internal fun updateActionUnavailableFailure(action: String?): UpdateDownloadFailure =
+    if (action == Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES) {
+        UpdateDownloadFailure.INSTALL_PERMISSION_SETTINGS_UNAVAILABLE
+    } else {
+        UpdateDownloadFailure.INSTALLER_UNAVAILABLE
+    }
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -110,6 +144,19 @@ class SettingsViewModel @Inject constructor(
     val updateCheckInProgress: StateFlow<Boolean> = _updateCheckInProgress.asStateFlow()
     private val _updateCheckResult = MutableStateFlow<UpdateCheckResult?>(null)
     val updateCheckResult: StateFlow<UpdateCheckResult?> = _updateCheckResult.asStateFlow()
+    private val _updateDownloadState =
+        MutableStateFlow<UpdateDownloadState>(UpdateDownloadState.Idle)
+    val updateDownloadState: StateFlow<UpdateDownloadState> =
+        _updateDownloadState.asStateFlow()
+    // Never replay installer intents after the About page collector has gone away.
+    private val _updateInstallActions = MutableSharedFlow<Intent>(
+        replay = 0,
+        extraBufferCapacity = 0,
+    )
+    val updateInstallActions = _updateInstallActions.asSharedFlow()
+    private val updateOperationMutex = Mutex()
+    private var updateOperationJob: Job? = null
+    private var downloadedUpdate: DownloadedUpdate? = null
 
     fun checkForUpdate() {
         if (_updateCheckInProgress.value) return
@@ -121,6 +168,96 @@ class SettingsViewModel @Inject constructor(
                 _updateCheckInProgress.value = false
             }
         }
+    }
+
+    fun downloadAndInstallUpdate(available: UpdateCheckResult.UpdateAvailable) {
+        launchUpdateOperation {
+            val cached = downloadedUpdate
+            if (cached != null && cached.version == available.latestVersion) {
+                prepareUpdateInstall(cached)
+                return@launchUpdateOperation
+            }
+            downloadedUpdate = null
+            _updateDownloadState.value = UpdateDownloadState.Downloading(
+                downloadedBytes = 0L,
+                totalBytes = available.updatePackage?.sizeBytes ?: 0L,
+            )
+            when (
+                val result = updateRepository.downloadUpdate(available) { downloaded, total ->
+                    _updateDownloadState.value = UpdateDownloadState.Downloading(
+                        downloadedBytes = downloaded,
+                        totalBytes = total,
+                    )
+                }
+            ) {
+                is UpdateDownloadResult.Downloaded -> {
+                    downloadedUpdate = result.update
+                    prepareUpdateInstall(result.update)
+                }
+                is UpdateDownloadResult.Failed -> {
+                    _updateDownloadState.value = UpdateDownloadState.Failed(result.reason)
+                }
+            }
+        }
+    }
+
+    /** Called after returning from Android's "install unknown apps" settings screen. */
+    fun resumeUpdateInstallAfterPermission() {
+        if (_updateDownloadState.value !is UpdateDownloadState.AwaitingInstallPermission) return
+        val canInstallPackages = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            true
+        } else {
+            try {
+                context.packageManager.canRequestPackageInstalls()
+            } catch (_: RuntimeException) {
+                false
+            }
+        }
+        if (!canInstallPackages) {
+            return
+        }
+        val cached = downloadedUpdate ?: return
+        launchUpdateOperation { prepareUpdateInstall(cached) }
+    }
+
+    fun reportUpdateActionUnavailable(intent: Intent) {
+        _updateDownloadState.value =
+            UpdateDownloadState.Failed(updateActionUnavailableFailure(intent.action))
+    }
+
+    private suspend fun prepareUpdateInstall(update: DownloadedUpdate) {
+        _updateDownloadState.value = UpdateDownloadState.Preparing(update.version)
+        when (val request = updateRepository.prepareInstall(update)) {
+            is UpdateInstallRequest.LaunchInstaller -> {
+                _updateDownloadState.value = UpdateDownloadState.ReadyToInstall(update.version)
+                _updateInstallActions.emit(request.intent)
+            }
+            is UpdateInstallRequest.RequestPermission -> {
+                _updateDownloadState.value =
+                    UpdateDownloadState.AwaitingInstallPermission(update.version)
+                _updateInstallActions.emit(request.intent)
+            }
+            is UpdateInstallRequest.Failed -> {
+                downloadedUpdate = null
+                _updateDownloadState.value = UpdateDownloadState.Failed(request.reason)
+            }
+        }
+    }
+
+    private fun launchUpdateOperation(block: suspend () -> Unit): Boolean {
+        if (!updateOperationMutex.tryLock()) return false
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            block()
+        }
+        updateOperationJob = job
+        job.invokeOnCompletion {
+            if (updateOperationJob === job) {
+                updateOperationJob = null
+            }
+            updateOperationMutex.unlock()
+        }
+        job.start()
+        return true
     }
 
     fun persistFolder(uri: Uri, diary: Boolean) {
@@ -139,6 +276,22 @@ class SettingsViewModel @Inject constructor(
     fun setDarkMode(value: DarkMode) = launch { repository.setDarkMode(value) }
     fun setAppLanguage(value: AppLanguage) = launch { repository.setAppLanguage(value) }
     fun setUserName(value: String) = launch { repository.setUserName(value) }
+    fun setHomeGreetingSettings(
+        userName: String,
+        greetings: List<HomeGreetingTemplate>,
+        onComplete: (Boolean) -> Unit,
+    ) = viewModelScope.launch {
+        try {
+            repository.setHomeGreetingSettings(userName, greetings)
+            onComplete(true)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _settingsError.value = error.message?.takeIf(String::isNotBlank)
+                ?: "主页问候保存失败 / Could not save home greetings"
+            onComplete(false)
+        }
+    }
     fun setThemeColor(value: Int) = launch { repository.setThemeColor(value) }
     fun setThemeSecondaryColors(value: List<Int>) =
         launch { repository.setThemeSecondaryColors(value) }
@@ -364,9 +517,30 @@ class SettingsViewModel @Inject constructor(
         defaultPage: NavItemId,
         items: List<NavItemConfig>,
         showLabels: Boolean,
-    ) = launch { repository.setNavigationSettings(defaultPage, items, showLabels) }
-    fun setMorePageSettings(showDescriptions: Boolean, items: List<NavItemConfig>) =
-        launch { repository.setMorePageSettings(showDescriptions, items) }
+        onDone: (Boolean) -> Unit = {},
+    ) = launchSave(onDone) {
+        repository.setNavigationSettings(defaultPage, items, showLabels)
+    }
+    fun setMorePageSettings(
+        showDescriptions: Boolean,
+        items: List<NavItemConfig>,
+        onDone: (Boolean) -> Unit = {},
+    ) = launchSave(onDone) {
+        repository.setMorePageSettings(showDescriptions, items)
+    }
+    fun setMorePageOrder(
+        value: List<NavItemId>,
+        onDone: (Boolean) -> Unit = {},
+    ) = viewModelScope.launch {
+        try {
+            repository.setMorePageOrder(value)
+            onDone(true)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            onDone(false)
+        }
+    }
     fun setRssSettings(maxItemsPerFeed: Int, showSummaries: Boolean) =
         launch { repository.setRssSettings(maxItemsPerFeed, showSummaries) }
     fun saveAiConfig(config: AiModelConfig, onDone: (Boolean) -> Unit = {}) =
@@ -690,6 +864,22 @@ class SettingsViewModel @Inject constructor(
         } catch (error: Exception) {
             _settingsError.value = error.message?.takeIf(String::isNotBlank)
                 ?: "设置保存失败 / Could not save settings"
+        }
+    }
+
+    private fun launchSave(
+        onDone: (Boolean) -> Unit,
+        block: suspend () -> Unit,
+    ) = viewModelScope.launch {
+        try {
+            block()
+            onDone(true)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _settingsError.value = error.message?.takeIf(String::isNotBlank)
+                ?: "设置保存失败 / Could not save settings"
+            onDone(false)
         }
     }
 }

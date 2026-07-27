@@ -1,6 +1,7 @@
 package com.deskcubby.app.ui.settings
 
 import android.net.Uri
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.BackHandler
@@ -43,6 +44,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AccessTime
+import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Close
@@ -78,6 +80,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -105,6 +108,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -125,7 +129,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.deskcubby.app.BuildConfig
 import com.deskcubby.app.R
 import com.deskcubby.app.takeCodePoints
@@ -140,6 +148,7 @@ import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
@@ -150,7 +159,10 @@ import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.UpdateCheckResult
+import com.deskcubby.app.data.repository.UpdateDownloadFailure
 import com.deskcubby.app.data.repository.buildAiRequestPreviewJson
+import com.deskcubby.app.data.preferences.MAX_HOME_GREETINGS
+import com.deskcubby.app.data.preferences.MAX_HOME_GREETING_CODE_POINTS
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.PendingCloudSyncJson
 import com.deskcubby.app.ui.components.AppLoadingIndicator
@@ -158,6 +170,7 @@ import com.deskcubby.app.ui.components.ColorPickerDialog
 import com.deskcubby.app.ui.iconFor
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
+import com.deskcubby.app.ui.home.HomeGreeting
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.LocalCompactMode
@@ -165,6 +178,7 @@ import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.tr
 import java.text.DateFormat
 import java.text.SimpleDateFormat
+import java.time.LocalDate
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -175,6 +189,7 @@ private enum class SettingsPage {
     APPEARANCE,
     SUBPAGES,
     HOME,
+    HOME_GREETING,
     BACKUP,
     SYNC,
     SYNC_DETAIL,
@@ -264,6 +279,28 @@ private data class HomeSettingsDraft(
     val mealButtonIcons: List<String>,
 )
 
+private val HomeGreetingTemplateListSaver =
+    Saver<List<HomeGreetingTemplate>, ArrayList<String>>(
+        save = { items ->
+            ArrayList<String>(items.size * 2).apply {
+                items.forEach { item ->
+                    add(item.chinese)
+                    add(item.english)
+                }
+            }
+        },
+        restore = { values ->
+            values.chunked(2).mapNotNull { pair ->
+                pair.getOrNull(1)?.let { english ->
+                    HomeGreetingTemplate(
+                        chinese = pair[0],
+                        english = english,
+                    )
+                }
+            }
+        },
+    )
+
 private val homeWidgetOptions = listOf(
     HomeWidgetOption("calendar", "日历", "Calendar"),
     HomeWidgetOption("weather", "天气缓存", "Weather cache"),
@@ -335,6 +372,7 @@ fun SettingsScreen(
     var page by rememberSaveable(startPage) { mutableStateOf(rootPage) }
     val saveCoordinator = remember { SettingsSaveCoordinator() }
     var showUnsavedDialog by remember { mutableStateOf(false) }
+    var pendingNavigationAfterUnsaved by remember { mutableStateOf<(() -> Unit)?>(null) }
     var editingAiConfig by remember { mutableStateOf<AiModelConfig?>(null) }
     var editingCloudSyncConfig by remember { mutableStateOf<CloudSyncConfig?>(null) }
 
@@ -365,10 +403,20 @@ fun SettingsScreen(
     }
 
     fun leaveCurrentPage() {
+        pendingNavigationAfterUnsaved = null
         if (saveCoordinator.dirty) {
             showUnsavedDialog = true
         } else {
             exitOrOpenParent()
+        }
+    }
+
+    fun navigateAfterHandlingUnsaved(action: () -> Unit) {
+        if (saveCoordinator.dirty) {
+            pendingNavigationAfterUnsaved = action
+            showUnsavedDialog = true
+        } else {
+            action()
         }
     }
 
@@ -452,6 +500,13 @@ fun SettingsScreen(
                 settings = settings,
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
+                onOpenGreeting = {
+                    if (saveCoordinator.dirty) {
+                        showUnsavedDialog = true
+                    } else {
+                        page = SettingsPage.HOME_GREETING
+                    }
+                },
                 onSave = { draft ->
                     viewModel.setHomePageSettings(
                         userName = draft.userName,
@@ -465,6 +520,17 @@ fun SettingsScreen(
                 },
             )
 
+            SettingsPage.HOME_GREETING -> HomeGreetingSettingsPage(
+                settings = settings,
+                contentPadding = inner,
+                saveCoordinator = saveCoordinator,
+                onSave = { userName, greetings ->
+                    viewModel.setHomeGreetingSettings(userName, greetings) { saved ->
+                        if (saved) completeSave(SettingsPage.HOME)
+                    }
+                },
+            )
+
             SettingsPage.SYNC -> CloudSyncSettingsPage(
                 settings = settings,
                 status = cloudSyncStatus,
@@ -473,22 +539,43 @@ fun SettingsScreen(
                 saveCoordinator = saveCoordinator,
                 onSaveEnabled = { enabled ->
                     viewModel.setCloudSyncEnabled(enabled) { saved ->
-                        if (saved) completeSave(SettingsPage.MAIN)
+                        if (saved) {
+                            val pendingNavigation = pendingNavigationAfterUnsaved
+                            pendingNavigationAfterUnsaved = null
+                            if (pendingNavigation == null) {
+                                completeSave(SettingsPage.BACKUP)
+                            } else {
+                                saveCoordinator.clear()
+                                pendingNavigation()
+                            }
+                        }
                     }
                 },
                 onAdd = {
-                    editingCloudSyncConfig = CloudSyncConfig(
-                        id = UUID.randomUUID().toString(),
-                        name = "",
-                    )
-                    page = SettingsPage.SYNC_DETAIL
+                    navigateAfterHandlingUnsaved {
+                        editingCloudSyncConfig = CloudSyncConfig(
+                            id = UUID.randomUUID().toString(),
+                            name = "",
+                        )
+                        page = SettingsPage.SYNC_DETAIL
+                    }
                 },
                 onEdit = { config ->
-                    editingCloudSyncConfig = config
-                    page = SettingsPage.SYNC_DETAIL
+                    navigateAfterHandlingUnsaved {
+                        editingCloudSyncConfig = config
+                        page = SettingsPage.SYNC_DETAIL
+                    }
                 },
-                onCopy = viewModel::copyCloudSyncConfig,
-                onDelete = viewModel::deleteCloudSyncConfig,
+                onCopy = { config ->
+                    navigateAfterHandlingUnsaved {
+                        viewModel.copyCloudSyncConfig(config)
+                    }
+                },
+                onDelete = { config ->
+                    navigateAfterHandlingUnsaved {
+                        viewModel.deleteCloudSyncConfig(config)
+                    }
+                },
                 onSyncNow = viewModel::syncCloudNow,
                 onRestoreIncomingJson = { fileName ->
                     viewModel.restoreIncomingCloudJson(fileName)
@@ -521,6 +608,7 @@ fun SettingsScreen(
             }
 
             SettingsPage.BACKUP -> BackupSettingsPage(
+                settings = settings,
                 backupTreeUri = settings.backupTreeUri,
                 operation = backupOperation,
                 autoBackupStatus = autoBackupStatus,
@@ -536,6 +624,7 @@ fun SettingsScreen(
                 jsonPreview = backupJsonPreview,
                 onOpenJsonPreview = viewModel::openBackupJsonPreview,
                 onCloseJsonPreview = viewModel::closeBackupJsonPreview,
+                onOpenCloudSync = { page = SettingsPage.SYNC },
             )
 
             SettingsPage.DIARY -> DiarySettingsPage(
@@ -646,9 +735,11 @@ fun SettingsScreen(
                 settings = settings,
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
-                onSave = { defaultPage, navItems, showLabels ->
-                    viewModel.setNavigationSettings(defaultPage, navItems, showLabels)
-                    completeSave(SettingsPage.MAIN)
+                onSave = { defaultPage, navItems, showLabels, onDone ->
+                    viewModel.setNavigationSettings(defaultPage, navItems, showLabels) { success ->
+                        onDone(success)
+                        if (success) completeSave(SettingsPage.MAIN)
+                    }
                 },
             )
 
@@ -656,9 +747,11 @@ fun SettingsScreen(
                 settings = settings,
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
-                onSave = { showDescriptions, navItems ->
-                    viewModel.setMorePageSettings(showDescriptions, navItems)
-                    completeSave(SettingsPage.MAIN)
+                onSave = { showDescriptions, navItems, onDone ->
+                    viewModel.setMorePageSettings(showDescriptions, navItems) { success ->
+                        onDone(success)
+                        if (success) completeSave(SettingsPage.SUBPAGES)
+                    }
                 },
             )
 
@@ -702,9 +795,12 @@ fun SettingsScreen(
 
     if (showUnsavedDialog) {
         AlertDialog(
-            onDismissRequest = { showUnsavedDialog = false },
+            onDismissRequest = {
+                showUnsavedDialog = false
+                pendingNavigationAfterUnsaved = null
+            },
             title = { Text(tr("设置尚未保存", "Unsaved settings")) },
-            text = { Text(tr("返回会丢失刚才的修改。", "Going back will discard your changes.")) },
+            text = { Text(tr("继续会丢失刚才的修改。", "Continuing will discard your changes.")) },
             confirmButton = {
                 TextButton(
                     enabled = saveCoordinator.enabled,
@@ -716,13 +812,25 @@ fun SettingsScreen(
             },
             dismissButton = {
                 Row {
-                    TextButton(onClick = { showUnsavedDialog = false }) {
+                    TextButton(
+                        onClick = {
+                            showUnsavedDialog = false
+                            pendingNavigationAfterUnsaved = null
+                        },
+                    ) {
                         Text(tr("继续编辑", "Keep editing"))
                     }
                     TextButton(
                         onClick = {
                             showUnsavedDialog = false
-                            exitOrOpenParent()
+                            val pendingNavigation = pendingNavigationAfterUnsaved
+                            pendingNavigationAfterUnsaved = null
+                            saveCoordinator.clear()
+                            if (pendingNavigation == null) {
+                                exitOrOpenParent()
+                            } else {
+                                pendingNavigation()
+                            }
                         },
                     ) { Text(tr("放弃", "Discard")) }
                 }
@@ -748,9 +856,15 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
     ),
     SettingsSearchEntry(
         tr("主页", "Home"),
-        tr("问候语、模块、标题、排序与饮食按钮", "Greeting, widgets, titles, order and meal buttons"),
-        "home widget 主页 模块 问候 组件 饮食按钮",
+        tr("模块、标题、排序与饮食按钮", "Widgets, titles, order and meal buttons"),
+        "home widget 主页 模块 组件 饮食按钮",
         SettingsPage.HOME,
+    ),
+    SettingsSearchEntry(
+        tr("主页问候", "Home greeting"),
+        tr("用户名以及问候语的增加、修改和删除", "User name and greeting add, edit and delete"),
+        "home greeting 主页 问候 用户名 增加 修改 删除",
+        SettingsPage.HOME_GREETING,
     ),
     SettingsSearchEntry(
         tr("日记与媒体", "Diary & media"),
@@ -783,16 +897,13 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
         SettingsPage.AI,
     ),
     SettingsSearchEntry(
-        tr("应用数据与备份", "App data & backup"),
-        tr("自动保存文件夹、导入与导出 JSON", "Auto-save folder and JSON import/export"),
-        "backup json 备份 导入 导出",
+        tr("应用数据、备份与同步", "App data, backup & sync"),
+        tr(
+            "自动保存、整体 JSON、导入导出、WebDAV 与 S3",
+            "Auto-save, complete JSON, import/export, WebDAV and S3",
+        ),
+        "backup json cloud sync webdav s3 备份 导入 导出 云端 同步",
         SettingsPage.BACKUP,
-    ),
-    SettingsSearchEntry(
-        tr("云端同步", "Cloud sync"),
-        tr("WebDAV、S3 兼容服务与同步内容", "WebDAV, S3-compatible services and content selection"),
-        "cloud sync webdav s3 云端 同步",
-        SettingsPage.SYNC,
     ),
     SettingsSearchEntry(
         tr("底部导航", "Bottom navigation"),
@@ -907,7 +1018,10 @@ private fun SettingsMainPage(
         item {
             SettingsMenuItem(
                 title = tr("子页面设置", "Subpage settings"),
-                description = tr("主页、日记、浏览器、小巧思、RSS 与 AI", "Home, diary, browser, thoughts, RSS and AI"),
+                description = tr(
+                    "主页、日记、浏览器、小巧思、RSS、AI 与导航页",
+                    "Home, diary, browser, thoughts, RSS, AI and the navigation page",
+                ),
                 icon = { Icon(Icons.Outlined.Tune, contentDescription = null) },
                 accentColor = settings.menuAccentColor(1),
                 onClick = { onOpen(SettingsPage.SUBPAGES) },
@@ -915,11 +1029,14 @@ private fun SettingsMainPage(
         }
         item {
             SettingsMenuItem(
-                title = tr("应用数据与备份", "App data & backup"),
-                description = if (settings.backupTreeUri == null) {
-                    tr("自动保存文件夹、导入与导出 JSON", "Auto-save folder and JSON import/export")
-                } else {
-                    tr("应用内容会在更改后自动保存", "App data is saved automatically after changes")
+                title = tr("应用数据、备份与同步", "App data, backup & sync"),
+                description = when {
+                    settings.cloudSyncEnabled ->
+                        tr("自动备份与云端同步已配置", "Auto-backup and cloud sync are configured")
+                    settings.backupTreeUri != null ->
+                        tr("自动保存、JSON 导入导出与云端同步", "Auto-save, JSON import/export and cloud sync")
+                    else ->
+                        tr("本地 JSON 备份、整体数据与云端同步", "Local JSON backup, complete data and cloud sync")
                 },
                 icon = { Icon(Icons.Outlined.Backup, contentDescription = null) },
                 accentColor = settings.menuAccentColor(2),
@@ -928,42 +1045,11 @@ private fun SettingsMainPage(
         }
         item {
             SettingsMenuItem(
-                title = tr("云端同步", "Cloud sync"),
-                description = if (settings.cloudSyncEnabled) {
-                    tr(
-                        "已开启，可同步日记、媒体与 JSON 备份",
-                        "Enabled for diaries, media and JSON backups",
-                    )
-                } else {
-                    tr(
-                        "WebDAV、S3 兼容服务与同步内容",
-                        "WebDAV, S3-compatible services and content selection",
-                    )
-                },
-                icon = { Icon(Icons.Outlined.Cloud, contentDescription = null) },
-                accentColor = settings.menuAccentColor(3),
-                onClick = { onOpen(SettingsPage.SYNC) },
-            )
-        }
-        item {
-            SettingsMenuItem(
                 title = tr("底部导航", "Bottom navigation"),
                 description = tr("显示方式、默认页、排序、名称与图标", "Display, default page, order, labels and icons"),
                 icon = { Icon(Icons.Outlined.ViewWeek, contentDescription = null) },
-                accentColor = settings.menuAccentColor(4),
+                accentColor = settings.menuAccentColor(3),
                 onClick = { onOpen(SettingsPage.NAVIGATION) },
-            )
-        }
-        item {
-            SettingsMenuItem(
-                title = tr("导航页", "Navigation page"),
-                description = tr(
-                    "收纳页面、双列卡片与自定义描述",
-                    "Collected pages, two-column cards and custom descriptions",
-                ),
-                icon = { Icon(Icons.Outlined.Tune, contentDescription = null) },
-                accentColor = settings.menuAccentColor(5),
-                onClick = { onOpen(SettingsPage.MORE_PAGE) },
             )
         }
         item {
@@ -971,7 +1057,7 @@ private fun SettingsMainPage(
                 title = tr("关于", "About"),
                 description = tr("版本、检查更新与应用显示名称", "Version, update check and app display name"),
                 icon = { Icon(Icons.Outlined.Info, contentDescription = null) },
-                accentColor = settings.menuAccentColor(6),
+                accentColor = settings.menuAccentColor(4),
                 onClick = { onOpen(SettingsPage.ABOUT) },
             )
         }
@@ -1050,6 +1136,18 @@ private fun SubpageSettingsPage(
         }
         item {
             SettingsMenuItem(
+                title = tr("导航页", "Navigation page"),
+                description = tr(
+                    "收纳页面、双列卡片与自定义描述",
+                    "Collected pages, two-column cards and custom descriptions",
+                ),
+                icon = { Icon(Icons.Outlined.Apps, contentDescription = null) },
+                accentColor = settings.menuAccentColor(6),
+                onClick = { onOpen(SettingsPage.MORE_PAGE) },
+            )
+        }
+        item {
+            SettingsMenuItem(
                 title = tr("手机使用时间", "Screen time"),
                 description = if (settings.usageTrackingEnabled) {
                     tr("已开启本机按日统计", "On-device daily tracking is enabled")
@@ -1057,7 +1155,7 @@ private fun SubpageSettingsPage(
                     tr("权限、开关与本机 JSON", "Permission, switch and on-device JSON")
                 },
                 icon = { Icon(Icons.Outlined.AccessTime, contentDescription = null) },
-                accentColor = settings.menuAccentColor(6),
+                accentColor = settings.menuAccentColor(7),
                 onClick = { onOpen(SettingsPage.USAGE) },
             )
         }
@@ -1070,7 +1168,7 @@ private fun SubpageSettingsPage(
                     tr("健康数据权限与本机 JSON", "Health permission and on-device JSON")
                 },
                 icon = { Icon(Icons.Outlined.DirectionsWalk, contentDescription = null) },
-                accentColor = settings.menuAccentColor(7),
+                accentColor = settings.menuAccentColor(8),
                 onClick = { onOpen(SettingsPage.STEPS) },
             )
         }
@@ -1257,7 +1355,9 @@ private fun CloudSyncSettingsPage(
                 }
                 Button(
                     onClick = onSyncNow,
-                    enabled = settings.cloudSyncEnabled && !status.running,
+                    enabled = enabled &&
+                        enabled == settings.cloudSyncEnabled &&
+                        !status.running,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Outlined.Sync, contentDescription = null)
@@ -1780,6 +1880,7 @@ private fun syncContentsLabel(contents: Set<CloudSyncContent>): String =
 
 @Composable
 private fun BackupSettingsPage(
+    settings: AppSettings,
     backupTreeUri: String?,
     operation: BackupOperationState,
     autoBackupStatus: AutoBackupStatus,
@@ -1795,6 +1896,7 @@ private fun BackupSettingsPage(
     jsonPreview: BackupJsonPreviewState,
     onOpenJsonPreview: () -> Unit,
     onCloseJsonPreview: () -> Unit,
+    onOpenCloudSync: () -> Unit,
 ) {
     var pendingImportUri by rememberSaveable { mutableStateOf<String?>(null) }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -1941,6 +2043,25 @@ private fun BackupSettingsPage(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        item {
+            SettingsMenuItem(
+                title = tr("云端同步", "Cloud sync"),
+                description = if (settings.cloudSyncEnabled) {
+                    tr(
+                        "已开启；管理 WebDAV、S3、同步内容和立即同步",
+                        "Enabled; manage WebDAV, S3, content and sync now",
+                    )
+                } else {
+                    tr(
+                        "配置 WebDAV 或 S3 兼容服务",
+                        "Configure WebDAV or an S3-compatible service",
+                    )
+                },
+                icon = { Icon(Icons.Outlined.Cloud, contentDescription = null) },
+                accentColor = settings.menuAccentColor(0),
+                onClick = onOpenCloudSync,
+            )
+        }
         item {
             SettingsSection(tr("自动保存文件夹", "Auto-save folder")) {
                 Text(
@@ -2419,9 +2540,9 @@ private fun HomeSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
     saveCoordinator: SettingsSaveCoordinator,
+    onOpenGreeting: () -> Unit,
     onSave: (HomeSettingsDraft) -> Unit,
 ) {
-    var userName by rememberSaveable(settings.userName) { mutableStateOf(settings.userName) }
     var widgetBordersEnabled by rememberSaveable(settings.homeWidgetBordersEnabled) {
         mutableStateOf(settings.homeWidgetBordersEnabled)
     }
@@ -2445,12 +2566,6 @@ private fun HomeSettingsPage(
     var widgetDragDistancePx by remember { mutableStateOf(0f) }
     var widgetDragOriginY by remember { mutableStateOf<Float?>(null) }
     var widgetDragTargetIndex by remember { mutableStateOf<Int?>(null) }
-    val trimmedName = userName.trim()
-    val greetingPreview = if (trimmedName.isBlank()) {
-        tr("你好！", "Hello!")
-    } else {
-        tr("你好，$trimmedName！", "Hello, $trimmedName!")
-    }
     val widgetDragSourceIndex = draggingWidgetId?.let(widgets::indexOf)?.takeIf { it >= 0 }
     val widgetInsertionSlot = widgetDragSourceIndex?.let { sourceIndex ->
         widgetDragTargetIndex?.let { targetIndex ->
@@ -2458,7 +2573,7 @@ private fun HomeSettingsPage(
         }
     }
     val homeDraft = HomeSettingsDraft(
-        userName = trimmedName,
+        userName = settings.userName,
         widgetBordersEnabled = widgetBordersEnabled,
         widgets = widgets,
         visibleWidgetTitles = visibleWidgetTitles,
@@ -2502,16 +2617,16 @@ private fun HomeSettingsPage(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            SettingsSection(tr("主页问候", "Home greeting")) {
-                OutlinedTextField(
-                    value = userName,
-                    onValueChange = { userName = it.takeCodePoints(32) },
-                    label = { Text(tr("用户名", "User name")) },
-                    supportingText = { Text(tr("主页将显示：$greetingPreview", "Home will show: $greetingPreview")) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            SettingsMenuItem(
+                title = tr("主页问候", "Home greeting"),
+                description = tr(
+                    "管理用户名和每日问候语，可增加、修改或删除",
+                    "Manage your name and add, edit or delete daily greetings",
+                ),
+                icon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                accentColor = settings.menuAccentColor(0),
+                onClick = onOpenGreeting,
+            )
         }
         item {
             SettingsSection(tr("模块样式", "Widget style")) {
@@ -2707,6 +2822,182 @@ private fun HomeSettingsPage(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeGreetingSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onSave: (String, List<HomeGreetingTemplate>) -> Unit,
+) {
+    var userName by rememberSaveable(settings.userName) { mutableStateOf(settings.userName) }
+    var greetings by rememberSaveable(
+        settings.homeGreetings,
+        stateSaver = HomeGreetingTemplateListSaver,
+    ) {
+        mutableStateOf(settings.homeGreetings)
+    }
+    val normalizedName = userName.trim().takeCodePoints(32)
+    val valid = greetings.size <= MAX_HOME_GREETINGS && greetings.all { item ->
+        item.chinese.isNotBlank() || item.english.isNotBlank()
+    }
+    val dirty = normalizedName != settings.userName || greetings != settings.homeGreetings
+
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = dirty,
+        enabled = valid,
+    ) {
+        onSave(normalizedName, greetings)
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            SettingsSection(tr("显示方式", "Display")) {
+                OutlinedTextField(
+                    value = userName,
+                    onValueChange = { userName = it.takeCodePoints(32) },
+                    label = { Text(tr("用户名", "User name")) },
+                    supportingText = {
+                        Text(
+                            tr(
+                                "问候语中的 {name} 会替换为此名称",
+                                "{name} in a greeting is replaced with this name",
+                            ),
+                        )
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    text = tr("今日预览", "Today's preview"),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = HomeGreeting.forDate(
+                        date = LocalDate.now(),
+                        language = settings.appLanguage,
+                        userName = normalizedName,
+                        templates = greetings,
+                    ),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    text = tr(
+                        "每天按列表顺序轮换；全部删除后主页显示“今日概览”。单条最多 $MAX_HOME_GREETING_CODE_POINTS 个字符。",
+                        "Greetings rotate daily in list order. If all are deleted, Home shows “Today's overview”. Each field allows up to $MAX_HOME_GREETING_CODE_POINTS characters.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        itemsIndexed(
+            items = greetings,
+            key = { index, _ -> index },
+        ) { index, item ->
+            SettingsSection(tr("问候语 ${index + 1}", "Greeting ${index + 1}")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    IconButton(
+                        onClick = {
+                            greetings = greetings.toMutableList().apply { removeAt(index) }
+                        },
+                    ) {
+                        Icon(
+                            Icons.Outlined.Delete,
+                            contentDescription = tr("删除这条问候语", "Delete this greeting"),
+                        )
+                    }
+                }
+                val bothBlank = item.chinese.isBlank() && item.english.isBlank()
+                OutlinedTextField(
+                    value = item.chinese,
+                    onValueChange = { value ->
+                        greetings = greetings.toMutableList().apply {
+                            this[index] = item.copy(
+                                chinese = value.takeCodePoints(MAX_HOME_GREETING_CODE_POINTS),
+                            )
+                        }
+                    },
+                    label = { Text(tr("中文", "Chinese")) },
+                    supportingText = {
+                        Text(
+                            if (bothBlank) {
+                                tr(
+                                    "中文或英文至少填写一项",
+                                    "Enter at least Chinese or English",
+                                )
+                            } else {
+                                tr(
+                                    "可使用 {name}；留空时使用英文内容",
+                                    "You may use {name}; blank falls back to English",
+                                )
+                            },
+                        )
+                    },
+                    isError = bothBlank,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = item.english,
+                    onValueChange = { value ->
+                        greetings = greetings.toMutableList().apply {
+                            this[index] = item.copy(
+                                english = value.takeCodePoints(MAX_HOME_GREETING_CODE_POINTS),
+                            )
+                        }
+                    },
+                    label = { Text(tr("英文", "English")) },
+                    supportingText = {
+                        Text(
+                            if (bothBlank) {
+                                tr(
+                                    "中文或英文至少填写一项",
+                                    "Enter at least Chinese or English",
+                                )
+                            } else {
+                                tr(
+                                    "可使用 {name}；留空时使用中文内容",
+                                    "You may use {name}; blank falls back to Chinese",
+                                )
+                            },
+                        )
+                    },
+                    isError = bothBlank,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
+        item {
+            OutlinedButton(
+                onClick = {
+                    if (greetings.size < MAX_HOME_GREETINGS) {
+                        greetings = greetings + HomeGreetingTemplate(chinese = "", english = "")
+                    }
+                },
+                enabled = greetings.size < MAX_HOME_GREETINGS,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Outlined.Add, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(tr("增加问候语", "Add greeting"))
             }
         }
     }
@@ -3907,7 +4198,7 @@ private fun NavigationSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
     saveCoordinator: SettingsSaveCoordinator,
-    onSave: (NavItemId, List<NavItemConfig>, Boolean) -> Unit,
+    onSave: (NavItemId, List<NavItemConfig>, Boolean, (Boolean) -> Unit) -> Unit,
 ) {
     var defaultPage by remember(settings.defaultPage) { mutableStateOf(settings.defaultPage) }
     var navItems by remember(settings.navItems) { mutableStateOf(settings.navItems.map { it.copy() }) }
@@ -3917,6 +4208,7 @@ private fun NavigationSettingsPage(
     var navDragDistancePx by remember { mutableStateOf(0f) }
     var navDragOriginY by remember { mutableStateOf<Float?>(null) }
     var navDragTargetIndex by remember { mutableStateOf<Int?>(null) }
+    var saving by remember { mutableStateOf(false) }
     val navDragSourceIndex = draggingNavId?.let { id ->
         navItems.indexOfFirst { it.id == id }.takeIf { it >= 0 }
     }
@@ -3955,7 +4247,11 @@ private fun NavigationSettingsPage(
         coordinator = saveCoordinator,
         dirty = defaultPage != settings.defaultPage || navItems != settings.navItems ||
             showLabels != settings.bottomNavShowLabels,
-    ) { onSave(defaultPage, navItems, showLabels) }
+        enabled = !saving,
+    ) {
+        saving = true
+        onSave(defaultPage, navItems, showLabels) { saving = false }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -3988,8 +4284,8 @@ private fun NavigationSettingsPage(
             SettingsSection(tr("导航项目", "Navigation items")) {
                 Text(
                     tr(
-                        "“底栏”控制底部导航；“导航页”把入口收进导航主页。页面也可同时隐藏、改名、换图标和排序。",
-                        "Bottom controls the bottom bar; More places an entry on the navigation page. Pages can also be hidden, renamed, reordered or given new icons.",
+                        "在这里选择底栏项目，并调整底栏顺序、名称和图标。导航页的收纳与排序请到“导航页设置”调整。",
+                        "Choose bottom-bar items here and adjust their order, labels and icons. Manage collection and order separately in Navigation page settings.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -4008,6 +4304,8 @@ private fun NavigationSettingsPage(
                                     alpha = if (isDragging) 0.62f else 1f
                                 },
                                 item = item,
+                                position = index + 1,
+                                total = navItems.size,
                                 onChange = { changed ->
                                     val changedItems = navItems.toMutableList().apply { set(index, changed) }
                                     navItems = changedItems
@@ -4029,8 +4327,16 @@ private fun NavigationSettingsPage(
                                     navDragTargetIndex = navTargetIndex(distance)
                                 },
                                 onDragCancelled = ::clearNavDrag,
-                                onMoveUp = { moveNavItem(index, index - 1) },
-                                onMoveDown = { moveNavItem(index, index + 1) },
+                                onMoveUp = if (index > 0) {
+                                    { moveNavItem(index, index - 1) }
+                                } else {
+                                    null
+                                },
+                                onMoveDown = if (index < navItems.lastIndex) {
+                                    { moveNavItem(index, index + 1) }
+                                } else {
+                                    null
+                                },
                                 onMove = { distance ->
                                     val target = navTargetIndex(distance) ?: navDragTargetIndex
                                     clearNavDrag()
@@ -4065,7 +4371,7 @@ private fun MorePageSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
     saveCoordinator: SettingsSaveCoordinator,
-    onSave: (Boolean, List<NavItemConfig>) -> Unit,
+    onSave: (Boolean, List<NavItemConfig>, (Boolean) -> Unit) -> Unit,
 ) {
     var showDescriptions by remember(settings.morePageShowDescriptions) {
         mutableStateOf(settings.morePageShowDescriptions)
@@ -4073,6 +4379,7 @@ private fun MorePageSettingsPage(
     var navItems by remember(settings.navItems) {
         mutableStateOf(settings.navItems.map { it.copy() })
     }
+    var saving by remember { mutableStateOf(false) }
     val language = LocalAppLanguage.current
     val editableItems = navItems.withIndex().filter { (_, item) ->
         item.id != NavItemId.HOME &&
@@ -4084,8 +4391,10 @@ private fun MorePageSettingsPage(
         coordinator = saveCoordinator,
         dirty = showDescriptions != settings.morePageShowDescriptions ||
             navItems != settings.navItems,
+        enabled = !saving,
     ) {
-        onSave(showDescriptions, navItems)
+        saving = true
+        onSave(showDescriptions, navItems) { saving = false }
     }
 
     LazyColumn(
@@ -4243,6 +4552,25 @@ private fun AboutSettingsPage(
     val context = LocalContext.current
     val checking by viewModel.updateCheckInProgress.collectAsStateWithLifecycle()
     val result by viewModel.updateCheckResult.collectAsStateWithLifecycle()
+    val downloadState by viewModel.updateDownloadState.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val installLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { /* Permission is re-checked after ON_RESUME below. */ }
+    LaunchedEffect(lifecycleOwner, viewModel, installLauncher) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            viewModel.resumeUpdateInstallAfterPermission()
+            viewModel.updateInstallActions.collect { intent ->
+                try {
+                    installLauncher.launch(intent)
+                } catch (_: ActivityNotFoundException) {
+                    viewModel.reportUpdateActionUnavailable(intent)
+                } catch (_: SecurityException) {
+                    viewModel.reportUpdateActionUnavailable(intent)
+                }
+            }
+        }
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
@@ -4283,7 +4611,7 @@ private fun AboutSettingsPage(
                 )
                 Button(
                     onClick = viewModel::checkForUpdate,
-                    enabled = !checking,
+                    enabled = !checking && !downloadState.isUpdateOperationInProgress(),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(if (checking) tr("正在检查…", "Checking…") else tr("检查更新", "Check for updates"))
@@ -4298,7 +4626,7 @@ private fun AboutSettingsPage(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     is UpdateCheckResult.Failed -> Text(
-                        current.message,
+                        tr(current.message, current.messageEnglish),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -4323,10 +4651,93 @@ private fun AboutSettingsPage(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Button(
-                            onClick = { openUrl(context, current.htmlUrl) },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text(tr("前往下载页面", "Open release page")) }
+                        val updatePackage = current.updatePackage
+                        if (updatePackage == null) {
+                            Text(
+                                tr(
+                                    "此版本没有可验证的 DeskCubby APK，请前往发布页面查看。",
+                                    "This release has no verifiable DeskCubby APK. Open the release page for details.",
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            OutlinedButton(
+                                onClick = { openUrl(context, current.htmlUrl) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text(tr("打开发布页面", "Open release page")) }
+                        } else {
+                            when (val state = downloadState) {
+                                is UpdateDownloadState.Downloading -> {
+                                    val progress = if (state.totalBytes > 0L) {
+                                        (state.downloadedBytes.toFloat() / state.totalBytes)
+                                            .coerceIn(0f, 1f)
+                                    } else {
+                                        0f
+                                    }
+                                    LinearProgressIndicator(
+                                        progress = { progress },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    Text(
+                                        tr(
+                                            "正在下载 ${formatUpdateSize(state.downloadedBytes)} / ${formatUpdateSize(state.totalBytes)}",
+                                            "Downloading ${formatUpdateSize(state.downloadedBytes)} / ${formatUpdateSize(state.totalBytes)}",
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                is UpdateDownloadState.Preparing -> Text(
+                                    tr(
+                                        "正在验证安装包并准备系统安装界面…",
+                                        "Verifying the APK and preparing the system installer…",
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                is UpdateDownloadState.AwaitingInstallPermission -> Text(
+                                    tr(
+                                        "安装包已验证。请在系统页面允许此来源安装应用，返回后会继续安装。",
+                                        "The APK is verified. Allow installs from this source in system settings, then return to continue.",
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                is UpdateDownloadState.ReadyToInstall -> Text(
+                                    tr(
+                                        "安装包已下载并验证；若安装界面已关闭，可再次打开。",
+                                        "The APK is downloaded and verified. You can reopen the installer if it was closed.",
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                is UpdateDownloadState.Failed -> Text(
+                                    updateDownloadFailureMessage(state.reason),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                                UpdateDownloadState.Idle -> Unit
+                            }
+                            Button(
+                                onClick = { viewModel.downloadAndInstallUpdate(current) },
+                                enabled = !downloadState.isUpdateOperationInProgress(),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    when (downloadState) {
+                                        is UpdateDownloadState.Preparing ->
+                                            tr("正在准备安装…", "Preparing installation…")
+                                        is UpdateDownloadState.AwaitingInstallPermission ->
+                                            tr("继续安装", "Continue installation")
+                                        is UpdateDownloadState.ReadyToInstall ->
+                                            tr("重新打开安装界面", "Reopen installer")
+                                        is UpdateDownloadState.Failed ->
+                                            tr("重试下载并安装", "Retry download and install")
+                                        else -> tr("下载并安装", "Download and install")
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -4498,13 +4909,15 @@ private fun DefaultPagePicker(current: NavItemId, items: List<NavItemConfig>, on
 private fun NavConfigRow(
     modifier: Modifier = Modifier,
     item: NavItemConfig,
+    position: Int,
+    total: Int,
     onChange: (NavItemConfig) -> Unit,
     onCenterChanged: (Float) -> Unit,
     onDragStarted: () -> Unit,
     onDragChanged: (Float) -> Unit,
     onDragCancelled: () -> Unit,
-    onMoveUp: () -> Boolean,
-    onMoveDown: () -> Boolean,
+    onMoveUp: (() -> Boolean)?,
+    onMoveDown: (() -> Boolean)?,
     onMove: (Float) -> Unit,
 ) {
     var iconMenu by remember { mutableStateOf(false) }
@@ -4517,10 +4930,7 @@ private fun NavConfigRow(
         "${item.id.defaultLabel}是否显示在底栏",
         "Show ${item.id.englishLabel} in bottom bar",
     )
-    val moreDescription = tr(
-        "${item.id.defaultLabel}是否放入导航页",
-        "Show ${item.id.englishLabel} on the More page",
-    )
+    val orderDescription = tr("第 $position 项，共 $total 项", "$position of $total")
 
     Column(
         modifier
@@ -4556,6 +4966,9 @@ private fun NavConfigRow(
                 modifier = Modifier.weight(1f),
             )
             FourDotDragHandle(
+                modifier = Modifier.semantics {
+                    stateDescription = orderDescription
+                },
                 translateSelf = false,
                 onDragStarted = onDragStarted,
                 onDragChanged = onDragChanged,
@@ -4568,9 +4981,13 @@ private fun NavConfigRow(
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 48.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.End,
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Checkbox(
+            Text(
+                tr("显示在底栏", "Show in bottom bar"),
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Switch(
                 checked = item.visible || item.id == NavItemId.SETTINGS,
                 enabled = item.id != NavItemId.SETTINGS,
                 onCheckedChange = { onChange(item.copy(visible = it)) },
@@ -4578,16 +4995,6 @@ private fun NavConfigRow(
                     contentDescription = visibilityDescription
                 },
             )
-            Text(tr("底栏", "Bottom"), style = MaterialTheme.typography.labelMedium)
-            Spacer(Modifier.width(12.dp))
-            Checkbox(
-                checked = item.showInMore,
-                enabled = item.id != NavItemId.HOME &&
-                    item.id != NavItemId.MORE && item.id != NavItemId.SETTINGS,
-                onCheckedChange = { onChange(item.copy(showInMore = it)) },
-                modifier = Modifier.semantics { contentDescription = moreDescription },
-            )
-            Text(tr("导航页", "More"), style = MaterialTheme.typography.labelMedium)
         }
     }
 }
@@ -4598,7 +5005,8 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.APPEARANCE -> tr("外观与语言", "Appearance & language")
     SettingsPage.SUBPAGES -> tr("子页面设置", "Subpage settings")
     SettingsPage.HOME -> tr("主页", "Home")
-    SettingsPage.BACKUP -> tr("应用数据与备份", "App data & backup")
+    SettingsPage.HOME_GREETING -> tr("主页问候", "Home greeting")
+    SettingsPage.BACKUP -> tr("应用数据、备份与同步", "App data, backup & sync")
     SettingsPage.SYNC -> tr("云端同步", "Cloud sync")
     SettingsPage.SYNC_DETAIL -> tr("同步配置", "Sync configuration")
     SettingsPage.DIARY -> tr("日记与媒体", "Diary & media")
@@ -4615,26 +5023,28 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
 }
 
 private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
+    SettingsPage.HOME_GREETING -> SettingsPage.HOME
+
     SettingsPage.HOME,
     SettingsPage.DIARY,
     SettingsPage.BLOG,
     SettingsPage.THOUGHT,
     SettingsPage.RSS,
     SettingsPage.AI,
+    SettingsPage.MORE_PAGE,
     SettingsPage.USAGE,
     SettingsPage.STEPS,
     -> SettingsPage.SUBPAGES
 
     SettingsPage.AI_DETAIL -> SettingsPage.AI
     SettingsPage.SYNC_DETAIL -> SettingsPage.SYNC
+    SettingsPage.SYNC -> SettingsPage.BACKUP
 
     SettingsPage.MAIN,
     SettingsPage.APPEARANCE,
     SettingsPage.SUBPAGES,
     SettingsPage.BACKUP,
-    SettingsPage.SYNC,
     SettingsPage.NAVIGATION,
-    SettingsPage.MORE_PAGE,
     SettingsPage.ABOUT,
     -> SettingsPage.MAIN
 }
@@ -4644,6 +5054,82 @@ private fun defaultBackupFileName(): String =
 
 private fun formatBackupTime(timestamp: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(timestamp))
+
+@Composable
+private fun updateDownloadFailureMessage(reason: UpdateDownloadFailure): String = when (reason) {
+    UpdateDownloadFailure.NO_TRUSTED_APK -> tr(
+        "此版本没有可验证的 APK。",
+        "This release has no verifiable APK.",
+    )
+    UpdateDownloadFailure.INVALID_DOWNLOAD_URL -> tr(
+        "下载地址或跳转目标不可信，已停止下载。",
+        "The download URL or redirect was not trusted, so the download was stopped.",
+    )
+    UpdateDownloadFailure.HTTP_ERROR -> tr(
+        "更新服务器未能提供安装包，请稍后重试。",
+        "The update server did not provide the APK. Please try again later.",
+    )
+    UpdateDownloadFailure.DOWNLOAD_TOO_LARGE -> tr(
+        "安装包超过 256 MiB 安全上限。",
+        "The APK exceeds the 256 MiB safety limit.",
+    )
+    UpdateDownloadFailure.SIZE_MISMATCH -> tr(
+        "安装包大小与发布信息不一致，文件已删除。",
+        "The APK size did not match the release metadata, so it was deleted.",
+    )
+    UpdateDownloadFailure.INVALID_APK -> tr(
+        "下载的文件不是有效的 Android 安装包。",
+        "The downloaded file is not a valid Android package.",
+    )
+    UpdateDownloadFailure.WRONG_APPLICATION -> tr(
+        "安装包不属于 DeskCubby，文件已删除。",
+        "The package is not DeskCubby, so it was deleted.",
+    )
+    UpdateDownloadFailure.VERSION_MISMATCH -> tr(
+        "安装包版本与发布版本不一致，文件已删除。",
+        "The package version does not match the release version, so it was deleted.",
+    )
+    UpdateDownloadFailure.NOT_NEWER -> tr(
+        "安装包的内部版本并不高于当前版本。",
+        "The package's internal version is not newer than the installed version.",
+    )
+    UpdateDownloadFailure.SIGNATURE_MISMATCH -> tr(
+        "安装包签名与当前应用不一致，文件已删除。",
+        "The package signature does not match this app, so it was deleted.",
+    )
+    UpdateDownloadFailure.TIMEOUT -> tr(
+        "下载安装包超时，请稍后重试。",
+        "The APK download timed out. Please try again later.",
+    )
+    UpdateDownloadFailure.TLS_ERROR -> tr(
+        "下载时 HTTPS 证书验证失败。",
+        "HTTPS certificate verification failed while downloading.",
+    )
+    UpdateDownloadFailure.NETWORK_ERROR -> tr(
+        "下载安装包失败，请检查网络连接。",
+        "The APK download failed. Check your network connection.",
+    )
+    UpdateDownloadFailure.STORAGE_ERROR -> tr(
+        "无法把安装包安全写入应用缓存。",
+        "The APK could not be safely written to the app cache.",
+    )
+    UpdateDownloadFailure.INSTALL_PERMISSION_SETTINGS_UNAVAILABLE -> tr(
+        "无法打开“允许此来源安装应用”系统设置。",
+        "The system settings for allowing installs from this source could not be opened.",
+    )
+    UpdateDownloadFailure.INSTALLER_UNAVAILABLE -> tr(
+        "无法打开系统安装程序。",
+        "The Android package installer could not be opened.",
+    )
+}
+
+private fun formatUpdateSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024L ->
+        String.format(Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
+    bytes >= 1024L ->
+        String.format(Locale.ROOT, "%.1f KiB", bytes / 1024.0)
+    else -> "$bytes B"
+}
 
 private const val JSON_PREVIEW_CHUNK_CHARS = 2_048
 

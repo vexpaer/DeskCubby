@@ -32,24 +32,24 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AddComment
-import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -173,7 +173,8 @@ fun AiChatScreen(
                 configured = configured,
                 onValueChange = viewModel::updateDraft,
                 onPickImage = { imagePicker.launch(arrayOf("image/*")) },
-                onPickContext = viewModel::openContextPicker,
+                onPickDiaryContext = viewModel::openDiaryContextPicker,
+                onPickThoughtContext = viewModel::openThoughtContextPicker,
                 onRemoveImage = viewModel::removePendingImage,
                 onClearContext = viewModel::clearPendingContexts,
                 onSend = viewModel::sendMessage,
@@ -321,16 +322,20 @@ fun AiChatScreen(
             },
         )
     }
-    if (uiState.isContextPickerVisible) {
+    val contextPickerSource = uiState.contextPickerSource
+    if (uiState.isContextPickerVisible && contextPickerSource != null) {
         AiContextPickerDialog(
+            source = contextPickerSource,
             candidates = uiState.contextCandidates,
             selectedKeys = uiState.pendingContextKeys,
+            errorMessage = uiState.contextPickerErrorMessage,
             isLoading = uiState.isLoadingContextCandidates,
             isLoadingPreview = uiState.isLoadingContextPreview,
             preview = uiState.contextPreview,
             onDismiss = viewModel::closeContextPicker,
             onRefresh = viewModel::refreshContextCandidates,
             onToggle = viewModel::toggleContextCandidate,
+            onToggleGroup = viewModel::toggleContextGroup,
             onPreview = viewModel::previewContextCandidate,
             onDismissPreview = viewModel::dismissContextPreview,
         )
@@ -602,13 +607,18 @@ private fun ChatComposer(
     configured: Boolean,
     onValueChange: (String) -> Unit,
     onPickImage: () -> Unit,
-    onPickContext: () -> Unit,
+    onPickDiaryContext: () -> Unit,
+    onPickThoughtContext: () -> Unit,
     onRemoveImage: () -> Unit,
     onClearContext: () -> Unit,
     onSend: () -> Unit,
 ) {
     val canSend = configured && (value.isNotBlank() || image != null) &&
         !isSending && !isPreparingImage
+    var addMenuExpanded by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(isSending, isPreparingImage) {
+        if (isSending || isPreparingImage) addMenuExpanded = false
+    }
     Surface(
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 3.dp,
@@ -620,7 +630,6 @@ private fun ChatComposer(
             if (contextCount > 0) {
                 PendingContextSummary(
                     count = contextCount,
-                    onOpen = onPickContext,
                     onClear = onClearContext,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -659,20 +668,48 @@ private fun ChatComposer(
                 Spacer(Modifier.height(8.dp))
             }
             Row(verticalAlignment = Alignment.Bottom) {
-                IconButton(
-                    enabled = !isSending && !isPreparingImage,
-                    onClick = onPickContext,
-                ) {
-                    Icon(Icons.Outlined.Description, tr("导入上下文", "Import context"))
-                }
-                IconButton(
-                    enabled = !isSending && !isPreparingImage,
-                    onClick = onPickImage,
-                ) {
-                    if (isPreparingImage) {
-                        AppLoadingIndicator(size = 22.dp, strokeWidth = 2.dp)
-                    } else {
-                        Icon(Icons.Outlined.AttachFile, tr("上传图片", "Upload image"))
+                Box {
+                    IconButton(
+                        enabled = !isSending && !isPreparingImage,
+                        onClick = { addMenuExpanded = true },
+                    ) {
+                        if (isPreparingImage) {
+                            AppLoadingIndicator(size = 22.dp, strokeWidth = 2.dp)
+                        } else {
+                            Icon(
+                                Icons.Outlined.Add,
+                                tr("添加媒体或上下文", "Add media or context"),
+                            )
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = addMenuExpanded,
+                        onDismissRequest = { addMenuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(tr("选择图片", "Choose image")) },
+                            leadingIcon = { Icon(Icons.Outlined.Image, null) },
+                            onClick = {
+                                addMenuExpanded = false
+                                onPickImage()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(tr("导入日记上下文", "Import diary context")) },
+                            leadingIcon = { Icon(Icons.Outlined.Article, null) },
+                            onClick = {
+                                addMenuExpanded = false
+                                onPickDiaryContext()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(tr("导入小巧思上下文", "Import thought context")) },
+                            leadingIcon = { Icon(Icons.Outlined.Lightbulb, null) },
+                            onClick = {
+                                addMenuExpanded = false
+                                onPickThoughtContext()
+                            },
+                        )
                     }
                 }
                 Spacer(Modifier.width(4.dp))
@@ -697,19 +734,18 @@ private fun ChatComposer(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
                     shape = MaterialTheme.shapes.large,
+                    trailingIcon = {
+                        IconButton(
+                            enabled = canSend,
+                            onClick = onSend,
+                        ) {
+                            Icon(
+                                Icons.Outlined.Send,
+                                contentDescription = tr("发送", "Send"),
+                            )
+                        }
+                    },
                 )
-                Spacer(Modifier.width(8.dp))
-                Button(
-                    enabled = canSend,
-                    onClick = onSend,
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
-                ) {
-                    Icon(
-                        Icons.Outlined.Send,
-                        contentDescription = tr("发送", "Send"),
-                        modifier = Modifier.size(21.dp),
-                    )
-                }
             }
         }
     }

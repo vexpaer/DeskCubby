@@ -32,14 +32,122 @@ class Game2048 private constructor(
     enum class Direction { UP, DOWN, LEFT, RIGHT }
 
     /**
+     * One source tile's visual path during a successful move.
+     *
+     * [fromIndex] and [toIndex] are row-major board indices. Two motions with the same
+     * [toIndex] and [merged] set merge into the corresponding [Merge] event.
+     */
+    data class TileMotion(
+        val fromIndex: Int,
+        val toIndex: Int,
+        val value: Int,
+        val merged: Boolean,
+    )
+
+    /** The result tile produced by two source tiles converging on [toIndex]. */
+    data class Merge(
+        val toIndex: Int,
+        val value: Int,
+    )
+
+    /** The new random tile added only after a successful slide/merge. */
+    data class Spawn(
+        val index: Int,
+        val value: Int,
+    )
+
+    /**
+     * Immutable transition data for one successful move.
+     *
+     * The engine has already committed [after], including [spawn], when this is returned. That
+     * keeps persistence authoritative even if a UI animation is cancelled or replaced.
+     */
+    data class MoveResult(
+        val before: List<Int>,
+        val after: List<Int>,
+        val motions: List<TileMotion>,
+        val merges: List<Merge>,
+        val spawn: Spawn,
+        val scoreGained: Int,
+    )
+
+    /**
      * Applies one move with the standard merge rules (each pair merges at most once per move).
      * When the board changed, one random tile (2 with 90% probability, else 4) is spawned and
      * true is returned; otherwise the board is untouched and false is returned.
      */
-    fun move(direction: Direction): Boolean {
-        val changed = slideAndMerge(direction)
-        if (changed) spawnTile()
-        return changed
+    fun move(direction: Direction): Boolean = moveWithResult(direction) != null
+
+    /**
+     * Applies one move and returns the exact source-to-destination mapping needed for animation.
+     * Returns null without changing the board, score or random generator when the move is invalid.
+     */
+    fun moveWithResult(direction: Direction): MoveResult? {
+        val before = cells.toList()
+        val next = IntArray(CELL_COUNT)
+        val motions = ArrayList<TileMotion>(CELL_COUNT)
+        val merges = ArrayList<Merge>(SIZE * 2)
+        var scoreGained = 0
+
+        for (line in 0 until SIZE) {
+            val indices = lineIndices(direction, line)
+            val tiles = ArrayList<Pair<Int, Int>>(SIZE)
+            for (index in indices) {
+                val value = cells[index]
+                if (value != 0) tiles += index to value
+            }
+            var sourcePosition = 0
+            var destinationPosition = 0
+            while (sourcePosition < tiles.size) {
+                val first = tiles[sourcePosition]
+                val second = tiles.getOrNull(sourcePosition + 1)
+                val destination = indices[destinationPosition]
+                if (second != null && first.second == second.second) {
+                    val mergedValue = first.second * 2
+                    next[destination] = mergedValue
+                    motions += TileMotion(
+                        fromIndex = first.first,
+                        toIndex = destination,
+                        value = first.second,
+                        merged = true,
+                    )
+                    motions += TileMotion(
+                        fromIndex = second.first,
+                        toIndex = destination,
+                        value = second.second,
+                        merged = true,
+                    )
+                    merges += Merge(toIndex = destination, value = mergedValue)
+                    scoreGained += mergedValue
+                    sourcePosition += 2
+                } else {
+                    next[destination] = first.second
+                    motions += TileMotion(
+                        fromIndex = first.first,
+                        toIndex = destination,
+                        value = first.second,
+                        merged = false,
+                    )
+                    sourcePosition++
+                }
+                destinationPosition++
+            }
+        }
+
+        if (cells.contentEquals(next)) return null
+
+        next.copyInto(cells)
+        score += scoreGained
+        val spawn = spawnTile()
+            ?: error("A successful 2048 move must leave room for exactly one spawned tile")
+        return MoveResult(
+            before = before,
+            after = cells.toList(),
+            motions = motions,
+            merges = merges,
+            spawn = spawn,
+            scoreGained = scoreGained,
+        )
     }
 
     /** Serializes the complete restorable state as JSON. */
@@ -52,33 +160,6 @@ class Game2048 private constructor(
         append("],\"score\":").append(score).append('}')
     }
 
-    private fun slideAndMerge(direction: Direction): Boolean {
-        var changed = false
-        for (line in 0 until SIZE) {
-            val indices = lineIndices(direction, line)
-            val values = indices.map { cells[it] }.filter { it != 0 }
-            val merged = ArrayList<Int>(SIZE)
-            var i = 0
-            while (i < values.size) {
-                if (i + 1 < values.size && values[i] == values[i + 1]) {
-                    val sum = values[i] * 2
-                    merged.add(sum)
-                    score += sum
-                    i += 2
-                } else {
-                    merged.add(values[i])
-                    i++
-                }
-            }
-            for (position in 0 until SIZE) {
-                val value = merged.getOrElse(position) { 0 }
-                if (cells[indices[position]] != value) changed = true
-                cells[indices[position]] = value
-            }
-        }
-        return changed
-    }
-
     /** Cell indices of one line, ordered from the edge the tiles slide towards. */
     private fun lineIndices(direction: Direction, line: Int): IntArray = when (direction) {
         Direction.LEFT -> IntArray(SIZE) { line * SIZE + it }
@@ -87,10 +168,13 @@ class Game2048 private constructor(
         Direction.DOWN -> IntArray(SIZE) { (SIZE - 1 - it) * SIZE + line }
     }
 
-    private fun spawnTile() {
+    private fun spawnTile(): Spawn? {
         val empty = cells.indices.filter { cells[it] == 0 }
-        if (empty.isEmpty()) return
-        cells[empty[random.nextInt(empty.size)]] = if (random.nextFloat() < 0.9f) 2 else 4
+        if (empty.isEmpty()) return null
+        val index = empty[random.nextInt(empty.size)]
+        val value = if (random.nextFloat() < 0.9f) 2 else 4
+        cells[index] = value
+        return Spawn(index = index, value = value)
     }
 
     private fun hasAnyMove(): Boolean {

@@ -237,11 +237,67 @@ data class NavItemConfig(
     val moreDescription: String = id.defaultDescription,
 )
 
+val MORE_PAGE_ORDERABLE_IDS: List<NavItemId> = NavItemId.entries.filter { id ->
+    id != NavItemId.HOME && id != NavItemId.MORE && id != NavItemId.SETTINGS
+}
+
+/**
+ * Keeps a user-defined More-page order complete and forward-compatible.
+ *
+ * Missing items first inherit their relative order from [navItems], which is the migration path
+ * for v15 backups and DataStore values created before More had an independent order.
+ */
+fun normalizeMorePageOrder(
+    order: Iterable<NavItemId>,
+    navItems: List<NavItemConfig>,
+): List<NavItemId> = buildList {
+    val eligible = MORE_PAGE_ORDERABLE_IDS.toSet()
+    fun appendIfEligible(id: NavItemId) {
+        if (id in eligible && id !in this) add(id)
+    }
+    order.forEach(::appendIfEligible)
+    navItems.forEach { appendIfEligible(it.id) }
+    MORE_PAGE_ORDERABLE_IDS.forEach(::appendIfEligible)
+}
+
+data class HomeGreetingTemplate(
+    val chinese: String,
+    val english: String,
+)
+
+val DEFAULT_HOME_GREETINGS: List<HomeGreetingTemplate> = listOf(
+    HomeGreetingTemplate("今天从这里开始", "Start here today"),
+    HomeGreetingTemplate("看看今天的安排", "Check today's plan"),
+    HomeGreetingTemplate("有想法就记下来", "Write down what's on your mind"),
+    HomeGreetingTemplate("先完成一件小事", "Start with one small task"),
+    HomeGreetingTemplate("今天想写点什么？", "What would you like to write today?"),
+    HomeGreetingTemplate("看看最近的记录", "Review your recent notes"),
+    HomeGreetingTemplate("先处理重要的事", "Start with what matters"),
+    HomeGreetingTemplate("打开日历看看", "Take a look at the calendar"),
+    HomeGreetingTemplate("记录一下当前状态", "Record where things stand"),
+    HomeGreetingTemplate("今天的进度怎么样？", "How is today going?"),
+    HomeGreetingTemplate("先快速记一条", "Add a quick note"),
+    HomeGreetingTemplate("看看时间都去哪了", "See where the time went"),
+    HomeGreetingTemplate("今天走了多少步？", "How many steps today?"),
+    HomeGreetingTemplate("查看新的订阅", "Check the latest feeds"),
+    HomeGreetingTemplate("整理一下当前思路", "Organize your current thoughts"),
+    HomeGreetingTemplate("从最简单的事开始", "Begin with the simplest thing"),
+    HomeGreetingTemplate("该记录今天了", "Time to record today"),
+    HomeGreetingTemplate("翻翻过去写的内容", "Browse something you wrote before"),
+    HomeGreetingTemplate("现在要做什么？", "What comes next?"),
+    HomeGreetingTemplate("先看一眼今日数据", "Check today's numbers"),
+    HomeGreetingTemplate("把刚才的想法留下", "Keep that thought before it slips away"),
+    HomeGreetingTemplate("今天也按计划推进", "Keep today's plan moving"),
+    HomeGreetingTemplate("检查一下重要日期", "Check the important dates"),
+    HomeGreetingTemplate("{name}，欢迎回来", "Welcome back, {name}"),
+)
+
 data class AppSettings(
     val visualStyle: VisualStyle = VisualStyle.MATERIAL,
     val darkMode: DarkMode = DarkMode.SYSTEM,
     val appLanguage: AppLanguage = AppLanguage.CHINESE,
     val userName: String = "",
+    val homeGreetings: List<HomeGreetingTemplate> = DEFAULT_HOME_GREETINGS,
     val themeColorArgb: Int = DEFAULT_THEME_COLOR_ARGB,
     val themeSecondaryColorsArgb: List<Int> = DEFAULT_THEME_SECONDARY_COLORS_ARGB,
     val fontScale: Float = 1f,
@@ -302,6 +358,7 @@ data class AppSettings(
     val navItems: List<NavItemConfig> = NavItemId.entries.map { id ->
         NavItemConfig(id = id, visible = id.defaultVisible || id == NavItemId.MORE)
     },
+    val morePageOrder: List<NavItemId> = normalizeMorePageOrder(emptyList(), navItems),
     val defaultPage: NavItemId = NavItemId.HOME,
     val bottomNavShowLabels: Boolean = true,
     val morePageShowDescriptions: Boolean = true,

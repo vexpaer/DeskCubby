@@ -16,13 +16,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Article
-import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Lightbulb
-import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
@@ -40,7 +37,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,23 +51,35 @@ import com.deskcubby.app.ui.theme.tr
 
 @Composable
 internal fun AiContextPickerDialog(
+    source: AiContextSource,
     candidates: List<AiContextCandidate>,
     selectedKeys: Set<String>,
+    errorMessage: String?,
     isLoading: Boolean,
     isLoadingPreview: Boolean,
     preview: AiContextItemPreview?,
     onDismiss: () -> Unit,
     onRefresh: () -> Unit,
     onToggle: (String) -> Unit,
+    onToggleGroup: (Collection<String>) -> Unit,
     onPreview: (String) -> Unit,
     onDismissPreview: () -> Unit,
 ) {
+    val visibleCandidates = remember(candidates, source) {
+        candidates.filter { it.source == source }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(tr("导入 AI 上下文", "Import AI context"))
+                    Text(
+                        when (source) {
+                            AiContextSource.DIARY -> tr("选择日记上下文", "Choose diary context")
+                            AiContextSource.THOUGHT -> tr("选择小巧思上下文", "Choose thought context")
+                            else -> tr("选择上下文", "Choose context")
+                        },
+                    )
                     Text(
                         tr(
                             "已选择 ${selectedKeys.size}/${AiContextCodec.MAX_ITEMS} 项",
@@ -94,6 +104,20 @@ internal fun AiContextPickerDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                errorMessage?.takeIf(String::isNotBlank)?.let { message ->
+                    Spacer(Modifier.height(8.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        shape = MaterialTheme.shapes.medium,
+                    ) {
+                        Text(
+                            message,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
                 Spacer(Modifier.height(10.dp))
                 when {
                     isLoading -> {
@@ -108,12 +132,21 @@ internal fun AiContextPickerDialog(
                         }
                     }
 
-                    candidates.isEmpty() -> {
+                    visibleCandidates.isEmpty() -> {
                         Text(
-                            tr(
-                                "没有可导入的日记、小巧思、日期记录或诗词。",
-                                "There are no diaries, thoughts, date records, or poems to import.",
-                            ),
+                            when (source) {
+                                AiContextSource.DIARY -> tr(
+                                    "没有可导入的日记。请先确认日记目录已授权并完成扫描。",
+                                    "There are no diaries to import. Check the diary directory permission and scan it first.",
+                                )
+
+                                AiContextSource.THOUGHT -> tr(
+                                    "没有可导入的小巧思。",
+                                    "There are no thoughts to import.",
+                                )
+
+                                else -> tr("没有可导入的条目。", "There are no items to import.")
+                            },
                             modifier = Modifier.padding(vertical = 28.dp),
                         )
                     }
@@ -123,14 +156,30 @@ internal fun AiContextPickerDialog(
                             modifier = Modifier.fillMaxWidth().heightIn(max = 500.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            AiContextSource.entries.forEach { source ->
-                                val sourceItems = candidates.filter { it.source == source }
-                                if (sourceItems.isNotEmpty()) {
-                                    item(key = "header-${source.wireValue}") {
-                                        ContextSourceHeader(source, sourceItems.size)
+                            if (source == AiContextSource.THOUGHT) {
+                                val groups = visibleCandidates
+                                    .groupBy(AiContextCandidate::groupKey)
+                                    .values
+                                    .sortedWith(
+                                        compareBy<List<AiContextCandidate>> {
+                                            it.firstOrNull()?.groupSortOrder ?: Long.MAX_VALUE
+                                        }.thenBy {
+                                            it.firstOrNull()?.groupTitle.orEmpty()
+                                        },
+                                    )
+                                groups.forEachIndexed { index, group ->
+                                    val groupKeys = group.map(AiContextCandidate::selectionKey)
+                                    val allSelected = groupKeys.all { it in selectedKeys }
+                                    item(key = "thought-group-${group.first().groupKey}-$index") {
+                                        ThoughtCategoryHeader(
+                                            title = group.first().groupTitle,
+                                            itemCount = group.size,
+                                            allSelected = allSelected,
+                                            onToggleGroup = { onToggleGroup(groupKeys) },
+                                        )
                                     }
                                     items(
-                                        items = sourceItems,
+                                        items = group,
                                         key = AiContextCandidate::selectionKey,
                                     ) { candidate ->
                                         ContextCandidateRow(
@@ -142,6 +191,20 @@ internal fun AiContextPickerDialog(
                                             onPreview = { onPreview(candidate.selectionKey) },
                                         )
                                     }
+                                }
+                            } else {
+                                items(
+                                    items = visibleCandidates,
+                                    key = AiContextCandidate::selectionKey,
+                                ) { candidate ->
+                                    ContextCandidateRow(
+                                        candidate = candidate,
+                                        selected = candidate.selectionKey in selectedKeys,
+                                        enabled = selectedKeys.size < AiContextCodec.MAX_ITEMS ||
+                                            candidate.selectionKey in selectedKeys,
+                                        onToggle = { onToggle(candidate.selectionKey) },
+                                        onPreview = { onPreview(candidate.selectionKey) },
+                                    )
                                 }
                             }
                         }
@@ -187,23 +250,51 @@ internal fun AiContextPickerDialog(
 }
 
 @Composable
-private fun ContextSourceHeader(source: AiContextSource, count: Int) {
+private fun ThoughtCategoryHeader(
+    title: String,
+    itemCount: Int,
+    allSelected: Boolean,
+    onToggleGroup: () -> Unit,
+) {
+    val displayTitle = title.ifBlank { tr("未分类", "Uncategorized") }
+    val actionDescription = if (allSelected) {
+        tr("取消整个分类：$displayTitle", "Clear entire category: $displayTitle")
+    } else {
+        tr("导入整个分类：$displayTitle", "Import entire category: $displayTitle")
+    }
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            imageVector = sourceIcon(source),
+            imageVector = Icons.Outlined.Lightbulb,
             contentDescription = null,
             modifier = Modifier.size(18.dp),
             tint = MaterialTheme.colorScheme.primary,
         )
         Spacer(Modifier.width(7.dp))
         Text(
-            "${sourceLabel(source)} · $count",
+            "$displayTitle · $itemCount",
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
         )
+        TextButton(
+            onClick = onToggleGroup,
+            modifier = Modifier.semantics {
+                contentDescription = actionDescription
+            },
+        ) {
+            Text(
+                if (allSelected) {
+                    tr("取消整类", "Clear category")
+                } else {
+                    tr("导入整类", "Import category")
+                },
+            )
+        }
     }
 }
 
@@ -353,11 +444,11 @@ private fun AiContextPreviewDialog(
 @Composable
 internal fun PendingContextSummary(
     count: Int,
-    onOpen: () -> Unit,
     onClear: () -> Unit,
 ) {
+    val clearDescription = tr("清空已选择的上下文", "Clear selected context")
     Surface(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
+        modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
         shape = MaterialTheme.shapes.medium,
@@ -379,7 +470,14 @@ internal fun PendingContextSummary(
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
-            TextButton(onClick = onClear) { Text(tr("清空", "Clear")) }
+            TextButton(
+                onClick = onClear,
+                modifier = Modifier.semantics {
+                    contentDescription = clearDescription
+                },
+            ) {
+                Text(tr("清空", "Clear"))
+            }
         }
     }
 }
@@ -485,13 +583,6 @@ private fun sourceLabel(source: AiContextSource): String = when (source) {
     AiContextSource.THOUGHT -> tr("小巧思", "Thought")
     AiContextSource.DATE_RECORD -> tr("日期记录", "Date record")
     AiContextSource.POEM -> tr("诗词本", "Poetry")
-}
-
-private fun sourceIcon(source: AiContextSource): ImageVector = when (source) {
-    AiContextSource.DIARY -> Icons.Outlined.Article
-    AiContextSource.THOUGHT -> Icons.Outlined.Lightbulb
-    AiContextSource.DATE_RECORD -> Icons.Outlined.CalendarMonth
-    AiContextSource.POEM -> Icons.Outlined.MenuBook
 }
 
 private fun estimatedSizeLabel(bytes: Long): String {

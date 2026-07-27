@@ -12,9 +12,22 @@ class PoetryBookRepository @Inject constructor(
 ) {
     val poems: Flow<List<SavedPoemEntity>> = dao.observeAll()
 
+    /**
+     * Loads the canonical Room row for editing. Callers must not reuse a list-card preview or any
+     * visually ellipsized text as the editor's initial value.
+     */
+    suspend fun loadForEdit(id: Long): SavedPoemEntity {
+        require(id > 0) { "Saved poem id must be positive" }
+        val poem = checkNotNull(dao.getById(id)) { "Saved poem no longer exists" }
+        check(poem.content.isNotBlank()) { "Saved poem content is unavailable" }
+        check(poem.content.length <= MAX_CONTENT_CHARS) { "Saved poem content is too long" }
+        check(poem.source.length <= MAX_SOURCE_CHARS) { "Saved poem source is too long" }
+        return poem
+    }
+
     suspend fun create(content: String, source: String = ""): Long {
         val now = System.currentTimeMillis()
-        return dao.insert(
+        val id = dao.insert(
             SavedPoemEntity(
                 content = requireContent(content),
                 source = requireSource(source),
@@ -22,21 +35,24 @@ class PoetryBookRepository @Inject constructor(
                 updatedAt = now,
             ),
         )
+        check(id > 0) { "Saved poem was not created" }
+        return id
     }
 
     suspend fun update(id: Long, content: String, source: String = "") {
         require(id > 0) { "Saved poem id must be positive" }
-        dao.update(
+        val changed = dao.update(
             id = id,
             content = requireContent(content),
             source = requireSource(source),
             updatedAt = System.currentTimeMillis(),
         )
+        check(changed == 1) { "Saved poem no longer exists" }
     }
 
     suspend fun delete(id: Long) {
         require(id > 0) { "Saved poem id must be positive" }
-        dao.delete(id)
+        check(dao.delete(id) == 1) { "Saved poem no longer exists" }
     }
 
     private fun requireContent(value: String): String = value.trim().also {
@@ -48,7 +64,7 @@ class PoetryBookRepository @Inject constructor(
         require(it.length <= MAX_SOURCE_CHARS) { "Poem source is too long" }
     }
 
-    private companion object {
+    internal companion object {
         const val MAX_CONTENT_CHARS = 4_000
         const val MAX_SOURCE_CHARS = 512
     }

@@ -1,18 +1,21 @@
 package com.deskcubby.app.data.statistics
 
 import android.app.AppOpsManager
-import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Process
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Clock
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,6 +33,10 @@ class UsageStatisticsRepository @Inject constructor(
     private val refreshMutex = Mutex()
     private val mutableCollectionState = MutableStateFlow(StatisticsCollectionState())
 
+    @Volatile
+    private var refreshGeneration = 0L
+    private var lastRefreshOutcome = StatisticsRefreshOutcome.ERROR
+
     val history: StateFlow<UsageStatisticsHistory> = store.history
     val collectionState: StateFlow<StatisticsCollectionState> =
         mutableCollectionState.asStateFlow()
@@ -42,60 +49,81 @@ class UsageStatisticsRepository @Inject constructor(
         ) == AppOpsManager.MODE_ALLOWED
     }.getOrDefault(false)
 
+    /**
+     * Concurrent callers share the result of the refresh already in progress.
+     * A later call made after completion remains an explicit new refresh.
+     */
     suspend fun refresh(
         clock: Clock = Clock.systemDefaultZone(),
-    ): StatisticsRefreshOutcome = refreshMutex.withLock {
+    ): StatisticsRefreshOutcome {
+        val observedGeneration = refreshGeneration
+        return refreshMutex.withLock {
+            if (refreshGeneration != observedGeneration) {
+                return@withLock lastRefreshOutcome
+            }
+            val outcome = performRefresh(clock)
+            lastRefreshOutcome = outcome
+            refreshGeneration += 1L
+            outcome
+        }
+    }
+
+    private suspend fun performRefresh(clock: Clock): StatisticsRefreshOutcome {
         if (!hasUsageAccess()) {
             mutableCollectionState.value = StatisticsCollectionState(
                 phase = StatisticsCollectionPhase.PERMISSION_REQUIRED,
             )
-            return@withLock StatisticsRefreshOutcome.PERMISSION_REQUIRED
+            return StatisticsRefreshOutcome.PERMISSION_REQUIRED
         }
         mutableCollectionState.value = mutableCollectionState.value.copy(
             phase = StatisticsCollectionPhase.REFRESHING,
             technicalDetail = null,
         )
-        try {
+        return try {
             val zone = clock.zone
-            val today = LocalDate.now(clock)
+            val nowMillis = clock.millis()
+            val today = Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
             val current = store.history.value
-            val firstDate = current.trackingStartedOn ?: today
-            val replacements = mutableMapOf<LocalDate, UsageStatisticsDay>()
-            var date = firstDate
-            while (!date.isAfter(today)) {
-                val existing = current.days.firstOrNull { it.date == date }
-                if (existing?.state != StatisticsDayState.FINAL) {
-                    replacements[date] = queryDay(
-                        date = date,
-                        today = today,
-                        zone = zone,
-                        nowMillis = clock.millis(),
-                    )
-                }
-                date = date.plusDays(1)
-            }
-            val refreshed = store.update { latest ->
-                val byDate = latest.days.associateBy(UsageStatisticsDay::date).toMutableMap()
-                replacements.forEach { (replacementDate, replacement) ->
-                    if (byDate[replacementDate]?.state != StatisticsDayState.FINAL) {
-                        byDate[replacementDate] = replacement
-                    }
-                }
-                latest.copy(
-                    trackingStartedOn = latest.trackingStartedOn ?: firstDate,
-                    days = byDate.values.sortedBy(UsageStatisticsDay::date),
+            val queryStartDate = usageQueryStartDate(
+                history = current,
+                today = today,
+            )
+            val rawBuckets = queryDailyBuckets(
+                beginDate = queryStartDate,
+                today = today,
+                zone = zone,
+                nowMillis = nowMillis,
+            )
+            val replacements = aggregateDailyUsageBuckets(
+                buckets = rawBuckets,
+                firstRequestedDate = queryStartDate,
+                today = today,
+                zone = zone,
+                nowMillis = nowMillis,
+            )
+            val attemptedCompletedThrough = today.minusDays(1L)
+            store.update { latest ->
+                val latestNeededStart = usageQueryStartDate(
+                    history = latest,
+                    today = today,
+                )
+                val coveredLatestDiscoveryWindow = !queryStartDate.isAfter(latestNeededStart)
+                mergeUsageStatisticsHistory(
+                    current = latest,
+                    replacements = replacements,
+                    backfillCompletedThrough = attemptedCompletedThrough.takeIf {
+                        coveredLatestDiscoveryWindow
+                    },
                 )
             }
-            val refreshedAt = refreshed.days.maxOfOrNull(UsageStatisticsDay::collectedAtEpochMillis)
-                ?: clock.millis()
             mutableCollectionState.value = StatisticsCollectionState(
                 phase = StatisticsCollectionPhase.READY,
-                lastSuccessfulRefreshEpochMillis = refreshedAt,
+                lastSuccessfulRefreshEpochMillis = nowMillis,
             )
             StatisticsRefreshOutcome.SUCCESS
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (error: SecurityException) {
+        } catch (_: SecurityException) {
             mutableCollectionState.value = StatisticsCollectionState(
                 phase = StatisticsCollectionPhase.PERMISSION_REQUIRED,
             )
@@ -116,67 +144,122 @@ class UsageStatisticsRepository @Inject constructor(
         )
     }
 
-    private suspend fun queryDay(
-        date: LocalDate,
+    private suspend fun queryDailyBuckets(
+        beginDate: LocalDate,
         today: LocalDate,
         zone: ZoneId,
         nowMillis: Long,
-    ): UsageStatisticsDay = withContext(Dispatchers.IO) {
-        val startMillis = date.atStartOfDay(zone).toInstant().toEpochMilli()
-        val naturalEndMillis = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        val endMillis = if (date == today) nowMillis.coerceAtMost(naturalEndMillis) else naturalEndMillis
-        val safeEndMillis = endMillis.coerceAtLeast(startMillis + 1L)
-        val queryStartMillis = date.minusDays(FOREGROUND_STATE_LOOKBACK_DAYS)
-            .atStartOfDay(zone)
-            .toInstant()
-            .toEpochMilli()
-        val events = usageStatsManager.queryEvents(queryStartMillis, safeEndMillis)
-            ?: throw IllegalStateException("Usage event query returned no result.")
-        val transitions = readTransitions(events)
-        UsageStatisticsDay(
-            date = date,
-            zoneId = zone.id,
-            state = if (date == today) StatisticsDayState.OPEN else StatisticsDayState.FINAL,
-            collectedAtEpochMillis = nowMillis,
-            apps = aggregateForegroundUsage(
-                windowStartMillis = startMillis,
-                windowEndMillis = safeEndMillis,
-                events = transitions,
-            ),
-        )
-    }
-
-    private fun readTransitions(events: UsageEvents): List<ForegroundTransition> {
-        val result = ArrayList<ForegroundTransition>()
-        val event = UsageEvents.Event()
-        while (events.hasNextEvent()) {
-            if (result.size >= MAX_USAGE_EVENTS_PER_QUERY) {
-                throw IllegalStateException("Usage event query exceeded the safety limit.")
+    ): List<RawDailyUsageBucket> = withContext(Dispatchers.IO) {
+        val requestedDayCount = ChronoUnit.DAYS.between(beginDate, today) + 1L
+        require(requestedDayCount in 1L..MAX_USAGE_BACKFILL_DAYS)
+        val result = ArrayList<RawDailyUsageBucket>()
+        var chunkStartDate = beginDate
+        while (!chunkStartDate.isAfter(today)) {
+            currentCoroutineContext().ensureActive()
+            val chunkEndDateExclusive = minOf(
+                chunkStartDate.plusDays(MAX_USAGE_QUERY_SPAN_DAYS),
+                today.plusDays(1L),
+            )
+            val beginMillis = chunkStartDate.atStartOfDay(zone).toInstant().toEpochMilli()
+            val endMillis = if (chunkEndDateExclusive.isAfter(today)) {
+                nowMillis
+            } else {
+                chunkEndDateExclusive.atStartOfDay(zone).toInstant().toEpochMilli()
             }
-            if (!events.getNextEvent(event)) break
-            val type = when (event.eventType) {
-                UsageEvents.Event.MOVE_TO_FOREGROUND ->
-                    ForegroundTransitionType.ENTER_FOREGROUND
-
-                UsageEvents.Event.MOVE_TO_BACKGROUND ->
-                    ForegroundTransitionType.LEAVE_FOREGROUND
-
-                else -> null
+            if (endMillis <= beginMillis) {
+                // Exactly at local midnight there is no real current-day
+                // interval to ask Android for yet.
+                chunkStartDate = chunkEndDateExclusive
+                continue
             }
-            val packageName = event.packageName
-            if (type != null && !packageName.isNullOrBlank()) {
-                result += ForegroundTransition(
-                    epochMillis = event.timeStamp,
-                    packageName = packageName,
-                    type = type,
+            require(beginMillis >= 0L && endMillis > beginMillis)
+            val values = usageStatsManager.queryUsageStats(
+                UsageStatsManager.INTERVAL_DAILY,
+                beginMillis,
+                endMillis,
+            ) ?: throw IllegalStateException("Daily usage query returned no result.")
+            if (
+                values.size > MAX_USAGE_BUCKETS_PER_QUERY ||
+                values.size > MAX_USAGE_BUCKETS_TOTAL - result.size
+            ) {
+                throw IllegalStateException("Daily usage query exceeded the safety limit.")
+            }
+            values.forEachIndexed { index, value ->
+                if (index % CANCELLATION_CHECK_INTERVAL == 0) {
+                    currentCoroutineContext().ensureActive()
+                }
+                result.add(
+                    RawDailyUsageBucket(
+                        beginEpochMillis = value.firstTimeStamp,
+                        endEpochMillis = value.lastTimeStamp,
+                        packageName = value.packageName.orEmpty(),
+                        foregroundMillis = value.totalTimeInForeground,
+                    ),
                 )
             }
+            chunkStartDate = chunkEndDateExclusive
         }
-        return result
+        result
     }
 
     private companion object {
-        const val FOREGROUND_STATE_LOOKBACK_DAYS = 7L
-        const val MAX_USAGE_EVENTS_PER_QUERY = 1_000_000
+        const val MAX_USAGE_BUCKETS_PER_QUERY = 100_000
+        const val MAX_USAGE_BUCKETS_TOTAL = 100_000
+        const val MAX_USAGE_QUERY_SPAN_DAYS = 366L
+        const val CANCELLATION_CHECK_INTERVAL = 512
     }
 }
+
+internal fun usageQueryStartDate(
+    history: UsageStatisticsHistory,
+    today: LocalDate,
+    maximumBackfillDays: Long = MAX_USAGE_BACKFILL_DAYS,
+    openRetryDays: Long = MAX_OPEN_RETRY_DAYS,
+): LocalDate {
+    require(maximumBackfillDays > 0L)
+    require(openRetryDays > 0L)
+    val historyFloor = today.minusDays(maximumBackfillDays - 1L)
+    if (history.backfillCompletedThrough == null) return historyFloor
+
+    val firstUnscannedDate = runCatching {
+        history.backfillCompletedThrough.plusDays(1L)
+    }.getOrDefault(today).coerceAtMost(today)
+    val retryFloor = today.minusDays(openRetryDays - 1L).coerceAtLeast(historyFloor)
+    val oldestRetryableOpen = history.days.asSequence()
+        .filter { day ->
+            day.state == StatisticsDayState.OPEN &&
+                !day.date.isBefore(retryFloor) &&
+                !day.date.isAfter(today)
+        }
+        .minOfOrNull(UsageStatisticsDay::date)
+    return minOf(
+        today,
+        firstUnscannedDate,
+        oldestRetryableOpen ?: today,
+    ).coerceAtLeast(historyFloor)
+}
+
+internal fun mergeUsageStatisticsHistory(
+    current: UsageStatisticsHistory,
+    replacements: Collection<UsageStatisticsDay>,
+    backfillCompletedThrough: LocalDate? = current.backfillCompletedThrough,
+): UsageStatisticsHistory {
+    val byDate = current.days.associateBy(UsageStatisticsDay::date).toMutableMap()
+    replacements.forEach { replacement ->
+        if (byDate[replacement.date]?.state != StatisticsDayState.FINAL) {
+            byDate[replacement.date] = replacement
+        }
+    }
+    val days = byDate.values.sortedBy(UsageStatisticsDay::date)
+    return UsageStatisticsHistory(
+        trackingStartedOn = days.firstOrNull()?.date,
+        days = days,
+        backfillCompletedThrough = listOfNotNull(
+            current.backfillCompletedThrough,
+            backfillCompletedThrough,
+        ).maxOrNull(),
+    )
+}
+
+private const val MAX_USAGE_BACKFILL_DAYS = 3_650L
+private const val MAX_OPEN_RETRY_DAYS = 31L

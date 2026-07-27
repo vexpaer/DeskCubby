@@ -4,6 +4,7 @@ import com.deskcubby.app.data.local.DateRecordDao
 import com.deskcubby.app.data.local.DiaryIndexDao
 import com.deskcubby.app.data.local.FlashThoughtDao
 import com.deskcubby.app.data.local.SavedPoemDao
+import com.deskcubby.app.data.local.ThoughtCategoryDao
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.ZoneId
@@ -18,6 +19,7 @@ import kotlinx.coroutines.withContext
 class AiContextRepository @Inject constructor(
     private val diaryIndexDao: DiaryIndexDao,
     private val flashThoughtDao: FlashThoughtDao,
+    private val thoughtCategoryDao: ThoughtCategoryDao,
     private val dateRecordDao: DateRecordDao,
     private val savedPoemDao: SavedPoemDao,
     private val diaryFileRepository: DiaryFileRepository,
@@ -32,17 +34,29 @@ class AiContextRepository @Inject constructor(
                 estimatedBytes = diary.size.takeIf { it >= 0L },
             )
         }
+        val thoughtCategories = thoughtCategoryDao.getAllForBackup().associateBy { it.id }
         val thoughts = flashThoughtDao.getAllForBackup()
             .asSequence()
             .filter { it.deletedAt == null }
-            .sortedWith(compareByDescending<com.deskcubby.app.data.local.FlashThoughtEntity> { it.updatedAt }.thenByDescending { it.id })
+            .sortedWith(
+                compareBy<com.deskcubby.app.data.local.FlashThoughtEntity> {
+                    it.categoryId?.let(thoughtCategories::get)?.sortOrder ?: Long.MAX_VALUE
+                }
+                    .thenByDescending { it.updatedAt }
+                    .thenByDescending { it.id },
+            )
             .map { thought ->
                 val preview = excerpt(thought.content)
+                val category = thought.categoryId?.let(thoughtCategories::get)
                 AiContextCandidate(
                     selectionKey = roomKey(THOUGHT_PREFIX, thought.id),
                     source = AiContextSource.THOUGHT,
                     title = firstMeaningfulLine(thought.content),
                     subtitle = formatInstant(thought.updatedAt),
+                    groupKey = category?.id?.let { "$THOUGHT_CATEGORY_PREFIX$it" }
+                        ?: UNCATEGORIZED_THOUGHT_GROUP,
+                    groupTitle = category?.name.orEmpty(),
+                    groupSortOrder = category?.sortOrder ?: Long.MAX_VALUE,
                     previewExcerpt = preview.text,
                     previewIsExcerpt = preview.isExcerpt,
                     estimatedBytes = thought.content.utf8Size().toLong(),
@@ -125,10 +139,16 @@ class AiContextRepository @Inject constructor(
                     val thought = flashThoughtDao.getAllForBackup()
                         .firstOrNull { it.id == id && it.deletedAt == null }
                         ?: unavailable()
+                    val categoryName = thought.categoryId?.let { categoryId ->
+                        thoughtCategoryDao.getAllForBackup()
+                            .firstOrNull { it.id == categoryId }
+                            ?.name
+                    }.orEmpty()
                     AiContextItem(
                         source = AiContextSource.THOUGHT,
                         title = firstMeaningfulLine(thought.content),
                         date = formatInstant(thought.updatedAt),
+                        attribution = categoryName,
                         content = thought.content,
                     )
                 }
@@ -211,6 +231,8 @@ class AiContextRepository @Inject constructor(
         const val THOUGHT_PREFIX = "thought:"
         const val DATE_PREFIX = "date:"
         const val POEM_PREFIX = "poem:"
+        const val THOUGHT_CATEGORY_PREFIX = "thought-category:"
+        const val UNCATEGORIZED_THOUGHT_GROUP = "thought-category:uncategorized"
         const val CANDIDATE_PREVIEW_CHARS = 220
         const val PREVIEW_CONTENT_CHARS = 12_000
         val DATE_TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")

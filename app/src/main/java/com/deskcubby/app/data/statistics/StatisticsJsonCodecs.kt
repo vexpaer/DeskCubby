@@ -15,8 +15,12 @@ object UsageStatisticsJsonCodec {
     fun encode(history: UsageStatisticsHistory): String {
         validateUsageHistory(history)
         val root = JSONObject()
-            .put(KEY_SCHEMA_VERSION, STATISTICS_SCHEMA_VERSION)
+            .put(KEY_SCHEMA_VERSION, USAGE_STATISTICS_SCHEMA_VERSION)
             .put(KEY_TRACKING_STARTED_ON, history.trackingStartedOn?.toString() ?: JSONObject.NULL)
+            .put(
+                KEY_BACKFILL_COMPLETED_THROUGH,
+                history.backfillCompletedThrough?.toString() ?: JSONObject.NULL,
+            )
         val days = JSONArray()
         history.days.sortedBy(UsageStatisticsDay::date).forEach { day ->
             val apps = JSONArray()
@@ -41,13 +45,37 @@ object UsageStatisticsJsonCodec {
     }
 
     fun decode(json: String): UsageStatisticsHistory = decodeBounded(json) { root ->
-        root.requireExactKeys(
-            KEY_SCHEMA_VERSION,
-            KEY_TRACKING_STARTED_ON,
-            KEY_DAYS,
+        val schemaVersion = root.requiredSchemaVersion(
+            minimum = LEGACY_USAGE_STATISTICS_SCHEMA_VERSION,
+            maximum = USAGE_STATISTICS_SCHEMA_VERSION,
         )
-        root.requireSchemaVersion()
+        when (schemaVersion) {
+            LEGACY_USAGE_STATISTICS_SCHEMA_VERSION -> root.requireExactKeys(
+                KEY_SCHEMA_VERSION,
+                KEY_TRACKING_STARTED_ON,
+                KEY_DAYS,
+            )
+
+            USAGE_STATISTICS_SCHEMA_VERSION -> root.requireExactKeys(
+                KEY_SCHEMA_VERSION,
+                KEY_TRACKING_STARTED_ON,
+                KEY_BACKFILL_COMPLETED_THROUGH,
+                KEY_DAYS,
+            )
+
+            else -> invalid("Unsupported usage statistics schema.")
+        }
         val trackingStartedOn = root.requiredNullableDate(KEY_TRACKING_STARTED_ON)
+        val backfillCompletedThrough = if (
+            schemaVersion >= USAGE_STATISTICS_SCHEMA_VERSION
+        ) {
+            root.requiredNullableDate(KEY_BACKFILL_COMPLETED_THROUGH)
+        } else {
+            // Explicit v1 -> v2 migration. Existing days, especially FINAL
+            // snapshots, are preserved and one bounded discovery scan remains
+            // pending.
+            null
+        }
         val dayArray = root.requiredArray(KEY_DAYS, MAX_STATISTICS_DAYS)
         val days = buildList(dayArray.length()) {
             repeat(dayArray.length()) { index ->
@@ -94,7 +122,11 @@ object UsageStatisticsJsonCodec {
                 )
             }
         }
-        UsageStatisticsHistory(trackingStartedOn, days).also(::validateUsageHistory)
+        UsageStatisticsHistory(
+            trackingStartedOn = trackingStartedOn,
+            days = days,
+            backfillCompletedThrough = backfillCompletedThrough,
+        ).also(::validateUsageHistory)
     }
 }
 
@@ -102,7 +134,7 @@ object StepStatisticsJsonCodec {
     fun encode(history: StepStatisticsHistory): String {
         validateStepHistory(history)
         val root = JSONObject()
-            .put(KEY_SCHEMA_VERSION, STATISTICS_SCHEMA_VERSION)
+            .put(KEY_SCHEMA_VERSION, STEP_STATISTICS_SCHEMA_VERSION)
             .put(KEY_TRACKING_STARTED_ON, history.trackingStartedOn?.toString() ?: JSONObject.NULL)
         val days = JSONArray()
         history.days.sortedBy(StepStatisticsDay::date).forEach { day ->
@@ -125,7 +157,10 @@ object StepStatisticsJsonCodec {
             KEY_TRACKING_STARTED_ON,
             KEY_DAYS,
         )
-        root.requireSchemaVersion()
+        root.requiredSchemaVersion(
+            minimum = STEP_STATISTICS_SCHEMA_VERSION,
+            maximum = STEP_STATISTICS_SCHEMA_VERSION,
+        )
         val trackingStartedOn = root.requiredNullableDate(KEY_TRACKING_STARTED_ON)
         val dayArray = root.requiredArray(KEY_DAYS, MAX_STATISTICS_DAYS)
         val days = buildList(dayArray.length()) {
@@ -244,13 +279,16 @@ private fun validateZoneId(value: String) {
     }
 }
 
-private fun JSONObject.requireSchemaVersion() {
+private fun JSONObject.requiredSchemaVersion(
+    minimum: Int,
+    maximum: Int,
+): Int {
     val version = requiredLong(
         KEY_SCHEMA_VERSION,
-        minimum = STATISTICS_SCHEMA_VERSION.toLong(),
-        maximum = STATISTICS_SCHEMA_VERSION.toLong(),
+        minimum = minimum.toLong(),
+        maximum = maximum.toLong(),
     )
-    if (version != STATISTICS_SCHEMA_VERSION.toLong()) invalid("Unsupported statistics schema.")
+    return version.toInt()
 }
 
 private fun JSONObject.requireExactKeys(vararg expected: String) {
@@ -320,7 +358,9 @@ private fun JSONObject.requiredDayState(key: String): StatisticsDayState {
 
 private fun invalid(message: String): Nothing = throw StatisticsJsonException(message)
 
-internal const val STATISTICS_SCHEMA_VERSION = 1
+internal const val LEGACY_USAGE_STATISTICS_SCHEMA_VERSION = 1
+internal const val USAGE_STATISTICS_SCHEMA_VERSION = 2
+internal const val STEP_STATISTICS_SCHEMA_VERSION = 1
 internal const val MAX_STATISTICS_JSON_BYTES = 10 * 1024 * 1024
 private const val MAX_STATISTICS_DAYS = 36_600
 private const val MAX_APPS_PER_DAY = 4_096
@@ -333,6 +373,7 @@ private const val MAX_STEPS_PER_DAY = 1_000_000L
 
 private const val KEY_SCHEMA_VERSION = "schemaVersion"
 private const val KEY_TRACKING_STARTED_ON = "trackingStartedOn"
+private const val KEY_BACKFILL_COMPLETED_THROUGH = "backfillCompletedThrough"
 private const val KEY_DAYS = "days"
 private const val KEY_DATE = "date"
 private const val KEY_ZONE_ID = "zoneId"

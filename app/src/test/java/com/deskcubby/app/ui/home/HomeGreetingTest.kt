@@ -1,6 +1,7 @@
 package com.deskcubby.app.ui.home
 
 import com.deskcubby.app.data.model.AppLanguage
+import com.deskcubby.app.data.model.HomeGreetingTemplate
 import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -36,17 +37,31 @@ class HomeGreetingTest {
 
         assertEquals(first, second)
         assertEquals(first, afterCycle)
-        assertTrue(first.contains("阿岚"))
     }
 
     @Test
-    fun `language and anonymous fallback are localized`() {
+    fun `custom name token and language are resolved`() {
+        val date = LocalDate.of(2026, 2, 3)
+        val templates = listOf(HomeGreetingTemplate("{name}，开始吧", "Start, {name}"))
+
+        val chinese = HomeGreeting.forDate(date, AppLanguage.CHINESE, "阿岚", templates)
+        val english = HomeGreeting.forDate(date, AppLanguage.ENGLISH, "Alex", templates)
+
+        assertEquals("阿岚，开始吧", chinese)
+        assertEquals("Start, Alex", english)
+    }
+
+    @Test
+    fun `deleting every greeting has a localized fallback`() {
         val date = LocalDate.of(2026, 2, 3)
 
-        val chinese = HomeGreeting.forDate(date, AppLanguage.CHINESE, "   ")
-        val english = HomeGreeting.forDate(date, AppLanguage.ENGLISH, "   ")
-
-        assertTrue(chinese.contains("朋友"))
-        assertTrue(english.contains("Friend"))
+        assertEquals(
+            "今日概览",
+            HomeGreeting.forDate(date, AppLanguage.CHINESE, "   ", emptyList()),
+        )
+        assertEquals(
+            "Today's overview",
+            HomeGreeting.forDate(date, AppLanguage.ENGLISH, "Alex", emptyList()),
+        )
     }
 }
