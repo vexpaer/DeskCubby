@@ -56,7 +56,8 @@ object UsageStatisticsJsonCodec {
                 KEY_DAYS,
             )
 
-            PREVIOUS_USAGE_STATISTICS_SCHEMA_VERSION,
+            PROVIDER_TIMESTAMP_USAGE_STATISTICS_SCHEMA_VERSION,
+            EXACT_DAY_USAGE_STATISTICS_SCHEMA_VERSION,
             USAGE_STATISTICS_SCHEMA_VERSION -> root.requireExactKeys(
                 KEY_SCHEMA_VERSION,
                 KEY_TRACKING_STARTED_ON,
@@ -70,9 +71,9 @@ object UsageStatisticsJsonCodec {
         val backfillCompletedThrough = if (schemaVersion == USAGE_STATISTICS_SCHEMA_VERSION) {
             root.requiredNullableDate(KEY_BACKFILL_COMPLETED_THROUGH)
         } else {
-            // v1 had no watermark. v2 used a provider-timestamp strategy that could discard every
-            // returned row and still mark discovery complete. Preserve its rows but force one
-            // bounded scan with the corrected exact-day strategy.
+            // v1 had no watermark. v2 trusted provider timestamps and v3 forced provider summaries
+            // into requested dates; both strategies can produce missing or repeated daily values.
+            // Preserve their rows but force one bounded event-stream rebuild.
             null
         }
         val dayArray = root.requiredArray(KEY_DAYS, MAX_STATISTICS_DAYS)
@@ -415,8 +416,9 @@ private fun JSONObject.requiredDayState(key: String): StatisticsDayState {
 private fun invalid(message: String): Nothing = throw StatisticsJsonException(message)
 
 internal const val LEGACY_USAGE_STATISTICS_SCHEMA_VERSION = 1
-internal const val PREVIOUS_USAGE_STATISTICS_SCHEMA_VERSION = 2
-internal const val USAGE_STATISTICS_SCHEMA_VERSION = 3
+internal const val PROVIDER_TIMESTAMP_USAGE_STATISTICS_SCHEMA_VERSION = 2
+internal const val EXACT_DAY_USAGE_STATISTICS_SCHEMA_VERSION = 3
+internal const val USAGE_STATISTICS_SCHEMA_VERSION = 4
 internal const val LEGACY_STEP_STATISTICS_SCHEMA_VERSION = 1
 internal const val STEP_STATISTICS_SCHEMA_VERSION = 2
 internal const val MAX_STATISTICS_JSON_BYTES = 10 * 1024 * 1024

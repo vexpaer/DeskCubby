@@ -104,6 +104,20 @@ class UsageStatisticsMergeTest {
         assertEquals(listOf(firstComplete.date), merged.days.map { it.date })
     }
 
+    @Test
+    fun authoritativeEventRebuildCanCorrectPreviouslyFinalDuplicateDays() {
+        val old = day("2026-07-26", StatisticsDayState.FINAL, 8_400_000L)
+        val corrected = day("2026-07-26", StatisticsDayState.FINAL, 1_200_000L)
+
+        val merged = mergeUsageStatisticsHistory(
+            current = UsageStatisticsHistory(old.date, listOf(old)),
+            replacements = listOf(corrected),
+            replaceFinal = true,
+        )
+
+        assertEquals(1_200_000L, merged.days.single().totalForegroundMillis)
+    }
+
     private fun day(
         date: String,
         state: StatisticsDayState,

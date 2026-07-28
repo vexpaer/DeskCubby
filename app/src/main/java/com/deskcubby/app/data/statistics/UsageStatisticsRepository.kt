@@ -1,6 +1,7 @@
 package com.deskcubby.app.data.statistics
 
 import android.app.AppOpsManager
+import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Process
@@ -9,7 +10,6 @@ import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -88,19 +88,22 @@ class UsageStatisticsRepository @Inject constructor(
                 history = current,
                 today = today,
             )
-            val rawBuckets = queryDailyBuckets(
+            val eventQuery = queryUsageEvents(
                 beginDate = queryStartDate,
-                today = today,
                 zone = zone,
                 nowMillis = nowMillis,
             )
-            val replacements = aggregateDailyUsageBuckets(
-                buckets = rawBuckets,
+            val eventAggregation = aggregateUsageEvents(
+                query = eventQuery,
                 firstRequestedDate = queryStartDate,
                 today = today,
                 zone = zone,
                 nowMillis = nowMillis,
             )
+            val replacements = eventAggregation.days.toMutableList()
+            if (replacements.none { it.date == today }) {
+                queryCurrentDayFallback(today, zone, nowMillis)?.let(replacements::add)
+            }
             val attemptedCompletedThrough = today.minusDays(1L)
             store.update { latest ->
                 val latestNeededStart = usageQueryStartDate(
@@ -114,6 +117,7 @@ class UsageStatisticsRepository @Inject constructor(
                     backfillCompletedThrough = attemptedCompletedThrough.takeIf {
                         coveredLatestDiscoveryWindow
                     },
+                    replaceFinal = true,
                 )
             }
             mutableCollectionState.value = StatisticsCollectionState(
@@ -144,106 +148,92 @@ class UsageStatisticsRepository @Inject constructor(
         )
     }
 
-    private suspend fun queryDailyBuckets(
+    private suspend fun queryUsageEvents(
         beginDate: LocalDate,
+        zone: ZoneId,
+        nowMillis: Long,
+    ): UsageEventQueryResult = withContext(Dispatchers.IO) {
+        // Include earlier events so a session crossing into the first requested midnight has a
+        // known start, and so ordinary incremental refreshes are not mistaken for a retention
+        // boundary merely because the first app use happened after midnight.
+        val eventSeedDate = beginDate.minusDays(USAGE_EVENT_SEED_LOOKBACK_DAYS)
+        val beginMillis = eventSeedDate.atStartOfDay(zone).toInstant().toEpochMilli()
+        require(nowMillis > beginMillis)
+        val usageEvents = usageStatsManager.queryEvents(beginMillis, nowMillis)
+            ?: throw IllegalStateException("Usage event query returned no result.")
+        val copied = ArrayList<RawUsageEvent>()
+        var earliestEventEpochMillis: Long? = null
+        var totalEvents = 0
+        val event = UsageEvents.Event()
+        while (usageEvents.hasNextEvent()) {
+            currentCoroutineContext().ensureActive()
+            if (!usageEvents.getNextEvent(event)) break
+            totalEvents += 1
+            if (totalEvents > MAX_USAGE_EVENTS_TOTAL) {
+                throw IllegalStateException("Usage event query exceeded the safety limit.")
+            }
+            val timestamp = event.timeStamp
+            if (timestamp !in beginMillis..nowMillis) continue
+            earliestEventEpochMillis = minOf(earliestEventEpochMillis ?: timestamp, timestamp)
+            val kind = when {
+                event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ->
+                    RawUsageEventKind.FOREGROUND
+                event.eventType == UsageEvents.Event.ACTIVITY_PAUSED ->
+                    RawUsageEventKind.BACKGROUND
+                event.eventType == UsageEvents.Event.SCREEN_NON_INTERACTIVE ||
+                    event.eventType == UsageEvents.Event.KEYGUARD_SHOWN ||
+                    event.eventType == UsageEvents.Event.DEVICE_SHUTDOWN ->
+                    RawUsageEventKind.STOP_ALL
+                else -> null
+            }
+            if (kind != null) {
+                copied += RawUsageEvent(
+                    timestampEpochMillis = timestamp,
+                    packageName = event.packageName,
+                    kind = kind,
+                )
+            }
+        }
+        UsageEventQueryResult(copied, earliestEventEpochMillis)
+    }
+
+    private suspend fun queryCurrentDayFallback(
         today: LocalDate,
         zone: ZoneId,
         nowMillis: Long,
-    ): List<RawDailyUsageBucket> = withContext(Dispatchers.IO) {
-        val requestedDayCount = ChronoUnit.DAYS.between(beginDate, today) + 1L
-        require(requestedDayCount in 1L..MAX_USAGE_BACKFILL_DAYS)
-        val result = ArrayList<RawDailyUsageBucket>()
-        var discoveryStartDate = beginDate
-        while (!discoveryStartDate.isAfter(today)) {
-            currentCoroutineContext().ensureActive()
-            val discoveryEndDateExclusive = minOf(
-                discoveryStartDate.plusDays(MAX_USAGE_DISCOVERY_SPAN_DAYS),
-                today.plusDays(1L),
-            )
-            val discoveryBeginMillis =
-                discoveryStartDate.atStartOfDay(zone).toInstant().toEpochMilli()
-            val discoveryEndMillis = if (discoveryEndDateExclusive.isAfter(today)) {
-                nowMillis
-            } else {
-                discoveryEndDateExclusive.atStartOfDay(zone).toInstant().toEpochMilli()
-            }
-            if (discoveryEndMillis <= discoveryBeginMillis) {
-                discoveryStartDate = discoveryEndDateExclusive
-                continue
-            }
-
-            // A short broad query only discovers whether Android still exposes anything in this
-            // period. Its UsageStats timestamps cannot safely be treated as individual days:
-            // some OEMs return one summary spanning the whole requested range.
-            val discoveryValues = queryUsageStats(
-                beginMillis = discoveryBeginMillis,
-                endMillis = discoveryEndMillis,
-            )
-            if (discoveryValues.isNotEmpty()) {
-                var date = discoveryStartDate
-                while (date.isBefore(discoveryEndDateExclusive) && !date.isAfter(today)) {
-                    currentCoroutineContext().ensureActive()
-                    val dayStartMillis =
-                        date.atStartOfDay(zone).toInstant().toEpochMilli()
-                    val naturalDayEndMillis =
-                        date.plusDays(1L).atStartOfDay(zone).toInstant().toEpochMilli()
-                    val dayEndMillis = if (date == today) {
-                        nowMillis.coerceAtMost(naturalDayEndMillis)
-                    } else {
-                        naturalDayEndMillis
-                    }
-                    if (dayEndMillis > dayStartMillis) {
-                        val dayValues = if (
-                            discoveryStartDate == date &&
-                            discoveryEndDateExclusive == date.plusDays(1L)
-                        ) {
-                            discoveryValues
-                        } else {
-                            queryUsageStats(dayStartMillis, dayEndMillis)
-                        }
-                        val remainingCapacity = MAX_USAGE_BUCKETS_TOTAL - result.size
-                        if (dayValues.size > remainingCapacity) {
-                            throw IllegalStateException(
-                                "Daily usage query exceeded the safety limit.",
-                            )
-                        }
-                        result += exactDayUsageBuckets(
-                            values = dayValues.map { value ->
-                                RawQueriedUsage(
-                                    packageName = value.packageName.orEmpty(),
-                                    foregroundMillis = value.totalTimeInForeground,
-                                )
-                            },
-                            dayStartMillis = dayStartMillis,
-                            dayEndMillis = dayEndMillis,
-                        )
-                    }
-                    date = date.plusDays(1L)
-                }
-            }
-            discoveryStartDate = discoveryEndDateExclusive
-        }
-        result
-    }
-
-    private suspend fun queryUsageStats(
-        beginMillis: Long,
-        endMillis: Long,
-    ) = usageStatsManager.queryUsageStats(
-        UsageStatsManager.INTERVAL_DAILY,
-        beginMillis,
-        endMillis,
-    )?.also { values ->
+    ): UsageStatisticsDay? = withContext(Dispatchers.IO) {
+        val start = today.atStartOfDay(zone).toInstant().toEpochMilli()
+        val values = usageStatsManager.queryUsageStats(
+            UsageStatsManager.INTERVAL_DAILY,
+            start,
+            nowMillis,
+        ) ?: return@withContext null
         if (values.size > MAX_USAGE_BUCKETS_PER_QUERY) {
             throw IllegalStateException("Daily usage query exceeded the safety limit.")
         }
         currentCoroutineContext().ensureActive()
-    } ?: throw IllegalStateException("Daily usage query returned no result.")
+        aggregateDailyUsageBuckets(
+            buckets = exactDayUsageBuckets(
+                values = values.map { value ->
+                    RawQueriedUsage(
+                        packageName = value.packageName.orEmpty(),
+                        foregroundMillis = value.totalTimeInForeground,
+                    )
+                },
+                dayStartMillis = start,
+                dayEndMillis = nowMillis,
+            ),
+            firstRequestedDate = today,
+            today = today,
+            zone = zone,
+            nowMillis = nowMillis,
+        ).singleOrNull()
+    }
 
     private companion object {
         const val MAX_USAGE_BUCKETS_PER_QUERY = 100_000
-        const val MAX_USAGE_BUCKETS_TOTAL = 100_000
-        const val MAX_USAGE_DISCOVERY_SPAN_DAYS = 31L
+        const val MAX_USAGE_EVENTS_TOTAL = 500_000
+        const val USAGE_EVENT_SEED_LOOKBACK_DAYS = 31L
     }
 }
 
@@ -280,10 +270,11 @@ internal fun mergeUsageStatisticsHistory(
     current: UsageStatisticsHistory,
     replacements: Collection<UsageStatisticsDay>,
     backfillCompletedThrough: LocalDate? = current.backfillCompletedThrough,
+    replaceFinal: Boolean = false,
 ): UsageStatisticsHistory {
     val byDate = current.days.associateBy(UsageStatisticsDay::date).toMutableMap()
     replacements.forEach { replacement ->
-        if (byDate[replacement.date]?.state != StatisticsDayState.FINAL) {
+        if (replaceFinal || byDate[replacement.date]?.state != StatisticsDayState.FINAL) {
             byDate[replacement.date] = replacement
         }
     }

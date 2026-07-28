@@ -62,7 +62,7 @@ class StatisticsJsonCodecsTest {
         assertEquals(StatisticsDayState.FINAL, migrated.days.single().state)
         assertNull(migrated.backfillCompletedThrough)
         val reencoded = JSONObject(UsageStatisticsJsonCodec.encode(migrated))
-        assertEquals(3, reencoded.getInt("schemaVersion"))
+        assertEquals(4, reencoded.getInt("schemaVersion"))
         assertEquals(true, reencoded.has("backfillCompletedThrough"))
     }
 
@@ -89,7 +89,36 @@ class StatisticsJsonCodecsTest {
         assertEquals(history.days, migrated.days)
         assertNull(migrated.backfillCompletedThrough)
         assertEquals(
-            3,
+            4,
+            JSONObject(UsageStatisticsJsonCodec.encode(migrated))
+                .getInt("schemaVersion"),
+        )
+    }
+
+    @Test
+    fun usageV3MigrationForcesEventStreamRebuild() {
+        val history = UsageStatisticsHistory(
+            trackingStartedOn = LocalDate.parse("2026-07-25"),
+            days = listOf(
+                UsageStatisticsDay(
+                    date = LocalDate.parse("2026-07-25"),
+                    zoneId = "Asia/Shanghai",
+                    state = StatisticsDayState.FINAL,
+                    collectedAtEpochMillis = 42,
+                    apps = listOf(UsageAppDuration("com.tencent.mm", 8_400_000)),
+                ),
+            ),
+            backfillCompletedThrough = LocalDate.parse("2026-07-26"),
+        )
+        val versionThree = JSONObject(UsageStatisticsJsonCodec.encode(history))
+            .put("schemaVersion", 3)
+
+        val migrated = UsageStatisticsJsonCodec.decode(versionThree.toString())
+
+        assertEquals(history.days, migrated.days)
+        assertNull(migrated.backfillCompletedThrough)
+        assertEquals(
+            4,
             JSONObject(UsageStatisticsJsonCodec.encode(migrated))
                 .getInt("schemaVersion"),
         )

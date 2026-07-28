@@ -200,6 +200,82 @@ class GameEnginesTest {
         assertEquals(json, restored.toJson())
         assertEquals(game.board, restored.board)
         assertEquals(game.score, restored.score)
+        assertEquals(game.canUndo, restored.canUndo)
+    }
+
+    @Test
+    fun game2048UndoRestoresBoardAndScoreOnlyOnce() {
+        val cells = listOf(
+            2, 2, 0, 0,
+            4, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+        )
+        val game = Game2048.fromJson(game2048Json(cells, score = 12), Random(7))!!
+
+        assertTrue(game.move(Game2048.Direction.LEFT))
+        assertTrue(game.canUndo)
+        assertTrue(game.undo())
+
+        assertEquals(cells, game.board)
+        assertEquals(12, game.score)
+        assertFalse(game.canUndo)
+        assertFalse(game.undo())
+    }
+
+    @Test
+    fun game2048NoOpDoesNotDiscardAvailableUndo() {
+        val previous = listOf(
+            2, 2, 0, 0,
+            4, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+        )
+        val current = listOf(
+            4, 2, 0, 0,
+            4, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+        )
+        val game = Game2048.fromJson(
+            """{"size":4,"cells":[${current.joinToString(",")}],"score":4,""" +
+                """"undoCells":[${previous.joinToString(",")}],"undoScore":0}""",
+            Random(7),
+        )!!
+
+        val afterMove = game.board
+        assertFalse(game.move(Game2048.Direction.LEFT))
+        assertEquals(afterMove, game.board)
+        assertTrue(game.canUndo)
+        assertTrue(game.undo())
+        assertEquals(previous, game.board)
+    }
+
+    @Test
+    fun game2048SavePreservesUndoAcrossAllBoardSizes() {
+        listOf(4, 5, 6).forEach { size ->
+            val cells = MutableList(size * size) { 0 }.apply {
+                this[0] = 2
+                this[1] = 2
+            }
+            val game = Game2048.fromJson(
+                """{"size":$size,"cells":[${cells.joinToString(",")}],"score":8}""",
+                Random(size),
+                expectedSize = size,
+            )!!
+            assertTrue(game.move(Game2048.Direction.LEFT))
+
+            val restored = Game2048.fromJson(
+                game.toJson(),
+                Random(99),
+                expectedSize = size,
+            )!!
+
+            assertTrue(restored.canUndo)
+            assertTrue(restored.undo())
+            assertEquals(cells, restored.board)
+            assertEquals(8, restored.score)
+        }
     }
 
     @Test

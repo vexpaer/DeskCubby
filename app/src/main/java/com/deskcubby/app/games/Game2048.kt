@@ -11,6 +11,8 @@ class Game2048 private constructor(
     val size: Int,
     initialScore: Int,
     private val random: Random,
+    initialUndoCells: IntArray? = null,
+    initialUndoScore: Int? = null,
 ) {
 
     /** Starts a fresh game with two spawned tiles. */
@@ -25,8 +27,14 @@ class Game2048 private constructor(
     var score: Int = initialScore
         private set
 
+    private var undoCells: IntArray? = initialUndoCells?.copyOf()
+    private var undoScore: Int? = initialUndoScore
+
     /** Row-major snapshot of all tile values (0 = empty). */
     val board: List<Int> get() = cells.toList()
+
+    /** A successful move records exactly one restorable prior state. */
+    val canUndo: Boolean get() = undoCells != null && undoScore != null
 
     fun cellAt(row: Int, column: Int): Int = cells[row * size + column]
 
@@ -88,6 +96,7 @@ class Game2048 private constructor(
      */
     fun moveWithResult(direction: Direction): MoveResult? {
         val before = cells.toList()
+        val scoreBefore = score
         val next = IntArray(cells.size)
         val motions = ArrayList<TileMotion>(cells.size)
         val merges = ArrayList<Merge>(size * 2)
@@ -140,6 +149,8 @@ class Game2048 private constructor(
 
         if (cells.contentEquals(next)) return null
 
+        undoCells = before.toIntArray()
+        undoScore = scoreBefore
         next.copyInto(cells)
         score += scoreGained
         val spawn = spawnTile()
@@ -154,6 +165,17 @@ class Game2048 private constructor(
         )
     }
 
+    /** Restores the state before the latest successful move. Undo itself cannot be repeated. */
+    fun undo(): Boolean {
+        val previousCells = undoCells ?: return false
+        val previousScore = undoScore ?: return false
+        previousCells.copyInto(cells)
+        score = previousScore
+        undoCells = null
+        undoScore = null
+        return true
+    }
+
     /** Serializes the complete restorable state as JSON. */
     fun toJson(): String = buildString {
         append("{\"size\":").append(size).append(",\"cells\":[")
@@ -161,7 +183,19 @@ class Game2048 private constructor(
             if (index > 0) append(',')
             append(value)
         }
-        append("],\"score\":").append(score).append('}')
+        append("],\"score\":").append(score).append(",\"undoCells\":")
+        val previousCells = undoCells
+        if (previousCells == null) {
+            append("null")
+        } else {
+            append('[')
+            previousCells.forEachIndexed { index, value ->
+                if (index > 0) append(',')
+                append(value)
+            }
+            append(']')
+        }
+        append(",\"undoScore\":").append(undoScore ?: "null").append('}')
     }
 
     /** Cell indices of one line, ordered from the edge the tiles slide towards. */
@@ -210,7 +244,37 @@ class Game2048 private constructor(
             if (cells.size != size * size || cells.any { it < 0 }) return null
             val score = GameJson.intOf(map["score"]) ?: return null
             if (score < 0) return null
-            return Game2048(cells.toIntArray(), size, score, random)
+            val hasUndoCells = map.containsKey("undoCells")
+            val hasUndoScore = map.containsKey("undoScore")
+            if (hasUndoCells != hasUndoScore) return null
+            val undoCellsValue = map["undoCells"]
+            val undoScoreValue = map["undoScore"]
+            val undoCells: IntArray?
+            val undoScore: Int?
+            if (!hasUndoCells || (undoCellsValue == null && undoScoreValue == null)) {
+                undoCells = null
+                undoScore = null
+            } else {
+                val restoredUndoCells = GameJson.intListOf(undoCellsValue) ?: return null
+                val restoredUndoScore = GameJson.intOf(undoScoreValue) ?: return null
+                if (
+                    restoredUndoCells.size != size * size ||
+                    restoredUndoCells.any { it < 0 } ||
+                    restoredUndoScore < 0
+                ) {
+                    return null
+                }
+                undoCells = restoredUndoCells.toIntArray()
+                undoScore = restoredUndoScore
+            }
+            return Game2048(
+                cells = cells.toIntArray(),
+                size = size,
+                initialScore = score,
+                random = random,
+                initialUndoCells = undoCells,
+                initialUndoScore = undoScore,
+            )
         }
 
         private fun validatedCellCount(size: Int): Int {

@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
@@ -266,6 +267,9 @@ private fun GameFrame(
     paused: Boolean,
     onTogglePause: () -> Unit,
     onBack: () -> Unit,
+    undoVisible: Boolean = false,
+    undoEnabled: Boolean = false,
+    onUndo: () -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
     BackHandler(onBack = onBack)
@@ -284,6 +288,11 @@ private fun GameFrame(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
+            if (undoVisible) {
+                IconButton(onClick = onUndo, enabled = undoEnabled) {
+                    Icon(Icons.AutoMirrored.Outlined.Undo, tr("撤回上一步", "Undo last move"))
+                }
+            }
             if (pauseVisible) {
                 IconButton(onClick = onTogglePause) {
                     if (paused) {
@@ -363,7 +372,12 @@ private fun GameAutoPauseEffect(onPauseAndSave: () -> Unit) {
 }
 
 @Composable
-private fun GameOverDialog(score: Int, onRestart: () -> Unit, onExit: () -> Unit) {
+private fun GameOverDialog(
+    score: Int,
+    onRestart: () -> Unit,
+    onExit: () -> Unit,
+    onUndo: (() -> Unit)? = null,
+) {
     AlertDialog(
         onDismissRequest = onExit,
         title = { Text(tr("游戏结束", "Game over")) },
@@ -372,7 +386,12 @@ private fun GameOverDialog(score: Int, onRestart: () -> Unit, onExit: () -> Unit
             TextButton(onClick = onRestart) { Text(tr("再来一局", "Play again")) }
         },
         dismissButton = {
-            TextButton(onClick = onExit) { Text(tr("返回", "Back")) }
+            Row {
+                onUndo?.let { undo ->
+                    TextButton(onClick = undo) { Text(tr("撤回", "Undo")) }
+                }
+                TextButton(onClick = onExit) { Text(tr("返回", "Back")) }
+            }
         },
     )
 }
@@ -463,6 +482,7 @@ private fun Game2048Page(
     val board = remember(engine, frame) { engine?.board ?: List(boardSize * boardSize) { 0 } }
     val score = remember(engine, frame) { engine?.score ?: 0 }
     val gameOver = remember(engine, frame) { engine?.isGameOver == true }
+    val canUndo = remember(engine, frame) { engine?.canUndo == true }
 
     LaunchedEffect(gameOver) {
         if (gameOver && !scoreRecorded) {
@@ -488,6 +508,17 @@ private fun Game2048Page(
         viewModel.saveProgress(gameId, current.toJson(), current.score)
     }
 
+    fun undoLastMove() {
+        val current = engine ?: return
+        if (!current.undo()) return
+        transition = null
+        transitionSequence++
+        frame++
+        paused = false
+        scoreRecorded = false
+        viewModel.saveProgress(gameId, current.toJson(), current.score)
+    }
+
     GameAutoPauseEffect(onPauseAndSave = ::pauseAndSave)
 
     GameFrame(
@@ -508,6 +539,9 @@ private fun Game2048Page(
             saveIfRunning()
             onExit()
         },
+        undoVisible = engine != null,
+        undoEnabled = canUndo && !paused,
+        onUndo = ::undoLastMove,
     ) {
         Box(
             Modifier
@@ -552,6 +586,7 @@ private fun Game2048Page(
                 scoreRecorded = false
             },
             onExit = onExit,
+            onUndo = if (canUndo) ::undoLastMove else null,
         )
     }
 }
