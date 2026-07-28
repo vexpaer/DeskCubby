@@ -128,6 +128,40 @@ class AppDatabaseMigrationTest {
         database.close()
     }
 
+    @Test
+    fun migrate7To8AddsVaultOrderAndPreservesCurrentDisplayOrder() {
+        val databaseName = "vault-order-migration-test"
+        helper.createDatabase(databaseName, 7).apply {
+            execSQL(
+                """
+                INSERT INTO vault_items (id, cipherText, iv, createdAt, updatedAt)
+                VALUES
+                    (1, 'b2xkZXI=', 'aXYx', 10, 20),
+                    (2, 'bmV3ZXI=', 'aXYy', 30, 40)
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            databaseName,
+            8,
+            true,
+            AppDatabase.MIGRATION_7_8,
+        )
+        database.query(
+            "SELECT id, sortOrder FROM vault_items ORDER BY sortOrder ASC",
+        ).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(2L, cursor.getLong(0))
+            assertEquals(0L, cursor.getLong(1))
+            cursor.moveToNext()
+            assertEquals(1L, cursor.getLong(0))
+            assertEquals(1L, cursor.getLong(1))
+        }
+        database.close()
+    }
+
     private companion object {
         const val TEST_DATABASE = "ai-chat-migration-test"
     }

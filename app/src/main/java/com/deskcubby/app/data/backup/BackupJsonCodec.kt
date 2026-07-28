@@ -18,13 +18,18 @@ import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MAX_POETRY_FONT_SIZE_SP
+import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MIN_POETRY_FONT_SIZE_SP
+import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
@@ -41,7 +46,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 16,
+    val formatVersion: Int = 17,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -61,7 +66,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 16
+    const val FORMAT_VERSION: Int = 17
 
     private const val FORMAT_NAME = "DeskCubby"
     private const val MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -220,6 +225,12 @@ object BackupJsonCodec {
         .put("thoughtDisplayMode", settings.thoughtDisplayMode.name)
         .put("thoughtHighlightColorArgb", settings.thoughtHighlightColorArgb)
         .put("thoughtEditorMaxHeightDp", settings.thoughtEditorMaxHeightDp)
+        .putNullable("poetryFontUri", settings.poetryFontUri)
+        .put("poetryFontSizeSp", settings.poetryFontSizeSp)
+        .put("poetryLineSpacing", settings.poetryLineSpacing)
+        .put("poetryTextAlignment", settings.poetryTextAlignment.name)
+        .put("poetryShowSource", settings.poetryShowSource)
+        .put("poetryShowQuoteMark", settings.poetryShowQuoteMark)
         .put("mealCalendarImageMaxHeightDp", settings.mealCalendarImageMaxHeightDp)
         .put("mealCalendarShowCaptions", settings.mealCalendarShowCaptions)
         .put("mealCalendarWrapEnabled", settings.mealCalendarWrapEnabled)
@@ -580,6 +591,53 @@ object BackupJsonCodec {
                 )
             } else {
                 defaults.thoughtEditorMaxHeightDp
+            },
+            poetryFontUri = if (version >= 17) {
+                json.requiredNullableString("poetryFontUri")
+                    ?.requireMaxLength("poetryFontUri", MAX_URL_CHARS)
+            } else {
+                defaults.poetryFontUri
+            },
+            poetryFontSizeSp = if (version >= 17) {
+                json.requiredFiniteNumber("poetryFontSizeSp").also { value ->
+                    require(
+                        value in MIN_POETRY_FONT_SIZE_SP.toDouble()..
+                            MAX_POETRY_FONT_SIZE_SP.toDouble(),
+                    ) {
+                        "poetryFontSizeSp must be between $MIN_POETRY_FONT_SIZE_SP and " +
+                            "$MAX_POETRY_FONT_SIZE_SP"
+                    }
+                }.toFloat()
+            } else {
+                defaults.poetryFontSizeSp
+            },
+            poetryLineSpacing = if (version >= 17) {
+                json.requiredFiniteNumber("poetryLineSpacing").also { value ->
+                    require(
+                        value in MIN_POETRY_LINE_SPACING.toDouble()..
+                            MAX_POETRY_LINE_SPACING.toDouble(),
+                    ) {
+                        "poetryLineSpacing must be between $MIN_POETRY_LINE_SPACING and " +
+                            "$MAX_POETRY_LINE_SPACING"
+                    }
+                }.toFloat()
+            } else {
+                defaults.poetryLineSpacing
+            },
+            poetryTextAlignment = if (version >= 17) {
+                json.requiredEnum<PoetryTextAlignment>("poetryTextAlignment")
+            } else {
+                defaults.poetryTextAlignment
+            },
+            poetryShowSource = if (version >= 17) {
+                json.requiredBoolean("poetryShowSource")
+            } else {
+                defaults.poetryShowSource
+            },
+            poetryShowQuoteMark = if (version >= 17) {
+                json.requiredBoolean("poetryShowQuoteMark")
+            } else {
+                defaults.poetryShowQuoteMark
             },
             mealCalendarImageMaxHeightDp = if (version >= 9) {
                 json.requiredCoercedInt("mealCalendarImageMaxHeightDp", 80, 320)

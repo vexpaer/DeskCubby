@@ -8,13 +8,15 @@ enum class BrowserTheme { SYSTEM, LIGHT, DARK }
 
 enum class AppLanguage { CHINESE, ENGLISH }
 
-enum class LauncherIcon { CURRENT, MAGIC_BOOK }
+enum class LauncherIcon { CURRENT, MAGIC_BOOK, DESK_CUBBY }
 
 enum class ThoughtReopenMode { LAST_VISITED, ALL }
 
 enum class ThoughtDisplayMode { SINGLE_LINE, FULL }
 
 enum class MealPhotosPerRow { TWO, THREE, SMART }
+
+enum class PoetryTextAlignment { START, CENTER }
 
 /**
  * Row sizes for wrapped meal-calendar photos. SMART mixes rows of 3 and 2 so the
@@ -98,6 +100,10 @@ const val DEFAULT_THOUGHT_HIGHLIGHT_COLOR_ARGB: Int = 0xFFF6E3A1.toInt()
 const val MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP: Int = 96
 const val MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP: Int = 400
 const val DEFAULT_THOUGHT_EDITOR_MAX_HEIGHT_DP: Int = 168
+const val MIN_POETRY_FONT_SIZE_SP: Float = 14f
+const val MAX_POETRY_FONT_SIZE_SP: Float = 36f
+const val MIN_POETRY_LINE_SPACING: Float = 1f
+const val MAX_POETRY_LINE_SPACING: Float = 2f
 
 enum class NavItemId(
     val route: String,
@@ -329,6 +335,12 @@ data class AppSettings(
     val thoughtDisplayMode: ThoughtDisplayMode = ThoughtDisplayMode.SINGLE_LINE,
     val thoughtHighlightColorArgb: Int = DEFAULT_THOUGHT_HIGHLIGHT_COLOR_ARGB,
     val thoughtEditorMaxHeightDp: Int = DEFAULT_THOUGHT_EDITOR_MAX_HEIGHT_DP,
+    val poetryFontUri: String? = null,
+    val poetryFontSizeSp: Float = 18f,
+    val poetryLineSpacing: Float = 1.45f,
+    val poetryTextAlignment: PoetryTextAlignment = PoetryTextAlignment.START,
+    val poetryShowSource: Boolean = true,
+    val poetryShowQuoteMark: Boolean = true,
     val mealCalendarImageMaxHeightDp: Int = 124,
     val mealCalendarShowCaptions: Boolean = true,
     val mealCalendarWrapEnabled: Boolean = false,

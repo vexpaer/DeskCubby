@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         VaultItemEntity::class,
         GameStateEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -184,6 +184,27 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     """.trimIndent(),
                 )
+            }
+        }
+
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `vault_items` ADD COLUMN `sortOrder` INTEGER NOT NULL DEFAULT 0",
+                )
+                val orderedIds = buildList {
+                    db.query(
+                        "SELECT id FROM `vault_items` ORDER BY updatedAt DESC, id DESC",
+                    ).use { cursor ->
+                        while (cursor.moveToNext()) add(cursor.getLong(0))
+                    }
+                }
+                orderedIds.forEachIndexed { index, id ->
+                    db.execSQL(
+                        "UPDATE `vault_items` SET `sortOrder` = ? WHERE `id` = ?",
+                        arrayOf(index.toLong(), id),
+                    )
+                }
             }
         }
     }

@@ -2,6 +2,7 @@ package com.deskcubby.app.ui.settings
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -26,6 +27,7 @@ import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.MealPhotosPerRow
+import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
@@ -335,6 +337,56 @@ class SettingsViewModel @Inject constructor(
             highlightColorArgb = highlightColorArgb,
             editorMaxHeightDp = editorMaxHeightDp,
         )
+    }
+    fun persistPoetryFont(uri: Uri, onComplete: (Boolean) -> Unit) =
+        viewModelScope.launch {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+                val readable = withContext(Dispatchers.IO) {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                        runCatching { Typeface.Builder(descriptor.fileDescriptor).build() }.isSuccess
+                    } == true
+                }
+                require(readable) { "所选文件不是可读取的字体 / The selected file is not a readable font" }
+                onComplete(true)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _settingsError.value = error.message?.takeIf(String::isNotBlank)
+                    ?: "字体导入失败 / Could not import font"
+                onComplete(false)
+            }
+        }
+
+    fun setPoetryDisplaySettings(
+        fontUri: String?,
+        fontSizeSp: Float,
+        lineSpacing: Float,
+        textAlignment: PoetryTextAlignment,
+        showSource: Boolean,
+        showQuoteMark: Boolean,
+        onComplete: (Boolean) -> Unit,
+    ) = viewModelScope.launch {
+        try {
+            repository.setPoetryDisplaySettings(
+                fontUri = fontUri,
+                fontSizeSp = fontSizeSp,
+                lineSpacing = lineSpacing,
+                textAlignment = textAlignment,
+                showSource = showSource,
+                showQuoteMark = showQuoteMark,
+            )
+            onComplete(true)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _settingsError.value = error.message?.takeIf(String::isNotBlank)
+                ?: "诗词显示设置保存失败 / Could not save poetry display settings"
+            onComplete(false)
+        }
     }
     fun setMealCalendarImageMaxHeight(value: Int) =
         launch { repository.setMealCalendarImageMaxHeight(value) }

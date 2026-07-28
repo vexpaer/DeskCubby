@@ -32,6 +32,7 @@ data class DailyPoem(
     /** All lines of the origin poem joined with newlines; empty when unknown. */
     val fullContent: String = "",
     val dynasty: String = "",
+    val title: String = "",
 )
 
 enum class PoemEditContentStatus {
@@ -59,6 +60,7 @@ class PoetryRepository @Inject constructor(
         val updatedAt = longPreferencesKey("updated_at")
         val fullContent = stringPreferencesKey("full_content")
         val dynasty = stringPreferencesKey("dynasty")
+        val title = stringPreferencesKey("title")
     }
 
     val poem: Flow<DailyPoem> = context.poetryDataStore.data.map { prefs ->
@@ -73,6 +75,8 @@ class PoetryRepository @Inject constructor(
                 FALLBACK.fullContent
             },
             dynasty = prefs[Keys.dynasty].orEmpty(),
+            title = prefs[Keys.title]
+                ?: titleFromFormattedSource(prefs[Keys.source] ?: FALLBACK.source),
         )
     }
 
@@ -96,6 +100,7 @@ class PoetryRepository @Inject constructor(
                 prefs[Keys.source] = parsed.source
                 prefs[Keys.fullContent] = parsed.fullContent
                 prefs[Keys.dynasty] = parsed.dynasty
+                prefs[Keys.title] = parsed.title
                 prefs[Keys.updatedAt] = System.currentTimeMillis()
             }
         }
@@ -157,6 +162,7 @@ class PoetryRepository @Inject constructor(
             source = "— 张可久《人月圆·山中书事》",
             fullContent = "兴亡千古繁华梦，诗眼倦天涯。\n孔林乔木，吴宫蔓草，楚庙寒鸦。\n数间茅舍，藏书万卷，投老村家。\n山中何事？松花酿酒，春水煎茶。",
             dynasty = "元",
+            title = "人月圆·山中书事",
         )
 
         internal fun parseSentence(raw: String): DailyPoem {
@@ -179,6 +185,7 @@ class PoetryRepository @Inject constructor(
                 source = source,
                 fullContent = fullContent,
                 dynasty = origin?.optString("dynasty").orEmpty(),
+                title = title,
             )
         }
 
@@ -188,6 +195,16 @@ class PoetryRepository @Inject constructor(
                 title.isNotBlank() -> "— 《$title》"
                 else -> "— 今日诗词"
             }
+
+        internal fun titleFromFormattedSource(source: String): String {
+            val start = source.indexOf('《')
+            val end = source.indexOf('》', startIndex = (start + 1).coerceAtLeast(0))
+            return if (start >= 0 && end > start + 1) {
+                source.substring(start + 1, end).trim()
+            } else {
+                ""
+            }
+        }
 
         internal fun resolveSavedContentForEdit(
             storedContent: String,

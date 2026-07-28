@@ -373,4 +373,14 @@ class SettingsRepositoryTest {
         assertEquals(1f, normalizeFontScale(Float.POSITIVE_INFINITY), 0f)
         assertEquals(1f, normalizeFontScale(Float.NEGATIVE_INFINITY), 0f)
     }
+
+    @Test
+    fun normalizePoetryDisplayNumbersClampAndRejectNonFiniteValues() {
+        assertEquals(14f, normalizePoetryFontSize(1f), 0f)
+        assertEquals(36f, normalizePoetryFontSize(99f), 0f)
+        assertEquals(18f, normalizePoetryFontSize(Float.NaN), 0f)
+        assertEquals(1f, normalizePoetryLineSpacing(0.1f), 0f)
+        assertEquals(2f, normalizePoetryLineSpacing(9f), 0f)
+        assertEquals(1.45f, normalizePoetryLineSpacing(Float.POSITIVE_INFINITY), 0f)
+    }
 }

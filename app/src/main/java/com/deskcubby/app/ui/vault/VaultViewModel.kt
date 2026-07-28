@@ -110,6 +110,15 @@ class VaultViewModel @Inject constructor(
         }
     }
 
+    fun reorderItems(orderedIds: List<Long>) {
+        viewModelScope.launch {
+            val ok = runGuarded { repository.reorderItems(orderedIds) } ?: false
+            if (!ok && mutableError.value == null) {
+                mutableError.value = VaultUiError.OPERATION_FAILED
+            }
+        }
+    }
+
     fun consumeError() {
         mutableError.value = null
     }

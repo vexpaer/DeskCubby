@@ -2,12 +2,15 @@
 
 package com.deskcubby.app.ui.usage
 
+import android.content.Intent
 import android.content.pm.LauncherApps
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.os.Process
+import android.os.Build
 import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -34,6 +37,7 @@ import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -42,6 +46,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -64,6 +69,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.statistics.StatisticsCollectionPhase
 import com.deskcubby.app.data.statistics.StatisticsDayState
+import com.deskcubby.app.data.statistics.StatisticsPoint
 import com.deskcubby.app.ui.statistics.StatisticsChart
 import com.deskcubby.app.ui.statistics.StatisticsChartControls
 import com.deskcubby.app.ui.statistics.StatisticsMessagePanel
@@ -82,6 +88,7 @@ fun UsageStatisticsScreen(
     onOpenTrackingSettings: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    var selectedPoint by remember { mutableStateOf<StatisticsPoint?>(null) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
 
     Scaffold(
@@ -109,13 +116,15 @@ fun UsageStatisticsScreen(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
-                UsageCollectionMessage(
-                    state = state,
-                    onRequestUsageAccess = onRequestUsageAccess,
-                    onOpenTrackingSettings = onOpenTrackingSettings,
-                    onRetry = viewModel::refresh,
-                )
+            if (!state.enabled || state.collection.phase != StatisticsCollectionPhase.READY) {
+                item {
+                    UsageCollectionMessage(
+                        state = state,
+                        onRequestUsageAccess = onRequestUsageAccess,
+                        onOpenTrackingSettings = onOpenTrackingSettings,
+                        onRetry = viewModel::refresh,
+                    )
+                }
             }
             if (state.history.days.isNotEmpty()) {
                 item {
@@ -147,20 +156,14 @@ fun UsageStatisticsScreen(
                         cornerRadius = 22.dp,
                         padding = PaddingValues(16.dp),
                     ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(
-                                tr("按本地自然日", "By local civil day"),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            StatisticsChart(
-                                points = state.points,
-                                chartType = state.chartType,
-                                valueDescription = { value ->
-                                    value?.let { "${(it / 60_000.0).toLong()} min" } ?: "—"
-                                },
-                            )
-                        }
+                        StatisticsChart(
+                            points = state.points,
+                            chartType = state.chartType,
+                            valueDescription = { value ->
+                                value?.let { "${(it / 60_000.0).toLong()} min" } ?: "—"
+                            },
+                            onPointSelected = { selectedPoint = it },
+                        )
                     }
                 }
                 item {
@@ -196,6 +199,27 @@ fun UsageStatisticsScreen(
                 }
             }
         }
+    }
+
+    selectedPoint?.let { point ->
+        val selectedValue = point.value?.let { value ->
+            formatUsageDuration(value)
+        } ?: tr("无使用记录", "No usage recorded")
+        AlertDialog(
+            onDismissRequest = { selectedPoint = null },
+            title = { Text(point.date.toString()) },
+            text = {
+                Text(
+                    selectedValue,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedPoint = null }) {
+                    Text(tr("关闭", "Close"))
+                }
+            },
+        )
     }
 }
 
@@ -248,13 +272,7 @@ private fun UsageCollectionMessage(
                 ),
             )
 
-        else -> StatisticsMessagePanel(
-            title = tr("本机私有统计", "Private on-device statistics"),
-            message = tr(
-                "会补采系统目前仍能访问的既往记录；今天可刷新，成功日结的过去日期不会重复计算。统计与权限不会进入备份或云同步。",
-                "All earlier records still exposed by Android are backfilled. Today stays refreshable, while finalized past dates are never recalculated. Statistics and permissions are excluded from backups and cloud sync.",
-            ),
-        )
+        else -> Unit
     }
 }
 
@@ -476,15 +494,31 @@ private fun loadUsageAppIcon(
     packageName: String,
 ): ImageBitmap? {
     usageAppIconCache.get(packageName)?.let { return it.asImageBitmap() }
-    val launcherIcon = runCatching {
+    val applicationIcon = runCatching {
+        context.packageManager.getApplicationIcon(packageName)
+    }.getOrNull()
+    val queriedLauncherIcon = runCatching {
+        val intent = Intent(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_LAUNCHER)
+            .setPackage(packageName)
+        val matches = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.queryIntentActivities(
+                intent,
+                PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong()),
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.queryIntentActivities(intent, PackageManager.MATCH_ALL)
+        }
+        matches.firstOrNull()?.loadIcon(context.packageManager)
+    }.getOrNull()
+    val launcherAppsIcon = runCatching {
         context.getSystemService(LauncherApps::class.java)
             .getActivityList(packageName, Process.myUserHandle())
             .firstOrNull()
             ?.getIcon(context.resources.displayMetrics.densityDpi)
     }.getOrNull()
-    val drawable = launcherIcon ?: runCatching {
-        context.packageManager.getApplicationIcon(packageName)
-    }.getOrNull() ?: return null
+    val drawable = applicationIcon ?: queriedLauncherIcon ?: launcherAppsIcon ?: return null
     return drawable.renderBoundedIcon()?.also { bitmap ->
         usageAppIconCache.put(packageName, bitmap)
     }?.asImageBitmap()

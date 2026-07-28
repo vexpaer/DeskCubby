@@ -36,6 +36,8 @@ fun syncLauncherAlias(
         LauncherAlias("LauncherChinese", chinese = true, LauncherIcon.CURRENT),
         LauncherAlias("LauncherBookDefault", chinese = false, LauncherIcon.MAGIC_BOOK),
         LauncherAlias("LauncherBookChinese", chinese = true, LauncherIcon.MAGIC_BOOK),
+        LauncherAlias("LauncherCubbyDefault", chinese = false, LauncherIcon.DESK_CUBBY),
+        LauncherAlias("LauncherCubbyChinese", chinese = true, LauncherIcon.DESK_CUBBY),
     )
     val desired = aliases.first { alias ->
         alias.chinese == useChineseName && alias.icon == launcherIcon

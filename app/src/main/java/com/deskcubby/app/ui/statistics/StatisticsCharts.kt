@@ -3,12 +3,14 @@
 package com.deskcubby.app.ui.statistics
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,6 +35,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -45,6 +48,8 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.roundToInt
 
 @Composable
 fun StatisticsChartControls(
@@ -76,31 +81,28 @@ fun StatisticsChartControls(
                 )
             }
         }
-        FlowRow(
+        Row(
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             StatisticsChartType.entries.forEach { item ->
+                val label = when (item) {
+                    StatisticsChartType.BARS -> tr("直方图", "Bars")
+                    StatisticsChartType.LINE -> tr("曲线", "Line")
+                    StatisticsChartType.CALENDAR -> tr("格子图", "Grid")
+                }
                 FilterChip(
                     selected = chartType == item,
                     onClick = { onChartTypeChange(item) },
-                    leadingIcon = {
+                    modifier = Modifier.weight(1f),
+                    label = {
                         Icon(
                             imageVector = when (item) {
                                 StatisticsChartType.BARS -> Icons.Outlined.BarChart
                                 StatisticsChartType.LINE -> Icons.Outlined.ShowChart
                                 StatisticsChartType.CALENDAR -> Icons.Outlined.GridOn
                             },
-                            contentDescription = null,
-                        )
-                    },
-                    label = {
-                        Text(
-                            when (item) {
-                                StatisticsChartType.BARS -> tr("直方图", "Bars")
-                                StatisticsChartType.LINE -> tr("曲线", "Line")
-                                StatisticsChartType.CALENDAR -> tr("格子图", "Grid")
-                            },
+                            contentDescription = label,
                         )
                     },
                 )
@@ -114,6 +116,7 @@ fun StatisticsChart(
     points: List<StatisticsPoint>,
     chartType: StatisticsChartType,
     valueDescription: (Double?) -> String,
+    onPointSelected: (StatisticsPoint) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val description = remember(points, valueDescription) {
@@ -125,21 +128,38 @@ fun StatisticsChart(
         .fillMaxWidth()
         .semantics { contentDescription = description }
     when (chartType) {
-        StatisticsChartType.BARS -> BarStatisticsChart(points, chartModifier)
-        StatisticsChartType.LINE -> LineStatisticsChart(points, chartModifier)
-        StatisticsChartType.CALENDAR -> CalendarStatisticsChart(points, chartModifier)
+        StatisticsChartType.BARS ->
+            BarStatisticsChart(points, onPointSelected, chartModifier)
+        StatisticsChartType.LINE ->
+            LineStatisticsChart(points, onPointSelected, chartModifier)
+        StatisticsChartType.CALENDAR ->
+            CalendarStatisticsChart(points, onPointSelected, chartModifier)
     }
 }
 
 @Composable
 private fun BarStatisticsChart(
     points: List<StatisticsPoint>,
+    onPointSelected: (StatisticsPoint) -> Unit,
     modifier: Modifier,
 ) {
     val primary = MaterialTheme.colorScheme.primary
     val empty = MaterialTheme.colorScheme.outlineVariant
     val maxValue = points.mapNotNull(StatisticsPoint::value).maxOrNull()?.coerceAtLeast(1.0) ?: 1.0
-    Canvas(modifier.height(CHART_HEIGHT)) {
+    Canvas(
+        modifier
+            .height(CHART_HEIGHT)
+            .pointerInput(points) {
+                detectTapGestures { position ->
+                    if (points.isNotEmpty() && size.width > 0) {
+                        val index = floor(position.x / size.width * points.size)
+                            .toInt()
+                            .coerceIn(points.indices)
+                        onPointSelected(points[index])
+                    }
+                }
+            },
+    ) {
         if (points.isEmpty()) return@Canvas
         val gap = 3.dp.toPx()
         val slot = size.width / points.size
@@ -170,12 +190,30 @@ private fun BarStatisticsChart(
 @Composable
 private fun LineStatisticsChart(
     points: List<StatisticsPoint>,
+    onPointSelected: (StatisticsPoint) -> Unit,
     modifier: Modifier,
 ) {
     val primary = MaterialTheme.colorScheme.primary
     val empty = MaterialTheme.colorScheme.outlineVariant
     val maxValue = points.mapNotNull(StatisticsPoint::value).maxOrNull()?.coerceAtLeast(1.0) ?: 1.0
-    Canvas(modifier.height(CHART_HEIGHT)) {
+    Canvas(
+        modifier
+            .height(CHART_HEIGHT)
+            .pointerInput(points) {
+                detectTapGestures { position ->
+                    if (points.isNotEmpty() && size.width > 0) {
+                        val index = if (points.size == 1) {
+                            0
+                        } else {
+                            (position.x / size.width * (points.size - 1))
+                                .roundToInt()
+                                .coerceIn(points.indices)
+                        }
+                        onPointSelected(points[index])
+                    }
+                }
+            },
+    ) {
         if (points.isEmpty()) return@Canvas
         val horizontalPadding = 5.dp.toPx()
         val usableWidth = (size.width - horizontalPadding * 2f).coerceAtLeast(1f)
@@ -210,6 +248,7 @@ private fun LineStatisticsChart(
 @Composable
 private fun CalendarStatisticsChart(
     points: List<StatisticsPoint>,
+    onPointSelected: (StatisticsPoint) -> Unit,
     modifier: Modifier,
 ) {
     val primary = MaterialTheme.colorScheme.primary
@@ -231,6 +270,15 @@ private fun CalendarStatisticsChart(
                 .horizontalScroll(scroll)
                 .width(canvasWidth)
                 .height(CALENDAR_HEIGHT)
+                .pointerInput(normalized) {
+                    detectTapGestures { position ->
+                        val cell = CALENDAR_CELL.toPx()
+                        val column = floor(position.x / cell).toInt()
+                        val row = floor(position.y / cell).toInt()
+                        val index = column * 7 + row
+                        normalized.getOrNull(index)?.let(onPointSelected)
+                    }
+                }
                 .padding(vertical = 2.dp),
         ) {
             val cell = CALENDAR_CELL.toPx()

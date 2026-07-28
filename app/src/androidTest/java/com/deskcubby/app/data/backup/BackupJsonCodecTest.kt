@@ -18,6 +18,7 @@ import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
@@ -43,7 +44,7 @@ class BackupJsonCodecTest {
                 0xFFA26A4A.toInt(),
             ),
             fontScale = 1.15f,
-            launcherIcon = LauncherIcon.MAGIC_BOOK,
+            launcherIcon = LauncherIcon.DESK_CUBBY,
             backupTreeUri = "content://device-only-backup-folder",
             diaryTreeUri = "content://diaries",
             mediaTreeUri = "content://media",
@@ -60,6 +61,12 @@ class BackupJsonCodecTest {
             mealImageCompressionQuality = 65,
             thoughtReopenMode = ThoughtReopenMode.LAST_VISITED,
             thoughtDisplayMode = ThoughtDisplayMode.FULL,
+            poetryFontUri = "content://com.example.fonts/document/poetry.otf",
+            poetryFontSizeSp = 26f,
+            poetryLineSpacing = 1.7f,
+            poetryTextAlignment = PoetryTextAlignment.CENTER,
+            poetryShowSource = false,
+            poetryShowQuoteMark = false,
             mealCalendarImageMaxHeightDp = 188,
             mealCalendarShowCaptions = false,
             dailyEventTemplates = listOf(
@@ -175,6 +182,77 @@ class BackupJsonCodecTest {
         assertEquals(settings.fontScale, decoded.settings.fontScale)
         assertEquals(BackupJsonCodec.FORMAT_VERSION, decoded.formatVersion)
         assertEquals(40L, decoded.exportedAt)
+    }
+
+    @Test
+    fun versionSixteenUsesSafeDefaultsForVersionSeventeenPoetrySettings() {
+        val current = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 16,
+                    settings = AppSettings(
+                        poetryFontUri = "content://com.example.fonts/document/poetry.ttf",
+                        poetryFontSizeSp = 30f,
+                        poetryLineSpacing = 1.8f,
+                        poetryTextAlignment = PoetryTextAlignment.CENTER,
+                        poetryShowSource = false,
+                        poetryShowQuoteMark = false,
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        current.put("version", 16)
+        current.getJSONObject("settings").apply {
+            remove("poetryFontUri")
+            remove("poetryFontSizeSp")
+            remove("poetryLineSpacing")
+            remove("poetryTextAlignment")
+            remove("poetryShowSource")
+            remove("poetryShowQuoteMark")
+        }
+
+        val decoded = BackupJsonCodec.decode(current.toString())
+        val defaults = AppSettings()
+
+        assertEquals(16, decoded.formatVersion)
+        assertEquals(defaults.poetryFontUri, decoded.settings.poetryFontUri)
+        assertEquals(defaults.poetryFontSizeSp, decoded.settings.poetryFontSizeSp)
+        assertEquals(defaults.poetryLineSpacing, decoded.settings.poetryLineSpacing)
+        assertEquals(defaults.poetryTextAlignment, decoded.settings.poetryTextAlignment)
+        assertEquals(defaults.poetryShowSource, decoded.settings.poetryShowSource)
+        assertEquals(defaults.poetryShowQuoteMark, decoded.settings.poetryShowQuoteMark)
+    }
+
+    @Test
+    fun versionSeventeenRejectsInvalidPoetryDisplaySettings() {
+        fun currentRoot() = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 17,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put("poetryFontSizeSp", 100)
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put("poetryLineSpacing", 0.5)
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put("poetryTextAlignment", "DIAGONAL")
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put(
+                "poetryFontUri",
+                "content://" + "f".repeat(8_193),
+            )
+        })
     }
 
     @Test

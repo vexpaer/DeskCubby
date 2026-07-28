@@ -93,7 +93,7 @@ data class MealCalendarPhoto(
     val locationName: String? = null,
 )
 
-/** One entry of the `deskcubby-media.json` sidecar kept in the media directory. */
+/** One entry of the `dc-media.json` sidecar kept in the media directory. */
 data class MediaMetaEntry(
     val energyKj: Int? = null,
     val latitude: Double? = null,
@@ -826,7 +826,16 @@ class DiaryFileRepository @Inject constructor(
         }
     }
 
-    private fun mediaMetaFile(root: DocumentFile): DocumentFile? = root.listFiles()
+    private fun mediaMetaFile(root: DocumentFile): DocumentFile? {
+        val files = root.listFiles()
+        return files.firstOrNull {
+            it.isFile && it.name.equals(MEDIA_META_FILE_NAME, ignoreCase = true)
+        } ?: files.firstOrNull {
+            it.isFile && it.name.equals(LEGACY_MEDIA_META_FILE_NAME, ignoreCase = true)
+        }
+    }
+
+    private fun currentMediaMetaFile(root: DocumentFile): DocumentFile? = root.listFiles()
         .firstOrNull { it.isFile && it.name.equals(MEDIA_META_FILE_NAME, ignoreCase = true) }
 
     private data class MediaDirectorySnapshot(
@@ -845,6 +854,8 @@ class DiaryFileRepository @Inject constructor(
             .toMap()
         val metaFile = files.firstOrNull {
             it.isFile && it.name.equals(MEDIA_META_FILE_NAME, ignoreCase = true)
+        } ?: files.firstOrNull {
+            it.isFile && it.name.equals(LEGACY_MEDIA_META_FILE_NAME, ignoreCase = true)
         }
         val metaEntries = metaFile?.let { file ->
             try {
@@ -909,7 +920,9 @@ class DiaryFileRepository @Inject constructor(
         val current = readMediaMetaEntries(root).toMutableMap()
         current[normalizedKey] = transform(current[normalizedKey] ?: MediaMetaEntry())
         val encoded = encodeMediaMeta(current)
-        val target = mediaMetaFile(root)
+        // Read the legacy long filename when present, but always write future updates to
+        // the shorter name. The legacy file is kept as a recoverable compatibility copy.
+        val target = currentMediaMetaFile(root)
             ?: root.createFile("application/json", MEDIA_META_FILE_NAME)
             ?: error("无法在媒体目录创建 $MEDIA_META_FILE_NAME")
         writeText(target.uri, encoded)
@@ -2068,7 +2081,8 @@ class DiaryFileRepository @Inject constructor(
             """!\[([^\]\r\n]*)]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:\s+(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\([^\)\r\n]*\)))?\s*\)""",
         )
         private val ENERGY_SUFFIX_REGEX = Regex("[-–—]\\s*(\\d+)\\s*kJ\\s*$", RegexOption.IGNORE_CASE)
-        private const val MEDIA_META_FILE_NAME = "deskcubby-media.json"
+        private const val MEDIA_META_FILE_NAME = "dc-media.json"
+        private const val LEGACY_MEDIA_META_FILE_NAME = "deskcubby-media.json"
         private const val MEAL_EXPORT_CACHE_PREFIX = "meal-calendar-"
         private const val MEAL_EXPORT_CACHE_SUFFIX = ".png"
         private const val MEAL_EXPORT_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L

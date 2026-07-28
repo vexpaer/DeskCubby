@@ -121,7 +121,7 @@ class DiaryCloudSyncLocalStore(
         if (bytes.size.toLong() > limits.maxObjectBytes || sha256(bytes) != contentSha256) {
             throw CloudSyncConflictException("远端文件校验失败，未写入本地。")
         }
-        if (key == JSON_SYNC_KEY) {
+        if (key == JSON_SYNC_KEY || key == LEGACY_JSON_SYNC_KEY) {
             val bridge = jsonBridge ?: throw CloudSyncConfigurationException(
                 "JSON 同步尚未连接到应用备份服务。",
             )
@@ -137,7 +137,7 @@ class DiaryCloudSyncLocalStore(
                 localId = current.localId,
             )
             val staged = bridge.stageIncoming(bytes, contentSha256, configId)
-            val copyKey = "json/DeskCubby.remote-conflict-${contentSha256.take(8)}.json"
+            val copyKey = "json/dc.remote-conflict-${contentSha256.take(8)}.json"
             return@withLock LocalWriteResult.ConflictCopy(
                 existing = currentObject,
                 copy = LocalSyncObject(
@@ -238,7 +238,8 @@ class DiaryCloudSyncLocalStore(
     }
 
     private companion object {
-        const val JSON_SYNC_KEY = "json/DeskCubby.json"
+        const val JSON_SYNC_KEY = "json/dc.json"
+        const val LEGACY_JSON_SYNC_KEY = "json/DeskCubby.json"
         const val EMPTY_SHA256 =
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }

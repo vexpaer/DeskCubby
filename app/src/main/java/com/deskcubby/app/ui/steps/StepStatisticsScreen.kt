@@ -19,16 +19,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +42,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.statistics.StatisticsCollectionPhase
 import com.deskcubby.app.data.statistics.StatisticsDayState
+import com.deskcubby.app.data.statistics.StatisticsPoint
 import com.deskcubby.app.data.statistics.StepHealthConnectAction
 import com.deskcubby.app.data.statistics.StepHealthConnectAccess
 import com.deskcubby.app.data.statistics.StepStatisticsRepository
@@ -57,6 +62,7 @@ fun StepStatisticsScreen(
     onOpenHealthConnect: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    var selectedPoint by remember { mutableStateOf<StatisticsPoint?>(null) }
     val permissionContract = remember { StepHealthConnectAccess.permissionContract() }
     val permissionLauncher = rememberLauncherForActivityResult(permissionContract) {
         viewModel.onPermissionResult()
@@ -125,20 +131,14 @@ fun StepStatisticsScreen(
                         cornerRadius = 22.dp,
                         padding = PaddingValues(16.dp),
                     ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(
-                                tr("每日步数", "Daily steps"),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            StatisticsChart(
-                                points = state.points,
-                                chartType = state.chartType,
-                                valueDescription = { value ->
-                                    value?.let(::formatStepCount) ?: "—"
-                                },
-                            )
-                        }
+                        StatisticsChart(
+                            points = state.points,
+                            chartType = state.chartType,
+                            valueDescription = { value ->
+                                value?.let(::formatStepCount) ?: "—"
+                            },
+                            onPointSelected = { selectedPoint = it },
+                        )
                     }
                 }
                 item {
@@ -173,6 +173,24 @@ fun StepStatisticsScreen(
                 }
             }
         }
+    }
+
+    selectedPoint?.let { point ->
+        AlertDialog(
+            onDismissRequest = { selectedPoint = null },
+            title = { Text(point.date.toString()) },
+            text = {
+                Text(
+                    point.value?.let(::formatStepCount) ?: tr("无步数记录", "No steps recorded"),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedPoint = null }) {
+                    Text(tr("关闭", "Close"))
+                }
+            },
+        )
     }
 }
 

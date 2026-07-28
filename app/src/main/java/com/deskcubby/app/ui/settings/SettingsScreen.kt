@@ -118,11 +118,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.platform.LocalContext
@@ -152,9 +156,14 @@ import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.MAX_POETRY_FONT_SIZE_SP
+import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MIN_POETRY_FONT_SIZE_SP
+import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotosPerRow
+import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
@@ -171,6 +180,7 @@ import com.deskcubby.app.ui.iconFor
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
 import com.deskcubby.app.ui.home.HomeGreeting
+import com.deskcubby.app.ui.poetry.rememberPoetryFontFamily
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.LocalCompactMode
@@ -196,6 +206,7 @@ private enum class SettingsPage {
     DIARY,
     BLOG,
     THOUGHT,
+    POETRY,
     RSS,
     AI,
     AI_DETAIL,
@@ -206,7 +217,7 @@ private enum class SettingsPage {
     ABOUT,
 }
 
-enum class SettingsStartPage { MAIN, NAVIGATION, MORE_PAGE, USAGE, STEPS, RSS, AI }
+enum class SettingsStartPage { MAIN, NAVIGATION, MORE_PAGE, USAGE, STEPS, RSS, AI, POETRY }
 
 private fun SettingsStartPage.toSettingsPage(): SettingsPage = when (this) {
     SettingsStartPage.MAIN -> SettingsPage.MAIN
@@ -216,6 +227,7 @@ private fun SettingsStartPage.toSettingsPage(): SettingsPage = when (this) {
     SettingsStartPage.STEPS -> SettingsPage.STEPS
     SettingsStartPage.RSS -> SettingsPage.RSS
     SettingsStartPage.AI -> SettingsPage.AI
+    SettingsStartPage.POETRY -> SettingsPage.POETRY
 }
 
 private class SettingsSaveCoordinator {
@@ -689,6 +701,32 @@ fun SettingsScreen(
                 },
             )
 
+            SettingsPage.POETRY -> PoetrySettingsPage(
+                settings = settings,
+                contentPadding = inner,
+                saveCoordinator = saveCoordinator,
+                onImportFont = viewModel::persistPoetryFont,
+                onSave = {
+                        fontUri,
+                        fontSizeSp,
+                        lineSpacing,
+                        textAlignment,
+                        showSource,
+                        showQuoteMark,
+                    ->
+                    viewModel.setPoetryDisplaySettings(
+                        fontUri = fontUri,
+                        fontSizeSp = fontSizeSp,
+                        lineSpacing = lineSpacing,
+                        textAlignment = textAlignment,
+                        showSource = showSource,
+                        showQuoteMark = showQuoteMark,
+                    ) { saved ->
+                        if (saved) completeSave(SettingsPage.SUBPAGES)
+                    }
+                },
+            )
+
             SettingsPage.RSS -> RssSettingsPage(
                 settings = settings,
                 contentPadding = inner,
@@ -883,6 +921,12 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
         tr("打开位置、内容显示、行高、重点颜色与输入框高度", "Reopen page, display, row height, highlight color and editor height"),
         "thought 小巧思 行高 重点 高亮 颜色 输入框 高度 编辑框",
         SettingsPage.THOUGHT,
+    ),
+    SettingsSearchEntry(
+        tr("诗词本", "Poetry book"),
+        tr("导入字体、字号、行距、对齐与出处显示", "Imported font, size, spacing, alignment and source"),
+        "poetry font size spacing align source 诗词 字体 字号 行距 对齐 出处",
+        SettingsPage.POETRY,
     ),
     SettingsSearchEntry(
         tr("RSS 订阅", "RSS"),
@@ -1118,10 +1162,22 @@ private fun SubpageSettingsPage(
         }
         item {
             SettingsMenuItem(
+                title = tr("诗词本", "Poetry book"),
+                description = tr(
+                    "字体、字号、行距、对齐与出处显示",
+                    "Font, size, spacing, alignment and source display",
+                ),
+                icon = { Icon(Icons.Outlined.MenuBook, contentDescription = null) },
+                accentColor = settings.menuAccentColor(4),
+                onClick = { onOpen(SettingsPage.POETRY) },
+            )
+        }
+        item {
+            SettingsMenuItem(
                 title = tr("RSS 订阅", "RSS"),
                 description = tr("每个订阅的文章数量与摘要显示", "Article limit and summary display"),
                 icon = { Icon(Icons.Outlined.RssFeed, contentDescription = null) },
-                accentColor = settings.menuAccentColor(4),
+                accentColor = settings.menuAccentColor(5),
                 onClick = { onOpen(SettingsPage.RSS) },
             )
         }
@@ -1130,7 +1186,7 @@ private fun SubpageSettingsPage(
                 title = tr("AI 配置", "AI configurations"),
                 description = tr("兼容接口、模型、系统提示词与 API 密钥", "Endpoint, model, system prompt and API key"),
                 icon = { Icon(Icons.Outlined.SmartToy, contentDescription = null) },
-                accentColor = settings.menuAccentColor(5),
+                accentColor = settings.menuAccentColor(6),
                 onClick = { onOpen(SettingsPage.AI) },
             )
         }
@@ -1142,7 +1198,7 @@ private fun SubpageSettingsPage(
                     "Collected pages, two-column cards and custom descriptions",
                 ),
                 icon = { Icon(Icons.Outlined.Apps, contentDescription = null) },
-                accentColor = settings.menuAccentColor(6),
+                accentColor = settings.menuAccentColor(7),
                 onClick = { onOpen(SettingsPage.MORE_PAGE) },
             )
         }
@@ -1155,7 +1211,7 @@ private fun SubpageSettingsPage(
                     tr("权限、开关与本机 JSON", "Permission, switch and on-device JSON")
                 },
                 icon = { Icon(Icons.Outlined.AccessTime, contentDescription = null) },
-                accentColor = settings.menuAccentColor(7),
+                accentColor = settings.menuAccentColor(8),
                 onClick = { onOpen(SettingsPage.USAGE) },
             )
         }
@@ -1168,7 +1224,7 @@ private fun SubpageSettingsPage(
                     tr("健康数据权限与本机 JSON", "Health permission and on-device JSON")
                 },
                 icon = { Icon(Icons.Outlined.DirectionsWalk, contentDescription = null) },
-                accentColor = settings.menuAccentColor(8),
+                accentColor = settings.menuAccentColor(9),
                 onClick = { onOpen(SettingsPage.STEPS) },
             )
         }
@@ -2066,8 +2122,8 @@ private fun BackupSettingsPage(
             SettingsSection(tr("自动保存文件夹", "Auto-save folder")) {
                 Text(
                     tr(
-                        "选择一个独立文件夹后，每次应用内容发生更改都会自动保存到 DeskCubby.json。",
-                        "Choose a dedicated folder to save automatically to DeskCubby.json whenever app data changes.",
+                        "选择一个独立文件夹后，每次应用内容发生更改都会自动保存到 dc.json。",
+                        "Choose a dedicated folder to save automatically to dc.json whenever app data changes.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -2834,6 +2890,7 @@ private fun HomeGreetingSettingsPage(
     saveCoordinator: SettingsSaveCoordinator,
     onSave: (String, List<HomeGreetingTemplate>) -> Unit,
 ) {
+    val clipboard = LocalClipboardManager.current
     var userName by rememberSaveable(settings.userName) { mutableStateOf(settings.userName) }
     var greetings by rememberSaveable(
         settings.homeGreetings,
@@ -2877,6 +2934,14 @@ private fun HomeGreetingSettingsPage(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                OutlinedButton(
+                    onClick = { clipboard.setText(AnnotatedString("{name}")) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Outlined.ContentCopy, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("复制 {name}", "Copy {name}"))
+                }
                 Text(
                     text = tr("今日预览", "Today's preview"),
                     style = MaterialTheme.typography.labelMedium,
@@ -2998,6 +3063,213 @@ private fun HomeGreetingSettingsPage(
                 Icon(Icons.Outlined.Add, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(tr("增加问候语", "Add greeting"))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PoetrySettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onImportFont: (Uri, (Boolean) -> Unit) -> Unit,
+    onSave: (
+        fontUri: String?,
+        fontSizeSp: Float,
+        lineSpacing: Float,
+        textAlignment: PoetryTextAlignment,
+        showSource: Boolean,
+        showQuoteMark: Boolean,
+    ) -> Unit,
+) {
+    var fontUri by rememberSaveable(settings.poetryFontUri) {
+        mutableStateOf(settings.poetryFontUri)
+    }
+    var fontSizeSp by rememberSaveable(settings.poetryFontSizeSp) {
+        mutableStateOf(settings.poetryFontSizeSp)
+    }
+    var lineSpacing by rememberSaveable(settings.poetryLineSpacing) {
+        mutableStateOf(settings.poetryLineSpacing)
+    }
+    var textAlignment by rememberSaveable(settings.poetryTextAlignment) {
+        mutableStateOf(settings.poetryTextAlignment)
+    }
+    var showSource by rememberSaveable(settings.poetryShowSource) {
+        mutableStateOf(settings.poetryShowSource)
+    }
+    var showQuoteMark by rememberSaveable(settings.poetryShowQuoteMark) {
+        mutableStateOf(settings.poetryShowQuoteMark)
+    }
+    val importedFontFamily = rememberPoetryFontFamily(fontUri)
+    val fontPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            onImportFont(uri) { imported ->
+                if (imported) fontUri = uri.toString()
+            }
+        }
+    }
+    val dirty = fontUri != settings.poetryFontUri ||
+        fontSizeSp != settings.poetryFontSizeSp ||
+        lineSpacing != settings.poetryLineSpacing ||
+        textAlignment != settings.poetryTextAlignment ||
+        showSource != settings.poetryShowSource ||
+        showQuoteMark != settings.poetryShowQuoteMark
+
+    RegisterSettingsSave(saveCoordinator, dirty) {
+        onSave(
+            fontUri,
+            fontSizeSp,
+            lineSpacing,
+            textAlignment,
+            showSource,
+            showQuoteMark,
+        )
+    }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(contentPadding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            SettingsSection(tr("字体", "Font")) {
+                Text(
+                    if (fontUri == null) {
+                        tr("使用应用默认字体", "Using the app default font")
+                    } else {
+                        tr("已导入自定义字体", "Custom font imported")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            fontPicker.launch(
+                                arrayOf(
+                                    "font/ttf",
+                                    "font/otf",
+                                    "application/x-font-ttf",
+                                    "application/x-font-opentype",
+                                    "application/octet-stream",
+                                ),
+                            )
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Outlined.FolderOpen, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(tr("导入字体", "Import font"))
+                    }
+                    OutlinedButton(
+                        onClick = { fontUri = null },
+                        enabled = fontUri != null,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(tr("恢复默认", "Use default"))
+                    }
+                }
+                Text(
+                    tr(
+                        "字号 ${fontSizeSp.roundToInt()} sp",
+                        "Font size ${fontSizeSp.roundToInt()} sp",
+                    ),
+                )
+                Slider(
+                    value = fontSizeSp,
+                    onValueChange = { fontSizeSp = it },
+                    valueRange = MIN_POETRY_FONT_SIZE_SP..MAX_POETRY_FONT_SIZE_SP,
+                    steps = (MAX_POETRY_FONT_SIZE_SP - MIN_POETRY_FONT_SIZE_SP).toInt() - 1,
+                )
+            }
+        }
+        item {
+            SettingsSection(tr("排版", "Layout")) {
+                Text(
+                    tr(
+                        "行距 ${String.format(Locale.ROOT, "%.2f", lineSpacing)} 倍",
+                        "Line spacing ${String.format(Locale.ROOT, "%.2f", lineSpacing)}×",
+                    ),
+                )
+                Slider(
+                    value = lineSpacing,
+                    onValueChange = { lineSpacing = it },
+                    valueRange = MIN_POETRY_LINE_SPACING..MAX_POETRY_LINE_SPACING,
+                    steps = 9,
+                )
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    PoetryTextAlignment.entries.forEachIndexed { index, alignment ->
+                        SegmentedButton(
+                            selected = textAlignment == alignment,
+                            onClick = { textAlignment = alignment },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = index,
+                                count = PoetryTextAlignment.entries.size,
+                            ),
+                            label = {
+                                Text(
+                                    when (alignment) {
+                                        PoetryTextAlignment.START -> tr("左对齐", "Start")
+                                        PoetryTextAlignment.CENTER -> tr("居中", "Center")
+                                    },
+                                )
+                            },
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(tr("显示出处", "Show source"), modifier = Modifier.weight(1f))
+                    Switch(checked = showSource, onCheckedChange = { showSource = it })
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(tr("显示引号装饰", "Show quote decoration"), modifier = Modifier.weight(1f))
+                    Switch(checked = showQuoteMark, onCheckedChange = { showQuoteMark = it })
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("预览", "Preview")) {
+                Text(
+                    text = tr(
+                        "山中何事？松花酿酒，春水煎茶。",
+                        "What happens in the hills? Pine blossoms brew wine; spring water makes tea.",
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    fontFamily = importedFontFamily,
+                    fontSize = fontSizeSp.sp,
+                    lineHeight = (fontSizeSp * lineSpacing).sp,
+                    textAlign = when (textAlignment) {
+                        PoetryTextAlignment.START -> TextAlign.Start
+                        PoetryTextAlignment.CENTER -> TextAlign.Center
+                    },
+                )
+                if (showSource) {
+                    Text(
+                        text = tr("—— 张可久《人月圆·山中书事》", "— Zhang Kejiu"),
+                        modifier = Modifier.fillMaxWidth(),
+                        fontFamily = importedFontFamily,
+                        textAlign = when (textAlignment) {
+                            PoetryTextAlignment.START -> TextAlign.Start
+                            PoetryTextAlignment.CENTER -> TextAlign.Center
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
@@ -3242,8 +3514,8 @@ private fun DiarySettingsPage(
                         Text(tr("记录照片拍摄地点", "Record photo location"))
                         Text(
                             tr(
-                                "从照片 EXIF 读取拍摄地点，与热量一起记录到媒体目录的 deskcubby-media.json；相册照片可能需要授予媒体位置权限。",
-                                "Reads the photo's EXIF location into deskcubby-media.json in the media folder alongside calories; gallery photos may need the media-location permission.",
+                                "从照片 EXIF 读取拍摄地点，与热量一起记录到媒体目录的 dc-media.json；相册照片可能需要授予媒体位置权限。",
+                                "Reads the photo's EXIF location into dc-media.json in the media folder alongside calories; gallery photos may need the media-location permission.",
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -4783,6 +5055,7 @@ private fun AboutSettingsPage(
                     val label = when (icon) {
                         LauncherIcon.CURRENT -> tr("经典图标", "Classic icon")
                         LauncherIcon.MAGIC_BOOK -> tr("魔法书图标", "Magic book icon")
+                        LauncherIcon.DESK_CUBBY -> tr("桌洞图标", "Desk cubby icon")
                     }
                     Row(
                         modifier = Modifier
@@ -4799,23 +5072,34 @@ private fun AboutSettingsPage(
                                 .size(52.dp)
                                 .clip(CircleShape)
                                 .background(
-                                    if (icon == LauncherIcon.CURRENT) Color.Black
-                                    else Color(0xFFFFFDF8),
+                                    when (icon) {
+                                        LauncherIcon.CURRENT -> Color.Black
+                                        LauncherIcon.MAGIC_BOOK -> Color(0xFFFFFDF8)
+                                        LauncherIcon.DESK_CUBBY -> Color.White
+                                    },
                                 ),
                             contentAlignment = Alignment.Center,
                         ) {
                             Image(
                                 painter = painterResource(
-                                    if (icon == LauncherIcon.CURRENT) {
-                                        R.drawable.ic_launcher_art
-                                    } else {
-                                        R.drawable.ic_launcher_book_foreground
+                                    when (icon) {
+                                        LauncherIcon.CURRENT -> R.drawable.ic_launcher_art
+                                        LauncherIcon.MAGIC_BOOK ->
+                                            R.drawable.ic_launcher_book_foreground
+                                        LauncherIcon.DESK_CUBBY ->
+                                            R.drawable.ic_launcher_cubby_foreground
                                     },
                                 ),
                                 contentDescription = null,
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .padding(if (icon == LauncherIcon.CURRENT) 8.dp else 2.dp),
+                                    .padding(
+                                        when (icon) {
+                                            LauncherIcon.CURRENT -> 8.dp
+                                            LauncherIcon.MAGIC_BOOK -> 2.dp
+                                            LauncherIcon.DESK_CUBBY -> 5.dp
+                                        },
+                                    ),
                             )
                         }
                         Spacer(Modifier.width(12.dp))
@@ -5012,6 +5296,7 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.DIARY -> tr("日记与媒体", "Diary & media")
     SettingsPage.BLOG -> tr("浏览器", "Browser")
     SettingsPage.THOUGHT -> tr("小巧思", "Thoughts")
+    SettingsPage.POETRY -> tr("诗词本", "Poetry book")
     SettingsPage.RSS -> tr("RSS 订阅", "RSS")
     SettingsPage.AI -> tr("AI 配置", "AI configurations")
     SettingsPage.AI_DETAIL -> tr("AI 配置详情", "AI configuration")
@@ -5029,6 +5314,7 @@ private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
     SettingsPage.DIARY,
     SettingsPage.BLOG,
     SettingsPage.THOUGHT,
+    SettingsPage.POETRY,
     SettingsPage.RSS,
     SettingsPage.AI,
     SettingsPage.MORE_PAGE,
@@ -5050,7 +5336,7 @@ private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
 }
 
 private fun defaultBackupFileName(): String =
-    "DeskCubby-backup-${SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date())}.json"
+    "dc-backup-${SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date())}.json"
 
 private fun formatBackupTime(timestamp: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(timestamp))

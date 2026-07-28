@@ -1,8 +1,10 @@
 package com.deskcubby.app.ui.usage
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Process
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -64,16 +66,38 @@ class UsageStatisticsViewModel @Inject constructor(
     private val chartType = MutableStateFlow(StatisticsChartType.BARS)
     private val launcherApps = context.getSystemService(LauncherApps::class.java)
     private val launcherLabels: Map<String, String> by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        runCatching {
-            launcherApps.getActivityList(null, Process.myUserHandle())
-                .asSequence()
-                .mapNotNull { activity ->
-                    val label = activity.label?.toString()?.takeIf(String::isNotBlank)
-                    label?.let { activity.applicationInfo.packageName to it }
+        buildMap {
+            val packageManager = context.packageManager
+            val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val resolved = runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    packageManager.queryIntentActivities(
+                        launcherIntent,
+                        PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong()),
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageManager.queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
                 }
-                .distinctBy { it.first }
-                .toMap()
-        }.getOrDefault(emptyMap())
+            }.getOrDefault(emptyList())
+            resolved.forEach { activity ->
+                val applicationInfo = activity.activityInfo?.applicationInfo ?: return@forEach
+                val label = runCatching {
+                    packageManager.getApplicationLabel(applicationInfo).toString()
+                }.getOrNull()?.takeIf(String::isNotBlank)
+                if (label != null) put(applicationInfo.packageName, label)
+            }
+            runCatching {
+                launcherApps.getActivityList(null, Process.myUserHandle())
+            }.getOrDefault(emptyList()).forEach { activity ->
+                val packageName = activity.applicationInfo.packageName
+                if (packageName !in this) {
+                    activity.label?.toString()?.takeIf(String::isNotBlank)?.let { label ->
+                        put(packageName, label)
+                    }
+                }
+            }
+        }
     }
     private val labelCache = ConcurrentHashMap<String, String>()
     private val enabled = settingsRepository.settings
@@ -167,7 +191,7 @@ class UsageStatisticsViewModel @Inject constructor(
         } catch (_: SecurityException) {
             null
         }
-        val label = (launcherLabel ?: applicationLabel)
+        val label = (applicationLabel ?: launcherLabel)
             ?.takeIf { it.isNotBlank() && it != packageName }
             ?: fallbackUsageAppLabel(packageName)
         labelCache[packageName] = label

@@ -8,6 +8,11 @@ class PoetryRepositoryTest {
     fun formatsPoemSource() {
         assertEquals("— 李商隐《夜雨寄北》", PoetryRepository.formatSource("夜雨寄北", "李商隐"))
         assertEquals("— 《无题》", PoetryRepository.formatSource("无题", ""))
+        assertEquals(
+            "夜雨寄北",
+            PoetryRepository.titleFromFormattedSource("— 李商隐《夜雨寄北》"),
+        )
+        assertEquals("", PoetryRepository.titleFromFormattedSource("— 今日诗词"))
     }
 
     @Test

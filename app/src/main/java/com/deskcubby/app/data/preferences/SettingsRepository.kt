@@ -33,12 +33,17 @@ import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MAX_POETRY_FONT_SIZE_SP
+import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MIN_POETRY_FONT_SIZE_SP
+import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
@@ -102,6 +107,12 @@ class SettingsRepository @Inject constructor(
         val thoughtDisplayMode = stringPreferencesKey("thought_display_mode")
         val thoughtHighlightColorArgb = intPreferencesKey("thought_highlight_color_argb")
         val thoughtEditorMaxHeightDp = intPreferencesKey("thought_editor_max_height_dp")
+        val poetryFontUri = stringPreferencesKey("poetry_font_uri")
+        val poetryFontSizeSp = floatPreferencesKey("poetry_font_size_sp")
+        val poetryLineSpacing = floatPreferencesKey("poetry_line_spacing")
+        val poetryTextAlignment = stringPreferencesKey("poetry_text_alignment")
+        val poetryShowSource = booleanPreferencesKey("poetry_show_source")
+        val poetryShowQuoteMark = booleanPreferencesKey("poetry_show_quote_mark")
         val mealCalendarImageMaxHeightDp = intPreferencesKey("meal_calendar_image_max_height_dp")
         val mealCalendarShowCaptions = booleanPreferencesKey("meal_calendar_show_captions")
         val mealCalendarWrapEnabled = booleanPreferencesKey("meal_calendar_wrap_enabled")
@@ -227,6 +238,19 @@ class SettingsRepository @Inject constructor(
             thoughtEditorMaxHeightDp = (prefs[Keys.thoughtEditorMaxHeightDp]
                 ?: defaults.thoughtEditorMaxHeightDp)
                 .coerceIn(MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP, MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP),
+            poetryFontUri = prefs[Keys.poetryFontUri]?.takeIf(::hasPersistedReadAccess),
+            poetryFontSizeSp = normalizePoetryFontSize(
+                prefs[Keys.poetryFontSizeSp],
+                defaults.poetryFontSizeSp,
+            ),
+            poetryLineSpacing = normalizePoetryLineSpacing(
+                prefs[Keys.poetryLineSpacing],
+                defaults.poetryLineSpacing,
+            ),
+            poetryTextAlignment = prefs[Keys.poetryTextAlignment]
+                .enumValueOr(defaults.poetryTextAlignment),
+            poetryShowSource = prefs[Keys.poetryShowSource] ?: defaults.poetryShowSource,
+            poetryShowQuoteMark = prefs[Keys.poetryShowQuoteMark] ?: defaults.poetryShowQuoteMark,
             mealCalendarImageMaxHeightDp = (prefs[Keys.mealCalendarImageMaxHeightDp]
                 ?: defaults.mealCalendarImageMaxHeightDp).coerceIn(80, 320),
             mealCalendarShowCaptions = prefs[Keys.mealCalendarShowCaptions]
@@ -383,6 +407,26 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.thoughtHighlightColorArgb] = highlightColorArgb or 0xFF000000.toInt()
             prefs[Keys.thoughtEditorMaxHeightDp] = editorMaxHeightDp
                 .coerceIn(MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP, MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP)
+        }
+    }
+    suspend fun setPoetryDisplaySettings(
+        fontUri: String?,
+        fontSizeSp: Float,
+        lineSpacing: Float,
+        textAlignment: PoetryTextAlignment,
+        showSource: Boolean,
+        showQuoteMark: Boolean,
+    ) {
+        context.settingsDataStore.edit { prefs ->
+            prefs.setOrRemove(
+                Keys.poetryFontUri,
+                fontUri?.takeIf(::hasPersistedReadAccess),
+            )
+            prefs[Keys.poetryFontSizeSp] = normalizePoetryFontSize(fontSizeSp)
+            prefs[Keys.poetryLineSpacing] = normalizePoetryLineSpacing(lineSpacing)
+            prefs[Keys.poetryTextAlignment] = textAlignment.name
+            prefs[Keys.poetryShowSource] = showSource
+            prefs[Keys.poetryShowQuoteMark] = showQuoteMark
         }
     }
     suspend fun setMealCalendarImageMaxHeight(value: Int) =
@@ -598,6 +642,15 @@ class SettingsRepository @Inject constructor(
                 value.thoughtHighlightColorArgb or 0xFF000000.toInt()
             prefs[Keys.thoughtEditorMaxHeightDp] = value.thoughtEditorMaxHeightDp
                 .coerceIn(MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP, MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP)
+            prefs.setOrRemove(
+                Keys.poetryFontUri,
+                restorableReadUriOrCurrent(value.poetryFontUri, prefs[Keys.poetryFontUri]),
+            )
+            prefs[Keys.poetryFontSizeSp] = normalizePoetryFontSize(value.poetryFontSizeSp)
+            prefs[Keys.poetryLineSpacing] = normalizePoetryLineSpacing(value.poetryLineSpacing)
+            prefs[Keys.poetryTextAlignment] = value.poetryTextAlignment.name
+            prefs[Keys.poetryShowSource] = value.poetryShowSource
+            prefs[Keys.poetryShowQuoteMark] = value.poetryShowQuoteMark
             prefs[Keys.mealCalendarImageMaxHeightDp] = value.mealCalendarImageMaxHeightDp.coerceIn(80, 320)
             prefs[Keys.mealCalendarShowCaptions] = value.mealCalendarShowCaptions
             prefs[Keys.mealCalendarWrapEnabled] = value.mealCalendarWrapEnabled
@@ -659,6 +712,11 @@ class SettingsRepository @Inject constructor(
         return imported.takeIf(::hasPersistedTreeAccess) ?: current
     }
 
+    private fun restorableReadUriOrCurrent(imported: String?, current: String?): String? {
+        if (imported == null) return null
+        return imported.takeIf(::hasPersistedReadAccess) ?: current
+    }
+
     private fun hasPersistedTreeAccess(raw: String): Boolean {
         val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
         val isTreeUri = runCatching {
@@ -668,6 +726,16 @@ class SettingsRepository @Inject constructor(
         return runCatching {
             context.contentResolver.persistedUriPermissions.any { permission ->
                 permission.uri == uri && permission.isReadPermission && permission.isWritePermission
+            }
+        }.getOrDefault(false)
+    }
+
+    private fun hasPersistedReadAccess(raw: String): Boolean {
+        val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
+        if (uri.scheme != "content") return false
+        return runCatching {
+            context.contentResolver.persistedUriPermissions.any { permission ->
+                permission.uri == uri && permission.isReadPermission
             }
         }.getOrDefault(false)
     }
@@ -1140,6 +1208,24 @@ internal fun normalizeFontScale(value: Float?, fallback: Float = 1f): Float {
         ?: 1f
     return value?.takeIf(Float::isFinite)
         ?.coerceIn(MIN_APP_FONT_SCALE, MAX_APP_FONT_SCALE)
+        ?: normalizedFallback
+}
+
+internal fun normalizePoetryFontSize(value: Float?, fallback: Float = 18f): Float {
+    val normalizedFallback = fallback.takeIf(Float::isFinite)
+        ?.coerceIn(MIN_POETRY_FONT_SIZE_SP, MAX_POETRY_FONT_SIZE_SP)
+        ?: 18f
+    return value?.takeIf(Float::isFinite)
+        ?.coerceIn(MIN_POETRY_FONT_SIZE_SP, MAX_POETRY_FONT_SIZE_SP)
+        ?: normalizedFallback
+}
+
+internal fun normalizePoetryLineSpacing(value: Float?, fallback: Float = 1.45f): Float {
+    val normalizedFallback = fallback.takeIf(Float::isFinite)
+        ?.coerceIn(MIN_POETRY_LINE_SPACING, MAX_POETRY_LINE_SPACING)
+        ?: 1.45f
+    return value?.takeIf(Float::isFinite)
+        ?.coerceIn(MIN_POETRY_LINE_SPACING, MAX_POETRY_LINE_SPACING)
         ?: normalizedFallback
 }
 

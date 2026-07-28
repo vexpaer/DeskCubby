@@ -133,6 +133,7 @@ data class VaultItem(
     val note: String?,
     val createdAt: Long,
     val updatedAt: Long,
+    val sortOrder: Long,
 )
 
 /**
@@ -442,7 +443,7 @@ class VaultRepository internal constructor(
                 val key = unlockedKeyForMutation() ?: return@withContext false
                 val now = System.currentTimeMillis()
                 val encrypted = VaultCrypto.encrypt(key, encodeVaultItemPayload(content, note))
-                vaultItemDao.insert(
+                vaultItemDao.insertAtEnd(
                     VaultItemEntity(
                         cipherText = encrypted.cipherBase64,
                         iv = encrypted.ivBase64,
@@ -477,6 +478,23 @@ class VaultRepository internal constructor(
                 if (id == VAULT_KEY_MARKER_ENTITY_ID) return@withContext false
                 unlockedKeyForMutation() ?: return@withContext false
                 vaultItemDao.delete(id) > 0
+            }
+        }
+
+    suspend fun reorderItems(orderedIds: List<Long>): Boolean =
+        operationMutex.withLock {
+            withContext(Dispatchers.Default) {
+                unlockedKeyForMutation() ?: return@withContext false
+                val currentIds = vaultItemDao.getUserIdsInOrder(VAULT_KEY_MARKER_ENTITY_ID)
+                if (
+                    orderedIds.size != currentIds.size ||
+                    orderedIds.distinct().size != orderedIds.size ||
+                    orderedIds.toSet() != currentIds.toSet()
+                ) {
+                    return@withContext false
+                }
+                vaultItemDao.replaceUserOrder(orderedIds)
+                true
             }
         }
 
@@ -570,6 +588,7 @@ class VaultRepository internal constructor(
             note = payload.note,
             createdAt = entity.createdAt,
             updatedAt = entity.updatedAt,
+            sortOrder = entity.sortOrder,
         )
     }
 

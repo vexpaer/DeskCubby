@@ -155,7 +155,9 @@ class AppBackupRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             val root = resolveTree(treeUri, "导入自动备份", requireWrite = false)
             val backup = readAutomaticBackup(root)
-                ?: throw AppBackupException("导入自动备份失败：所选文件夹中没有 $BACKUP_FILE_NAME。")
+                ?: throw AppBackupException(
+                    "导入自动备份失败：所选文件夹中没有 $BACKUP_FILE_NAME 或旧版备份。",
+                )
             restoreBackup(backup)
         }
     }
@@ -278,12 +280,19 @@ class AppBackupRepository @Inject constructor(
         val json = BackupJsonCodec.encode(backup)
 
         val main = findAutomaticFile(root, BACKUP_FILE_NAME)
+        val legacyMain = findAutomaticFile(root, LEGACY_BACKUP_FILE_NAME)
         val existingPending = findAutomaticFile(root, PENDING_FILE_NAME)
+        val legacyPending = findAutomaticFile(root, LEGACY_PENDING_FILE_NAME)
         val existingPrevious = findAutomaticFile(root, PREVIOUS_FILE_NAME)
+        val legacyPrevious = findAutomaticFile(root, LEGACY_PREVIOUS_FILE_NAME)
 
-        val currentMain = main?.let { readCompatibleBackupForRotation(it, "自动保存读取主文件") }
+        val currentMain = (main ?: legacyMain)?.let {
+            readCompatibleBackupForRotation(it, "自动保存读取主文件")
+        }
         existingPending?.let { readCompatibleBackupForRotation(it, "自动保存读取待完成文件") }
+        legacyPending?.let { readCompatibleBackupForRotation(it, "自动保存读取旧版待完成文件") }
         existingPrevious?.let { readCompatibleBackupForRotation(it, "自动保存读取上一版本") }
+        legacyPrevious?.let { readCompatibleBackupForRotation(it, "自动保存读取旧版上一版本") }
 
         val pending = existingPending ?: getOrCreateAutomaticFile(root, PENDING_FILE_NAME)
         writeAndVerifyBackup(pending, json, "自动保存临时文件")
@@ -344,9 +353,24 @@ class AppBackupRepository @Inject constructor(
             // A verified pending file means the pending -> main rotation started but may not
             // have finished. Prefer it without comparing wall-clock timestamps, which can move
             // backwards after a manual/NTP clock correction.
-            AutomaticBackupCandidate(PENDING_FILE_NAME, "读取待完成自动备份", priority = 3),
-            AutomaticBackupCandidate(BACKUP_FILE_NAME, "读取自动备份", priority = 2),
-            AutomaticBackupCandidate(PREVIOUS_FILE_NAME, "读取上一版本备份", priority = 1),
+            AutomaticBackupCandidate(PENDING_FILE_NAME, "读取待完成自动备份", priority = 6),
+            AutomaticBackupCandidate(BACKUP_FILE_NAME, "读取自动备份", priority = 5),
+            AutomaticBackupCandidate(PREVIOUS_FILE_NAME, "读取上一版本备份", priority = 4),
+            AutomaticBackupCandidate(
+                LEGACY_PENDING_FILE_NAME,
+                "读取旧版待完成自动备份",
+                priority = 3,
+            ),
+            AutomaticBackupCandidate(
+                LEGACY_BACKUP_FILE_NAME,
+                "读取旧版自动备份",
+                priority = 2,
+            ),
+            AutomaticBackupCandidate(
+                LEGACY_PREVIOUS_FILE_NAME,
+                "读取旧版上一版本备份",
+                priority = 1,
+            ),
         ).mapNotNull { candidate ->
             findAutomaticFile(root, candidate.name)?.let { candidate to it }
         }
@@ -651,9 +675,12 @@ class AppBackupRepository @Inject constructor(
     )
 
     private companion object {
-        const val BACKUP_FILE_NAME = "DeskCubby.json"
-        const val PENDING_FILE_NAME = "DeskCubby.pending.json"
-        const val PREVIOUS_FILE_NAME = "DeskCubby.previous.json"
+        const val BACKUP_FILE_NAME = "dc.json"
+        const val PENDING_FILE_NAME = "dc.pending.json"
+        const val PREVIOUS_FILE_NAME = "dc.previous.json"
+        const val LEGACY_BACKUP_FILE_NAME = "DeskCubby.json"
+        const val LEGACY_PENDING_FILE_NAME = "DeskCubby.pending.json"
+        const val LEGACY_PREVIOUS_FILE_NAME = "DeskCubby.previous.json"
         const val BACKUP_MIME_TYPE = "application/json"
         const val MAX_IMPORT_BYTES = 10 * 1024 * 1024
     }

@@ -35,5 +35,6 @@ class PoetryRepositoryParsingTest {
         )
         assertEquals("— 李商隐《夜雨寄北》", poem.source)
         assertEquals("唐", poem.dynasty)
+        assertEquals("夜雨寄北", poem.title)
     }
 }

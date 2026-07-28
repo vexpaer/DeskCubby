@@ -27,6 +27,12 @@
         <!-- Health Connect is a system module on Android 14+ and an APK provider on
              older supported versions. This query keeps the latter discoverable. -->
         <package android:name="com.google.android.apps.healthdata" />
+        <!-- Package visibility for resolving the real labels and icons of apps that
+             appear in UsageStats, without requesting QUERY_ALL_PACKAGES. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <application
@@ -130,6 +136,34 @@
             android:icon="@mipmap/ic_launcher_book"
             android:label="@string/launcher_name_chinese"
             android:roundIcon="@mipmap/ic_launcher_book_round"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherCubbyDefault"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_cubby"
+            android:label="@string/launcher_name_default"
+            android:roundIcon="@mipmap/ic_launcher_cubby_round"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherCubbyChinese"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_cubby"
+            android:label="@string/launcher_name_chinese"
+            android:roundIcon="@mipmap/ic_launcher_cubby_round"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

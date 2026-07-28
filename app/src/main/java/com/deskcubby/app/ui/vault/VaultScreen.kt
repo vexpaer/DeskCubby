@@ -30,13 +30,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.LockOpen
-import androidx.compose.material.icons.outlined.Notes
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.WarningAmber
@@ -45,7 +43,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -57,17 +54,19 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -78,20 +77,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.repository.VaultItem
 import com.deskcubby.app.data.repository.VaultLockState
 import com.deskcubby.app.data.repository.isValidNewVaultPassword
 import com.deskcubby.app.ui.components.AppEmptyState
+import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.theme.GlassPanel
-import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.tr
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
-import java.util.Locale
 import kotlinx.coroutines.launch
 
 @Composable
@@ -356,7 +350,10 @@ private fun VaultUnlockedContent(
     var showNewEditor by remember { mutableStateOf(false) }
     var editorItem by remember { mutableStateOf<VaultItem?>(null) }
     var showChangePassword by remember { mutableStateOf(false) }
-    var showNotes by rememberSaveable { mutableStateOf(false) }
+    var draggingItemId by remember { mutableStateOf<Long?>(null) }
+    var dragDistancePx by remember { mutableFloatStateOf(0f) }
+    var dragOriginY by remember { mutableStateOf<Float?>(null) }
+    val itemCenters = remember { mutableStateMapOf<Long, Float>() }
 
     fun showFeedback(message: String) {
         coroutineScope.launch { snackbarHostState.showSnackbar(message) }
@@ -379,6 +376,29 @@ private fun VaultUnlockedContent(
         if (!opened) showFeedback(openLinkFailedLabel)
     }
 
+    fun reorderedIds(fromIndex: Int, toIndex: Int): List<Long> {
+        if (fromIndex == toIndex) return items.map(VaultItem::id)
+        return items.map(VaultItem::id).toMutableList().apply {
+            val moved = removeAt(fromIndex)
+            add(toIndex, moved)
+        }
+    }
+
+    fun targetIndex(distancePx: Float): Int? {
+        val origin = dragOriginY ?: return null
+        val targetId = itemCenters
+            .filterKeys { id -> items.any { it.id == id } }
+            .minByOrNull { (_, center) -> kotlin.math.abs(center - (origin + distancePx)) }
+            ?.key
+        return items.indexOfFirst { it.id == targetId }.takeIf { it >= 0 }
+    }
+
+    fun clearDrag() {
+        draggingItemId = null
+        dragDistancePx = 0f
+        dragOriginY = null
+    }
+
     // While the change-password dialog is open, it renders errors itself.
     LaunchedEffect(error, showChangePassword) {
         if (error == VaultUiError.OPERATION_FAILED && !showChangePassword) {
@@ -396,23 +416,6 @@ private fun VaultUnlockedContent(
             TopAppBar(
                 title = { Text(tr("收藏夹", "Vault")) },
                 actions = {
-                    val displayModeState = if (showNotes) {
-                        tr("正在显示备注", "Showing notes")
-                    } else {
-                        tr("正在显示日期", "Showing dates")
-                    }
-                    IconToggleButton(
-                        checked = showNotes,
-                        onCheckedChange = { showNotes = it },
-                        modifier = Modifier.semantics {
-                            stateDescription = displayModeState
-                        },
-                    ) {
-                        Icon(
-                            imageVector = if (showNotes) Icons.Outlined.Notes else Icons.Outlined.CalendarMonth,
-                            contentDescription = tr("切换备注或日期显示", "Toggle notes or dates"),
-                        )
-                    }
                     IconButton(onClick = { showChangePassword = true }) {
                         Icon(Icons.Outlined.Key, tr("修改密码", "Change password"))
                     }
@@ -457,12 +460,54 @@ private fun VaultUnlockedContent(
                     }
                 }
                 items(items, key = { it.id }) { item ->
+                    val index = items.indexOfFirst { it.id == item.id }
+                    val isDragging = draggingItemId == item.id
                     VaultItemCard(
                         item = item,
-                        showNote = showNotes,
-                        onCopy = { copyContent(item.content) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onGloballyPositioned {
+                                itemCenters[item.id] = it.boundsInRoot().center.y
+                            }
+                            .graphicsLayer {
+                                translationY = if (isDragging) dragDistancePx else 0f
+                                alpha = if (isDragging) 0.68f else 1f
+                            }
+                            .zIndex(if (isDragging) 1f else 0f),
                         onOpenLink = ::openLink,
+                        onCopy = { copyContent(item.content) },
                         onEdit = { editorItem = item },
+                        dragEnabled = items.size > 1,
+                        onDragStarted = {
+                            draggingItemId = item.id
+                            dragDistancePx = 0f
+                            dragOriginY = itemCenters[item.id]
+                        },
+                        onDragChanged = { dragDistancePx = it },
+                        onDragCancelled = ::clearDrag,
+                        onDragFinished = { distance ->
+                            val target = targetIndex(distance)
+                            clearDrag()
+                            if (index >= 0 && target != null && target != index) {
+                                viewModel.reorderItems(reorderedIds(index, target))
+                            }
+                        },
+                        onMoveUp = {
+                            if (index > 0) {
+                                viewModel.reorderItems(reorderedIds(index, index - 1))
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                        onMoveDown = {
+                            if (index >= 0 && index < items.lastIndex) {
+                                viewModel.reorderItems(reorderedIds(index, index + 1))
+                                true
+                            } else {
+                                false
+                            }
+                        },
                     )
                 }
             }
@@ -491,6 +536,7 @@ private fun VaultUnlockedContent(
                 viewModel.deleteItem(item.id)
                 editorItem = null
             },
+            onCopy = { copyContent(item.content) },
         )
     }
 
@@ -540,23 +586,22 @@ private fun VaultCorruptionNotice(corruptedItemCount: Int) {
 @Composable
 private fun VaultItemCard(
     item: VaultItem,
-    showNote: Boolean,
+    modifier: Modifier,
     onCopy: () -> Unit,
     onOpenLink: (String) -> Unit,
     onEdit: () -> Unit,
+    dragEnabled: Boolean,
+    onDragStarted: () -> Unit,
+    onDragChanged: (Float) -> Unit,
+    onDragCancelled: () -> Unit,
+    onDragFinished: (Float) -> Unit,
+    onMoveUp: () -> Boolean,
+    onMoveDown: () -> Boolean,
 ) {
-    val language = LocalAppLanguage.current
     val safeUrl = remember(item.content) { safeVaultHttpUrlOrNull(item.content) }
-    val timeText = remember(item.updatedAt, language) {
-        val formatter = DateTimeFormatter
-            .ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
-            .withLocale(if (language == AppLanguage.ENGLISH) Locale.ENGLISH else Locale.SIMPLIFIED_CHINESE)
-        Instant.ofEpochMilli(item.updatedAt).atZone(ZoneId.systemDefault()).format(formatter)
-    }
 
     GlassPanel(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .combinedClickable(
                 onClickLabel = if (safeUrl != null) {
                     tr("在浏览器中打开链接", "Open link in browser")
@@ -592,21 +637,27 @@ private fun VaultItemCard(
                     maxLines = 4,
                     overflow = TextOverflow.Ellipsis,
                 )
-                IconButton(onClick = onCopy) {
-                    Icon(
-                        imageVector = Icons.Outlined.ContentCopy,
-                        contentDescription = tr("复制内容", "Copy content"),
-                    )
-                }
+                FourDotDragHandle(
+                    enabled = dragEnabled,
+                    translateSelf = false,
+                    onDragStarted = onDragStarted,
+                    onDragChanged = onDragChanged,
+                    onDragCancelled = onDragCancelled,
+                    onMoveUp = onMoveUp,
+                    onMoveDown = onMoveDown,
+                    onDragFinished = onDragFinished,
+                )
             }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = if (showNote) item.note ?: tr("无备注", "No note") else timeText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            item.note?.takeIf(String::isNotBlank)?.let { note ->
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -617,6 +668,7 @@ private fun VaultItemEditorDialog(
     onDismiss: () -> Unit,
     onSave: (content: String, note: String?) -> Unit,
     onDelete: (() -> Unit)?,
+    onCopy: (() -> Unit)? = null,
 ) {
     var content by remember(item?.id) { mutableStateOf(item?.content.orEmpty()) }
     var note by remember(item?.id) { mutableStateOf(item?.note.orEmpty()) }
@@ -660,6 +712,13 @@ private fun VaultItemEditorDialog(
             ) { Text(tr("保存", "Save")) }
         },
         dismissButton = {
+            if (onCopy != null) {
+                TextButton(onClick = onCopy) {
+                    Icon(Icons.Outlined.ContentCopy, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text(tr("复制", "Copy"))
+                }
+            }
             if (onDelete != null) {
                 TextButton(onClick = onDelete) {
                     Text(tr("删除", "Delete"), color = MaterialTheme.colorScheme.error)

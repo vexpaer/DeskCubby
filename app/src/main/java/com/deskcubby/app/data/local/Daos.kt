@@ -459,10 +459,10 @@ interface AiChatDao {
 
 @Dao
 interface VaultItemDao {
-    @Query("SELECT * FROM vault_items ORDER BY updatedAt DESC, id DESC")
+    @Query("SELECT * FROM vault_items ORDER BY sortOrder ASC, updatedAt DESC, id DESC")
     fun observeAll(): Flow<List<VaultItemEntity>>
 
-    @Query("SELECT * FROM vault_items ORDER BY id ASC")
+    @Query("SELECT * FROM vault_items ORDER BY sortOrder ASC, id ASC")
     suspend fun getAll(): List<VaultItemEntity>
 
     @Query("SELECT * FROM vault_items WHERE id = :id LIMIT 1")
@@ -470,6 +470,13 @@ interface VaultItemDao {
 
     @Insert
     suspend fun insert(item: VaultItemEntity): Long
+
+    @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM vault_items")
+    suspend fun nextSortOrder(): Long
+
+    @Transaction
+    suspend fun insertAtEnd(item: VaultItemEntity): Long =
+        insert(item.copy(sortOrder = nextSortOrder()))
 
     @Query(
         "UPDATE vault_items SET cipherText = :cipherText, iv = :iv, updatedAt = :updatedAt " +
@@ -479,6 +486,22 @@ interface VaultItemDao {
 
     @Query("DELETE FROM vault_items WHERE id = :id")
     suspend fun delete(id: Long): Int
+
+    @Query(
+        "SELECT id FROM vault_items WHERE id != :excludedId " +
+            "ORDER BY sortOrder ASC, updatedAt DESC, id DESC",
+    )
+    suspend fun getUserIdsInOrder(excludedId: Long): List<Long>
+
+    @Query("UPDATE vault_items SET sortOrder = :sortOrder WHERE id = :id")
+    suspend fun updateSortOrder(id: Long, sortOrder: Long)
+
+    @Transaction
+    suspend fun replaceUserOrder(orderedIds: List<Long>) {
+        orderedIds.forEachIndexed { index, id ->
+            updateSortOrder(id, index.toLong())
+        }
+    }
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<VaultItemEntity>)

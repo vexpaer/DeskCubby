@@ -393,7 +393,9 @@ private fun HomeWidget(
                 }
                 AlertDialog(
                     onDismissRequest = { showFullPoem = false },
-                    title = { Text(tr("完整诗词", "Full poem")) },
+                    title = {
+                        Text(poem.title.ifBlank { tr("诗词", "Poem") })
+                    },
                     text = {
                         Column(Modifier.verticalScroll(rememberScrollState())) {
                             Text(

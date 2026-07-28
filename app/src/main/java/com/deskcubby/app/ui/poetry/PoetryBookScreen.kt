@@ -31,6 +31,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
@@ -56,12 +57,17 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.local.SavedPoemEntity
+import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.repository.PoemEditContentStatus
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.theme.GlassPanel
@@ -71,6 +77,8 @@ import com.deskcubby.app.ui.theme.tr
 fun PoetryBookScreen(
     padding: PaddingValues,
     viewModel: PoetryBookViewModel,
+    settings: AppSettings,
+    onOpenSettings: () -> Unit,
 ) {
     val poems by viewModel.poems.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
@@ -96,8 +104,10 @@ fun PoetryBookScreen(
         null -> null
     }
     var showNewEditor by remember { mutableStateOf(false) }
+    var pendingActions by remember { mutableStateOf<SavedPoemEntity?>(null) }
     var pendingDelete by remember { mutableStateOf<SavedPoemEntity?>(null) }
     var creating by remember { mutableStateOf(false) }
+    val poetryFontFamily = rememberPoetryFontFamily(settings.poetryFontUri)
 
     LaunchedEffect(error, errorMessage) {
         if (error != null && errorMessage != null) {
@@ -111,7 +121,16 @@ fun PoetryBookScreen(
             .padding(bottom = padding.calculateBottomPadding())
             .imePadding(),
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
-        topBar = { TopAppBar(title = { Text(tr("诗词本", "Poetry book")) }) },
+        topBar = {
+            TopAppBar(
+                title = { Text(tr("诗词本", "Poetry book")) },
+                actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Outlined.Settings, tr("诗词本设置", "Poetry book settings"))
+                    }
+                },
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
@@ -146,12 +165,56 @@ fun PoetryBookScreen(
                     SavedPoemCard(
                         poem = poem,
                         loadingForEdit = (editorState as? PoetryEditorState.Loading)?.poemId == poem.id,
-                        onEdit = { viewModel.beginEdit(poem.id) },
-                        onDelete = { pendingDelete = poem },
+                        settings = settings,
+                        fontFamily = poetryFontFamily,
+                        onShowActions = { pendingActions = poem },
                     )
                 }
             }
         }
+    }
+
+    pendingActions?.let { poem ->
+        AlertDialog(
+            onDismissRequest = { pendingActions = null },
+            title = { Text(tr("诗词操作", "Poem actions")) },
+            text = {
+                Column {
+                    TextButton(
+                        onClick = {
+                            pendingActions = null
+                            viewModel.beginEdit(poem.id)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Outlined.Edit, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(tr("编辑", "Edit"))
+                    }
+                    TextButton(
+                        onClick = {
+                            pendingActions = null
+                            pendingDelete = poem
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Delete,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(tr("删除", "Delete"), color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { pendingActions = null }) {
+                    Text(tr("取消", "Cancel"))
+                }
+            },
+        )
     }
 
     if (showNewEditor) {
@@ -250,57 +313,66 @@ private fun EmptyPoetryBook(modifier: Modifier, onAdd: () -> Unit) {
 private fun SavedPoemCard(
     poem: SavedPoemEntity,
     loadingForEdit: Boolean,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
+    settings: AppSettings,
+    fontFamily: FontFamily?,
+    onShowActions: () -> Unit,
 ) {
+    val textAlignment = when (settings.poetryTextAlignment) {
+        PoetryTextAlignment.START -> TextAlign.Start
+        PoetryTextAlignment.CENTER -> TextAlign.Center
+    }
     GlassPanel(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(
                 enabled = !loadingForEdit,
-                onClick = onEdit,
-                onLongClick = onEdit,
+                onLongClickLabel = tr("显示编辑和删除操作", "Show edit and delete actions"),
+                onClick = {},
+                onLongClick = onShowActions,
             ),
         cornerRadius = 20.dp,
         padding = PaddingValues(horizontal = 16.dp, vertical = 13.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-            Text(
-                text = "“",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold,
-            )
-            Spacer(Modifier.width(6.dp))
+            if (settings.poetryShowQuoteMark) {
+                Text(
+                    text = "“",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.width(6.dp))
+            }
             Column(Modifier.weight(1f)) {
                 Text(
                     text = poem.content,
-                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.fillMaxWidth(),
+                    fontFamily = fontFamily,
+                    fontSize = settings.poetryFontSizeSp.sp,
+                    lineHeight = (settings.poetryFontSizeSp * settings.poetryLineSpacing).sp,
                     fontWeight = FontWeight.Medium,
+                    textAlign = textAlignment,
                 )
-                if (poem.source.isNotBlank()) {
+                if (settings.poetryShowSource && poem.source.isNotBlank()) {
                     Spacer(Modifier.height(8.dp))
                     Text(
                         text = "—— ${poem.source}",
+                        modifier = Modifier.fillMaxWidth(),
                         style = MaterialTheme.typography.bodySmall,
+                        fontFamily = fontFamily,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontStyle = FontStyle.Italic,
+                        textAlign = textAlignment,
                     )
                 }
-            }
-            Column {
-                IconButton(onClick = onDelete, enabled = !loadingForEdit) {
-                    Icon(Icons.Outlined.Delete, tr("删除", "Delete"))
-                }
-                IconButton(onClick = onEdit, enabled = !loadingForEdit) {
-                    if (loadingForEdit) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        Icon(Icons.Outlined.Edit, tr("编辑", "Edit"))
-                    }
+                if (loadingForEdit) {
+                    Spacer(Modifier.height(8.dp))
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .align(Alignment.End),
+                        strokeWidth = 2.dp,
+                    )
                 }
             }
         }

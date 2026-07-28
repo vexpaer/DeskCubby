@@ -136,6 +136,7 @@ object Routes {
     const val USAGE_SETTINGS = "settings/usage-statistics"
     const val STEPS_SETTINGS = "settings/step-statistics"
     const val AI_SETTINGS = "settings/ai"
+    const val POETRY_SETTINGS = "settings/poetry"
 }
 
 @Composable
@@ -291,7 +292,14 @@ fun DeskCubbyRoot(
                     }
                     composable(NavItemId.POETRY.route) {
                         val poetryBookViewModel: PoetryBookViewModel = hiltViewModel()
-                        PoetryBookScreen(padding = padding, viewModel = poetryBookViewModel)
+                        PoetryBookScreen(
+                            padding = padding,
+                            viewModel = poetryBookViewModel,
+                            settings = settings,
+                            onOpenSettings = {
+                                navController.navigate(Routes.POETRY_SETTINGS)
+                            },
+                        )
                     }
                     composable(NavItemId.RSS.route) {
                         val rssViewModel: RssViewModel = hiltViewModel()
@@ -475,6 +483,14 @@ fun DeskCubbyRoot(
                             padding = padding,
                             viewModel = settingsViewModel,
                             startPage = SettingsStartPage.AI,
+                            onExit = { navController.popBackStack() },
+                        )
+                    }
+                    composable(Routes.POETRY_SETTINGS) {
+                        SettingsScreen(
+                            padding = padding,
+                            viewModel = settingsViewModel,
+                            startPage = SettingsStartPage.POETRY,
                             onExit = { navController.popBackStack() },
                         )
                     }

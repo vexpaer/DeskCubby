@@ -134,6 +134,7 @@ data class VaultItemEntity(
     val iv: String,
     val createdAt: Long,
     val updatedAt: Long,
+    @ColumnInfo(defaultValue = "0") val sortOrder: Long = 0,
 )
 
 /** High score plus an optional serialized paused-game snapshot for one mini game. */

@@ -378,6 +378,21 @@ class VaultRepositoryRecoveryTest {
             return stored.id
         }
 
+        override suspend fun nextSortOrder(): Long =
+            (rows.value.maxOfOrNull(VaultItemEntity::sortOrder) ?: -1L) + 1L
+
+        override suspend fun getUserIdsInOrder(excludedId: Long): List<Long> =
+            rows.value
+                .filterNot { it.id == excludedId }
+                .sortedWith(compareBy(VaultItemEntity::sortOrder, VaultItemEntity::id))
+                .map(VaultItemEntity::id)
+
+        override suspend fun updateSortOrder(id: Long, sortOrder: Long) {
+            rows.value = rows.value.map { item ->
+                if (item.id == id) item.copy(sortOrder = sortOrder) else item
+            }
+        }
+
         override suspend fun update(
             id: Long,
             cipherText: String,
