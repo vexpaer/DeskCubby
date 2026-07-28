@@ -345,7 +345,11 @@ private fun SavedPoemCard(
             }
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = poem.content,
+                    text = if (settings.poetrySevenCharacterWrapEnabled) {
+                        wrapSevenCharacterVerse(poem.content)
+                    } else {
+                        poem.content
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     fontFamily = fontFamily,
                     fontSize = settings.poetryFontSizeSp.sp,

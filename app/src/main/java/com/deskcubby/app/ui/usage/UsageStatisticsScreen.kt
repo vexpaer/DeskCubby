@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -37,18 +38,19 @@ import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -90,6 +92,9 @@ fun UsageStatisticsScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedPoint by remember { mutableStateOf<StatisticsPoint?>(null) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
+    LaunchedEffect(state.range, state.chartType, state.selectedPackage) {
+        selectedPoint = null
+    }
 
     Scaffold(
         modifier = Modifier.padding(bottom = padding.calculateBottomPadding()),
@@ -99,7 +104,8 @@ fun UsageStatisticsScreen(
                 title = { Text(tr("手机使用时间", "Screen time")) },
                 actions = {
                     IconButton(
-                        enabled = state.enabled &&
+                        enabled = !state.initializing &&
+                            state.enabled &&
                             state.collection.phase != StatisticsCollectionPhase.REFRESHING,
                         onClick = viewModel::refresh,
                     ) {
@@ -116,7 +122,26 @@ fun UsageStatisticsScreen(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (!state.enabled || state.collection.phase != StatisticsCollectionPhase.READY) {
+            if (state.initializing) {
+                item {
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        FilledTonalButton(
+                            enabled = false,
+                            onClick = {},
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
+                            Text(tr("加载中", "Loading"))
+                        }
+                    }
+                }
+            } else if (!state.enabled || state.collection.phase != StatisticsCollectionPhase.READY) {
                 item {
                     UsageCollectionMessage(
                         state = state,
@@ -132,6 +157,12 @@ fun UsageStatisticsScreen(
                         overview = state.overview,
                         totalText = formatUsageDuration(state.overview.total),
                         averageText = formatUsageDuration(state.overview.averagePerDataDay),
+                        highestDayText = formatUsageDuration(
+                            state.highestDayForegroundMillis,
+                        ),
+                        lastSevenAverageText = formatUsageDuration(
+                            state.lastSevenDayAverageForegroundMillis,
+                        ),
                     )
                 }
                 item {
@@ -140,14 +171,6 @@ fun UsageStatisticsScreen(
                         choices = state.appChoices,
                         allAppsMillis = state.rangeTotalForegroundMillis.toDouble(),
                         onSelect = viewModel::selectPackage,
-                    )
-                }
-                item {
-                    StatisticsChartControls(
-                        range = state.range,
-                        chartType = state.chartType,
-                        onRangeChange = viewModel::selectRange,
-                        onChartTypeChange = viewModel::selectChartType,
                     )
                 }
                 item {
@@ -160,11 +183,20 @@ fun UsageStatisticsScreen(
                             points = state.points,
                             chartType = state.chartType,
                             valueDescription = { value ->
-                                value?.let { "${(it / 60_000.0).toLong()} min" } ?: "—"
+                                value?.let { formatUsageDuration(it) } ?: "—"
                             },
+                            selectedPoint = selectedPoint,
                             onPointSelected = { selectedPoint = it },
                         )
                     }
+                }
+                item {
+                    StatisticsChartControls(
+                        range = state.range,
+                        chartType = state.chartType,
+                        onRangeChange = viewModel::selectRange,
+                        onChartTypeChange = viewModel::selectChartType,
+                    )
                 }
                 item {
                     Text(
@@ -201,26 +233,6 @@ fun UsageStatisticsScreen(
         }
     }
 
-    selectedPoint?.let { point ->
-        val selectedValue = point.value?.let { value ->
-            formatUsageDuration(value)
-        } ?: tr("无使用记录", "No usage recorded")
-        AlertDialog(
-            onDismissRequest = { selectedPoint = null },
-            title = { Text(point.date.toString()) },
-            text = {
-                Text(
-                    selectedValue,
-                    style = MaterialTheme.typography.titleMedium,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { selectedPoint = null }) {
-                    Text(tr("关闭", "Close"))
-                }
-            },
-        )
-    }
 }
 
 @Composable

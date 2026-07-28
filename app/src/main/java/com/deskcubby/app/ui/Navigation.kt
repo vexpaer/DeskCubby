@@ -46,7 +46,7 @@ import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.RssFeed
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.SmartToy
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.ViewDay
 import androidx.compose.material3.Icon
@@ -694,7 +694,7 @@ fun iconFor(key: String): ImageVector = when (key) {
     "sparkle" -> Icons.Outlined.AutoAwesome
     "day" -> Icons.Outlined.ViewDay
     "rss" -> Icons.Outlined.RssFeed
-    "ai" -> Icons.Outlined.SmartToy
+    "ai" -> Icons.Outlined.Psychology
     "apps" -> Icons.Outlined.Apps
     "lock" -> Icons.Outlined.Lock
     "game" -> Icons.Outlined.SportsEsports

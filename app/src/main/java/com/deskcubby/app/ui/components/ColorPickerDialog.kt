@@ -1,9 +1,12 @@
 package com.deskcubby.app.ui.components
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,11 +24,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.deskcubby.app.ui.theme.tr
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sin
+import kotlin.math.sqrt
 import android.graphics.Color as AndroidColor
 
 private const val OPAQUE_MASK: Int = 0xFF shl 24
@@ -97,31 +113,34 @@ fun ColorPickerDialog(
                     )
                 }
 
-                Text(
-                    text = tr("色相", "Hue"),
-                    style = MaterialTheme.typography.labelMedium,
+                HexHoneycombPicker(
+                    hue = hue,
+                    saturation = saturation,
+                    value = hsvValue,
+                    onPick = { pickedHue, pickedSaturation ->
+                        updateFromSliders(
+                            newHue = pickedHue,
+                            newSaturation = pickedSaturation,
+                        )
+                    },
                 )
-                Slider(
+
+                CompactColorSlider(
+                    label = tr("色相", "Hue"),
                     value = hue,
                     onValueChange = { updateFromSliders(newHue = it) },
                     valueRange = 0f..360f,
                 )
 
-                Text(
-                    text = tr("饱和度", "Saturation"),
-                    style = MaterialTheme.typography.labelMedium,
-                )
-                Slider(
+                CompactColorSlider(
+                    label = tr("饱和度", "Saturation"),
                     value = saturation,
                     onValueChange = { updateFromSliders(newSaturation = it) },
                     valueRange = 0f..1f,
                 )
 
-                Text(
-                    text = tr("明度", "Value"),
-                    style = MaterialTheme.typography.labelMedium,
-                )
-                Slider(
+                CompactColorSlider(
+                    label = tr("明度", "Value"),
                     value = hsvValue,
                     onValueChange = { updateFromSliders(newValue = it) },
                     valueRange = 0f..1f,
@@ -168,3 +187,177 @@ fun ColorPickerDialog(
         },
     )
 }
+
+@Composable
+private fun CompactColorSlider(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.weight(0.28f),
+        )
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            modifier = Modifier.weight(0.72f),
+        )
+    }
+}
+
+@Composable
+private fun HexHoneycombPicker(
+    hue: Float,
+    saturation: Float,
+    value: Float,
+    onPick: (hue: Float, saturation: Float) -> Unit,
+) {
+    val outline = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+    val selection = MaterialTheme.colorScheme.onSurface
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(152.dp)
+            .pointerInput(hue, value) {
+                detectTapGestures { tap ->
+                    val cells = honeycombCells(size.width.toFloat(), size.height.toFloat())
+                    cells.minByOrNull { cell ->
+                        val dx = tap.x - cell.center.x
+                        val dy = tap.y - cell.center.y
+                        dx * dx + dy * dy
+                    }?.takeIf { cell ->
+                        val dx = tap.x - cell.center.x
+                        val dy = tap.y - cell.center.y
+                        dx * dx + dy * dy <= cell.radius * cell.radius * 1.45f
+                    }?.let { cell ->
+                        onPick(
+                            if (cell.saturation < 0.001f) hue else cell.hue,
+                            cell.saturation,
+                        )
+                    }
+                }
+            },
+    ) {
+        val cells = honeycombCells(size.width, size.height)
+        val selected = cells.minByOrNull { cell ->
+            val hueDistance = circularHueDistance(cell.hue, hue) / 180f
+            abs(cell.saturation - saturation) + hueDistance * max(cell.saturation, saturation)
+        }
+        cells.forEach { cell ->
+            val path = hexagonPath(cell.center, cell.radius)
+            drawPath(
+                path = path,
+                color = Color(
+                    hsvToOpaqueArgb(
+                        hue = cell.hue,
+                        saturation = cell.saturation,
+                        value = value,
+                    ),
+                ),
+            )
+            drawPath(
+                path = path,
+                color = outline,
+                style = Stroke(width = 0.75.dp.toPx(), join = StrokeJoin.Round),
+            )
+            if (cell == selected) {
+                drawPath(
+                    path = path,
+                    color = selection,
+                    style = Stroke(width = 2.dp.toPx(), join = StrokeJoin.Round),
+                )
+            }
+        }
+    }
+}
+
+private data class HoneycombCell(
+    val center: Offset,
+    val radius: Float,
+    val hue: Float,
+    val saturation: Float,
+)
+
+private fun honeycombCells(width: Float, height: Float): List<HoneycombCell> {
+    if (width <= 0f || height <= 0f) return emptyList()
+    val coordinates = buildList {
+        for (q in -HONEYCOMB_RINGS..HONEYCOMB_RINGS) {
+            for (r in -HONEYCOMB_RINGS..HONEYCOMB_RINGS) {
+                val s = -q - r
+                if (max(abs(q), max(abs(r), abs(s))) <= HONEYCOMB_RINGS) {
+                    add(q to r)
+                }
+            }
+        }
+    }
+    val sqrtThree = sqrt(3f)
+    val rawCenters = coordinates.map { (q, r) ->
+        Offset(
+            x = sqrtThree * (q + r / 2f),
+            y = 1.5f * r,
+        )
+    }
+    val minX = rawCenters.minOf(Offset::x)
+    val maxX = rawCenters.maxOf(Offset::x)
+    val minY = rawCenters.minOf(Offset::y)
+    val maxY = rawCenters.maxOf(Offset::y)
+    val margin = 4f
+    val radius = min(
+        (width - margin * 2f) / (maxX - minX + sqrtThree),
+        (height - margin * 2f) / (maxY - minY + 2f),
+    ).coerceAtLeast(1f)
+    val drawingWidth = (maxX - minX) * radius
+    val drawingHeight = (maxY - minY) * radius
+    val offsetX = (width - drawingWidth) / 2f - minX * radius
+    val offsetY = (height - drawingHeight) / 2f - minY * radius
+    val center = Offset(width / 2f, height / 2f)
+    return rawCenters.mapIndexed { index, raw ->
+        val point = Offset(
+            x = offsetX + raw.x * radius,
+            y = offsetY + raw.y * radius,
+        )
+        val (q, r) = coordinates[index]
+        val ring = max(abs(q), max(abs(r), abs(-q - r)))
+        val saturation = ring.toFloat() / HONEYCOMB_RINGS
+        val angle = Math.toDegrees(
+            atan2(
+                (point.y - center.y).toDouble(),
+                (point.x - center.x).toDouble(),
+            ),
+        ).toFloat()
+        HoneycombCell(
+            center = point,
+            radius = radius * 0.98f,
+            hue = (angle + 360f) % 360f,
+            saturation = saturation,
+        )
+    }
+}
+
+private fun hexagonPath(center: Offset, radius: Float): Path = Path().apply {
+    repeat(6) { index ->
+        val angle = -PI / 2.0 + index * PI / 3.0
+        val point = Offset(
+            x = center.x + cos(angle).toFloat() * radius,
+            y = center.y + sin(angle).toFloat() * radius,
+        )
+        if (index == 0) moveTo(point.x, point.y) else lineTo(point.x, point.y)
+    }
+    close()
+}
+
+private fun circularHueDistance(first: Float, second: Float): Float {
+    val direct = abs(first - second) % 360f
+    return min(direct, 360f - direct)
+}
+
+private const val HONEYCOMB_RINGS = 5

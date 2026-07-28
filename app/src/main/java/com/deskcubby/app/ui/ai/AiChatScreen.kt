@@ -48,7 +48,6 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -199,7 +198,7 @@ fun AiChatScreen(
                             Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(Icons.Outlined.SmartToy, null, tint = MaterialTheme.colorScheme.primary)
+                            Icon(Icons.Outlined.Psychology, null, tint = MaterialTheme.colorScheme.primary)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(tr("当前文字模型", "Current text model"), style = MaterialTheme.typography.labelSmall)
@@ -227,7 +226,7 @@ fun AiChatScreen(
 
             if (uiState.messages.isEmpty() && !uiState.isSending) {
                 AppEmptyState(
-                    icon = Icons.Outlined.SmartToy,
+                    icon = Icons.Outlined.Psychology,
                     title = if (configured) {
                         tr("开始一段对话", "Start a conversation")
                     } else {

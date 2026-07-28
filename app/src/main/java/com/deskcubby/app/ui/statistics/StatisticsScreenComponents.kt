@@ -26,6 +26,8 @@ fun StatisticsOverviewPanel(
     overview: StatisticsOverview,
     totalText: String,
     averageText: String,
+    highestDayText: String? = null,
+    lastSevenAverageText: String? = null,
     modifier: Modifier = Modifier,
 ) {
     GlassPanel(
@@ -34,11 +36,6 @@ fun StatisticsOverviewPanel(
         padding = PaddingValues(16.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text(
-                tr("总览", "Overview"),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 StatisticsSummaryItem(
                     label = tr("开始统计", "Tracking since"),
@@ -53,6 +50,20 @@ fun StatisticsOverviewPanel(
                     ),
                     modifier = Modifier.weight(1f),
                 )
+            }
+            if (highestDayText != null && lastSevenAverageText != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    StatisticsSummaryItem(
+                        label = tr("单日最高", "Highest day"),
+                        value = highestDayText,
+                        modifier = Modifier.weight(1f),
+                    )
+                    StatisticsSummaryItem(
+                        label = tr("过去 7 天平均", "Last 7-day average"),
+                        value = lastSevenAverageText,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 StatisticsSummaryItem(
@@ -133,15 +144,14 @@ private fun StatisticsSummaryItem(
     }
 }
 
-@Composable
 fun formatUsageDuration(milliseconds: Double): String {
     val totalMinutes = (milliseconds / 60_000.0).roundToLong().coerceAtLeast(0)
     val hours = totalMinutes / 60
     val minutes = totalMinutes % 60
     return if (hours > 0) {
-        tr("${hours} 小时 ${minutes} 分钟", "${hours}h ${minutes}m")
+        "${hours}H ${minutes}M"
     } else {
-        tr("${minutes} 分钟", "${minutes}m")
+        "${minutes}M"
     }
 }
 

@@ -140,8 +140,16 @@ class GamesViewModel @Inject constructor(
 
     companion object {
         const val GAME_2048 = "2048"
+        const val GAME_2048_5 = "2048_5"
+        const val GAME_2048_6 = "2048_6"
         const val GAME_SNAKE = "snake"
         const val GAME_TETRIS = "tetris"
-        val GAME_IDS = listOf(GAME_2048, GAME_SNAKE, GAME_TETRIS)
+        val GAME_IDS = listOf(
+            GAME_2048,
+            GAME_2048_5,
+            GAME_2048_6,
+            GAME_SNAKE,
+            GAME_TETRIS,
+        )
     }
 }

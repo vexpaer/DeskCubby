@@ -63,6 +63,7 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.RssFeed
+import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Tune
@@ -181,6 +182,7 @@ import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
 import com.deskcubby.app.ui.home.HomeGreeting
 import com.deskcubby.app.ui.poetry.rememberPoetryFontFamily
+import com.deskcubby.app.ui.poetry.wrapSevenCharacterVerse
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.LocalCompactMode
@@ -237,24 +239,40 @@ private class SettingsSaveCoordinator {
         private set
     var enabled by mutableStateOf(false)
         private set
+    var resetAvailable by mutableStateOf(false)
+        private set
     private var saveAction: (() -> Unit)? = null
+    private var resetAction: (() -> Unit)? = null
 
-    fun register(dirty: Boolean, enabled: Boolean, action: () -> Unit) {
+    fun register(
+        dirty: Boolean,
+        enabled: Boolean,
+        action: () -> Unit,
+        resetAction: (() -> Unit)?,
+    ) {
         available = true
         this.dirty = dirty
         this.enabled = enabled
         saveAction = action
+        this.resetAction = resetAction
+        resetAvailable = resetAction != null
     }
 
     fun clear() {
         available = false
         dirty = false
         enabled = false
+        resetAvailable = false
         saveAction = null
+        resetAction = null
     }
 
     fun save() {
         if (available && dirty && enabled) saveAction?.invoke()
+    }
+
+    fun reset() {
+        if (resetAvailable) resetAction?.invoke()
     }
 }
 
@@ -263,11 +281,26 @@ private fun RegisterSettingsSave(
     coordinator: SettingsSaveCoordinator,
     dirty: Boolean,
     enabled: Boolean = true,
+    onReset: (() -> Unit)? = null,
     onSave: () -> Unit,
 ) {
     val currentOnSave by rememberUpdatedState(onSave)
+    val currentOnReset by rememberUpdatedState(onReset)
     val stableAction = remember(coordinator) { { currentOnSave() } }
-    SideEffect { coordinator.register(dirty = dirty, enabled = enabled, action = stableAction) }
+    val stableReset: () -> Unit = remember(coordinator) {
+        {
+            currentOnReset?.invoke()
+            Unit
+        }
+    }
+    SideEffect {
+        coordinator.register(
+            dirty = dirty,
+            enabled = enabled,
+            action = stableAction,
+            resetAction = stableReset.takeIf { onReset != null },
+        )
+    }
 }
 
 private data class HomeWidgetOption(
@@ -461,6 +494,17 @@ fun SettingsScreen(
                     }
                 },
                 actions = {
+                    if (saveCoordinator.resetAvailable) {
+                        IconButton(onClick = saveCoordinator::reset) {
+                            Icon(
+                                Icons.Outlined.Restore,
+                                contentDescription = tr(
+                                    "重置本页所有设置",
+                                    "Reset all settings on this page",
+                                ),
+                            )
+                        }
+                    }
                     if (saveCoordinator.available) {
                         TextButton(
                             enabled = saveCoordinator.dirty && saveCoordinator.enabled,
@@ -713,6 +757,7 @@ fun SettingsScreen(
                         textAlignment,
                         showSource,
                         showQuoteMark,
+                        sevenCharacterWrapEnabled,
                     ->
                     viewModel.setPoetryDisplaySettings(
                         fontUri = fontUri,
@@ -721,6 +766,7 @@ fun SettingsScreen(
                         textAlignment = textAlignment,
                         showSource = showSource,
                         showQuoteMark = showQuoteMark,
+                        sevenCharacterWrapEnabled = sevenCharacterWrapEnabled,
                     ) { saved ->
                         if (saved) completeSave(SettingsPage.SUBPAGES)
                     }
@@ -811,8 +857,8 @@ fun SettingsScreen(
             SettingsPage.STEPS -> DeviceTrackingSettingsPage(
                 title = tr("步数记录", "Step tracking"),
                 explanation = tr(
-                    "经你授权后从系统健康数据读取每日步数，结果写入本机独立 JSON。健康数据不会进入应用备份或云同步。",
-                    "With your permission, reads daily steps from system health data into a separate on-device JSON file. Health data is excluded from app backups and cloud sync.",
+                    "优先读取已授权的 Health Connect；未连接时可改用手机的系统计步传感器，从首次采样开始按差额记录。结果写入本机独立 JSON，不进入应用备份或云同步。",
+                    "Uses authorized Health Connect first, or the phone's step-counter sensor when Health Connect is not connected. Sensor tracking starts with the first sample and stores only measured differences in a separate on-device JSON excluded from backups and cloud sync.",
                 ),
                 enabled = settings.stepTrackingEnabled,
                 contentPadding = inner,
@@ -941,7 +987,7 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
         SettingsPage.AI,
     ),
     SettingsSearchEntry(
-        tr("应用数据、备份与同步", "App data, backup & sync"),
+        tr("应用数据", "App data"),
         tr(
             "自动保存、整体 JSON、导入导出、WebDAV 与 S3",
             "Auto-save, complete JSON, import/export, WebDAV and S3",
@@ -1073,7 +1119,7 @@ private fun SettingsMainPage(
         }
         item {
             SettingsMenuItem(
-                title = tr("应用数据、备份与同步", "App data, backup & sync"),
+                title = tr("应用数据", "App data"),
                 description = when {
                     settings.cloudSyncEnabled ->
                         tr("自动备份与云端同步已配置", "Auto-backup and cloud sync are configured")
@@ -1337,6 +1383,7 @@ private fun CloudSyncSettingsPage(
         coordinator = saveCoordinator,
         dirty = enabled != settings.cloudSyncEnabled,
         enabled = !enabled || settings.cloudSyncConfigs.any(CloudSyncConfig::enabled),
+        onReset = { enabled = AppSettings().cloudSyncEnabled },
     ) { onSaveEnabled(enabled) }
 
     LazyColumn(
@@ -1622,6 +1669,25 @@ private fun CloudSyncConfigDetailPage(
         coordinator = saveCoordinator,
         dirty = dirty,
         enabled = canSave,
+        onReset = {
+            val defaults = CloudSyncConfig(id = initial.id, name = "")
+            name = defaults.name
+            enabled = defaults.enabled
+            serviceType = defaults.serviceType
+            endpointUrl = defaults.endpointUrl
+            remotePath = defaults.remotePath
+            webDavUsername = defaults.webDavUsername
+            webDavPassword = ""
+            s3Bucket = defaults.s3Bucket
+            s3Region = defaults.s3Region
+            s3AccessKey = ""
+            s3SecretKey = ""
+            s3SessionToken = ""
+            allowInsecureHttp = defaults.allowInsecureHttp
+            selectedContents = defaults.selectedContents
+            direction = defaults.direction
+            clearCredentials = hasStoredCredentials
+        },
     ) { onSave(draft, clearCredentials) }
 
     LazyColumn(
@@ -2310,6 +2376,16 @@ private fun AppearanceSettingsPage(
         coordinator = saveCoordinator,
         dirty = appearanceDirty,
         enabled = parsedThemeColor != null && secondaryColorsValid,
+        onReset = {
+            val defaults = AppSettings()
+            visualStyle = defaults.visualStyle
+            darkMode = defaults.darkMode
+            language = defaults.appLanguage
+            themeHex = colorToHex(defaults.themeColorArgb)
+            secondaryHexes = defaults.themeSecondaryColorsArgb.map(::colorToHex)
+            fontScale = defaults.fontScale
+            compactMode = defaults.compactMode
+        },
     ) {
         onSave(
             visualStyle,
@@ -2648,6 +2724,14 @@ private fun HomeSettingsPage(
         coordinator = saveCoordinator,
         dirty = homeDirty,
         enabled = mealButtonIcons.all { it.isNotBlank() },
+        onReset = {
+            val defaults = AppSettings()
+            widgetBordersEnabled = defaults.homeWidgetBordersEnabled
+            widgets = defaults.homeWidgets
+            visibleWidgetTitles = defaults.homeWidgetTitles
+            mealButtonsUseIcons = defaults.mealButtonsUseIcons
+            mealButtonIcons = defaults.mealButtonIcons
+        },
     ) { onSave(homeDraft) }
 
     fun widgetTargetIndex(distancePx: Float): Int? {
@@ -2908,6 +2992,11 @@ private fun HomeGreetingSettingsPage(
         coordinator = saveCoordinator,
         dirty = dirty,
         enabled = valid,
+        onReset = {
+            val defaults = AppSettings()
+            userName = defaults.userName
+            greetings = defaults.homeGreetings
+        },
     ) {
         onSave(normalizedName, greetings)
     }
@@ -3081,6 +3170,7 @@ private fun PoetrySettingsPage(
         textAlignment: PoetryTextAlignment,
         showSource: Boolean,
         showQuoteMark: Boolean,
+        sevenCharacterWrapEnabled: Boolean,
     ) -> Unit,
 ) {
     var fontUri by rememberSaveable(settings.poetryFontUri) {
@@ -3101,6 +3191,11 @@ private fun PoetrySettingsPage(
     var showQuoteMark by rememberSaveable(settings.poetryShowQuoteMark) {
         mutableStateOf(settings.poetryShowQuoteMark)
     }
+    var sevenCharacterWrapEnabled by rememberSaveable(
+        settings.poetrySevenCharacterWrapEnabled,
+    ) {
+        mutableStateOf(settings.poetrySevenCharacterWrapEnabled)
+    }
     val importedFontFamily = rememberPoetryFontFamily(fontUri)
     val fontPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -3116,9 +3211,23 @@ private fun PoetrySettingsPage(
         lineSpacing != settings.poetryLineSpacing ||
         textAlignment != settings.poetryTextAlignment ||
         showSource != settings.poetryShowSource ||
-        showQuoteMark != settings.poetryShowQuoteMark
+        showQuoteMark != settings.poetryShowQuoteMark ||
+        sevenCharacterWrapEnabled != settings.poetrySevenCharacterWrapEnabled
 
-    RegisterSettingsSave(saveCoordinator, dirty) {
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = dirty,
+        onReset = {
+            val defaults = AppSettings()
+            fontUri = defaults.poetryFontUri
+            fontSizeSp = defaults.poetryFontSizeSp
+            lineSpacing = defaults.poetryLineSpacing
+            textAlignment = defaults.poetryTextAlignment
+            showSource = defaults.poetryShowSource
+            showQuoteMark = defaults.poetryShowQuoteMark
+            sevenCharacterWrapEnabled = defaults.poetrySevenCharacterWrapEnabled
+        },
+    ) {
         onSave(
             fontUri,
             fontSizeSp,
@@ -3126,6 +3235,7 @@ private fun PoetrySettingsPage(
             textAlignment,
             showSource,
             showQuoteMark,
+            sevenCharacterWrapEnabled,
         )
     }
 
@@ -3239,15 +3349,44 @@ private fun PoetrySettingsPage(
                     Text(tr("显示引号装饰", "Show quote decoration"), modifier = Modifier.weight(1f))
                     Switch(checked = showQuoteMark, onCheckedChange = { showQuoteMark = it })
                 }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("七言诗自动换行", "Wrap seven-character verse"))
+                        Text(
+                            tr(
+                                "每七个正文字符连同紧随标点显示为一行",
+                                "Show every seven content characters with trailing punctuation on one line",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = sevenCharacterWrapEnabled,
+                        onCheckedChange = { sevenCharacterWrapEnabled = it },
+                    )
+                }
             }
         }
         item {
             SettingsSection(tr("预览", "Preview")) {
                 Text(
-                    text = tr(
-                        "山中何事？松花酿酒，春水煎茶。",
-                        "What happens in the hills? Pine blossoms brew wine; spring water makes tea.",
-                    ),
+                    text = if (sevenCharacterWrapEnabled) {
+                        wrapSevenCharacterVerse(
+                            tr(
+                                "两个黄鹂鸣翠柳，一行白鹭上青天。",
+                                "Two orioles sing among green willows; a white egret climbs the blue sky.",
+                            ),
+                        )
+                    } else {
+                        tr(
+                            "山中何事？松花酿酒，春水煎茶。",
+                            "What happens in the hills? Pine blossoms brew wine; spring water makes tea.",
+                        )
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     fontFamily = importedFontFamily,
                     fontSize = fontSizeSp.sp,
@@ -3380,6 +3519,29 @@ private fun DiarySettingsPage(
         enabled = filePattern.isNotBlank() && imagePattern.isNotBlank() &&
             diaryDraft.imageWidth != null && diaryDraft.imageHeight != null &&
             (!calorieEnabled || textConfigs.any { it.id == calorieTextConfigId } && imageConfigs.any { it.id == calorieImageConfigId }),
+        onReset = {
+            val defaults = AppSettings()
+            diaryTreeUri = defaults.diaryTreeUri
+            mediaTreeUri = defaults.mediaTreeUri
+            filePattern = defaults.fileNamePattern
+            template = defaults.markdownTemplate
+            imagePattern = defaults.imageNamePattern
+            imageWidth = defaults.imageMaxWidthDp.toString()
+            imageHeight = defaults.imageMaxHeightDp.toString()
+            mealImageCompressionEnabled = defaults.mealImageCompressionEnabled
+            mealImageCompressionQuality = defaults.mealImageCompressionQuality
+            saveOriginalToGallery = defaults.saveOriginalToGallery
+            photoLocationEnabled = defaults.photoLocationEnabled
+            mealCalendarImageMaxHeight = defaults.mealCalendarImageMaxHeightDp
+            mealCalendarShowCaptions = defaults.mealCalendarShowCaptions
+            mealCalendarWrapEnabled = defaults.mealCalendarWrapEnabled
+            mealCalendarPhotosPerRow = defaults.mealCalendarPhotosPerRow
+            calorieEnabled = defaults.calorieEstimationEnabled
+            calorieTextConfigId = defaults.calorieTextConfigId
+            calorieImageConfigId = defaults.calorieImageConfigId
+            calorieVisionPrompt = defaults.calorieVisionPrompt
+            calorieTextPrompt = defaults.calorieTextPrompt
+        },
     ) { onSave(diaryDraft) }
 
     LazyColumn(
@@ -3724,6 +3886,12 @@ private fun BlogSettingsPage(
         dirty = browserHome != settings.browserHomeUrl || browserTheme != settings.browserTheme ||
             browserDesktopMode != settings.browserDesktopMode,
         enabled = browserHome.isNotBlank(),
+        onReset = {
+            val defaults = AppSettings()
+            browserHome = defaults.browserHomeUrl
+            browserTheme = defaults.browserTheme
+            browserDesktopMode = defaults.browserDesktopMode
+        },
     ) { onSave(browserHome, browserTheme, browserDesktopMode) }
 
     LazyColumn(
@@ -3816,6 +3984,14 @@ private fun ThoughtSettingsPage(
             displayMode != settings.thoughtDisplayMode ||
             highlightColor != settings.thoughtHighlightColorArgb ||
             editorMaxHeight != settings.thoughtEditorMaxHeightDp,
+        onReset = {
+            val defaults = AppSettings()
+            rowHeight = defaults.thoughtRowHeightDp
+            reopenMode = defaults.thoughtReopenMode
+            displayMode = defaults.thoughtDisplayMode
+            highlightColor = defaults.thoughtHighlightColorArgb
+            editorMaxHeight = defaults.thoughtEditorMaxHeightDp
+        },
     ) { onSave(rowHeight, reopenMode, displayMode, highlightColor, editorMaxHeight) }
 
     if (showHighlightPicker) {
@@ -3973,6 +4149,11 @@ private fun RssSettingsPage(
     RegisterSettingsSave(
         coordinator = saveCoordinator,
         dirty = maxItems != settings.rssMaxItemsPerFeed || showSummaries != settings.rssShowSummaries,
+        onReset = {
+            val defaults = AppSettings()
+            maxItems = defaults.rssMaxItemsPerFeed
+            showSummaries = defaults.rssShowSummaries
+        },
     ) { onSave(maxItems, showSummaries) }
 
     LazyColumn(
@@ -4125,7 +4306,30 @@ private fun AiConfigurationDetailPage(
         "https" -> true; "http" -> allowHttp; else -> false
     }
     val dirty = changed != initial.copy(enabled = true)
-    RegisterSettingsSave(saveCoordinator, dirty, name.isNotBlank() && model.isNotBlank() && endpointValid) {
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = dirty,
+        enabled = name.isNotBlank() && model.isNotBlank() && endpointValid,
+        onReset = {
+            val defaults = AiModelConfig(
+                id = initial.id,
+                name = "",
+                type = initial.type,
+                endpointUrl = "https://api.openai.com/v1/chat/completions",
+                model = "",
+                systemPrompt = "你是一个有帮助的助手。",
+            )
+            name = defaults.name
+            type = defaults.type
+            endpoint = defaults.endpointUrl
+            model = defaults.model
+            allowHttp = defaults.allowInsecureHttp
+            temperature = defaults.temperature
+            systemPrompt = defaults.systemPrompt
+            apiKey = defaults.apiKey
+            requestPreview = null
+        },
+    ) {
         onSave(changed)
     }
     LazyColumn(
@@ -4520,6 +4724,13 @@ private fun NavigationSettingsPage(
         dirty = defaultPage != settings.defaultPage || navItems != settings.navItems ||
             showLabels != settings.bottomNavShowLabels,
         enabled = !saving,
+        onReset = {
+            val defaults = AppSettings()
+            defaultPage = defaults.defaultPage
+            navItems = defaults.navItems
+            showLabels = defaults.bottomNavShowLabels
+            clearNavDrag()
+        },
     ) {
         saving = true
         onSave(defaultPage, navItems, showLabels) { saving = false }
@@ -4664,6 +4875,11 @@ private fun MorePageSettingsPage(
         dirty = showDescriptions != settings.morePageShowDescriptions ||
             navItems != settings.navItems,
         enabled = !saving,
+        onReset = {
+            val defaults = AppSettings()
+            showDescriptions = defaults.morePageShowDescriptions
+            navItems = defaults.navItems
+        },
     ) {
         saving = true
         onSave(showDescriptions, navItems) { saving = false }
@@ -4774,6 +4990,7 @@ private fun DeviceTrackingSettingsPage(
     RegisterSettingsSave(
         coordinator = saveCoordinator,
         dirty = draftEnabled != enabled,
+        onReset = { draftEnabled = false },
     ) { onSave(draftEnabled) }
 
     LazyColumn(
@@ -5290,7 +5507,7 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.SUBPAGES -> tr("子页面设置", "Subpage settings")
     SettingsPage.HOME -> tr("主页", "Home")
     SettingsPage.HOME_GREETING -> tr("主页问候", "Home greeting")
-    SettingsPage.BACKUP -> tr("应用数据、备份与同步", "App data, backup & sync")
+    SettingsPage.BACKUP -> tr("应用数据", "App data")
     SettingsPage.SYNC -> tr("云端同步", "Cloud sync")
     SettingsPage.SYNC_DETAIL -> tr("同步配置", "Sync configuration")
     SettingsPage.DIARY -> tr("日记与媒体", "Diary & media")

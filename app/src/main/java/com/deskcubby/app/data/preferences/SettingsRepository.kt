@@ -113,6 +113,8 @@ class SettingsRepository @Inject constructor(
         val poetryTextAlignment = stringPreferencesKey("poetry_text_alignment")
         val poetryShowSource = booleanPreferencesKey("poetry_show_source")
         val poetryShowQuoteMark = booleanPreferencesKey("poetry_show_quote_mark")
+        val poetrySevenCharacterWrapEnabled =
+            booleanPreferencesKey("poetry_seven_character_wrap_enabled")
         val mealCalendarImageMaxHeightDp = intPreferencesKey("meal_calendar_image_max_height_dp")
         val mealCalendarShowCaptions = booleanPreferencesKey("meal_calendar_show_captions")
         val mealCalendarWrapEnabled = booleanPreferencesKey("meal_calendar_wrap_enabled")
@@ -251,6 +253,8 @@ class SettingsRepository @Inject constructor(
                 .enumValueOr(defaults.poetryTextAlignment),
             poetryShowSource = prefs[Keys.poetryShowSource] ?: defaults.poetryShowSource,
             poetryShowQuoteMark = prefs[Keys.poetryShowQuoteMark] ?: defaults.poetryShowQuoteMark,
+            poetrySevenCharacterWrapEnabled = prefs[Keys.poetrySevenCharacterWrapEnabled]
+                ?: defaults.poetrySevenCharacterWrapEnabled,
             mealCalendarImageMaxHeightDp = (prefs[Keys.mealCalendarImageMaxHeightDp]
                 ?: defaults.mealCalendarImageMaxHeightDp).coerceIn(80, 320),
             mealCalendarShowCaptions = prefs[Keys.mealCalendarShowCaptions]
@@ -416,6 +420,7 @@ class SettingsRepository @Inject constructor(
         textAlignment: PoetryTextAlignment,
         showSource: Boolean,
         showQuoteMark: Boolean,
+        sevenCharacterWrapEnabled: Boolean,
     ) {
         context.settingsDataStore.edit { prefs ->
             prefs.setOrRemove(
@@ -427,6 +432,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.poetryTextAlignment] = textAlignment.name
             prefs[Keys.poetryShowSource] = showSource
             prefs[Keys.poetryShowQuoteMark] = showQuoteMark
+            prefs[Keys.poetrySevenCharacterWrapEnabled] = sevenCharacterWrapEnabled
         }
     }
     suspend fun setMealCalendarImageMaxHeight(value: Int) =
@@ -651,6 +657,8 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.poetryTextAlignment] = value.poetryTextAlignment.name
             prefs[Keys.poetryShowSource] = value.poetryShowSource
             prefs[Keys.poetryShowQuoteMark] = value.poetryShowQuoteMark
+            prefs[Keys.poetrySevenCharacterWrapEnabled] =
+                value.poetrySevenCharacterWrapEnabled
             prefs[Keys.mealCalendarImageMaxHeightDp] = value.mealCalendarImageMaxHeightDp.coerceIn(80, 320)
             prefs[Keys.mealCalendarShowCaptions] = value.mealCalendarShowCaptions
             prefs[Keys.mealCalendarWrapEnabled] = value.mealCalendarWrapEnabled

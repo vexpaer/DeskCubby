@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 data class StepStatisticsUiState(
+    val initializing: Boolean = true,
     val enabled: Boolean = false,
     val history: StepStatisticsHistory = StepStatisticsHistory(),
     val collection: StatisticsCollectionState = StatisticsCollectionState(),
@@ -35,6 +36,9 @@ data class StepStatisticsUiState(
     val points: List<StatisticsPoint> = emptyList(),
     val permissionsToRequest: Set<String> = emptySet(),
     val healthConnectAction: StepHealthConnectAction = StepHealthConnectAction.UNSUPPORTED,
+    val deviceStepCounterAvailable: Boolean = false,
+    val deviceStepCounterPermission: String? = null,
+    val usingDeviceStepCounter: Boolean = false,
 )
 
 @HiltViewModel
@@ -62,6 +66,7 @@ class StepStatisticsViewModel @Inject constructor(
             dateOf = { it.date },
         )
         StepStatisticsUiState(
+            initializing = false,
             enabled = isEnabled,
             history = history,
             collection = collection,
@@ -75,6 +80,15 @@ class StepStatisticsViewModel @Inject constructor(
                 .getOrDefault(emptySet()),
             healthConnectAction = runCatching(repository::healthConnectAction)
                 .getOrDefault(StepHealthConnectAction.UNSUPPORTED),
+            deviceStepCounterAvailable = runCatching(
+                repository::isDeviceStepCounterAvailable,
+            ).getOrDefault(false),
+            deviceStepCounterPermission = runCatching(
+                repository::deviceStepCounterPermission,
+            ).getOrNull(),
+            usingDeviceStepCounter =
+                collection.technicalDetail ==
+                    StepStatisticsRepository.DETAIL_DEVICE_STEP_COUNTER,
         )
     }.stateIn(
         scope = viewModelScope,

@@ -43,6 +43,7 @@ data class UsageAppChoice(
 )
 
 data class UsageStatisticsUiState(
+    val initializing: Boolean = true,
     val enabled: Boolean = false,
     val history: UsageStatisticsHistory = UsageStatisticsHistory(),
     val collection: StatisticsCollectionState = StatisticsCollectionState(),
@@ -53,6 +54,8 @@ data class UsageStatisticsUiState(
     val overview: StatisticsOverview = StatisticsOverview(null, 0, 0, 0.0, 0.0),
     val points: List<StatisticsPoint> = emptyList(),
     val rangeTotalForegroundMillis: Long = 0L,
+    val highestDayForegroundMillis: Double = 0.0,
+    val lastSevenDayAverageForegroundMillis: Double = 0.0,
 )
 
 @HiltViewModel
@@ -138,6 +141,7 @@ class UsageStatisticsViewModel @Inject constructor(
             }
         }
         UsageStatisticsUiState(
+            initializing = false,
             enabled = inputs.enabled,
             history = inputs.history,
             collection = inputs.collection,
@@ -147,6 +151,9 @@ class UsageStatisticsViewModel @Inject constructor(
             chartType = inputs.chartType,
             overview = derived.overview,
             rangeTotalForegroundMillis = derived.rangeTotalForegroundMillis,
+            highestDayForegroundMillis = derived.highestDayForegroundMillis,
+            lastSevenDayAverageForegroundMillis =
+                derived.lastSevenDayAverageForegroundMillis,
             points = derived.points,
         )
     }.stateIn(
@@ -212,6 +219,8 @@ private data class DerivedUsageStatisticsState(
     val rankedPackages: List<UsagePackageTotal>,
     val overview: StatisticsOverview,
     val rangeTotalForegroundMillis: Long,
+    val highestDayForegroundMillis: Double,
+    val lastSevenDayAverageForegroundMillis: Double,
     val points: List<StatisticsPoint>,
 )
 
@@ -224,6 +233,20 @@ private fun deriveUsageStatisticsState(
         today = today,
         dateOf = UsageStatisticsDay::date,
     )
+    val points = days.map { day ->
+        StatisticsPoint(
+            date = day.date,
+            value = day.valueForPackage(inputs.selectedPackage),
+        )
+    }
+    val lastSevenDays = inputs.history.days.withinStatisticsRange(
+        range = StatisticsRange.LAST_7_DAYS,
+        today = today,
+        dateOf = UsageStatisticsDay::date,
+    )
+    val lastSevenValues = lastSevenDays.map { day ->
+        day.valueForPackage(inputs.selectedPackage)
+    }
     return DerivedUsageStatisticsState(
         rankedPackages = rankUsagePackages(
             allDays = inputs.history.days,
@@ -239,21 +262,27 @@ private fun deriveUsageStatisticsState(
             val value = day.totalForegroundMillis
             if (Long.MAX_VALUE - total < value) Long.MAX_VALUE else total + value
         },
-        points = days.map { day ->
-            StatisticsPoint(
-                date = day.date,
-                value = if (inputs.selectedPackage == null) {
-                    day.totalForegroundMillis.toDouble()
-                } else {
-                    day.apps.firstOrNull { it.packageName == inputs.selectedPackage }
-                        ?.foregroundMillis
-                        ?.toDouble()
-                        ?: 0.0
-                },
-            )
+        highestDayForegroundMillis = points.mapNotNull(StatisticsPoint::value)
+            .maxOrNull()
+            ?: 0.0,
+        lastSevenDayAverageForegroundMillis = if (lastSevenValues.isEmpty()) {
+            0.0
+        } else {
+            lastSevenValues.average()
         },
+        points = points,
     )
 }
+
+private fun UsageStatisticsDay.valueForPackage(packageName: String?): Double =
+    if (packageName == null) {
+        totalForegroundMillis.toDouble()
+    } else {
+        apps.firstOrNull { it.packageName == packageName }
+            ?.foregroundMillis
+            ?.toDouble()
+            ?: 0.0
+    }
 
 internal data class UsagePackageTotal(
     val packageName: String,

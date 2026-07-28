@@ -203,6 +203,30 @@ class GameEnginesTest {
     }
 
     @Test
+    fun game2048SupportsFiveAndSixCellBoards() {
+        listOf(5, 6).forEach { size ->
+            val game = Game2048(size, Random(size))
+            val restored = Game2048.fromJson(
+                game.toJson(),
+                random = Random(1),
+                expectedSize = size,
+            )!!
+
+            assertEquals(size, restored.size)
+            assertEquals(size * size, restored.board.size)
+            assertEquals(game.board, restored.board)
+        }
+    }
+
+    @Test
+    fun legacy2048SaveDefaultsToFourByFourAndRejectsWrongVariant() {
+        val legacy = game2048Json(List(16) { 0 })
+
+        assertEquals(4, Game2048.fromJson(legacy)!!.size)
+        assertNull(Game2048.fromJson(legacy, expectedSize = 5))
+    }
+
+    @Test
     fun snakeJsonRoundTripPreservesState() {
         val game = SnakeGame(random = Random(11))
         game.setDirection(SnakeGame.Direction.DOWN)

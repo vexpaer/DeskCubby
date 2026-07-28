@@ -368,6 +368,7 @@ class SettingsViewModel @Inject constructor(
         textAlignment: PoetryTextAlignment,
         showSource: Boolean,
         showQuoteMark: Boolean,
+        sevenCharacterWrapEnabled: Boolean,
         onComplete: (Boolean) -> Unit,
     ) = viewModelScope.launch {
         try {
@@ -378,6 +379,7 @@ class SettingsViewModel @Inject constructor(
                 textAlignment = textAlignment,
                 showSource = showSource,
                 showQuoteMark = showQuoteMark,
+                sevenCharacterWrapEnabled = sevenCharacterWrapEnabled,
             )
             onComplete(true)
         } catch (error: CancellationException) {

@@ -135,6 +135,15 @@ object StepStatisticsJsonCodec {
         val root = JSONObject()
             .put(KEY_SCHEMA_VERSION, STEP_STATISTICS_SCHEMA_VERSION)
             .put(KEY_TRACKING_STARTED_ON, history.trackingStartedOn?.toString() ?: JSONObject.NULL)
+            .put(
+                KEY_DEVICE_SENSOR_BASELINE,
+                history.deviceSensorBaseline?.let { baseline ->
+                    JSONObject()
+                        .put(KEY_DATE, baseline.date.toString())
+                        .put(KEY_CUMULATIVE_STEPS, baseline.cumulativeSteps)
+                        .put(KEY_CAPTURED_AT, baseline.capturedAtEpochMillis)
+                } ?: JSONObject.NULL,
+            )
         val days = JSONArray()
         history.days.sortedBy(StepStatisticsDay::date).forEach { day ->
             days.put(
@@ -151,16 +160,47 @@ object StepStatisticsJsonCodec {
     }
 
     fun decode(json: String): StepStatisticsHistory = decodeBounded(json) { root ->
-        root.requireExactKeys(
-            KEY_SCHEMA_VERSION,
-            KEY_TRACKING_STARTED_ON,
-            KEY_DAYS,
-        )
-        root.requiredSchemaVersion(
-            minimum = STEP_STATISTICS_SCHEMA_VERSION,
+        val version = root.requiredSchemaVersion(
+            minimum = LEGACY_STEP_STATISTICS_SCHEMA_VERSION,
             maximum = STEP_STATISTICS_SCHEMA_VERSION,
         )
+        if (version >= 2) {
+            root.requireExactKeys(
+                KEY_SCHEMA_VERSION,
+                KEY_TRACKING_STARTED_ON,
+                KEY_DEVICE_SENSOR_BASELINE,
+                KEY_DAYS,
+            )
+        } else {
+            root.requireExactKeys(
+                KEY_SCHEMA_VERSION,
+                KEY_TRACKING_STARTED_ON,
+                KEY_DAYS,
+            )
+        }
         val trackingStartedOn = root.requiredNullableDate(KEY_TRACKING_STARTED_ON)
+        val deviceSensorBaseline = if (
+            version >= 2 && !root.isNull(KEY_DEVICE_SENSOR_BASELINE)
+        ) {
+            root.requiredObject(KEY_DEVICE_SENSOR_BASELINE).run {
+                requireExactKeys(KEY_DATE, KEY_CUMULATIVE_STEPS, KEY_CAPTURED_AT)
+                DeviceStepSensorBaseline(
+                    date = requiredDate(KEY_DATE),
+                    cumulativeSteps = requiredLong(
+                        KEY_CUMULATIVE_STEPS,
+                        minimum = 0,
+                        maximum = Long.MAX_VALUE,
+                    ),
+                    capturedAtEpochMillis = requiredLong(
+                        KEY_CAPTURED_AT,
+                        minimum = 0,
+                        maximum = Long.MAX_VALUE,
+                    ),
+                )
+            }
+        } else {
+            null
+        }
         val dayArray = root.requiredArray(KEY_DAYS, MAX_STATISTICS_DAYS)
         val days = buildList(dayArray.length()) {
             repeat(dayArray.length()) { index ->
@@ -192,7 +232,11 @@ object StepStatisticsJsonCodec {
                 )
             }
         }
-        StepStatisticsHistory(trackingStartedOn, days).also(::validateStepHistory)
+        StepStatisticsHistory(
+            trackingStartedOn = trackingStartedOn,
+            days = days,
+            deviceSensorBaseline = deviceSensorBaseline,
+        ).also(::validateStepHistory)
     }
 }
 
@@ -246,6 +290,16 @@ private fun validateStepHistory(history: StepStatisticsHistory) {
             invalid("Step count is outside the accepted daily range.")
         }
     }
+    history.deviceSensorBaseline?.let { baseline ->
+        if (baseline.cumulativeSteps < 0) invalid("Sensor cumulative steps must be non-negative.")
+        if (baseline.capturedAtEpochMillis < 0) invalid("Sensor capture time must be non-negative.")
+        if (
+            history.trackingStartedOn != null &&
+            baseline.date.isBefore(history.trackingStartedOn)
+        ) {
+            invalid("Sensor baseline predates trackingStartedOn.")
+        }
+    }
 }
 
 private fun validateDates(trackingStartedOn: LocalDate?, dates: List<LocalDate>) {
@@ -297,6 +351,9 @@ private fun JSONObject.requireExactKeys(vararg expected: String) {
         invalid("Unexpected or missing JSON fields: ${(actual union expectedSet) - (actual intersect expectedSet)}")
     }
 }
+
+private fun JSONObject.requiredObject(key: String): JSONObject =
+    optJSONObject(key) ?: invalid("Missing or invalid object: $key")
 
 private fun JSONObject.requiredArray(key: String, maxEntries: Int): JSONArray {
     if (!has(key) || isNull(key)) invalid("$key must be an array.")
@@ -360,7 +417,8 @@ private fun invalid(message: String): Nothing = throw StatisticsJsonException(me
 internal const val LEGACY_USAGE_STATISTICS_SCHEMA_VERSION = 1
 internal const val PREVIOUS_USAGE_STATISTICS_SCHEMA_VERSION = 2
 internal const val USAGE_STATISTICS_SCHEMA_VERSION = 3
-internal const val STEP_STATISTICS_SCHEMA_VERSION = 1
+internal const val LEGACY_STEP_STATISTICS_SCHEMA_VERSION = 1
+internal const val STEP_STATISTICS_SCHEMA_VERSION = 2
 internal const val MAX_STATISTICS_JSON_BYTES = 10 * 1024 * 1024
 private const val MAX_STATISTICS_DAYS = 36_600
 private const val MAX_APPS_PER_DAY = 4_096
@@ -383,3 +441,6 @@ private const val KEY_APPS = "apps"
 private const val KEY_PACKAGE_NAME = "packageName"
 private const val KEY_FOREGROUND_MILLIS = "foregroundMillis"
 private const val KEY_STEPS = "steps"
+private const val KEY_DEVICE_SENSOR_BASELINE = "deviceSensorBaseline"
+private const val KEY_CUMULATIVE_STEPS = "cumulativeSteps"
+private const val KEY_CAPTURED_AT = "capturedAtEpochMillis"

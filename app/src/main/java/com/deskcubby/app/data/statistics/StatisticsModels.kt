@@ -40,8 +40,8 @@ data class UsageStatisticsHistory(
 )
 
 /**
- * A null [steps] value means Health Connect successfully answered the query
- * but had no aggregate for the day. It is deliberately distinct from zero.
+ * A null [steps] value means the selected source has not produced a trustworthy
+ * daily result. It is deliberately distinct from zero.
  */
 data class StepStatisticsDay(
     val date: LocalDate,
@@ -54,6 +54,17 @@ data class StepStatisticsDay(
 data class StepStatisticsHistory(
     val trackingStartedOn: LocalDate? = null,
     val days: List<StepStatisticsDay> = emptyList(),
+    val deviceSensorBaseline: DeviceStepSensorBaseline? = null,
+)
+
+/**
+ * Last cumulative TYPE_STEP_COUNTER sample. It is device-local collection state rather than a
+ * daily result; a reset or reboot is detected when the next cumulative value is lower.
+ */
+data class DeviceStepSensorBaseline(
+    val date: LocalDate,
+    val cumulativeSteps: Long,
+    val capturedAtEpochMillis: Long,
 )
 
 enum class StatisticsRange(

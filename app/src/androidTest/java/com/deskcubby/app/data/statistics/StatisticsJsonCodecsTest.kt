@@ -118,6 +118,41 @@ class StatisticsJsonCodecsTest {
     }
 
     @Test
+    fun stepsPreserveDeviceSensorBaselineAndImportVersionOne() {
+        val date = LocalDate.parse("2026-07-27")
+        val history = StepStatisticsHistory(
+            trackingStartedOn = date,
+            days = listOf(
+                StepStatisticsDay(
+                    date = date,
+                    zoneId = "UTC",
+                    state = StatisticsDayState.OPEN,
+                    collectedAtEpochMillis = 42,
+                    steps = 123,
+                ),
+            ),
+            deviceSensorBaseline = DeviceStepSensorBaseline(
+                date = date,
+                cumulativeSteps = 4_567,
+                capturedAtEpochMillis = 42,
+            ),
+        )
+
+        val decoded = StepStatisticsJsonCodec.decode(
+            StepStatisticsJsonCodec.encode(history),
+        )
+        assertEquals(history, decoded)
+
+        val versionOne = JSONObject(StepStatisticsJsonCodec.encode(history))
+            .put("schemaVersion", 1)
+            .apply { remove("deviceSensorBaseline") }
+        assertNull(
+            StepStatisticsJsonCodec.decode(versionOne.toString())
+                .deviceSensorBaseline,
+        )
+    }
+
+    @Test
     fun rejectsUnknownField() {
         val root = JSONObject(
             StepStatisticsJsonCodec.encode(StepStatisticsHistory()),

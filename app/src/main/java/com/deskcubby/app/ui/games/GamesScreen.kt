@@ -16,14 +16,19 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -60,7 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -98,14 +103,39 @@ fun GamesScreen(padding: PaddingValues, viewModel: GamesViewModel) {
     Box(
         Modifier
             .fillMaxSize()
-            .padding(padding),
+            .padding(bottom = padding.calculateBottomPadding())
+            .windowInsetsPadding(
+                WindowInsets.safeDrawing.only(
+                    WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+                ),
+            ),
     ) {
         val current = launch
         if (current == null) {
             GameListPage(viewModel, onLaunch)
         } else {
             when (current.gameId) {
-                GamesViewModel.GAME_2048 -> Game2048Page(viewModel, current.resume) { launch = null }
+                GamesViewModel.GAME_2048 -> Game2048Page(
+                    viewModel = viewModel,
+                    gameId = current.gameId,
+                    boardSize = 4,
+                    resume = current.resume,
+                    onExit = { launch = null },
+                )
+                GamesViewModel.GAME_2048_5 -> Game2048Page(
+                    viewModel = viewModel,
+                    gameId = current.gameId,
+                    boardSize = 5,
+                    resume = current.resume,
+                    onExit = { launch = null },
+                )
+                GamesViewModel.GAME_2048_6 -> Game2048Page(
+                    viewModel = viewModel,
+                    gameId = current.gameId,
+                    boardSize = 6,
+                    resume = current.resume,
+                    onExit = { launch = null },
+                )
                 GamesViewModel.GAME_SNAKE -> SnakePage(viewModel, current.resume) { launch = null }
                 GamesViewModel.GAME_TETRIS -> TetrisPage(viewModel, current.resume) { launch = null }
                 else -> GameListPage(viewModel, onLaunch)
@@ -136,8 +166,22 @@ private fun GameListPage(viewModel: GamesViewModel, onLaunch: (String, Boolean) 
         )
         GameCard(
             gameId = GamesViewModel.GAME_2048,
-            title = tr("2048", "2048"),
-            subtitle = tr("滑动合并数字，冲击 2048", "Swipe to merge tiles and reach 2048"),
+            title = "2048 · 4×4",
+            subtitle = tr("经典棋盘，节奏紧凑", "Classic compact board"),
+            viewModel = viewModel,
+            onLaunch = onLaunch,
+        )
+        GameCard(
+            gameId = GamesViewModel.GAME_2048_5,
+            title = "2048 · 5×5",
+            subtitle = tr("空间更大，适合长局", "More space for longer games"),
+            viewModel = viewModel,
+            onLaunch = onLaunch,
+        )
+        GameCard(
+            gameId = GamesViewModel.GAME_2048_6,
+            title = "2048 · 6×6",
+            subtitle = tr("最大棋盘，挑战高分", "Largest board for high scores"),
             viewModel = viewModel,
             onLaunch = onLaunch,
         )
@@ -388,8 +432,13 @@ private fun SwipeDirection.toSnakeDirection(): SnakeGame.Direction = when (this)
 // ---------------------------------------------------------------------------------------------
 
 @Composable
-private fun Game2048Page(viewModel: GamesViewModel, resume: Boolean, onExit: () -> Unit) {
-    val gameId = GamesViewModel.GAME_2048
+private fun Game2048Page(
+    viewModel: GamesViewModel,
+    gameId: String,
+    boardSize: Int,
+    resume: Boolean,
+    onExit: () -> Unit,
+) {
     var engine by remember { mutableStateOf<Game2048?>(null) }
     var frame by remember { mutableIntStateOf(0) }
     var paused by remember { mutableStateOf(false) }
@@ -400,12 +449,18 @@ private fun Game2048Page(viewModel: GamesViewModel, resume: Boolean, onExit: () 
 
     LaunchedEffect(Unit) {
         if (engine == null) {
-            val restored = if (resume) viewModel.loadSave(gameId)?.let { Game2048.fromJson(it) } else null
-            engine = restored ?: Game2048()
+            val restored = if (resume) {
+                viewModel.loadSave(gameId)?.let {
+                    Game2048.fromJson(it, expectedSize = boardSize)
+                }
+            } else {
+                null
+            }
+            engine = restored ?: Game2048(boardSize)
         }
     }
 
-    val board = remember(engine, frame) { engine?.board ?: List(Game2048.SIZE * Game2048.SIZE) { 0 } }
+    val board = remember(engine, frame) { engine?.board ?: List(boardSize * boardSize) { 0 } }
     val score = remember(engine, frame) { engine?.score ?: 0 }
     val gameOver = remember(engine, frame) { engine?.isGameOver == true }
 
@@ -436,7 +491,7 @@ private fun Game2048Page(viewModel: GamesViewModel, resume: Boolean, onExit: () 
     GameAutoPauseEffect(onPauseAndSave = ::pauseAndSave)
 
     GameFrame(
-        title = tr("2048", "2048"),
+        title = "2048 · ${boardSize}×${boardSize}",
         score = score,
         highScore = maxOf(meta.highScore, score),
         pauseVisible = engine != null && !gameOver,
@@ -462,6 +517,7 @@ private fun Game2048Page(viewModel: GamesViewModel, resume: Boolean, onExit: () 
         ) {
             Board2048(
                 board = board,
+                boardSize = boardSize,
                 enabled = engine != null && !paused && !gameOver,
                 transition = transition,
                 transitionSequence = transitionSequence,
@@ -488,7 +544,7 @@ private fun Game2048Page(viewModel: GamesViewModel, resume: Boolean, onExit: () 
         GameOverDialog(
             score = score,
             onRestart = {
-                engine = Game2048()
+                engine = Game2048(boardSize)
                 transition = null
                 transitionSequence++
                 frame++
@@ -509,6 +565,7 @@ internal fun shouldAnimate2048Transition(
 @Composable
 private fun Board2048(
     board: List<Int>,
+    boardSize: Int,
     enabled: Boolean,
     transition: Game2048.MoveResult?,
     transitionSequence: Int,
@@ -546,24 +603,28 @@ private fun Board2048(
             .background(scheme.surfaceVariant.copy(alpha = 0.5f))
             .swipeInput(enabled) { swipe -> onMove(swipe.to2048Direction()) },
     ) {
-        val cellGap = 8.dp
-        val boardPadding = 8.dp
-        val tileSize = (maxWidth - boardPadding * 2 - cellGap * (Game2048.SIZE - 1)) /
-            Game2048.SIZE
+        val cellGap = when (boardSize) {
+            4 -> 8.dp
+            5 -> 6.dp
+            else -> 4.dp
+        }
+        val boardPadding = if (boardSize == 6) 6.dp else 8.dp
+        val tileSize = (maxWidth - boardPadding * 2 - cellGap * (boardSize - 1)) /
+            boardSize
         val density = LocalDensity.current
         val paddingPx = with(density) { boardPadding.toPx() }
         val stepPx = with(density) { (tileSize + cellGap).toPx() }
 
         fun cellOffset(index: Int): IntOffset {
-            val column = index % Game2048.SIZE
-            val row = index / Game2048.SIZE
+            val column = index % boardSize
+            val row = index / boardSize
             return IntOffset(
                 x = (paddingPx + column * stepPx).roundToInt(),
                 y = (paddingPx + row * stepPx).roundToInt(),
             )
         }
 
-        repeat(Game2048.SIZE * Game2048.SIZE) { index ->
+        repeat(boardSize * boardSize) { index ->
             Box(
                 Modifier
                     .offset { cellOffset(index) }
@@ -589,6 +650,7 @@ private fun Board2048(
                 key(transitionSequence, motion.fromIndex, motion.toIndex, order) {
                     Tile2048(
                         value = motion.value,
+                        boardSize = boardSize,
                         modifier = Modifier
                             .offset { animatedOffset }
                             .size(tileSize),
@@ -613,13 +675,32 @@ private fun Board2048(
                     index in mergeDestinations -> mergedTileScale(popProgress)
                     else -> 1f
                 }
+                val tileAlpha = if (
+                    currentTransition != null &&
+                    index == currentTransition.spawn.index
+                ) {
+                    popProgress.coerceIn(0f, 1f)
+                } else {
+                    1f
+                }
+                val tileRotation = if (index in mergeDestinations) {
+                    (1f - popProgress) * 4f
+                } else {
+                    0f
+                }
                 key(transitionSequence, index, value) {
                     Tile2048(
                         value = value,
+                        boardSize = boardSize,
                         modifier = Modifier
                             .offset { cellOffset(index) }
                             .size(tileSize)
-                            .scale(tileScale),
+                            .graphicsLayer {
+                                scaleX = tileScale
+                                scaleY = tileScale
+                                alpha = tileAlpha
+                                rotationZ = tileRotation
+                            },
                     )
                 }
             }
@@ -647,16 +728,21 @@ private fun mergedTileScale(progress: Float): Float {
 }
 
 @Composable
-private fun Tile2048(value: Int, modifier: Modifier = Modifier) {
+private fun Tile2048(
+    value: Int,
+    boardSize: Int,
+    modifier: Modifier = Modifier,
+) {
     val scheme = MaterialTheme.colorScheme
-    // Tile shade moves only between the user-selected secondary and primary colors.
-    val fraction = if (value <= 0) 0f else (log2(value.toFloat()) / 11f).coerceIn(0.08f, 1f)
-    val background = if (value <= 0) {
-        scheme.surface.copy(alpha = 0.6f)
-    } else {
-        lerp(scheme.secondary, scheme.primary, fraction)
+    val exponent = if (value <= 0) 0 else log2(value.toFloat()).roundToInt()
+    val (background, textColor) = when (exponent % 6) {
+        1 -> scheme.secondaryContainer to scheme.onSecondaryContainer
+        2 -> scheme.tertiaryContainer to scheme.onTertiaryContainer
+        3 -> scheme.primaryContainer to scheme.onPrimaryContainer
+        4 -> scheme.secondary to scheme.onSecondary
+        5 -> scheme.tertiary to scheme.onTertiary
+        else -> scheme.primary to scheme.onPrimary
     }
-    val textColor = if (fraction > 0.5f) scheme.onPrimary else scheme.onSecondary
     Box(
         modifier
             .clip(RoundedCornerShape(10.dp))
@@ -668,13 +754,23 @@ private fun Tile2048(value: Int, modifier: Modifier = Modifier) {
                 value.toString(),
                 color = textColor,
                 fontWeight = FontWeight.Bold,
-                fontSize = when {
-                    value < 100 -> 22.sp
-                    value < 1000 -> 19.sp
-                    else -> 16.sp
-                },
+                fontSize = tileFontSize(value, boardSize).sp,
             )
         }
+    }
+}
+
+private fun tileFontSize(value: Int, boardSize: Int): Int {
+    val base = when (boardSize) {
+        4 -> 22
+        5 -> 18
+        else -> 15
+    }
+    return when {
+        value < 100 -> base
+        value < 1_000 -> base - 2
+        value < 10_000 -> base - 4
+        else -> (base - 6).coerceAtLeast(9)
     }
 }
 
@@ -1099,7 +1195,7 @@ private fun NextPiecePanel(cells: List<TetrisGame.Cell>, color: Color) {
 }
 
 private const val SNAKE_TICK_MILLIS = 220L
-private const val GAME_2048_ANIMATION_MILLIS = 190
+private const val GAME_2048_ANIMATION_MILLIS = 240
 private const val GAME_2048_SLIDE_END = 0.64f
 private const val TETRIS_BASE_TICK_MILLIS = 600L
 private const val TETRIS_LEVEL_STEP_MILLIS = 40L

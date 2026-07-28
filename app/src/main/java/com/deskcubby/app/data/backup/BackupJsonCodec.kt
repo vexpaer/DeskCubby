@@ -46,7 +46,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 17,
+    val formatVersion: Int = 18,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -66,7 +66,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 17
+    const val FORMAT_VERSION: Int = 18
 
     private const val FORMAT_NAME = "DeskCubby"
     private const val MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -231,6 +231,10 @@ object BackupJsonCodec {
         .put("poetryTextAlignment", settings.poetryTextAlignment.name)
         .put("poetryShowSource", settings.poetryShowSource)
         .put("poetryShowQuoteMark", settings.poetryShowQuoteMark)
+        .put(
+            "poetrySevenCharacterWrapEnabled",
+            settings.poetrySevenCharacterWrapEnabled,
+        )
         .put("mealCalendarImageMaxHeightDp", settings.mealCalendarImageMaxHeightDp)
         .put("mealCalendarShowCaptions", settings.mealCalendarShowCaptions)
         .put("mealCalendarWrapEnabled", settings.mealCalendarWrapEnabled)
@@ -638,6 +642,11 @@ object BackupJsonCodec {
                 json.requiredBoolean("poetryShowQuoteMark")
             } else {
                 defaults.poetryShowQuoteMark
+            },
+            poetrySevenCharacterWrapEnabled = if (version >= 18) {
+                json.requiredBoolean("poetrySevenCharacterWrapEnabled")
+            } else {
+                defaults.poetrySevenCharacterWrapEnabled
             },
             mealCalendarImageMaxHeightDp = if (version >= 9) {
                 json.requiredCoercedInt("mealCalendarImageMaxHeightDp", 80, 320)

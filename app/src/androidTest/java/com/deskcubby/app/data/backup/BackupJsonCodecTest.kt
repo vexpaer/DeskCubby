@@ -67,6 +67,7 @@ class BackupJsonCodecTest {
             poetryTextAlignment = PoetryTextAlignment.CENTER,
             poetryShowSource = false,
             poetryShowQuoteMark = false,
+            poetrySevenCharacterWrapEnabled = true,
             mealCalendarImageMaxHeightDp = 188,
             mealCalendarShowCaptions = false,
             dailyEventTemplates = listOf(
@@ -253,6 +254,26 @@ class BackupJsonCodecTest {
                 "content://" + "f".repeat(8_193),
             )
         })
+    }
+
+    @Test
+    fun versionSeventeenUsesDefaultForSevenCharacterWrapping() {
+        val current = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 18,
+                    settings = AppSettings(poetrySevenCharacterWrapEnabled = true),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        current.put("version", 17)
+        current.getJSONObject("settings").remove("poetrySevenCharacterWrapEnabled")
+
+        val decoded = BackupJsonCodec.decode(current.toString())
+
+        assertEquals(false, decoded.settings.poetrySevenCharacterWrapEnabled)
     }
 
     @Test

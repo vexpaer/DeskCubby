@@ -3,17 +3,21 @@ package com.deskcubby.app.games
 import kotlin.random.Random
 
 /**
- * Pure-Kotlin 2048 engine on a 4x4 board. No Android/Compose dependencies so the rules can be
+ * Pure-Kotlin 2048 engine on a 4x4, 5x5 or 6x6 board. No Android/Compose dependencies so the rules can be
  * unit tested on the JVM. Pass a seeded [Random] for deterministic tile spawning in tests.
  */
 class Game2048 private constructor(
     private val cells: IntArray,
+    val size: Int,
     initialScore: Int,
     private val random: Random,
 ) {
 
     /** Starts a fresh game with two spawned tiles. */
-    constructor(random: Random = Random.Default) : this(IntArray(CELL_COUNT), 0, random) {
+    constructor(random: Random = Random.Default) : this(SIZE, random)
+
+    constructor(size: Int, random: Random = Random.Default) :
+        this(IntArray(validatedCellCount(size)), size, 0, random) {
         spawnTile()
         spawnTile()
     }
@@ -21,10 +25,10 @@ class Game2048 private constructor(
     var score: Int = initialScore
         private set
 
-    /** Row-major snapshot of the 16 tile values (0 = empty). */
+    /** Row-major snapshot of all tile values (0 = empty). */
     val board: List<Int> get() = cells.toList()
 
-    fun cellAt(row: Int, column: Int): Int = cells[row * SIZE + column]
+    fun cellAt(row: Int, column: Int): Int = cells[row * size + column]
 
     /** True when no move in any direction can change the board. */
     val isGameOver: Boolean get() = !hasAnyMove()
@@ -84,14 +88,14 @@ class Game2048 private constructor(
      */
     fun moveWithResult(direction: Direction): MoveResult? {
         val before = cells.toList()
-        val next = IntArray(CELL_COUNT)
-        val motions = ArrayList<TileMotion>(CELL_COUNT)
-        val merges = ArrayList<Merge>(SIZE * 2)
+        val next = IntArray(cells.size)
+        val motions = ArrayList<TileMotion>(cells.size)
+        val merges = ArrayList<Merge>(size * 2)
         var scoreGained = 0
 
-        for (line in 0 until SIZE) {
+        for (line in 0 until size) {
             val indices = lineIndices(direction, line)
-            val tiles = ArrayList<Pair<Int, Int>>(SIZE)
+            val tiles = ArrayList<Pair<Int, Int>>(size)
             for (index in indices) {
                 val value = cells[index]
                 if (value != 0) tiles += index to value
@@ -152,7 +156,7 @@ class Game2048 private constructor(
 
     /** Serializes the complete restorable state as JSON. */
     fun toJson(): String = buildString {
-        append("{\"cells\":[")
+        append("{\"size\":").append(size).append(",\"cells\":[")
         cells.forEachIndexed { index, value ->
             if (index > 0) append(',')
             append(value)
@@ -162,10 +166,10 @@ class Game2048 private constructor(
 
     /** Cell indices of one line, ordered from the edge the tiles slide towards. */
     private fun lineIndices(direction: Direction, line: Int): IntArray = when (direction) {
-        Direction.LEFT -> IntArray(SIZE) { line * SIZE + it }
-        Direction.RIGHT -> IntArray(SIZE) { line * SIZE + (SIZE - 1 - it) }
-        Direction.UP -> IntArray(SIZE) { it * SIZE + line }
-        Direction.DOWN -> IntArray(SIZE) { (SIZE - 1 - it) * SIZE + line }
+        Direction.LEFT -> IntArray(size) { line * size + it }
+        Direction.RIGHT -> IntArray(size) { line * size + (size - 1 - it) }
+        Direction.UP -> IntArray(size) { it * size + line }
+        Direction.DOWN -> IntArray(size) { (size - 1 - it) * size + line }
     }
 
     private fun spawnTile(): Spawn? {
@@ -180,26 +184,38 @@ class Game2048 private constructor(
     private fun hasAnyMove(): Boolean {
         for (index in cells.indices) {
             if (cells[index] == 0) return true
-            val row = index / SIZE
-            val column = index % SIZE
-            if (column + 1 < SIZE && cells[index] == cells[index + 1]) return true
-            if (row + 1 < SIZE && cells[index] == cells[index + SIZE]) return true
+            val row = index / size
+            val column = index % size
+            if (column + 1 < size && cells[index] == cells[index + 1]) return true
+            if (row + 1 < size && cells[index] == cells[index + size]) return true
         }
         return false
     }
 
     companion object {
         const val SIZE = 4
-        private const val CELL_COUNT = SIZE * SIZE
+        const val MIN_SIZE = 4
+        const val MAX_SIZE = 6
 
         /** Restores a game from [toJson] output. Returns null (never throws) on invalid input. */
-        fun fromJson(json: String, random: Random = Random.Default): Game2048? {
+        fun fromJson(
+            json: String,
+            random: Random = Random.Default,
+            expectedSize: Int? = null,
+        ): Game2048? {
             val map = GameJson.objectOf(GameJson.parse(json)) ?: return null
+            val size = map["size"]?.let(GameJson::intOf) ?: SIZE
+            if (size !in MIN_SIZE..MAX_SIZE || expectedSize?.let { it != size } == true) return null
             val cells = GameJson.intListOf(map["cells"]) ?: return null
-            if (cells.size != CELL_COUNT || cells.any { it < 0 }) return null
+            if (cells.size != size * size || cells.any { it < 0 }) return null
             val score = GameJson.intOf(map["score"]) ?: return null
             if (score < 0) return null
-            return Game2048(cells.toIntArray(), score, random)
+            return Game2048(cells.toIntArray(), size, score, random)
+        }
+
+        private fun validatedCellCount(size: Int): Int {
+            require(size in MIN_SIZE..MAX_SIZE) { "2048 board size must be 4, 5, or 6" }
+            return size * size
         }
     }
 }
