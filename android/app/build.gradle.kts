@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 
 plugins {
@@ -8,22 +9,36 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
-val releaseKeystorePropertiesFile = rootProject.file("keystore.properties")
+val canonicalReleaseKeystorePropertiesFile = rootProject.file("keystore.properties")
+val releaseKeystorePropertiesFile = listOf(
+    canonicalReleaseKeystorePropertiesFile,
+    rootProject.file("../keystore.properties"),
+).firstOrNull { it.isFile } ?: canonicalReleaseKeystorePropertiesFile
 val releaseKeystoreProperties = Properties().apply {
     if (releaseKeystorePropertiesFile.isFile) {
         releaseKeystorePropertiesFile.inputStream().use(::load)
     }
 }
 
-fun releaseSigningValue(propertyName: String, environmentName: String): String? =
-    providers.environmentVariable(environmentName).orNull
+fun normalizedSigningValue(value: String?): String? =
+    value
         ?.trim()
         ?.takeIf(String::isNotEmpty)
-        ?: releaseKeystoreProperties.getProperty(propertyName)
-            ?.trim()
-            ?.takeIf(String::isNotEmpty)
 
-val releaseStoreFile = releaseSigningValue("storeFile", "DESKCUBBY_RELEASE_STORE_FILE")
+fun releaseSigningEnvironmentValue(environmentName: String): String? =
+    normalizedSigningValue(providers.environmentVariable(environmentName).orNull)
+
+fun releaseSigningPropertyValue(propertyName: String): String? =
+    normalizedSigningValue(releaseKeystoreProperties.getProperty(propertyName))
+
+fun releaseSigningValue(propertyName: String, environmentName: String): String? =
+    releaseSigningEnvironmentValue(environmentName)
+        ?: releaseSigningPropertyValue(propertyName)
+
+val releaseStoreFileFromEnvironment =
+    releaseSigningEnvironmentValue("DESKCUBBY_RELEASE_STORE_FILE")
+val releaseStoreFile =
+    releaseStoreFileFromEnvironment ?: releaseSigningPropertyValue("storeFile")
 val releaseStorePassword = releaseSigningValue("storePassword", "DESKCUBBY_RELEASE_STORE_PASSWORD")
 val releaseKeyAlias = releaseSigningValue("keyAlias", "DESKCUBBY_RELEASE_KEY_ALIAS")
 val releaseKeyPassword = releaseSigningValue("keyPassword", "DESKCUBBY_RELEASE_KEY_PASSWORD")
@@ -70,7 +85,17 @@ android {
     signingConfigs {
         if (releaseSigningConfigured) {
             create("release") {
-                storeFile = rootProject.file(checkNotNull(releaseStoreFile))
+                val configuredStoreFile = File(checkNotNull(releaseStoreFile))
+                val storeFileBaseDirectory = if (releaseStoreFileFromEnvironment != null) {
+                    rootProject.projectDir
+                } else {
+                    releaseKeystorePropertiesFile.parentFile
+                }
+                storeFile = if (configuredStoreFile.isAbsolute) {
+                    configuredStoreFile
+                } else {
+                    storeFileBaseDirectory.resolve(configuredStoreFile.path)
+                }
                 storePassword = checkNotNull(releaseStorePassword)
                 keyAlias = checkNotNull(releaseKeyAlias)
                 keyPassword = checkNotNull(releaseKeyPassword)

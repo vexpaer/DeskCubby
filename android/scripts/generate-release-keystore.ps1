@@ -7,16 +7,28 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$keystoreDirectory = Join-Path $repoRoot "release"
+$androidRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$repositoryRoot = (Resolve-Path (Join-Path $androidRoot "..")).Path
+$keystoreDirectory = Join-Path $androidRoot "release"
 $keystorePath = Join-Path $keystoreDirectory "DeskCubby-release.jks"
-$propertiesPath = Join-Path $repoRoot "keystore.properties"
+$propertiesPath = Join-Path $androidRoot "keystore.properties"
+$legacyKeystorePath = Join-Path $repositoryRoot "release\DeskCubby-release.jks"
+$legacyPropertiesPath = Join-Path $repositoryRoot "keystore.properties"
 
 if (Test-Path -LiteralPath $keystorePath) {
     throw "Release keystore already exists: $keystorePath"
 }
 if (Test-Path -LiteralPath $propertiesPath) {
     throw "Signing properties already exist: $propertiesPath"
+}
+if (
+    (Test-Path -LiteralPath $legacyKeystorePath) -or
+    (Test-Path -LiteralPath $legacyPropertiesPath)
+) {
+    throw (
+        "Release signing files already exist at the repository root. " +
+        "The Android build remains compatible with them; do not generate a replacement key."
+    )
 }
 
 $keytoolCommand = Get-Command keytool -ErrorAction SilentlyContinue

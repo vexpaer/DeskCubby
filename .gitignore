@@ -14,7 +14,7 @@ build/
 captures/
 .externalNativeBuild/
 .cxx/
-app/build/
+android/app/build/
 *.apk
 *.aab
 

@@ -6,6 +6,8 @@ DeskCubby 是一个本地优先的 Android 原生个人记录应用。日记正�
 
 当前版本：**0.3.7**
 
+仓库按平台拆分：完整 Android 工程位于 `android/`，Windows 端预留目录位于 `windows/`；`README.md`、`TUTORIAL.md`、`overview.md`、许可证等项目级文档继续保留在仓库根目录。
+
 ## 当前功能
 
 ### 界面与导航
@@ -119,40 +121,44 @@ DeskCubby 是一个本地优先的 Android 原生个人记录应用。日记正�
 - Android SDK 36
 - JDK 17 或更高版本（可以使用 Android Studio 自带的 JDK）
 
-项目 Wrapper 在未设置 `GRADLE_USER_HOME` 时，会默认把 Gradle 分发和依赖缓存放在项目根目录的 `.gradle-user-home`，避免占用 C 盘。
+使用 Android Studio 时请打开仓库内的 `android/` 目录。项目 Wrapper 在未设置 `GRADLE_USER_HOME` 时，会默认把 Gradle 分发和依赖缓存放在 `android/.gradle-user-home`，避免占用 C 盘。
+
+以下命令均从仓库根目录运行。
 
 ### Debug APK
 
 ```powershell
-.\gradlew.bat :app:assembleDebug
+.\android\gradlew.bat --project-dir .\android :app:assembleDebug
 ```
 
-输出：`app/build/outputs/apk/debug/DeskCubby.apk`
+输出：`android/app/build/outputs/apk/debug/DeskCubby.apk`
 
 ### Release 签名
 
 首次打包前运行：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\generate-release-keystore.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\android\scripts\generate-release-keystore.ps1
 ```
 
 脚本会生成：
 
-- `release/DeskCubby-release.jks`：应用的长期 Release 签名密钥。
-- `keystore.properties`：本机签名参数和随机强密码。
+- `android/release/DeskCubby-release.jks`：应用的长期 Release 签名密钥。
+- `android/keystore.properties`：本机签名参数和随机强密码。
 
 这两个文件均已被 `.gitignore` 排除，不会进入 Git。请把它们一起加密备份到可靠位置；Android 后续版本必须继续使用同一把签名密钥，丢失或更换密钥会导致已安装版本无法正常升级。
+
+为避免目录迁移破坏已有发布能力，构建仍兼容迁移前保存在仓库根目录的 `keystore.properties` 与其相对路径；新配置统一放在 `android/` 内即可。如果签名脚本检测到根目录已有旧签名文件，它会拒绝生成替代密钥。不要为了整理目录复制、替换或重新生成已有长期签名密钥。
 
 然后构建已签名 Release APK：
 
 ```powershell
-.\gradlew.bat :app:assembleRelease
+.\android\gradlew.bat --project-dir .\android :app:assembleRelease
 ```
 
-输出：`app/build/outputs/apk/release/DeskCubby.apk`
+输出：`android/app/build/outputs/apk/release/DeskCubby.apk`
 
-如需手动配置，可复制 `keystore.properties.example` 为 `keystore.properties`。CI 也可以改用以下环境变量，避免把密码写入文件：
+如需手动配置，可复制 `android/keystore.properties.example` 为 `android/keystore.properties`。CI 也可以改用以下环境变量，避免把密码写入文件：
 
 - `DESKCUBBY_RELEASE_STORE_FILE`
 - `DESKCUBBY_RELEASE_STORE_PASSWORD`
@@ -164,10 +170,10 @@ Release 任务在签名配置缺失或不完整时会直接失败，不会误生
 ### 验证
 
 ```powershell
-.\gradlew.bat :app:compileDebugKotlin --offline
-.\gradlew.bat :app:testDebugUnitTest --offline
-.\gradlew.bat :app:compileDebugAndroidTestKotlin --offline
-.\gradlew.bat :app:assembleDebug :app:lintDebug --offline
+.\android\gradlew.bat --project-dir .\android :app:compileDebugKotlin --offline
+.\android\gradlew.bat --project-dir .\android :app:testDebugUnitTest --offline
+.\android\gradlew.bat --project-dir .\android :app:compileDebugAndroidTestKotlin --offline
+.\android\gradlew.bat --project-dir .\android :app:assembleDebug :app:lintDebug --offline
 ```
 
 0.3.7（2026-07-28）改用前后台事件重建手机使用时间并按本地午夜切分，升级后会修正系统仍保留事件范围内的重复日高值；4×4/5×5/6×6 三种 2048 均新增可随存档保留的单步撤回，游戏结束时也可撤回继续。应用 versionCode 为 10；应用备份仍为 v18，Room 仍为 v8。
@@ -178,12 +184,12 @@ Release 任务在签名配置缺失或不完整时会直接失败，不会误生
 
 本次发布产物：
 
-- Release APK：`app/build/outputs/apk/release/DeskCubby.apk`
+- Release APK：`android/app/build/outputs/apk/release/DeskCubby.apk`
 
 如需验证已签名的 Release APK：
 
 ```powershell
-apksigner verify --verbose app\build\outputs\apk\release\DeskCubby.apk
+apksigner verify --verbose android\app\build\outputs\apk\release\DeskCubby.apk
 ```
 
 ## 使用边界
