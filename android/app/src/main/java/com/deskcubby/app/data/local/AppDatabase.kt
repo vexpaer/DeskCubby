@@ -12,13 +12,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BrowserRecordEntity::class,
         DiaryIndexEntity::class,
         DateRecordEntity::class,
+        PoetryCategoryEntity::class,
         SavedPoemEntity::class,
         AiConversationEntity::class,
         AiMessageEntity::class,
         VaultItemEntity::class,
         GameStateEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -27,6 +28,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun browserRecordDao(): BrowserRecordDao
     abstract fun diaryIndexDao(): DiaryIndexDao
     abstract fun dateRecordDao(): DateRecordDao
+    abstract fun poetryCategoryDao(): PoetryCategoryDao
     abstract fun savedPoemDao(): SavedPoemDao
     abstract fun aiChatDao(): AiChatDao
     abstract fun vaultItemDao(): VaultItemDao
@@ -205,6 +207,53 @@ abstract class AppDatabase : RoomDatabase() {
                         arrayOf(index.toLong(), id),
                     )
                 }
+            }
+        }
+
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `poetry_categories` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT COLLATE NOCASE NOT NULL,
+                        `colorArgb` INTEGER NOT NULL,
+                        `sortOrder` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_poetry_categories_name` " +
+                        "ON `poetry_categories` (`name`)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `saved_poems_new` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `content` TEXT NOT NULL,
+                        `source` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL,
+                        `categoryId` INTEGER DEFAULT NULL,
+                        FOREIGN KEY(`categoryId`) REFERENCES `poetry_categories`(`id`)
+                            ON UPDATE NO ACTION ON DELETE SET NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `saved_poems_new` (`id`, `content`, `source`, `createdAt`, `updatedAt`)
+                    SELECT `id`, `content`, `source`, `createdAt`, `updatedAt` FROM `saved_poems`
+                    """.trimIndent(),
+                )
+                db.execSQL("DROP TABLE `saved_poems`")
+                db.execSQL("ALTER TABLE `saved_poems_new` RENAME TO `saved_poems`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_saved_poems_categoryId` " +
+                        "ON `saved_poems` (`categoryId`)",
+                )
             }
         }
     }

@@ -32,6 +32,7 @@ import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.preferences.SettingsRepository
+import com.deskcubby.app.data.preferences.normalizeS3EndpointScheme
 import com.deskcubby.app.data.repository.LegacyAiKeyMigrationStore
 import com.deskcubby.app.data.repository.DownloadedUpdate
 import com.deskcubby.app.data.repository.UpdateCheckResult
@@ -43,6 +44,7 @@ import com.deskcubby.app.data.sync.AppCloudSyncService
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncSecretStore
 import com.deskcubby.app.data.sync.PendingCloudSyncJson
+import com.deskcubby.app.data.sync.formatCloudSyncError
 import com.deskcubby.app.data.sync.validateForSync
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -418,6 +420,8 @@ class SettingsViewModel @Inject constructor(
     fun setMealButtonIcons(value: List<String>) = launch { repository.setMealButtonIcons(value) }
     fun hasCloudSyncCredentials(config: CloudSyncConfig): Boolean =
         cloudSyncSecretStore.hasCredentials(config)
+    fun cloudSyncConfigForEdit(config: CloudSyncConfig): CloudSyncConfig =
+        runCatching { cloudSyncSecretStore.hydrate(config) }.getOrDefault(config)
     fun pendingCloudSyncJson(): List<PendingCloudSyncJson> =
         cloudSyncService.pendingIncomingJson()
 
@@ -427,20 +431,30 @@ class SettingsViewModel @Inject constructor(
         onDone: (Boolean) -> Unit = {},
     ) = viewModelScope.launch {
         try {
-            val stored = if (clearExistingCredentials) {
-                config
-            } else {
-                val existing = cloudSyncSecretStore.hydrate(config)
+            val normalized = if (config.serviceType == CloudSyncServiceType.S3_COMPATIBLE) {
                 config.copy(
-                    webDavPassword = config.webDavPassword.ifBlank {
-                        existing.webDavPassword
-                    },
-                    s3AccessKey = config.s3AccessKey.ifBlank { existing.s3AccessKey },
-                    s3SecretKey = config.s3SecretKey.ifBlank { existing.s3SecretKey },
-                    s3SessionToken = config.s3SessionToken.ifBlank {
-                        existing.s3SessionToken
-                    },
+                    endpointUrl = normalizeS3EndpointScheme(
+                        config.endpointUrl,
+                        config.allowInsecureHttp,
+                    ),
                 )
+            } else {
+                config
+            }
+            val stored = when {
+                normalized.serviceType == CloudSyncServiceType.S3_COMPATIBLE -> normalized.copy(
+                    webDavPassword = "",
+                )
+
+                clearExistingCredentials -> normalized.copy(webDavPassword = "")
+                else -> {
+                    val existing = cloudSyncSecretStore.hydrate(normalized)
+                    normalized.copy(
+                        webDavPassword = normalized.webDavPassword.ifBlank {
+                            existing.webDavPassword
+                        },
+                    )
+                }
             }
             val candidate = if (stored.enabled) {
                 stored
@@ -452,10 +466,15 @@ class SettingsViewModel @Inject constructor(
                 )
             }
             candidate.validateForSync()
-            val withSavedCredentials = cloudSyncSecretStore.save(
-                stored,
-                clearExisting = clearExistingCredentials,
-            )
+            val isS3 = stored.serviceType == CloudSyncServiceType.S3_COMPATIBLE
+            val withSavedCredentials = if (isS3) {
+                stored
+            } else {
+                cloudSyncSecretStore.save(
+                    stored,
+                    clearExisting = clearExistingCredentials,
+                )
+            }
             val current = settings.value
             val configs = if (current.cloudSyncConfigs.any { it.id == config.id }) {
                 current.cloudSyncConfigs.map { item ->
@@ -465,6 +484,11 @@ class SettingsViewModel @Inject constructor(
                 current.cloudSyncConfigs + withSavedCredentials
             }
             repository.setCloudSyncSettings(current.cloudSyncEnabled, configs)
+            if (isS3) {
+                // DataStore now owns the plaintext values. Delete the legacy encrypted copy only
+                // after that durable write succeeds, so a failed save cannot lose credentials.
+                cloudSyncSecretStore.delete(stored.id)
+            }
             onDone(true)
         } catch (error: CancellationException) {
             throw error
@@ -549,7 +573,7 @@ class SettingsViewModel @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            _settingsError.value = error.message ?: "云端同步失败"
+            _settingsError.value = formatCloudSyncError(error)
         }
     }
 
@@ -905,10 +929,12 @@ class SettingsViewModel @Inject constructor(
     private fun successMessage(actionZh: String, actionEn: String, summary: BackupSummary): String =
         "$actionZh：${summary.thoughtCount} 条小巧思、${summary.categoryCount} 个小巧思分类、" +
             "${summary.favoriteCount} 个浏览器收藏、" +
-            "${summary.dateRecordCount} 个日期记录、${summary.poemCount} 首诗词；" +
+            "${summary.dateRecordCount} 个日期记录、${summary.poetryCategoryCount} 个诗词分类、" +
+            "${summary.poemCount} 首诗词；" +
             "$actionEn: ${summary.thoughtCount} thoughts, " +
             "${summary.categoryCount} thought categories, ${summary.favoriteCount} bookmarks, " +
-            "${summary.dateRecordCount} date records, ${summary.poemCount} poems"
+            "${summary.dateRecordCount} date records, " +
+            "${summary.poetryCategoryCount} poetry categories, ${summary.poemCount} poems"
 
     private fun launch(block: suspend () -> Unit) = viewModelScope.launch {
         try {

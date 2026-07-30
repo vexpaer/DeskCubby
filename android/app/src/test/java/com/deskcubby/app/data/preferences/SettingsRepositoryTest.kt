@@ -4,6 +4,7 @@ import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
+import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
@@ -159,7 +160,7 @@ class SettingsRepositoryTest {
     }
 
     @Test
-    fun normalizeCloudSyncConfigsStripsEveryCredentialField() {
+    fun normalizeCloudSyncConfigsStripsWebDavSecretAndKeepsS3Credentials() {
         val normalized = normalizeCloudSyncConfigs(
             listOf(
                 CloudSyncConfig(
@@ -177,9 +178,60 @@ class SettingsRepositoryTest {
 
         assertEquals("alice", normalized.webDavUsername)
         assertEquals("", normalized.webDavPassword)
-        assertEquals("", normalized.s3AccessKey)
-        assertEquals("", normalized.s3SecretKey)
-        assertEquals("", normalized.s3SessionToken)
+        assertEquals("s3-access-key", normalized.s3AccessKey)
+        assertEquals("s3-secret-key", normalized.s3SecretKey)
+        assertEquals("s3-session-token", normalized.s3SessionToken)
+    }
+
+    @Test
+    fun normalizeCloudSyncConfigsAddsS3SchemeFromTlsPreference() {
+        val tls = CloudSyncConfig(
+            id = "tls",
+            name = "CSTCloud TLS",
+            serviceType = CloudSyncServiceType.S3_COMPATIBLE,
+            endpointUrl = "obss3.cstcloud.cn",
+            s3Bucket = "archive",
+            s3AccessKey = "access",
+            s3SecretKey = "secret",
+        )
+        val localHttp = tls.copy(
+            id = "http",
+            name = "Local S3",
+            endpointUrl = "192.168.1.2:9000",
+            allowInsecureHttp = true,
+        )
+
+        val normalized = normalizeCloudSyncConfigs(listOf(tls, localHttp))
+
+        assertEquals("https://obss3.cstcloud.cn", normalized[0].endpointUrl)
+        assertEquals("http://192.168.1.2:9000", normalized[1].endpointUrl)
+    }
+
+    @Test
+    fun s3CredentialsAreReusedOnlyForTheSameEndpointBucketAndRegion() {
+        val local = CloudSyncConfig(
+            id = "local",
+            name = "Local",
+            endpointUrl = "https://obss3.cstcloud.cn/",
+            s3Bucket = "archive",
+            s3Region = "cn-east-1",
+        )
+
+        assertEquals(
+            true,
+            hasSameS3CredentialScope(
+                local,
+                local.copy(endpointUrl = "https://obss3.cstcloud.cn"),
+            ),
+        )
+        assertEquals(
+            false,
+            hasSameS3CredentialScope(local, local.copy(s3Bucket = "other")),
+        )
+        assertEquals(
+            false,
+            hasSameS3CredentialScope(local, local.copy(endpointUrl = "https://other.example")),
+        )
     }
 
     @Test

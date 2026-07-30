@@ -204,7 +204,7 @@ class GameEnginesTest {
     }
 
     @Test
-    fun game2048UndoRestoresBoardAndScoreOnlyOnce() {
+    fun game2048UndoRestoresEveryPriorBoardAndScore() {
         val cells = listOf(
             2, 2, 0, 0,
             4, 0, 0, 0,
@@ -214,9 +214,16 @@ class GameEnginesTest {
         val game = Game2048.fromJson(game2048Json(cells, score = 12), Random(7))!!
 
         assertTrue(game.move(Game2048.Direction.LEFT))
+        val afterFirstMove = game.board
+        val afterFirstScore = game.score
+        assertTrue(game.move(Game2048.Direction.DOWN))
         assertTrue(game.canUndo)
         assertTrue(game.undo())
 
+        assertEquals(afterFirstMove, game.board)
+        assertEquals(afterFirstScore, game.score)
+        assertTrue(game.canUndo)
+        assertTrue(game.undo())
         assertEquals(cells, game.board)
         assertEquals(12, game.score)
         assertFalse(game.canUndo)

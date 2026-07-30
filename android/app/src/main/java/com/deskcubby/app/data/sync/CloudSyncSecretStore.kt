@@ -21,10 +21,10 @@ import javax.inject.Singleton
 import org.json.JSONObject
 
 /**
- * Device-local encrypted credential storage for cloud sync.
+ * Device-local encrypted WebDAV credential storage and legacy S3 credential migration.
  *
- * Cloud credentials are intentionally excluded from DataStore and DeskCubby JSON backups. A
- * binding prevents silently reusing credentials after the provider endpoint or account changes.
+ * New S3 credentials live in the app-private DataStore so they can be shown on the next edit.
+ * Existing encrypted S3 values remain readable here until SettingsViewModel migrates them.
  */
 @Singleton
 class CloudSyncSecretStore @Inject constructor(
@@ -34,13 +34,24 @@ class CloudSyncSecretStore @Inject constructor(
 
     @Synchronized
     fun hydrate(config: CloudSyncConfig): CloudSyncConfig {
-        val secrets = read(config) ?: return config.withoutSecrets()
-        return config.copy(
-            webDavPassword = secrets.webDavPassword,
-            s3AccessKey = secrets.s3AccessKey,
-            s3SecretKey = secrets.s3SecretKey,
-            s3SessionToken = secrets.s3SessionToken,
-        )
+        val secrets = read(config)
+        return when (config.serviceType) {
+            CloudSyncServiceType.WEBDAV -> config.copy(
+                webDavPassword = secrets?.webDavPassword.orEmpty(),
+                s3AccessKey = "",
+                s3SecretKey = "",
+                s3SessionToken = "",
+            )
+
+            CloudSyncServiceType.S3_COMPATIBLE -> config.copy(
+                webDavPassword = "",
+                s3AccessKey = config.s3AccessKey.ifBlank { secrets?.s3AccessKey.orEmpty() },
+                s3SecretKey = config.s3SecretKey.ifBlank { secrets?.s3SecretKey.orEmpty() },
+                s3SessionToken = config.s3SessionToken.ifBlank {
+                    secrets?.s3SessionToken.orEmpty()
+                },
+            )
+        }
     }
 
     /**
@@ -106,7 +117,12 @@ class CloudSyncSecretStore @Inject constructor(
     }
 
     @Synchronized
-    fun hasCredentials(config: CloudSyncConfig): Boolean = read(config)?.isEmpty() == false
+    fun hasCredentials(config: CloudSyncConfig): Boolean = when (config.serviceType) {
+        CloudSyncServiceType.WEBDAV -> read(config)?.webDavPassword?.isNotEmpty() == true
+        CloudSyncServiceType.S3_COMPATIBLE ->
+            config.s3AccessKey.isNotEmpty() && config.s3SecretKey.isNotEmpty() ||
+                read(config)?.let { it.s3AccessKey.isNotEmpty() && it.s3SecretKey.isNotEmpty() } == true
+    }
 
     private fun read(config: CloudSyncConfig): CloudSyncSecrets? {
         val suffix = keySuffix(config.id)

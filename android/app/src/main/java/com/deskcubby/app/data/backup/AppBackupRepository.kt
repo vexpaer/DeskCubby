@@ -12,6 +12,8 @@ import com.deskcubby.app.data.local.DateRecordDao
 import com.deskcubby.app.data.local.DateRecordEntity
 import com.deskcubby.app.data.local.FlashThoughtDao
 import com.deskcubby.app.data.local.FlashThoughtEntity
+import com.deskcubby.app.data.local.PoetryCategoryDao
+import com.deskcubby.app.data.local.PoetryCategoryEntity
 import com.deskcubby.app.data.local.SavedPoemDao
 import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryDao
@@ -45,6 +47,7 @@ data class AppBackupContent(
     val categories: List<ThoughtCategoryEntity>,
     val favorites: List<BrowserRecordEntity>,
     val dateRecords: List<DateRecordEntity>,
+    val poetryCategories: List<PoetryCategoryEntity>,
     val poems: List<SavedPoemEntity>,
 )
 
@@ -65,25 +68,33 @@ class AppBackupRepository @Inject constructor(
     private val categoryDao: ThoughtCategoryDao,
     private val browserDao: BrowserRecordDao,
     private val dateRecordDao: DateRecordDao,
+    private val poetryCategoryDao: PoetryCategoryDao,
     private val savedPoemDao: SavedPoemDao,
     private val settingsRepository: SettingsRepository,
 ) {
     private val operationMutex = Mutex()
 
     fun observeContent(): Flow<AppBackupContent> {
+        val poetryContent = combine(
+            poetryCategoryDao.observeAllForBackup(),
+            savedPoemDao.observeAllForBackup(),
+        ) { categories, poems ->
+            categories to poems
+        }
         val databaseContent = combine(
             thoughtDao.observeAllForBackup(),
             categoryDao.observeAllForBackup(),
             browserDao.observeFavorites(),
             dateRecordDao.observeAllForBackup(),
-            savedPoemDao.observeAllForBackup(),
-        ) { thoughts, categories, favorites, dateRecords, poems ->
+            poetryContent,
+        ) { thoughts, categories, favorites, dateRecords, poetry ->
             BackupDatabaseContent(
                 thoughts = thoughts,
                 categories = categories,
                 favorites = favorites,
                 dateRecords = dateRecords,
-                poems = poems,
+                poetryCategories = poetry.first,
+                poems = poetry.second,
             )
         }
         return combine(settingsRepository.settings, databaseContent) { settings, content ->
@@ -93,6 +104,7 @@ class AppBackupRepository @Inject constructor(
                 categories = content.categories,
                 favorites = content.favorites,
                 dateRecords = content.dateRecords,
+                poetryCategories = content.poetryCategories,
                 poems = content.poems,
             )
         }.flowOn(Dispatchers.IO)
@@ -254,7 +266,14 @@ class AppBackupRepository @Inject constructor(
                 }
                 browserDao.replaceFavoritesForBackup(backup.favorites)
                 dateRecordDao.replaceAllForBackup(backup.dateRecords)
-                savedPoemDao.replaceAllForBackup(backup.poems)
+                savedPoemDao.clearAllForBackup()
+                poetryCategoryDao.clearAllForBackup()
+                if (backup.poetryCategories.isNotEmpty()) {
+                    poetryCategoryDao.insertAllForBackup(backup.poetryCategories)
+                }
+                if (backup.poems.isNotEmpty()) {
+                    savedPoemDao.insertAllForBackup(backup.poems)
+                }
             }
         } catch (error: CancellationException) {
             rollbackSettingsAfterImportFailure(previousSettings, error)
@@ -563,6 +582,7 @@ class AppBackupRepository @Inject constructor(
                 categories = categoryDao.getAllForBackup(),
                 favorites = browserDao.getFavoritesForBackup(),
                 dateRecords = dateRecordDao.getAllForBackup(),
+                poetryCategories = poetryCategoryDao.getAllForBackup(),
                 poems = savedPoemDao.getAllForBackup(),
             )
         }
@@ -572,6 +592,7 @@ class AppBackupRepository @Inject constructor(
             categories = databaseContent.categories,
             favorites = databaseContent.favorites,
             dateRecords = databaseContent.dateRecords,
+            poetryCategories = databaseContent.poetryCategories,
             poems = databaseContent.poems,
         )
     }
@@ -654,6 +675,7 @@ class AppBackupRepository @Inject constructor(
         categories = categories,
         favorites = favorites,
         dateRecords = dateRecords,
+        poetryCategories = poetryCategories,
         poems = poems,
     )
 
@@ -663,6 +685,7 @@ class AppBackupRepository @Inject constructor(
         exportedAt = exportedAt,
         dateRecordCount = dateRecords.size,
         categoryCount = categories.size,
+        poetryCategoryCount = poetryCategories.size,
         poemCount = poems.size,
     )
 
@@ -671,6 +694,7 @@ class AppBackupRepository @Inject constructor(
         val categories: List<ThoughtCategoryEntity>,
         val favorites: List<BrowserRecordEntity>,
         val dateRecords: List<DateRecordEntity>,
+        val poetryCategories: List<PoetryCategoryEntity>,
         val poems: List<SavedPoemEntity>,
     )
 

@@ -65,6 +65,15 @@ internal fun CloudSyncConfig.validateForSync(): ValidatedCloudSyncConfig {
             ) {
                 throw CloudSyncConfigurationException("S3 Bucket 名称无效。")
             }
+            if (!s3PathStyle && (
+                    !S3_VIRTUAL_HOST_BUCKET_REGEX.matches(s3Bucket) ||
+                        endpoint.host.orEmpty().contains(':')
+                    )
+            ) {
+                throw CloudSyncConfigurationException(
+                    "关闭 Path-Style 时，Bucket 必须是可用作主机名的小写名称。",
+                )
+            }
             if (!S3_REGION_REGEX.matches(s3Region)) {
                 throw CloudSyncConfigurationException("S3 Region 无效。")
             }
@@ -93,6 +102,8 @@ internal fun CloudSyncConfig.validateForSync(): ValidatedCloudSyncConfig {
                 append(s3Bucket)
                 append('\n')
                 append(s3Region)
+                append('\n')
+                append(s3PathStyle)
                 append('\n')
                 // Only the final scope SHA-256 is persisted. Including the credential identity
                 // prevents ancestry from one account being reused after switching accounts.
@@ -141,6 +152,8 @@ internal fun sha256(bytes: ByteArray): String =
         .joinToString(separator = "") { "%02x".format(Locale.ROOT, it) }
 
 private val S3_REGION_REGEX = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+private val S3_VIRTUAL_HOST_BUCKET_REGEX =
+    Regex("[a-z0-9](?:[a-z0-9.-]{0,61}[a-z0-9])?")
 private const val MAX_CONFIG_ID_CHARS = 128
 private const val MAX_CONFIG_NAME_CHARS = 200
 private const val MAX_CREDENTIAL_CHARS = 8_192

@@ -63,7 +63,7 @@ class CloudSyncCoordinator(
                     add(
                         CloudSyncConfigRun(
                             configId = config.id,
-                            errorMessage = error.message ?: "同步失败，请检查服务配置。",
+                            errorMessage = formatCloudSyncError(error),
                         ),
                     )
                 }

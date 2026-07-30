@@ -358,13 +358,87 @@ interface SavedPoemDao {
     suspend fun insert(item: SavedPoemEntity): Long
 
     @Query(
-        "UPDATE saved_poems SET content = :content, source = :source, updatedAt = :updatedAt " +
+        "UPDATE saved_poems SET content = :content, source = :source, categoryId = :categoryId, " +
+            "updatedAt = :updatedAt " +
             "WHERE id = :id",
     )
-    suspend fun update(id: Long, content: String, source: String, updatedAt: Long): Int
+    suspend fun update(
+        id: Long,
+        content: String,
+        source: String,
+        categoryId: Long?,
+        updatedAt: Long,
+    ): Int
+
+    @Query("UPDATE saved_poems SET categoryId = :categoryId, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun setCategory(id: Long, categoryId: Long?, updatedAt: Long): Int
+
+    @Query(
+        "SELECT id FROM saved_poems WHERE categoryId = :categoryId AND content = :content " +
+            "AND source = :source LIMIT 1",
+    )
+    suspend fun findMatching(categoryId: Long, content: String, source: String): Long?
 
     @Query("DELETE FROM saved_poems WHERE id = :id")
     suspend fun delete(id: Long): Int
+}
+
+@Dao
+interface PoetryCategoryDao {
+    @Query("SELECT * FROM poetry_categories ORDER BY sortOrder ASC, createdAt ASC, id ASC")
+    fun observeAll(): Flow<List<PoetryCategoryEntity>>
+
+    @Query("SELECT * FROM poetry_categories ORDER BY id ASC")
+    fun observeAllForBackup(): Flow<List<PoetryCategoryEntity>>
+
+    @Query("SELECT * FROM poetry_categories ORDER BY id ASC")
+    suspend fun getAllForBackup(): List<PoetryCategoryEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAllForBackup(items: List<PoetryCategoryEntity>)
+
+    @Query("DELETE FROM poetry_categories")
+    suspend fun clearAllForBackup()
+
+    @Query("SELECT id FROM poetry_categories WHERE name = :name COLLATE NOCASE LIMIT 1")
+    suspend fun findIdByName(name: String): Long?
+
+    @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM poetry_categories")
+    suspend fun nextSortOrder(): Long
+
+    @Insert
+    suspend fun insert(item: PoetryCategoryEntity): Long
+
+    @Transaction
+    suspend fun insertIfNameAvailable(item: PoetryCategoryEntity): Long? {
+        if (findIdByName(item.name) != null) return null
+        return insert(item.copy(sortOrder = nextSortOrder()))
+    }
+
+    @Query(
+        "UPDATE poetry_categories SET name = :name, colorArgb = :colorArgb, updatedAt = :now " +
+            "WHERE id = :id",
+    )
+    suspend fun update(id: Long, name: String, colorArgb: Int, now: Long): Int
+
+    @Transaction
+    suspend fun updateIfNameAvailable(id: Long, name: String, colorArgb: Int, now: Long): Boolean {
+        val duplicateId = findIdByName(name)
+        if (duplicateId != null && duplicateId != id) return false
+        return update(id, name, colorArgb, now) > 0
+    }
+
+    @Query("UPDATE saved_poems SET categoryId = NULL WHERE categoryId = :categoryId")
+    suspend fun uncategorizePoems(categoryId: Long)
+
+    @Query("DELETE FROM poetry_categories WHERE id = :id")
+    suspend fun delete(id: Long): Int
+
+    @Transaction
+    suspend fun deleteAndUncategorize(id: Long): Boolean {
+        uncategorizePoems(id)
+        return delete(id) > 0
+    }
 }
 
 @Dao

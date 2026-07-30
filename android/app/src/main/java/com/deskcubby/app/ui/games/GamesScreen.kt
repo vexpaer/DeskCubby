@@ -3,10 +3,13 @@ package com.deskcubby.app.ui.games
 import android.animation.ValueAnimator
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +32,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -46,6 +51,7 @@ import androidx.compose.material.icons.outlined.RotateRight
 import androidx.compose.material.icons.outlined.VerticalAlignBottom
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -88,7 +94,6 @@ import com.deskcubby.app.games.TetrisGame
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.tr
 import kotlin.math.abs
-import kotlin.math.log2
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -460,7 +465,6 @@ private fun Game2048Page(
 ) {
     var engine by remember { mutableStateOf<Game2048?>(null) }
     var frame by remember { mutableIntStateOf(0) }
-    var paused by remember { mutableStateOf(false) }
     var scoreRecorded by remember { mutableStateOf(false) }
     var transition by remember { mutableStateOf<Game2048.MoveResult?>(null) }
     var transitionSequence by remember { mutableIntStateOf(0) }
@@ -497,7 +501,6 @@ private fun Game2048Page(
     }
 
     fun pauseAndSave() {
-        paused = true
         transition = null
         transitionSequence++
         val current = engine ?: return
@@ -514,80 +517,289 @@ private fun Game2048Page(
         transition = null
         transitionSequence++
         frame++
-        paused = false
         scoreRecorded = false
         viewModel.saveProgress(gameId, current.toJson(), current.score)
     }
 
-    GameAutoPauseEffect(onPauseAndSave = ::pauseAndSave)
-
-    GameFrame(
-        title = "2048 · ${boardSize}×${boardSize}",
-        score = score,
-        highScore = maxOf(meta.highScore, score),
-        pauseVisible = engine != null && !gameOver,
-        paused = paused,
-        onTogglePause = {
-            paused = !paused
-            if (paused) {
-                transition = null
-                transitionSequence++
-                saveIfRunning()
-            }
-        },
-        onBack = {
-            saveIfRunning()
-            onExit()
-        },
-        undoVisible = engine != null,
-        undoEnabled = canUndo && !paused,
-        onUndo = ::undoLastMove,
-    ) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            contentAlignment = Alignment.Center,
-        ) {
-            Board2048(
-                board = board,
-                boardSize = boardSize,
-                enabled = engine != null && !paused && !gameOver,
-                transition = transition,
-                transitionSequence = transitionSequence,
-                animate = !paused,
-                onMove = { direction ->
-                    val current = engine
-                    if (current != null && !paused && !current.isGameOver) {
-                        current.moveWithResult(direction)?.let { result ->
-                            // Commit every swipe immediately. A later swipe cancels only the
-                            // previous visual transition, never its already-persistable state.
-                            transition = result
-                            transitionSequence++
-                            frame++
-                        }
-                    }
-                },
-                modifier = Modifier.aspectRatio(1f),
-            )
-            if (paused) PauseOverlay()
-        }
+    fun startNewGame() {
+        engine = Game2048(boardSize)
+        transition = null
+        transitionSequence++
+        frame++
+        scoreRecorded = false
+        viewModel.clearSave(gameId)
     }
 
-    if (gameOver) {
-        GameOverDialog(
-            score = score,
-            onRestart = {
-                engine = Game2048(boardSize)
-                transition = null
-                transitionSequence++
-                frame++
-                paused = false
-                scoreRecorded = false
-            },
-            onExit = onExit,
-            onUndo = if (canUndo) ::undoLastMove else null,
-        )
+    GameAutoPauseEffect(onPauseAndSave = ::pauseAndSave)
+    BackHandler {
+        saveIfRunning()
+        onExit()
+    }
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(GAME_2048_PAGE_BACKGROUND),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        val contentWidth = if (maxWidth >= 532.dp) {
+            500.dp
+        } else {
+            minOf(280.dp, (maxWidth - 24.dp).coerceAtLeast(240.dp))
+        }
+        val largeLayout = contentWidth >= 500.dp
+        Column(
+            Modifier
+                .width(contentWidth)
+                .fillMaxHeight()
+                .verticalScroll(rememberScrollState())
+                .padding(top = 8.dp, bottom = 20.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = {
+                        saveIfRunning()
+                        onExit()
+                    },
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.ArrowBack,
+                        contentDescription = null,
+                        tint = GAME_2048_HEADING,
+                    )
+                    Text(tr("返回", "Back"), color = GAME_2048_HEADING)
+                }
+                Spacer(Modifier.weight(1f))
+                Site2048Button(
+                    text = tr("无限撤回", "Undo"),
+                    enabled = canUndo,
+                    large = largeLayout,
+                    onClick = ::undoLastMove,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "2048.org",
+                    modifier = Modifier.weight(1f),
+                    color = GAME_2048_HEADING,
+                    fontSize = if (largeLayout) 72.sp else 27.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Site2048ScoreBox(
+                    label = tr("分数", "Score"),
+                    value = score,
+                    addition = transition?.scoreGained ?: 0,
+                    transitionSequence = transitionSequence,
+                    large = largeLayout,
+                )
+                Spacer(Modifier.width(if (contentWidth >= 500.dp) 6.dp else 4.dp))
+                Site2048ScoreBox(
+                    label = tr("最高", "Best"),
+                    value = maxOf(meta.highScore, score),
+                    large = largeLayout,
+                )
+            }
+            Spacer(Modifier.height(if (largeLayout) 26.dp else 16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = tr(
+                        "合并数字，得到 2048 方块！",
+                        "Join the numbers and get to the 2048 tile!",
+                    ),
+                    modifier = Modifier.weight(1f),
+                    color = GAME_2048_HEADING,
+                    fontSize = if (largeLayout) 18.sp else 13.sp,
+                    lineHeight = if (largeLayout) 24.sp else 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.width(8.dp))
+                Site2048Button(
+                    text = tr("新游戏", "New Game"),
+                    large = largeLayout,
+                    onClick = ::startNewGame,
+                )
+            }
+            Spacer(Modifier.height(if (largeLayout) 32.dp else 12.dp))
+            Box(
+                modifier = Modifier
+                    .size(contentWidth)
+                    .align(Alignment.CenterHorizontally),
+            ) {
+                Board2048(
+                    board = board,
+                    boardSize = boardSize,
+                    enabled = engine != null && !gameOver,
+                    transition = transition,
+                    transitionSequence = transitionSequence,
+                    animate = true,
+                    onMove = { direction ->
+                        val current = engine
+                        if (current != null && !current.isGameOver) {
+                            current.moveWithResult(direction)?.let { result ->
+                                // State and undo history commit before the visual transition.
+                                transition = result
+                                transitionSequence++
+                                frame++
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+                if (gameOver) {
+                    Site2048GameOverOverlay(
+                        canUndo = canUndo,
+                        large = largeLayout,
+                        onUndo = ::undoLastMove,
+                        onRestart = ::startNewGame,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Site2048Button(
+    text: String,
+    enabled: Boolean = true,
+    large: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(3.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = GAME_2048_BUTTON,
+            contentColor = Color.White,
+            disabledContainerColor = GAME_2048_BUTTON.copy(alpha = 0.35f),
+            disabledContentColor = Color.White.copy(alpha = 0.7f),
+        ),
+        contentPadding = if (large) {
+            PaddingValues(horizontal = 20.dp, vertical = 9.dp)
+        } else {
+            PaddingValues(horizontal = 12.dp, vertical = 7.dp)
+        },
+    ) {
+        Text(text, fontWeight = FontWeight.Bold, fontSize = if (large) 18.sp else 12.sp)
+    }
+}
+
+@Composable
+private fun Site2048ScoreBox(
+    label: String,
+    value: Int,
+    addition: Int = 0,
+    transitionSequence: Int = 0,
+    large: Boolean = false,
+) {
+    val additionProgress = remember(transitionSequence, addition) {
+        Animatable(if (addition > 0 && ValueAnimator.areAnimatorsEnabled()) 0f else 1f)
+    }
+    LaunchedEffect(additionProgress, transitionSequence, addition) {
+        if (addition > 0 && ValueAnimator.areAnimatorsEnabled()) {
+            additionProgress.animateTo(
+                1f,
+                animationSpec = tween(
+                    durationMillis = GAME_2048_SCORE_ANIMATION_MILLIS,
+                    easing = CubicBezierEasing(0.42f, 0f, 1f, 1f),
+                ),
+            )
+        } else {
+            additionProgress.snapTo(1f)
+        }
+    }
+    Box {
+        Column(
+            modifier = Modifier
+                .widthIn(min = if (large) 92.dp else 55.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(GAME_2048_BOARD)
+                .padding(
+                    horizontal = if (large) 15.dp else 8.dp,
+                    vertical = if (large) 8.dp else 5.dp,
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                label.uppercase(),
+                color = GAME_2048_SCORE_LABEL,
+                fontSize = if (large) 13.sp else 10.sp,
+                lineHeight = if (large) 14.sp else 11.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                value.toString(),
+                color = Color.White,
+                fontSize = if (large) 25.sp else 17.sp,
+                lineHeight = if (large) 27.sp else 18.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        if (addition > 0 && additionProgress.value < 1f) {
+            Text(
+                text = "+$addition",
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset {
+                        IntOffset(
+                            x = 0,
+                            y = (-40.dp.toPx() * additionProgress.value).roundToInt(),
+                        )
+                    }
+                    .graphicsLayer { alpha = 1f - additionProgress.value },
+                color = GAME_2048_HEADING,
+                fontSize = if (large) 25.sp else 18.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun Site2048GameOverOverlay(
+    canUndo: Boolean,
+    large: Boolean,
+    onUndo: () -> Unit,
+    onRestart: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(GAME_2048_PAGE_BACKGROUND.copy(alpha = 0.82f))
+            .clickable(enabled = false) {},
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                tr("游戏结束！", "Game over!"),
+                color = GAME_2048_HEADING,
+                fontSize = if (large) 55.sp else 34.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(18.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (canUndo) {
+                    Site2048Button(tr("撤回", "Undo"), large = large, onClick = onUndo)
+                }
+                Site2048Button(
+                    tr("再试一次", "Try again"),
+                    large = large,
+                    onClick = onRestart,
+                )
+            }
+        }
     }
 }
 
@@ -608,7 +820,6 @@ private fun Board2048(
     onMove: (Game2048.Direction) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val scheme = MaterialTheme.colorScheme
     val shouldAnimate = shouldAnimate2048Transition(
         animate = animate,
         hasTransition = transition != null,
@@ -626,7 +837,7 @@ private fun Board2048(
                 targetValue = 1f,
                 animationSpec = tween(
                     durationMillis = GAME_2048_ANIMATION_MILLIS,
-                    easing = FastOutSlowInEasing,
+                    easing = LinearEasing,
                 ),
             )
         }
@@ -634,16 +845,16 @@ private fun Board2048(
 
     BoxWithConstraints(
         modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(scheme.surfaceVariant.copy(alpha = 0.5f))
+            .clip(RoundedCornerShape(6.dp))
+            .background(GAME_2048_BOARD)
             .swipeInput(enabled) { swipe -> onMove(swipe.to2048Direction()) },
     ) {
         val cellGap = when (boardSize) {
-            4 -> 8.dp
-            5 -> 6.dp
-            else -> 4.dp
+            4 -> 10.dp
+            5 -> 8.dp
+            else -> 7.dp
         }
-        val boardPadding = if (boardSize == 6) 6.dp else 8.dp
+        val boardPadding = cellGap
         val tileSize = (maxWidth - boardPadding * 2 - cellGap * (boardSize - 1)) /
             boardSize
         val density = LocalDensity.current
@@ -664,15 +875,15 @@ private fun Board2048(
                 Modifier
                     .offset { cellOffset(index) }
                     .size(tileSize)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(scheme.surface.copy(alpha = 0.6f)),
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(GAME_2048_EMPTY_TILE),
             )
         }
 
         val currentTransition = transition
         val animationProgress = progress.value
         if (currentTransition != null && animationProgress < GAME_2048_SLIDE_END) {
-            val slideProgress = FastOutSlowInEasing.transform(
+            val slideProgress = GAME_2048_EASE_IN_OUT.transform(
                 (animationProgress / GAME_2048_SLIDE_END).coerceIn(0f, 1f),
             )
             currentTransition.motions.forEachIndexed { order, motion ->
@@ -718,11 +929,6 @@ private fun Board2048(
                 } else {
                     1f
                 }
-                val tileRotation = if (index in mergeDestinations) {
-                    (1f - popProgress) * 4f
-                } else {
-                    0f
-                }
                 key(transitionSequence, index, value) {
                     Tile2048(
                         value = value,
@@ -734,7 +940,6 @@ private fun Board2048(
                                 scaleX = tileScale
                                 scaleY = tileScale
                                 alpha = tileAlpha
-                                rotationZ = tileRotation
                             },
                     )
                 }
@@ -743,22 +948,17 @@ private fun Board2048(
     }
 }
 
-/** A short overshoot makes a newly generated tile distinct without moving surrounding layout. */
+/** 2048.org's `appear` keyframe: scale 0 to 1 over 200 ms after the slide. */
 private fun spawnTileScale(progress: Float): Float {
-    val value = progress.coerceIn(0f, 1f)
-    return if (value < 0.72f) {
-        1.08f * FastOutSlowInEasing.transform(value / 0.72f)
-    } else {
-        1.08f - 0.08f * ((value - 0.72f) / 0.28f)
-    }
+    return GAME_2048_EASE.transform(progress.coerceIn(0f, 1f))
 }
 
-/** Merged tiles briefly compress and pop after both source tiles meet. */
+/** 2048.org's `pop` keyframe: scale 0 → 1.2 → 1 over 200 ms. */
 private fun mergedTileScale(progress: Float): Float {
     val value = progress.coerceIn(0f, 1f)
     return when {
-        value < 0.46f -> 0.84f + 0.30f * FastOutSlowInEasing.transform(value / 0.46f)
-        else -> 1.14f - 0.14f * ((value - 0.46f) / 0.54f)
+        value < 0.5f -> 1.2f * GAME_2048_EASE.transform(value / 0.5f)
+        else -> 1.2f - 0.2f * GAME_2048_EASE.transform((value - 0.5f) / 0.5f)
     }
 }
 
@@ -768,44 +968,53 @@ private fun Tile2048(
     boardSize: Int,
     modifier: Modifier = Modifier,
 ) {
-    val scheme = MaterialTheme.colorScheme
-    val exponent = if (value <= 0) 0 else log2(value.toFloat()).roundToInt()
-    val (background, textColor) = when (exponent % 6) {
-        1 -> scheme.secondaryContainer to scheme.onSecondaryContainer
-        2 -> scheme.tertiaryContainer to scheme.onTertiaryContainer
-        3 -> scheme.primaryContainer to scheme.onPrimaryContainer
-        4 -> scheme.secondary to scheme.onSecondary
-        5 -> scheme.tertiary to scheme.onTertiary
-        else -> scheme.primary to scheme.onPrimary
+    val background = when (value) {
+        2 -> Color(0xFFEEE4DA)
+        4 -> Color(0xFFEDE0C8)
+        8 -> Color(0xFFF2B179)
+        16 -> Color(0xFFF59563)
+        32 -> Color(0xFFF67C5F)
+        64 -> Color(0xFFF65E3B)
+        128 -> Color(0xFFEDCF72)
+        256 -> Color(0xFFEDCC61)
+        512 -> Color(0xFFEDC850)
+        1024 -> Color(0xFFEDC53F)
+        2048 -> Color(0xFFEDC22E)
+        else -> Color(0xFF3C3A32)
     }
-    Box(
+    val textColor = if (value <= 4) GAME_2048_HEADING else Color(0xFFF9F6F2)
+    BoxWithConstraints(
         modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(3.dp))
             .background(background),
         contentAlignment = Alignment.Center,
     ) {
         if (value > 0) {
+            val largeTile = maxWidth >= 70.dp
             Text(
                 value.toString(),
                 color = textColor,
                 fontWeight = FontWeight.Bold,
-                fontSize = tileFontSize(value, boardSize).sp,
+                fontSize = tileFontSize(value, boardSize, largeTile).sp,
             )
         }
     }
 }
 
-private fun tileFontSize(value: Int, boardSize: Int): Int {
-    val base = when (boardSize) {
-        4 -> 22
-        5 -> 18
-        else -> 15
+private fun tileFontSize(value: Int, boardSize: Int, largeTile: Boolean): Int {
+    val base = when {
+        largeTile && boardSize == 4 -> 55
+        largeTile && boardSize == 5 -> 42
+        largeTile -> 34
+        boardSize == 4 -> 32
+        boardSize == 5 -> 24
+        else -> 19
     }
     return when {
         value < 100 -> base
-        value < 1_000 -> base - 2
-        value < 10_000 -> base - 4
-        else -> (base - 6).coerceAtLeast(9)
+        value < 1_000 -> (base * 0.82f).roundToInt()
+        value < 10_000 -> (base * 0.64f).roundToInt()
+        else -> (base * 0.54f).roundToInt().coerceAtLeast(9)
     }
 }
 
@@ -1230,8 +1439,17 @@ private fun NextPiecePanel(cells: List<TetrisGame.Cell>, color: Color) {
 }
 
 private const val SNAKE_TICK_MILLIS = 220L
-private const val GAME_2048_ANIMATION_MILLIS = 240
-private const val GAME_2048_SLIDE_END = 0.64f
+private const val GAME_2048_ANIMATION_MILLIS = 300
+private const val GAME_2048_SCORE_ANIMATION_MILLIS = 600
+private const val GAME_2048_SLIDE_END = 1f / 3f
+private val GAME_2048_EASE_IN_OUT = CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
+private val GAME_2048_EASE = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
+private val GAME_2048_PAGE_BACKGROUND = Color(0xFFFAF8EF)
+private val GAME_2048_HEADING = Color(0xFF776E65)
+private val GAME_2048_BOARD = Color(0xFFBBADA0)
+private val GAME_2048_EMPTY_TILE = Color(0x59EEE4DA)
+private val GAME_2048_BUTTON = Color(0xFF8F7A66)
+private val GAME_2048_SCORE_LABEL = Color(0xFFEEE4DA)
 private const val TETRIS_BASE_TICK_MILLIS = 600L
 private const val TETRIS_LEVEL_STEP_MILLIS = 40L
 private const val TETRIS_MIN_TICK_MILLIS = 120L

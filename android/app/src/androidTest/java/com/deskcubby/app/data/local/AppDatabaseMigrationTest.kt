@@ -162,6 +162,48 @@ class AppDatabaseMigrationTest {
         database.close()
     }
 
+    @Test
+    fun migrate8To9AddsPoetryCategoriesAndPreservesExistingPoems() {
+        val databaseName = "poetry-category-migration-test"
+        helper.createDatabase(databaseName, 8).apply {
+            execSQL(
+                """
+                INSERT INTO saved_poems (id, content, source, createdAt, updatedAt)
+                VALUES (7, '床前明月光', '李白《静夜思》', 10, 20)
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            databaseName,
+            9,
+            true,
+            AppDatabase.MIGRATION_8_9,
+        )
+        database.query(
+            "SELECT content, source, categoryId FROM saved_poems WHERE id = 7",
+        ).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("床前明月光", cursor.getString(0))
+            assertEquals("李白《静夜思》", cursor.getString(1))
+            assertEquals(true, cursor.isNull(2))
+        }
+        database.execSQL(
+            """
+            INSERT INTO poetry_categories (id, name, colorArgb, sortOrder, createdAt, updatedAt)
+            VALUES (3, '初中·七年级上册', -1, 0, 30, 30)
+            """.trimIndent(),
+        )
+        database.execSQL("UPDATE saved_poems SET categoryId = 3 WHERE id = 7")
+        database.execSQL("DELETE FROM poetry_categories WHERE id = 3")
+        database.query("SELECT categoryId FROM saved_poems WHERE id = 7").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(true, cursor.isNull(0))
+        }
+        database.close()
+    }
+
     private companion object {
         const val TEST_DATABASE = "ai-chat-migration-test"
     }

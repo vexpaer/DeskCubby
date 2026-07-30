@@ -4,6 +4,7 @@ import com.deskcubby.app.data.local.BrowserRecordEntity
 import com.deskcubby.app.codePointLength
 import com.deskcubby.app.data.local.DateRecordEntity
 import com.deskcubby.app.data.local.FlashThoughtEntity
+import com.deskcubby.app.data.local.PoetryCategoryEntity
 import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
@@ -46,13 +47,14 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 18,
+    val formatVersion: Int = 19,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
     val favorites: List<BrowserRecordEntity>,
     val dateRecords: List<DateRecordEntity> = emptyList(),
     val categories: List<ThoughtCategoryEntity> = emptyList(),
+    val poetryCategories: List<PoetryCategoryEntity> = emptyList(),
     val poems: List<SavedPoemEntity> = emptyList(),
 )
 
@@ -62,11 +64,12 @@ data class BackupSummary(
     val exportedAt: Long,
     val dateRecordCount: Int = 0,
     val categoryCount: Int = 0,
+    val poetryCategoryCount: Int = 0,
     val poemCount: Int = 0,
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 18
+    const val FORMAT_VERSION: Int = 19
 
     private const val FORMAT_NAME = "DeskCubby"
     private const val MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -74,6 +77,7 @@ object BackupJsonCodec {
     private const val MAX_FAVORITES = 20_000
     private const val MAX_DATE_RECORDS = 50_000
     private const val MAX_CATEGORIES = 10_000
+    private const val MAX_POETRY_CATEGORIES = 10_000
     private const val MAX_POEMS = 50_000
     private const val MAX_THOUGHT_CHARS = 1_000_000
     private const val MAX_URL_CHARS = 8_192
@@ -82,6 +86,7 @@ object BackupJsonCodec {
     private const val MAX_DATE_NAME_CHARS = 256
     private const val MAX_DATE_ICON_CHARS = 64
     private const val MAX_CATEGORY_NAME_CHARS = 40
+    private const val MAX_POETRY_CATEGORY_NAME_CHARS = 100
     private const val MAX_POEM_CONTENT_CHARS = 100_000
     private const val MAX_POEM_SOURCE_CHARS = 4_096
     private const val MAX_USERNAME_CHARS = 32
@@ -103,6 +108,7 @@ object BackupJsonCodec {
         validateEntityKeys(
             thoughts = backup.thoughts,
             categories = backup.categories,
+            poetryCategories = backup.poetryCategories,
             favorites = backup.favorites,
             dateRecords = backup.dateRecords,
             poems = backup.poems,
@@ -117,6 +123,7 @@ object BackupJsonCodec {
             .put("categories", encodeCategories(backup.categories))
             .put("favorites", encodeFavorites(backup.favorites))
             .put("dateRecords", encodeDateRecords(backup.dateRecords))
+            .put("poetryCategories", encodePoetryCategories(backup.poetryCategories))
             .put("poems", encodePoems(backup.poems))
         return root.toString(2).also { encoded ->
             requireWithinSizeLimit(encoded)
@@ -174,8 +181,13 @@ object BackupJsonCodec {
         } else {
             emptyList()
         }
+        val poetryCategories = if (version >= 19) {
+            decodePoetryCategories(root.requiredArray("poetryCategories"))
+        } else {
+            emptyList()
+        }
         val poems = if (version >= 4) {
-            decodePoems(root.requiredArray("poems"))
+            decodePoems(root.requiredArray("poems"), includeCategoryId = version >= 19)
         } else {
             emptyList()
         }
@@ -187,8 +199,11 @@ object BackupJsonCodec {
             favorites = favorites,
             dateRecords = dateRecords,
             categories = categories,
+            poetryCategories = poetryCategories,
             poems = poems,
-        )
+        ).also {
+            validatePoetryCategoryReferences(it.poems, it.poetryCategories)
+        }
     }
 
     private fun encodeSettings(settings: AppSettings): JSONObject = JSONObject()
@@ -338,6 +353,7 @@ object BackupJsonCodec {
                     .put("webDavUsername", item.webDavUsername)
                     .put("s3Bucket", item.s3Bucket)
                     .put("s3Region", item.s3Region)
+                    .put("s3PathStyle", item.s3PathStyle)
                     .put("allowInsecureHttp", item.allowInsecureHttp)
                     .put("selectedContents", JSONArray().apply {
                         CloudSyncContent.entries
@@ -349,7 +365,10 @@ object BackupJsonCodec {
         }
     }
 
-    private fun decodeCloudSyncConfigs(json: JSONArray): List<CloudSyncConfig> = buildList {
+    private fun decodeCloudSyncConfigs(
+        json: JSONArray,
+        version: Int,
+    ): List<CloudSyncConfig> = buildList {
         require(json.length() <= MAX_CLOUD_SYNC_CONFIGS) {
             "Too many cloud sync configurations"
         }
@@ -382,6 +401,7 @@ object BackupJsonCodec {
                 webDavUsername = item.requiredString("webDavUsername"),
                 s3Bucket = item.requiredString("s3Bucket"),
                 s3Region = item.requiredString("s3Region"),
+                s3PathStyle = if (version >= 19) item.requiredBoolean("s3PathStyle") else true,
                 allowInsecureHttp = item.requiredBoolean("allowInsecureHttp"),
                 selectedContents = contents,
                 direction = item.requiredEnum("direction"),
@@ -534,7 +554,7 @@ object BackupJsonCodec {
                 false
             },
             cloudSyncConfigs = if (version >= 13) {
-                decodeCloudSyncConfigs(json.requiredArray("cloudSyncConfigs"))
+                decodeCloudSyncConfigs(json.requiredArray("cloudSyncConfigs"), version)
             } else {
                 defaults.cloudSyncConfigs
             },
@@ -1186,6 +1206,66 @@ object BackupJsonCodec {
         }
     }
 
+    private fun encodePoetryCategories(
+        categories: List<PoetryCategoryEntity>,
+    ): JSONArray = JSONArray().apply {
+        categories.forEach { category ->
+            put(
+                JSONObject()
+                    .put("id", category.id)
+                    .put("name", category.name)
+                    .put("colorArgb", category.colorArgb)
+                    .put("sortOrder", category.sortOrder)
+                    .put("createdAt", category.createdAt)
+                    .put("updatedAt", category.updatedAt),
+            )
+        }
+    }
+
+    private fun decodePoetryCategories(json: JSONArray): List<PoetryCategoryEntity> {
+        require(json.length() <= MAX_POETRY_CATEGORIES) {
+            "Backup contains too many poetry categories"
+        }
+        val ids = HashSet<Long>(json.length())
+        val names = HashSet<String>(json.length())
+        return buildList {
+            for (index in 0 until json.length()) {
+                val item = json.requiredObject(index, "poetryCategories")
+                val id = item.requiredLong("id")
+                require(id > 0) { "poetryCategories[$index].id must be positive" }
+                require(ids.add(id)) { "Duplicate poetry category id: $id" }
+                val name = item.requiredString("name").requireMaxLength(
+                    "poetryCategories[$index].name",
+                    MAX_POETRY_CATEGORY_NAME_CHARS,
+                )
+                require(name.isNotBlank()) {
+                    "poetryCategories[$index].name must not be blank"
+                }
+                require(names.add(name.lowercase(Locale.ROOT))) {
+                    "Duplicate poetry category name (case-insensitive): $name"
+                }
+                val createdAt = item.requiredLong("createdAt")
+                val updatedAt = item.requiredLong("updatedAt")
+                require(createdAt >= 0) {
+                    "poetryCategories[$index].createdAt must not be negative"
+                }
+                require(updatedAt >= createdAt) {
+                    "poetryCategories[$index].updatedAt must not precede createdAt"
+                }
+                add(
+                    PoetryCategoryEntity(
+                        id = id,
+                        name = name,
+                        colorArgb = item.requiredInt("colorArgb"),
+                        sortOrder = item.requiredLong("sortOrder"),
+                        createdAt = createdAt,
+                        updatedAt = updatedAt,
+                    ),
+                )
+            }
+        }
+    }
+
     private fun encodePoems(poems: List<SavedPoemEntity>): JSONArray = JSONArray().apply {
         poems.forEach { poem ->
             put(
@@ -1194,12 +1274,16 @@ object BackupJsonCodec {
                     .put("content", poem.content)
                     .put("source", poem.source)
                     .put("createdAt", poem.createdAt)
-                    .put("updatedAt", poem.updatedAt),
+                    .put("updatedAt", poem.updatedAt)
+                    .putNullable("categoryId", poem.categoryId),
             )
         }
     }
 
-    private fun decodePoems(json: JSONArray): List<SavedPoemEntity> {
+    private fun decodePoems(
+        json: JSONArray,
+        includeCategoryId: Boolean,
+    ): List<SavedPoemEntity> {
         require(json.length() <= MAX_POEMS) { "Backup contains too many poems" }
         val ids = HashSet<Long>(json.length())
         return buildList {
@@ -1226,6 +1310,11 @@ object BackupJsonCodec {
                         source = source,
                         createdAt = createdAt,
                         updatedAt = updatedAt,
+                        categoryId = if (includeCategoryId) {
+                            item.requiredNullableLong("categoryId")
+                        } else {
+                            null
+                        },
                     ),
                 )
             }
@@ -1235,6 +1324,7 @@ object BackupJsonCodec {
     private fun validateEntityKeys(
         thoughts: List<FlashThoughtEntity>,
         categories: List<ThoughtCategoryEntity>,
+        poetryCategories: List<PoetryCategoryEntity>,
         favorites: List<BrowserRecordEntity>,
         dateRecords: List<DateRecordEntity>,
         poems: List<SavedPoemEntity>,
@@ -1252,6 +1342,30 @@ object BackupJsonCodec {
             }
             require(category.createdAt >= 0 && category.updatedAt >= category.createdAt) {
                 "Category timestamps are invalid: ${category.id}"
+            }
+        }
+        val poetryCategoryIds = HashSet<Long>(poetryCategories.size)
+        val poetryCategoryNames = HashSet<String>(poetryCategories.size)
+        require(poetryCategories.size <= MAX_POETRY_CATEGORIES) {
+            "Backup contains too many poetry categories"
+        }
+        poetryCategories.forEach { category ->
+            require(category.id > 0) {
+                "Poetry category id must be positive: ${category.id}"
+            }
+            require(poetryCategoryIds.add(category.id)) {
+                "Duplicate poetry category id: ${category.id}"
+            }
+            category.name.requireMaxLength(
+                "Poetry category name",
+                MAX_POETRY_CATEGORY_NAME_CHARS,
+            )
+            require(category.name.isNotBlank()) { "Poetry category name must not be blank" }
+            require(poetryCategoryNames.add(category.name.lowercase(Locale.ROOT))) {
+                "Duplicate poetry category name (case-insensitive): ${category.name}"
+            }
+            require(category.createdAt >= 0 && category.updatedAt >= category.createdAt) {
+                "Poetry category timestamps are invalid: ${category.id}"
             }
         }
         val thoughtIds = HashSet<Long>(thoughts.size)
@@ -1303,6 +1417,9 @@ object BackupJsonCodec {
             require(poem.createdAt >= 0 && poem.updatedAt >= poem.createdAt) {
                 "Poem timestamps are invalid: ${poem.id}"
             }
+            require(poem.categoryId == null || poem.categoryId in poetryCategoryIds) {
+                "Poem ${poem.id} references missing poetry category: ${poem.categoryId}"
+            }
         }
     }
 
@@ -1314,6 +1431,18 @@ object BackupJsonCodec {
         thoughts.forEachIndexed { index, thought ->
             require(thought.categoryId == null || thought.categoryId in categoryIds) {
                 "thoughts[$index].categoryId references a missing category: ${thought.categoryId}"
+            }
+        }
+    }
+
+    private fun validatePoetryCategoryReferences(
+        poems: List<SavedPoemEntity>,
+        categories: List<PoetryCategoryEntity>,
+    ) {
+        val categoryIds = categories.mapTo(HashSet(categories.size)) { it.id }
+        poems.forEachIndexed { index, poem ->
+            require(poem.categoryId == null || poem.categoryId in categoryIds) {
+                "poems[$index].categoryId references a missing poetry category: ${poem.categoryId}"
             }
         }
     }

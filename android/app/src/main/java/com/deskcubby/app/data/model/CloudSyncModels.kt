@@ -3,10 +3,9 @@ package com.deskcubby.app.data.model
 /**
  * Persisted cloud-sync settings.
  *
- * Passwords and access keys are runtime fields used by the transport. They must be supplied by a
- * device-local credential store and must not be exported in DeskCubby JSON backups. [toString] is
- * overridden because data-class generated output would otherwise expose credentials to crash
- * reports or accidental logs.
+ * WebDAV passwords are supplied by the device-local credential store. S3 credentials are persisted
+ * in the app's private DataStore so the editor can show them again, but neither kind of credential
+ * is exported in DeskCubby JSON backups. [toString] stays redacted to prevent accidental logging.
  */
 data class CloudSyncConfig(
     val id: String,
@@ -22,6 +21,7 @@ data class CloudSyncConfig(
     val s3AccessKey: String = "",
     val s3SecretKey: String = "",
     val s3SessionToken: String = "",
+    val s3PathStyle: Boolean = true,
     val allowInsecureHttp: Boolean = false,
     val selectedContents: Set<CloudSyncContent> = setOf(
         CloudSyncContent.DIARIES,
@@ -52,6 +52,8 @@ data class CloudSyncConfig(
         append(", s3AccessKey=")
         append(if (s3AccessKey.isBlank()) "" else "<redacted>")
         append(", s3SecretKey=<redacted>, s3SessionToken=<redacted>")
+        append(", s3PathStyle=")
+        append(s3PathStyle)
         append(", allowInsecureHttp=")
         append(allowInsecureHttp)
         append(", selectedContents=")

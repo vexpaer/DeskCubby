@@ -58,6 +58,7 @@ class SavedPoemDaoTest {
                 id = poemId,
                 content = "after",
                 source = "new source",
+                categoryId = null,
                 updatedAt = 30L,
             ),
         )

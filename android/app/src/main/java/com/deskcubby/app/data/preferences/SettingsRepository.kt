@@ -599,6 +599,23 @@ class SettingsRepository @Inject constructor(
             ?: NavItemId.SETTINGS
 
         context.settingsDataStore.edit { prefs ->
+            val currentCloudSyncConfigs = decodeCloudSyncConfigs(prefs[Keys.cloudSyncConfigs])
+            val restoredCloudSyncConfigs = normalizedCloudSyncConfigs.map { restored ->
+                val local = currentCloudSyncConfigs.firstOrNull { it.id == restored.id }
+                if (
+                    restored.serviceType == CloudSyncServiceType.S3_COMPATIBLE &&
+                    local?.serviceType == CloudSyncServiceType.S3_COMPATIBLE &&
+                    hasSameS3CredentialScope(local, restored)
+                ) {
+                    restored.copy(
+                        s3AccessKey = local.s3AccessKey,
+                        s3SecretKey = local.s3SecretKey,
+                        s3SessionToken = local.s3SessionToken,
+                    )
+                } else {
+                    restored
+                }
+            }
             prefs[Keys.visualStyle] = value.visualStyle.name
             prefs[Keys.darkMode] = value.darkMode.name
             prefs[Keys.appLanguage] = value.appLanguage.name
@@ -614,9 +631,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.compactMode] = value.compactMode
             prefs[Keys.useChineseLauncherName] = value.useChineseLauncherName
             prefs[Keys.launcherIcon] = value.launcherIcon.name
-            prefs[Keys.cloudSyncConfigs] = encodeCloudSyncConfigs(normalizedCloudSyncConfigs)
+            prefs[Keys.cloudSyncConfigs] = encodeCloudSyncConfigs(restoredCloudSyncConfigs)
             prefs[Keys.cloudSyncEnabled] = value.cloudSyncEnabled &&
-                normalizedCloudSyncConfigs.any {
+                restoredCloudSyncConfigs.any {
                     it.enabled && it.selectedContents.isNotEmpty()
                 }
             prefs.setOrRemove(
@@ -858,6 +875,10 @@ class SettingsRepository @Inject constructor(
                         webDavUsername = item.optString("webDavUsername"),
                         s3Bucket = item.optString("s3Bucket"),
                         s3Region = item.optString("s3Region", "us-east-1"),
+                        s3AccessKey = item.optString("s3AccessKey"),
+                        s3SecretKey = item.optString("s3SecretKey"),
+                        s3SessionToken = item.optString("s3SessionToken"),
+                        s3PathStyle = item.optBoolean("s3PathStyle", true),
                         allowInsecureHttp = item.optBoolean("allowInsecureHttp", false),
                         selectedContents = contents,
                         direction = runCatching {
@@ -882,6 +903,10 @@ class SettingsRepository @Inject constructor(
                     .put("webDavUsername", item.webDavUsername)
                     .put("s3Bucket", item.s3Bucket)
                     .put("s3Region", item.s3Region)
+                    .put("s3AccessKey", item.s3AccessKey)
+                    .put("s3SecretKey", item.s3SecretKey)
+                    .put("s3SessionToken", item.s3SessionToken)
+                    .put("s3PathStyle", item.s3PathStyle)
                     .put("allowInsecureHttp", item.allowInsecureHttp)
                     .put("selectedContents", JSONArray().apply {
                         CloudSyncContent.entries
@@ -1126,6 +1151,13 @@ internal fun normalizeMealButtonIcons(
 internal fun normalizeCloudSyncConfigs(items: List<CloudSyncConfig>): List<CloudSyncConfig> =
     items.asSequence()
         .map { item ->
+            val normalizedEndpoint = if (
+                item.serviceType == CloudSyncServiceType.S3_COMPATIBLE
+            ) {
+                normalizeS3EndpointScheme(item.endpointUrl, item.allowInsecureHttp)
+            } else {
+                item.endpointUrl.trim()
+            }
             val normalizedPath = item.remotePath
                 .trim()
                 .trim('/')
@@ -1138,15 +1170,15 @@ internal fun normalizeCloudSyncConfigs(items: List<CloudSyncConfig>): List<Cloud
             item.copy(
                 id = item.id.trim().take(MAX_CLOUD_SYNC_ID_CHARS),
                 name = item.name.trim().replaceLineBreaks().take(MAX_CLOUD_SYNC_NAME_CHARS),
-                endpointUrl = item.endpointUrl.trim().take(MAX_URL_CHARS),
+                endpointUrl = normalizedEndpoint.take(MAX_URL_CHARS),
                 remotePath = normalizedPath,
                 webDavUsername = item.webDavUsername.trim().take(MAX_CLOUD_SYNC_USERNAME_CHARS),
                 webDavPassword = "",
                 s3Bucket = item.s3Bucket.trim().take(MAX_CLOUD_SYNC_BUCKET_CHARS),
                 s3Region = item.s3Region.trim().take(MAX_CLOUD_SYNC_REGION_CHARS),
-                s3AccessKey = "",
-                s3SecretKey = "",
-                s3SessionToken = "",
+                s3AccessKey = item.s3AccessKey.trim().take(MAX_CLOUD_SYNC_CREDENTIAL_CHARS),
+                s3SecretKey = item.s3SecretKey.take(MAX_CLOUD_SYNC_CREDENTIAL_CHARS),
+                s3SessionToken = item.s3SessionToken.take(MAX_CLOUD_SYNC_CREDENTIAL_CHARS),
                 selectedContents = item.selectedContents.intersect(CloudSyncContent.entries.toSet()),
             )
         }
@@ -1162,6 +1194,20 @@ internal fun normalizeCloudSyncConfigs(items: List<CloudSyncConfig>): List<Cloud
         .distinctBy(CloudSyncConfig::id)
         .take(MAX_CLOUD_SYNC_CONFIGS)
         .toList()
+
+internal fun normalizeS3EndpointScheme(raw: String, allowInsecureHttp: Boolean): String {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty() || "://" in trimmed) return trimmed
+    return "${if (allowInsecureHttp) "http" else "https"}://$trimmed"
+}
+
+internal fun hasSameS3CredentialScope(
+    local: CloudSyncConfig,
+    restored: CloudSyncConfig,
+): Boolean =
+    local.endpointUrl.trim().trimEnd('/') == restored.endpointUrl.trim().trimEnd('/') &&
+        local.s3Bucket.trim() == restored.s3Bucket.trim() &&
+        local.s3Region.trim() == restored.s3Region.trim()
 
 private fun isValidCloudSyncEndpoint(raw: String, allowInsecureHttp: Boolean): Boolean {
     val uri = runCatching { URI(raw) }.getOrNull() ?: return false
@@ -1307,6 +1353,7 @@ private const val MAX_CLOUD_SYNC_PATH_CHARS = 1_024
 private const val MAX_CLOUD_SYNC_USERNAME_CHARS = 512
 private const val MAX_CLOUD_SYNC_BUCKET_CHARS = 255
 private const val MAX_CLOUD_SYNC_REGION_CHARS = 128
+private const val MAX_CLOUD_SYNC_CREDENTIAL_CHARS = 8_192
 internal const val MAX_MORE_DESCRIPTION_CODE_POINTS = 160
 
 internal fun normalizeMoreDescription(value: String): String =

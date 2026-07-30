@@ -112,7 +112,7 @@ class AppCloudSyncService @Inject constructor(
                     running = false,
                     activeConfigId = null,
                     progress = null,
-                    error = error.message ?: "云端同步失败 / Cloud sync failed",
+                    error = formatCloudSyncError(error),
                     pendingJsonCount = pendingIncomingJson().size,
                 )
             }
@@ -157,7 +157,7 @@ class AppCloudSyncService @Inject constructor(
                     running = false,
                     activeConfigId = null,
                     progress = null,
-                    error = error.message ?: "云端同步失败 / Cloud sync failed",
+                    error = formatCloudSyncError(error),
                     pendingJsonCount = pendingIncomingJson().size,
                 )
             }

@@ -618,7 +618,7 @@ fun SettingsScreen(
                 },
                 onEdit = { config ->
                     navigateAfterHandlingUnsaved {
-                        editingCloudSyncConfig = config
+                        editingCloudSyncConfig = viewModel.cloudSyncConfigForEdit(config)
                         page = SettingsPage.SYNC_DETAIL
                     }
                 },
@@ -1412,8 +1412,8 @@ private fun CloudSyncSettingsPage(
                 }
                 Text(
                     tr(
-                        "WebDAV 密码和 S3 凭据仅加密保存在本机，不会写入 DeskCubby JSON 备份。",
-                        "WebDAV passwords and S3 credentials are encrypted on this device and excluded from DeskCubby JSON backups.",
+                        "WebDAV 密码经 Android Keystore 加密；S3 用户名和 Key 明文保存在应用私有存储中并可在编辑时回显。两者都不进入 JSON 备份或日志。",
+                        "WebDAV passwords use Android Keystore. S3 usernames and keys are stored as plaintext in app-private storage and shown when edited. Neither is included in JSON backups or logs.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1631,9 +1631,10 @@ private fun CloudSyncConfigDetailPage(
     var webDavPassword by remember(initial.id) { mutableStateOf("") }
     var s3Bucket by remember(initial.id) { mutableStateOf(initial.s3Bucket) }
     var s3Region by remember(initial.id) { mutableStateOf(initial.s3Region) }
-    var s3AccessKey by remember(initial.id) { mutableStateOf("") }
-    var s3SecretKey by remember(initial.id) { mutableStateOf("") }
-    var s3SessionToken by remember(initial.id) { mutableStateOf("") }
+    var s3AccessKey by remember(initial.id) { mutableStateOf(initial.s3AccessKey) }
+    var s3SecretKey by remember(initial.id) { mutableStateOf(initial.s3SecretKey) }
+    var s3SessionToken by remember(initial.id) { mutableStateOf(initial.s3SessionToken) }
+    var s3PathStyle by remember(initial.id) { mutableStateOf(initial.s3PathStyle) }
     var allowInsecureHttp by remember(initial.id) {
         mutableStateOf(initial.allowInsecureHttp)
     }
@@ -1656,6 +1657,7 @@ private fun CloudSyncConfigDetailPage(
         s3AccessKey = s3AccessKey,
         s3SecretKey = s3SecretKey,
         s3SessionToken = s3SessionToken,
+        s3PathStyle = s3PathStyle,
         allowInsecureHttp = allowInsecureHttp,
         selectedContents = selectedContents,
         direction = direction,
@@ -1683,6 +1685,7 @@ private fun CloudSyncConfigDetailPage(
             s3AccessKey = ""
             s3SecretKey = ""
             s3SessionToken = ""
+            s3PathStyle = defaults.s3PathStyle
             allowInsecureHttp = defaults.allowInsecureHttp
             selectedContents = defaults.selectedContents
             direction = defaults.direction
@@ -1748,8 +1751,8 @@ private fun CloudSyncConfigDetailPage(
                                 )
                             } else {
                                 tr(
-                                    "S3 兼容 API 根地址，例如 https://s3.example.com",
-                                    "S3-compatible API root, for example https://s3.example.com",
+                                    "可只填接入点（如 s3.example.com），客户端会按 SSL/TLS 选项补全协议。",
+                                    "You may enter only the endpoint (such as s3.example.com); the client adds the protocol from the SSL/TLS setting.",
                                 )
                             },
                         )
@@ -1768,24 +1771,55 @@ private fun CloudSyncConfigDetailPage(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(tr("允许 HTTP", "Allow HTTP"))
-                        Text(
-                            tr(
-                                "仅用于可信局域网服务",
-                                "Only for trusted local-network services",
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
+                if (serviceType == CloudSyncServiceType.WEBDAV) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(tr("允许 HTTP", "Allow HTTP"))
+                            Text(
+                                tr(
+                                    "仅用于可信局域网服务",
+                                    "Only for trusted local-network services",
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Switch(
+                            checked = allowInsecureHttp,
+                            onCheckedChange = { allowInsecureHttp = it },
                         )
                     }
-                    Switch(
-                        checked = allowInsecureHttp,
-                        onCheckedChange = { allowInsecureHttp = it },
-                    )
+                } else {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(tr("SSL/TLS", "SSL/TLS"))
+                            Text(
+                                tr(
+                                    "开启时自动添加 https://；仅可信内网端点可关闭。",
+                                    "Adds https:// when enabled; disable only for a trusted local endpoint.",
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Switch(
+                            checked = !allowInsecureHttp,
+                            onCheckedChange = { useTls ->
+                                allowInsecureHttp = !useTls
+                                endpointUrl = when {
+                                    useTls && endpointUrl.startsWith("http://", true) ->
+                                        "https://" + endpointUrl.substringAfter("://")
+                                    !useTls && endpointUrl.startsWith("https://", true) ->
+                                        "http://" + endpointUrl.substringAfter("://")
+                                    else -> endpointUrl
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -1888,26 +1922,48 @@ private fun CloudSyncConfigDetailPage(
                         isError = s3Region.isBlank(),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    SecretSettingField(
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(tr("路径寻址（Path-Style）", "Path-style addressing"))
+                            Text(
+                                tr(
+                                    "启用后请求路径为 /Bucket/目录；若服务要求 Bucket 子域名（部分 CSTCloud 接入点），请关闭。",
+                                    "Uses /bucket/path. Disable when the service requires a bucket subdomain, as some CSTCloud endpoints do.",
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Switch(
+                            checked = s3PathStyle,
+                            onCheckedChange = { s3PathStyle = it },
+                        )
+                    }
+                    OutlinedTextField(
                         value = s3AccessKey,
                         onValueChange = { s3AccessKey = it.take(8_192) },
-                        label = "Access Key ID",
-                        hasStoredValue = hasStoredCredentials && !clearCredentials,
+                        label = { Text("Access Key ID") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                    SecretSettingField(
+                    OutlinedTextField(
                         value = s3SecretKey,
                         onValueChange = { s3SecretKey = it.take(8_192) },
-                        label = "Secret Access Key",
-                        hasStoredValue = hasStoredCredentials && !clearCredentials,
+                        label = { Text("Secret Access Key") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                    SecretSettingField(
+                    OutlinedTextField(
                         value = s3SessionToken,
                         onValueChange = { s3SessionToken = it.take(8_192) },
-                        label = tr("会话令牌（可选）", "Session token (optional)"),
-                        hasStoredValue = hasStoredCredentials && !clearCredentials,
+                        label = { Text(tr("会话令牌（可选）", "Session token (optional)")) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                if (hasStoredCredentials) {
+                if (hasStoredCredentials && serviceType == CloudSyncServiceType.WEBDAV) {
                     Row(
                         Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1928,10 +1984,17 @@ private fun CloudSyncConfigDetailPage(
                     }
                 }
                 Text(
-                    tr(
-                        "凭据使用 Android Keystore 加密，只在发起请求时读取，不进入日志或 JSON 备份。",
-                        "Credentials are encrypted with Android Keystore, read only for requests, and excluded from logs and JSON backups.",
-                    ),
+                    if (serviceType == CloudSyncServiceType.WEBDAV) {
+                        tr(
+                            "密码使用 Android Keystore 加密，只在发起请求时读取，不进入日志或 JSON 备份。",
+                            "The password uses Android Keystore, is read only for requests, and is excluded from logs and JSON backups.",
+                        )
+                    } else {
+                        tr(
+                            "S3 用户名和 Key 明文保存在应用私有存储中，编辑时完整显示；不会写入日志或 DeskCubby JSON 备份。",
+                            "S3 usernames and keys are plaintext in app-private storage and fully visible when edited; they are excluded from logs and DeskCubby JSON backups.",
+                        )
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -2103,8 +2166,8 @@ private fun BackupSettingsPage(
                     )
                     Text(
                         tr(
-                            "${conflict.summary.thoughtCount} 条小巧思，${conflict.summary.categoryCount} 个分类，${conflict.summary.favoriteCount} 个浏览器收藏，${conflict.summary.dateRecordCount} 个日期记录，${conflict.summary.poemCount} 首诗词",
-                            "${conflict.summary.thoughtCount} thoughts, ${conflict.summary.categoryCount} categories, ${conflict.summary.favoriteCount} browser bookmarks, ${conflict.summary.dateRecordCount} date records, ${conflict.summary.poemCount} poems",
+                            "${conflict.summary.thoughtCount} 条小巧思，${conflict.summary.categoryCount} 个小巧思分类，${conflict.summary.favoriteCount} 个浏览器收藏，${conflict.summary.dateRecordCount} 个日期记录，${conflict.summary.poetryCategoryCount} 个诗词分类，${conflict.summary.poemCount} 首诗词",
+                            "${conflict.summary.thoughtCount} thoughts, ${conflict.summary.categoryCount} thought categories, ${conflict.summary.favoriteCount} browser bookmarks, ${conflict.summary.dateRecordCount} date records, ${conflict.summary.poetryCategoryCount} poetry categories, ${conflict.summary.poemCount} poems",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -2222,24 +2285,6 @@ private fun BackupSettingsPage(
             }
         }
         item {
-            SettingsSection(tr("备份内容", "Backup contents")) {
-                Text(
-                    tr(
-                        "包含应用设置（含 AI API Key、同步服务元数据与吃历滤镜）、小巧思及其分类、浏览器收藏夹、日期记录、诗词本，以及日记和媒体目录路径；不包含日记正文、媒体文件、AI 对话历史、云端凭据、手机使用时长或步数统计。",
-                        "Includes app settings (including AI API keys, sync-service metadata and meal filters), thoughts and categories, browser bookmarks, date records, the poetry book, and diary/media folder paths; diary files, media, AI chat history, cloud credentials, screen-time history and step history are excluded.",
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    tr(
-                        "跨设备导入后需重新选择日记和媒体目录、填写云端凭据并手动重新开启同步；没有本机授权的目录路径不会覆盖当前目录。",
-                        "After importing on another device, reselect diary/media folders, enter cloud credentials and explicitly re-enable sync; paths without local access do not replace current folders.",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-        }
-        item {
             SettingsSection(tr("JSON 导入与导出", "JSON import & export")) {
                 Text(
                     tr(
@@ -2271,6 +2316,24 @@ private fun BackupSettingsPage(
                     enabled = !busy && !jsonPreview.busy,
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text(tr("查看整体 JSON", "View complete JSON")) }
+            }
+        }
+        item {
+            SettingsSection(tr("备份内容", "Backup contents")) {
+                Text(
+                    tr(
+                        "包含应用设置（含 AI API Key、同步服务元数据与吃历滤镜）、小巧思及其分类、浏览器收藏夹、日期记录、诗词及诗词分类，以及日记和媒体目录路径；不包含日记正文、媒体文件、AI 对话历史、WebDAV 密码、S3 用户名或 Key、手机使用时长或步数统计。",
+                        "Includes app settings (including AI API keys, sync-service metadata and meal filters), thoughts and categories, browser bookmarks, date records, poems and poetry categories, and diary/media folder paths; diary files, media, AI chat history, WebDAV passwords, S3 usernames or keys, screen-time history and step history are excluded.",
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    tr(
+                        "跨设备导入后需重新选择日记和媒体目录、填写云端凭据并手动重新开启同步；没有本机授权的目录路径不会覆盖当前目录。",
+                        "After importing on another device, reselect diary/media folders, enter cloud credentials and explicitly re-enable sync; paths without local access do not replace current folders.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
         item {

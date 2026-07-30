@@ -1,0 +1,41 @@
+DeskCubby built-in poetry preset notices
+
+Junior-middle-school selection and source data:
+  tangyuan0821/Junior-Middle-School-poetry
+  Revision: b11547e302eb510bfe2118cc86df21d3e1cbc36d
+  License: Creative Commons Attribution-ShareAlike 4.0 International
+  Source: https://github.com/tangyuan0821/Junior-Middle-School-poetry
+  https://creativecommons.org/licenses/by-sa/4.0/
+
+The junior selection, its normalized arrangement in poetry_presets.json, and DeskCubby's
+changes to that selection are distributed under CC BY-SA 4.0. Changes: whitespace was
+normalized, entries were grouped by textbook volume, and modern works were omitted.
+
+Senior-high-school selection and source data:
+  zyhqwq/Highschool-poetry
+  Revision: cfca00fdb602634ac4507374975f0edb1dfed549
+  Source: https://github.com/zyhqwq/Highschool-poetry
+  License: MIT License
+  Copyright (c) 2026 zyhqwq
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The underlying classical Chinese works are in the public domain. DeskCubby normalizes
+whitespace, groups entries by textbook volume, omits three modern works, and removes one
+duplicate entry. Textbook selections can change between editions.

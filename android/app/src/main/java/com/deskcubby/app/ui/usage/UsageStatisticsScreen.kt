@@ -104,6 +104,14 @@ fun UsageStatisticsScreen(
     var selectedPoint by remember { mutableStateOf<StatisticsPoint?>(null) }
     var showExportWarning by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val exportSuccessMessage = tr(
+        "使用时间已导出并通过回读校验",
+        "Screen time was exported and verified",
+    )
+    val exportFailureMessage = tr(
+        "导出失败，目标文件未通过完整校验",
+        "Export failed because the target did not pass full verification",
+    )
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json"),
     ) { uri ->
@@ -117,12 +125,7 @@ fun UsageStatisticsScreen(
         when (exportState) {
             UsageStatisticsExportState.SUCCEEDED -> {
                 try {
-                    snackbarHostState.showSnackbar(
-                        tr(
-                            "使用时间已导出并通过回读校验",
-                            "Screen time was exported and verified",
-                        ),
-                    )
+                    snackbarHostState.showSnackbar(exportSuccessMessage)
                 } finally {
                     viewModel.consumeExportResult()
                 }
@@ -130,12 +133,7 @@ fun UsageStatisticsScreen(
 
             UsageStatisticsExportState.FAILED -> {
                 try {
-                    snackbarHostState.showSnackbar(
-                        tr(
-                            "导出失败，目标文件未通过完整校验",
-                            "Export failed because the target did not pass full verification",
-                        ),
-                    )
+                    snackbarHostState.showSnackbar(exportFailureMessage)
                 } finally {
                     viewModel.consumeExportResult()
                 }

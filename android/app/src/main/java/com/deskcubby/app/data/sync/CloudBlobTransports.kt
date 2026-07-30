@@ -131,12 +131,11 @@ private class S3BlobTransport(
     private val http: BoundedHttpClient,
 ) : ConditionalBlobTransport {
     private val config = config.source
-    private val collectionUri = buildCollectionUri(
+    private val collectionUri = buildS3CollectionUri(
         endpoint = config.endpoint,
-        pathSegments = buildList {
-            add(this@S3BlobTransport.config.s3Bucket)
-            addAll(config.remotePath.split('/').filter(String::isNotBlank))
-        },
+        bucket = this.config.s3Bucket,
+        remotePath = config.remotePath,
+        pathStyle = this.config.s3PathStyle,
     )
     private val signer = S3SigV4(
         accessKeyId = this.config.s3AccessKey,
@@ -167,7 +166,7 @@ private class S3BlobTransport(
             404 -> return null
             409, 412 -> throw CloudSyncConflictException()
             200 -> Unit
-            else -> throw statusException("S3 读取", response.status)
+            else -> throw s3StatusException("S3 读取", response.status, response.body)
         }
         val metadata = response.toBlobMetadata()
         if (expectedVersion != null && metadata.version != expectedVersion) {
@@ -213,7 +212,7 @@ private class S3BlobTransport(
         when (response.status) {
             200, 201, 204 -> Unit
             409, 412 -> throw CloudSyncConflictException()
-            else -> throw statusException("S3 写入", response.status)
+            else -> throw s3StatusException("S3 写入", response.status, response.body)
         }
         val metadata = response.toBlobMetadata(allowMissingVersion = true)
         if (metadata.version.isNotBlank()) {
@@ -267,7 +266,81 @@ private fun statusException(action: String, status: Int): CloudSyncException {
         in 500..599 -> "云端服务暂时不可用"
         else -> "服务返回状态 $status"
     }
-    return CloudSyncException("$action 失败：$detail。")
+    return CloudSyncException(
+        "$action 失败：$detail。",
+        errorCode = "HTTP_$status",
+    )
+}
+
+private fun s3StatusException(
+    action: String,
+    status: Int,
+    responseBody: ByteArray,
+): CloudSyncException {
+    val providerCode = extractS3ErrorCode(responseBody)
+    val detail = when (status) {
+        301, 302, 303, 307, 308 -> "服务发生重定向，请检查接入点和 Path-Style"
+        400 -> "请求签名、接入点、Region 或 Path-Style 不匹配"
+        401, 403 -> "认证失败或没有访问权限"
+        404 -> "Bucket、接入点或远端对象不存在"
+        405, 501 -> "服务不支持所需的条件 GET/PUT"
+        409, 412 -> "云端对象在同步期间发生变化"
+        411, 413 -> "服务拒绝了文件大小"
+        429 -> "请求过于频繁"
+        in 500..599 -> "云端服务暂时不可用"
+        else -> "服务返回状态 $status"
+    }
+    val safeProviderCode = providerCode?.takeIf(S3_ERROR_CODE::matches)
+    val code = buildString {
+        append("S3")
+        safeProviderCode?.let { append('_').append(it) }
+        append("_HTTP_").append(status)
+    }
+    val providerDetail = safeProviderCode?.let { "（服务代码：$it）" }.orEmpty()
+    return CloudSyncException(
+        "$action 失败：$detail$providerDetail。",
+        errorCode = code,
+    )
+}
+
+internal fun extractS3ErrorCode(responseBody: ByteArray): String? {
+    if (responseBody.isEmpty() || responseBody.size > MAX_ERROR_BYTES) return null
+    val text = responseBody.toString(StandardCharsets.UTF_8)
+    return S3_ERROR_XML.find(text)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.takeIf(S3_ERROR_CODE::matches)
+}
+
+internal fun buildS3CollectionUri(
+    endpoint: URI,
+    bucket: String,
+    remotePath: String,
+    pathStyle: Boolean,
+): URI {
+    if (pathStyle) {
+        return buildCollectionUri(
+            endpoint = endpoint,
+            pathSegments = buildList {
+                add(bucket)
+                addAll(remotePath.split('/').filter(String::isNotBlank))
+            },
+        )
+    }
+    val endpointHost = endpoint.host
+    val virtualHost = if (endpointHost.startsWith("$bucket.", ignoreCase = true)) {
+        endpointHost
+    } else {
+        "$bucket.$endpointHost"
+    }
+    val authority = if (endpoint.port == -1) virtualHost else "$virtualHost:${endpoint.port}"
+    val virtualEndpoint = URI(
+        "${endpoint.scheme}://$authority${endpoint.rawPath.orEmpty().ifEmpty { "/" }}",
+    )
+    return buildCollectionUri(
+        endpoint = virtualEndpoint,
+        pathSegments = remotePath.split('/').filter(String::isNotBlank),
+    )
 }
 
 private fun buildCollectionUri(
@@ -317,6 +390,9 @@ private fun Map<String, String>.withoutSyntheticHost(): Map<String, String> =
     filterKeys { !it.equals("host", ignoreCase = true) }
 
 private val STORAGE_NAME = Regex("[.A-Za-z0-9_-]{1,200}")
+private val S3_ERROR_XML =
+    Regex("""<(?:[A-Za-z0-9_-]+:)?Code>\s*([A-Za-z0-9._-]{1,128})\s*</(?:[A-Za-z0-9_-]+:)?Code>""")
+private val S3_ERROR_CODE = Regex("[A-Za-z0-9._-]{1,128}")
 private val HEX = "0123456789ABCDEF".toCharArray()
 private const val MAX_ETAG_CHARS = 4_096
 private const val MAX_ERROR_BYTES = 64L * 1024

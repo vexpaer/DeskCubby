@@ -94,6 +94,7 @@ class PoetryBookRepositoryTest {
             id: Long,
             content: String,
             source: String,
+            categoryId: Long?,
             updatedAt: Long,
         ): Int {
             val current = items.value[id] ?: return 0
@@ -101,11 +102,28 @@ class PoetryBookRepositoryTest {
                 id to current.copy(
                     content = content,
                     source = source,
+                    categoryId = categoryId,
                     updatedAt = updatedAt,
                 )
             )
             return 1
         }
+
+        override suspend fun setCategory(id: Long, categoryId: Long?, updatedAt: Long): Int {
+            val current = items.value[id] ?: return 0
+            items.value = items.value + (
+                id to current.copy(categoryId = categoryId, updatedAt = updatedAt)
+            )
+            return 1
+        }
+
+        override suspend fun findMatching(
+            categoryId: Long,
+            content: String,
+            source: String,
+        ): Long? = items.value.values.firstOrNull {
+            it.categoryId == categoryId && it.content == content && it.source == source
+        }?.id
 
         override suspend fun delete(id: Long): Int {
             if (id !in items.value) return 0

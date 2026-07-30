@@ -113,16 +113,28 @@ fun interface CloudSyncRemoteStoreFactory {
 open class CloudSyncException(
     message: String,
     cause: Throwable? = null,
+    val errorCode: String = "SYNC_FAILED",
 ) : IOException(message, cause)
 
 class CloudSyncConflictException(
     message: String = "云端内容在同步期间发生变化，请重新同步。",
-) : CloudSyncException(message)
+) : CloudSyncException(message, errorCode = "SYNC_CONFLICT")
 
 class CloudSyncLimitException(
     message: String,
-) : CloudSyncException(message)
+) : CloudSyncException(message, errorCode = "SYNC_LIMIT")
 
 class CloudSyncConfigurationException(
     message: String,
-) : CloudSyncException(message)
+) : CloudSyncException(message, errorCode = "SYNC_CONFIG")
+
+internal fun formatCloudSyncError(error: Throwable): String {
+    val syncError = generateSequence(error) { it.cause }
+        .filterIsInstance<CloudSyncException>()
+        .firstOrNull()
+    val code = syncError?.errorCode ?: "SYNC_UNEXPECTED"
+    val message = syncError?.message
+        ?.takeIf(String::isNotBlank)
+        ?: "云端同步失败，请检查服务配置。"
+    return "[$code] $message"
+}

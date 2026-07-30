@@ -90,53 +90,6 @@ class StatisticsStoreEncodingTest {
     }
 
     @Test
-    fun `usage export encoding is deterministic canonical schema v4`() {
-        val canonical = canonicalUsageStatisticsHistory(
-            UsageStatisticsHistory(
-                trackingStartedOn = LocalDate.parse("2026-07-28"),
-                days = listOf(
-                    usageDay(
-                        date = "2026-07-29",
-                        apps = listOf(
-                            UsageAppDuration("z.example", 2),
-                            UsageAppDuration("a.example", 1),
-                        ),
-                    ),
-                    usageDay(
-                        date = "2026-07-28",
-                        apps = listOf(UsageAppDuration("m.example", 3)),
-                    ),
-                ),
-                backfillCompletedThrough = LocalDate.parse("2026-07-28"),
-            ),
-        )
-
-        val (encoded, verified) = encodeAndVerifyStatisticsValue(
-            value = canonical,
-            encode = UsageStatisticsJsonCodec::encode,
-            decode = UsageStatisticsJsonCodec::decode,
-        )
-        val expected = buildString {
-            append("{\"schemaVersion\":4,\"trackingStartedOn\":\"2026-07-28\",")
-            append("\"backfillCompletedThrough\":\"2026-07-28\",\"days\":[")
-            append(
-                "{\"date\":\"2026-07-28\",\"zoneId\":\"Asia/Shanghai\"," +
-                    "\"state\":\"FINAL\",\"collectedAtEpochMillis\":1,\"apps\":[" +
-                    "{\"packageName\":\"m.example\",\"foregroundMillis\":3}]},",
-            )
-            append(
-                "{\"date\":\"2026-07-29\",\"zoneId\":\"Asia/Shanghai\"," +
-                    "\"state\":\"FINAL\",\"collectedAtEpochMillis\":1,\"apps\":[" +
-                    "{\"packageName\":\"a.example\",\"foregroundMillis\":1}," +
-                    "{\"packageName\":\"z.example\",\"foregroundMillis\":2}]}]}",
-            )
-        }
-
-        assertEquals(expected, encoded)
-        assertEquals(canonical, verified)
-    }
-
-    @Test
     fun `export read back requires exact bytes and matching decode`() {
         val expected = """{"schemaVersion":4}""".toByteArray(StandardCharsets.UTF_8)
 

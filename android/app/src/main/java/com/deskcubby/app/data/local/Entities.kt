@@ -76,7 +76,31 @@ data class DateRecordEntity(
     val updatedAt: Long,
 )
 
-@Entity(tableName = "saved_poems")
+@Entity(
+    tableName = "poetry_categories",
+    indices = [Index(value = ["name"], unique = true)],
+)
+data class PoetryCategoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(collate = ColumnInfo.NOCASE) val name: String,
+    val colorArgb: Int,
+    val sortOrder: Long,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+@Entity(
+    tableName = "saved_poems",
+    foreignKeys = [
+        ForeignKey(
+            entity = PoetryCategoryEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["categoryId"],
+            onDelete = ForeignKey.SET_NULL,
+        ),
+    ],
+    indices = [Index("categoryId")],
+)
 data class SavedPoemEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     /** Canonical saved body. List previews must never replace this value with an excerpt. */
@@ -84,6 +108,7 @@ data class SavedPoemEntity(
     val source: String = "",
     val createdAt: Long,
     val updatedAt: Long,
+    @ColumnInfo(defaultValue = "NULL") val categoryId: Long? = null,
 )
 
 @Entity(

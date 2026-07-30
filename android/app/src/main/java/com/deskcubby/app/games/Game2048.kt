@@ -11,8 +11,7 @@ class Game2048 private constructor(
     val size: Int,
     initialScore: Int,
     private val random: Random,
-    initialUndoCells: IntArray? = null,
-    initialUndoScore: Int? = null,
+    initialUndoHistory: List<Pair<IntArray, Int>> = emptyList(),
 ) {
 
     /** Starts a fresh game with two spawned tiles. */
@@ -27,14 +26,22 @@ class Game2048 private constructor(
     var score: Int = initialScore
         private set
 
-    private var undoCells: IntArray? = initialUndoCells?.copyOf()
-    private var undoScore: Int? = initialUndoScore
+    private data class UndoState(
+        val cells: IntArray,
+        val score: Int,
+    )
+
+    private val undoHistory = ArrayDeque<UndoState>().apply {
+        initialUndoHistory.forEach { (historyCells, historyScore) ->
+            addLast(UndoState(historyCells.copyOf(), historyScore))
+        }
+    }
 
     /** Row-major snapshot of all tile values (0 = empty). */
     val board: List<Int> get() = cells.toList()
 
-    /** A successful move records exactly one restorable prior state. */
-    val canUndo: Boolean get() = undoCells != null && undoScore != null
+    /** Every successful move remains restorable until the player starts a new game. */
+    val canUndo: Boolean get() = undoHistory.isNotEmpty()
 
     fun cellAt(row: Int, column: Int): Int = cells[row * size + column]
 
@@ -149,8 +156,7 @@ class Game2048 private constructor(
 
         if (cells.contentEquals(next)) return null
 
-        undoCells = before.toIntArray()
-        undoScore = scoreBefore
+        undoHistory.addLast(UndoState(before.toIntArray(), scoreBefore))
         next.copyInto(cells)
         score += scoreGained
         val spawn = spawnTile()
@@ -165,14 +171,11 @@ class Game2048 private constructor(
         )
     }
 
-    /** Restores the state before the latest successful move. Undo itself cannot be repeated. */
+    /** Restores the state before the latest successful move and keeps all earlier history. */
     fun undo(): Boolean {
-        val previousCells = undoCells ?: return false
-        val previousScore = undoScore ?: return false
-        previousCells.copyInto(cells)
-        score = previousScore
-        undoCells = null
-        undoScore = null
+        val previous = undoHistory.removeLastOrNull() ?: return false
+        previous.cells.copyInto(cells)
+        score = previous.score
         return true
     }
 
@@ -183,19 +186,17 @@ class Game2048 private constructor(
             if (index > 0) append(',')
             append(value)
         }
-        append("],\"score\":").append(score).append(",\"undoCells\":")
-        val previousCells = undoCells
-        if (previousCells == null) {
-            append("null")
-        } else {
-            append('[')
-            previousCells.forEachIndexed { index, value ->
-                if (index > 0) append(',')
+        append("],\"score\":").append(score).append(",\"undoHistory\":[")
+        undoHistory.forEachIndexed { historyIndex, previous ->
+            if (historyIndex > 0) append(',')
+            append("{\"cells\":[")
+            previous.cells.forEachIndexed { cellIndex, value ->
+                if (cellIndex > 0) append(',')
                 append(value)
             }
-            append(']')
+            append("],\"score\":").append(previous.score).append('}')
         }
-        append(",\"undoScore\":").append(undoScore ?: "null").append('}')
+        append("]}")
     }
 
     /** Cell indices of one line, ordered from the edge the tiles slide towards. */
@@ -244,36 +245,48 @@ class Game2048 private constructor(
             if (cells.size != size * size || cells.any { it < 0 }) return null
             val score = GameJson.intOf(map["score"]) ?: return null
             if (score < 0) return null
-            val hasUndoCells = map.containsKey("undoCells")
-            val hasUndoScore = map.containsKey("undoScore")
-            if (hasUndoCells != hasUndoScore) return null
-            val undoCellsValue = map["undoCells"]
-            val undoScoreValue = map["undoScore"]
-            val undoCells: IntArray?
-            val undoScore: Int?
-            if (!hasUndoCells || (undoCellsValue == null && undoScoreValue == null)) {
-                undoCells = null
-                undoScore = null
-            } else {
-                val restoredUndoCells = GameJson.intListOf(undoCellsValue) ?: return null
-                val restoredUndoScore = GameJson.intOf(undoScoreValue) ?: return null
-                if (
-                    restoredUndoCells.size != size * size ||
-                    restoredUndoCells.any { it < 0 } ||
-                    restoredUndoScore < 0
-                ) {
-                    return null
+            val undoHistory = ArrayList<Pair<IntArray, Int>>()
+            if (map.containsKey("undoHistory")) {
+                val historyValues = map["undoHistory"] as? List<*> ?: return null
+                historyValues.forEach { historyValue ->
+                    val historyMap = GameJson.objectOf(historyValue) ?: return null
+                    val historyCells = GameJson.intListOf(historyMap["cells"]) ?: return null
+                    val historyScore = GameJson.intOf(historyMap["score"]) ?: return null
+                    if (
+                        historyCells.size != size * size ||
+                        historyCells.any { it < 0 } ||
+                        historyScore < 0
+                    ) {
+                        return null
+                    }
+                    undoHistory += historyCells.toIntArray() to historyScore
                 }
-                undoCells = restoredUndoCells.toIntArray()
-                undoScore = restoredUndoScore
+            } else {
+                // v0.3.7 and earlier kept one undo snapshot. Promote it to the new history stack.
+                val hasUndoCells = map.containsKey("undoCells")
+                val hasUndoScore = map.containsKey("undoScore")
+                if (hasUndoCells != hasUndoScore) return null
+                val undoCellsValue = map["undoCells"]
+                val undoScoreValue = map["undoScore"]
+                if (hasUndoCells && !(undoCellsValue == null && undoScoreValue == null)) {
+                    val restoredUndoCells = GameJson.intListOf(undoCellsValue) ?: return null
+                    val restoredUndoScore = GameJson.intOf(undoScoreValue) ?: return null
+                    if (
+                        restoredUndoCells.size != size * size ||
+                        restoredUndoCells.any { it < 0 } ||
+                        restoredUndoScore < 0
+                    ) {
+                        return null
+                    }
+                    undoHistory += restoredUndoCells.toIntArray() to restoredUndoScore
+                }
             }
             return Game2048(
                 cells = cells.toIntArray(),
                 size = size,
                 initialScore = score,
                 random = random,
-                initialUndoCells = undoCells,
-                initialUndoScore = undoScore,
+                initialUndoHistory = undoHistory,
             )
         }
 

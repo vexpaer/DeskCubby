@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.deskcubby.app.data.local.BrowserRecordEntity
 import com.deskcubby.app.data.local.DateRecordEntity
 import com.deskcubby.app.data.local.FlashThoughtEntity
+import com.deskcubby.app.data.local.PoetryCategoryEntity
 import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
@@ -142,12 +143,21 @@ class BackupJsonCodecTest {
             createdAt = 31,
             updatedAt = 32,
         )
+        val poetryCategory = PoetryCategoryEntity(
+            id = 12,
+            name = "高中·必修上册",
+            colorArgb = 0xFF7166A4.toInt(),
+            sortOrder = 0,
+            createdAt = 32,
+            updatedAt = 32,
+        )
         val poem = SavedPoemEntity(
             id = 11,
             content = "海上生明月，天涯共此时。",
             source = "张九龄《望月怀远》",
             createdAt = 33,
             updatedAt = 34,
+            categoryId = poetryCategory.id,
         )
 
         val decoded = BackupJsonCodec.decode(
@@ -159,6 +169,7 @@ class BackupJsonCodecTest {
                     favorites = listOf(favorite),
                     dateRecords = listOf(dateRecord),
                     categories = listOf(category),
+                    poetryCategories = listOf(poetryCategory),
                     poems = listOf(poem),
                 ),
             ),
@@ -170,6 +181,7 @@ class BackupJsonCodecTest {
         assertEquals(listOf(category), decoded.categories)
         assertEquals(listOf(favorite), decoded.favorites)
         assertEquals(listOf(dateRecord), decoded.dateRecords)
+        assertEquals(listOf(poetryCategory), decoded.poetryCategories)
         assertEquals(listOf(poem), decoded.poems)
         assertEquals(true, decoded.settings.mealButtonsUseIcons)
         assertEquals("书桌主人", decoded.settings.userName)
@@ -306,6 +318,7 @@ class BackupJsonCodecTest {
             s3AccessKey = "s3-access-key-marker",
             s3SecretKey = "s3-secret-key-marker",
             s3SessionToken = "s3-session-token-marker",
+            s3PathStyle = false,
             selectedContents = setOf(CloudSyncContent.JSON_BACKUP),
             direction = CloudSyncDirection.UPLOAD_ONLY,
         )
@@ -383,6 +396,46 @@ class BackupJsonCodecTest {
         )
         assertEquals(filter, decoded.settings.mealPhotoFilter)
         assertEquals(navItems, decoded.settings.navItems)
+    }
+
+    @Test
+    fun versionEighteenImportsPoemsAsUncategorizedAndDefaultsToPathStyle() {
+        val current = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 18,
+                    settings = AppSettings(
+                        cloudSyncConfigs = listOf(
+                            CloudSyncConfig(
+                                id = "s3",
+                                name = "S3",
+                                serviceType = CloudSyncServiceType.S3_COMPATIBLE,
+                                endpointUrl = "https://s3.example.com",
+                                s3Bucket = "bucket",
+                                s3Region = "us-east-1",
+                            ),
+                        ),
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                    poems = listOf(testPoem(1).copy(categoryId = null)),
+                ),
+            ),
+        )
+        current.put("version", 18)
+        current.remove("poetryCategories")
+        current.getJSONObject("settings")
+            .getJSONArray("cloudSyncConfigs")
+            .getJSONObject(0)
+            .remove("s3PathStyle")
+        current.getJSONArray("poems").getJSONObject(0).remove("categoryId")
+
+        val decoded = BackupJsonCodec.decode(current.toString())
+
+        assertEquals(18, decoded.formatVersion)
+        assertEquals(emptyList<PoetryCategoryEntity>(), decoded.poetryCategories)
+        assertNull(decoded.poems.single().categoryId)
+        assertEquals(true, decoded.settings.cloudSyncConfigs.single().s3PathStyle)
     }
 
     @Test

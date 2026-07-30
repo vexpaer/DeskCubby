@@ -12,6 +12,53 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class StatisticsJsonCodecsTest {
     @Test
+    fun usageExportEncodingUsesCanonicalSchemaV4Bytes() {
+        val canonical = canonicalUsageStatisticsHistory(
+            UsageStatisticsHistory(
+                trackingStartedOn = LocalDate.parse("2026-07-28"),
+                days = listOf(
+                    usageDay(
+                        date = "2026-07-29",
+                        apps = listOf(
+                            UsageAppDuration("z.example", 2),
+                            UsageAppDuration("a.example", 1),
+                        ),
+                    ),
+                    usageDay(
+                        date = "2026-07-28",
+                        apps = listOf(UsageAppDuration("m.example", 3)),
+                    ),
+                ),
+                backfillCompletedThrough = LocalDate.parse("2026-07-28"),
+            ),
+        )
+
+        val (encoded, verified) = encodeAndVerifyStatisticsValue(
+            value = canonical,
+            encode = UsageStatisticsJsonCodec::encode,
+            decode = UsageStatisticsJsonCodec::decode,
+        )
+        val expected = buildString {
+            append("{\"schemaVersion\":4,\"trackingStartedOn\":\"2026-07-28\",")
+            append("\"backfillCompletedThrough\":\"2026-07-28\",\"days\":[")
+            append(
+                "{\"date\":\"2026-07-28\",\"zoneId\":\"Asia/Shanghai\"," +
+                    "\"state\":\"FINAL\",\"collectedAtEpochMillis\":1,\"apps\":[" +
+                    "{\"packageName\":\"m.example\",\"foregroundMillis\":3}]},",
+            )
+            append(
+                "{\"date\":\"2026-07-29\",\"zoneId\":\"Asia/Shanghai\"," +
+                    "\"state\":\"FINAL\",\"collectedAtEpochMillis\":1,\"apps\":[" +
+                    "{\"packageName\":\"a.example\",\"foregroundMillis\":1}," +
+                    "{\"packageName\":\"z.example\",\"foregroundMillis\":2}]}]}",
+            )
+        }
+
+        assertEquals(expected, encoded)
+        assertEquals(canonical, verified)
+    }
+
+    @Test
     fun usageRoundTripIsDeterministic() {
         val history = UsageStatisticsHistory(
             trackingStartedOn = LocalDate.parse("2026-07-26"),
@@ -240,4 +287,15 @@ class StatisticsJsonCodecsTest {
             StepStatisticsJsonCodec.decode(valid.toString())
         }
     }
+
+    private fun usageDay(
+        date: String,
+        apps: List<UsageAppDuration>,
+    ) = UsageStatisticsDay(
+        date = LocalDate.parse(date),
+        zoneId = "Asia/Shanghai",
+        state = StatisticsDayState.FINAL,
+        collectedAtEpochMillis = 1,
+        apps = apps,
+    )
 }

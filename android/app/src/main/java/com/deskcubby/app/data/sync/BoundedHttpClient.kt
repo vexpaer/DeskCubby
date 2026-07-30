@@ -69,7 +69,11 @@ internal class BoundedHttpClient(
                         if (error is CloudSyncException) {
                             error
                         } else {
-                            CloudSyncException("云端请求失败，请检查网络和服务配置。", error)
+                            CloudSyncException(
+                                "云端请求失败，请检查网络和服务配置。",
+                                error,
+                                errorCode = "NETWORK_REQUEST",
+                            )
                         },
                     )
                 } finally {
