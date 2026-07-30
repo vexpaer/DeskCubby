@@ -1,0 +1,178 @@
+name: Windows signed release
+
+on:
+  push:
+    tags:
+      - "windows-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing protected release tag, for example windows-v0.2.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build signed Windows release
+    runs-on: windows-latest
+    timeout-minutes: 90
+    environment: windows-production
+    permissions:
+      contents: write
+    env:
+      # A platform-specific channel avoids Android and Windows releases racing
+      # for GitHub's repository-wide `/releases/latest` alias.
+      DESKCUBBY_UPDATER_ENDPOINT: https://github.com/vexpaer/DeskCubby/releases/download/windows-stable/latest.json
+      DESKCUBBY_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+      DESKCUBBY_WINDOWS_PUBLISHER: ${{ vars.WINDOWS_PUBLISHER }}
+      DESKCUBBY_WINDOWS_SIGNER_SUBJECT: ${{ vars.WINDOWS_SIGNER_SUBJECT }}
+      DESKCUBBY_WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+      DESKCUBBY_WINDOWS_TIMESTAMP_TSP: ${{ vars.WINDOWS_TIMESTAMP_TSP }}
+
+    steps:
+      # Full immutable SHAs are intentional. Review and update them explicitly.
+      - name: Check out the release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate tag and version
+        id: release
+        shell: pwsh
+        env:
+          REQUESTED_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
+            $tag = $env:REQUESTED_RELEASE_TAG
+          } else {
+            $tag = $env:GITHUB_REF_NAME
+          }
+          if ($tag -notmatch '^windows-v\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$') {
+            throw "Invalid Windows release tag."
+          }
+          git rev-parse --verify "refs/tags/$tag" | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "The requested release tag does not exist."
+          }
+          $tagCommit = (git rev-list -n 1 "refs/tags/$tag").Trim()
+          git merge-base --is-ancestor $tagCommit "origin/main"
+          if ($LASTEXITCODE -ne 0) {
+            throw "The Windows release tag must point to an origin/main ancestor."
+          }
+          $config = Get-Content -Raw windows/src-tauri/tauri.conf.json |
+            ConvertFrom-Json
+          if ($tag -ne "windows-v$($config.version)") {
+            throw "Tag and Tauri version do not match."
+          }
+          "DESKCUBBY_RELEASE_TAG=$tag" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+
+      - name: Enable the pinned package manager
+        shell: pwsh
+        working-directory: windows
+        run: |
+          corepack enable
+          corepack pnpm --version
+
+      - name: Install locked frontend dependencies
+        shell: pwsh
+        working-directory: windows
+        run: corepack pnpm install --frozen-lockfile --trust-lockfile
+
+      - name: Verify frontend and Rust
+        shell: pwsh
+        working-directory: windows
+        run: |
+          corepack pnpm lint
+          corepack pnpm typecheck
+          corepack pnpm test
+          cargo fmt --manifest-path .\src-tauri\Cargo.toml --all -- --check
+          cargo clippy --locked --manifest-path .\src-tauri\Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path .\src-tauri\Cargo.toml
+          .\scripts\verify-packaging.ps1
+
+      - name: Fail closed when updater signing secrets are missing
+        shell: pwsh
+        working-directory: windows
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $required = @{
+            DESKCUBBY_UPDATER_PUBLIC_KEY = $env:DESKCUBBY_UPDATER_PUBLIC_KEY
+            DESKCUBBY_UPDATER_ENDPOINT = $env:DESKCUBBY_UPDATER_ENDPOINT
+            DESKCUBBY_WINDOWS_PUBLISHER = $env:DESKCUBBY_WINDOWS_PUBLISHER
+            TAURI_SIGNING_PRIVATE_KEY = $env:TAURI_SIGNING_PRIVATE_KEY
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          }
+          foreach ($entry in $required.GetEnumerator()) {
+            if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
+              throw "Required protected release input '$($entry.Key)' is missing."
+            }
+          }
+
+      - name: Import Authenticode PFX when configured
+        shell: pwsh
+        working-directory: windows
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          DESKCUBBY_WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_BASE64)) {
+            .\scripts\import-code-signing-certificate.ps1 -WriteGitHubEnvironment
+          } elseif ([string]::IsNullOrWhiteSpace($env:DESKCUBBY_WINDOWS_SIGN_COMMAND)) {
+            throw "No Authenticode PFX or Tauri signCommand was configured."
+          }
+
+      - name: Build and verify signed updater artifacts
+        shell: pwsh
+        working-directory: windows
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          DESKCUBBY_WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          .\scripts\build-release.ps1 `
+            -Mode SignedRelease `
+            -SkipChecks `
+            -ReleaseTag $env:DESKCUBBY_RELEASE_TAG `
+            -Repository "${{ github.repository }}"
+
+      - name: Create a draft GitHub Release
+        shell: pwsh
+        working-directory: windows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $config = Get-Content -Raw .\src-tauri\tauri.conf.json |
+            ConvertFrom-Json
+          .\scripts\publish-github-release.ps1 `
+            -ArtifactDirectory .\artifacts `
+            -Version $config.version `
+            -Tag $env:DESKCUBBY_RELEASE_TAG `
+            -Repository "${{ github.repository }}"
+
+      - name: Remove imported certificate from the runner
+        if: ${{ always() }}
+        shell: pwsh
+        working-directory: windows
+        run: .\scripts\remove-imported-code-signing-certificate.ps1

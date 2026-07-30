@@ -18,6 +18,22 @@ android/app/build/
 *.apk
 *.aab
 
+# Windows / Tauri
+/windows/node_modules/
+/windows/dist/
+/windows/coverage/
+/windows/.vite/
+/windows/src-tauri/target/
+/windows/src-tauri/target-*/
+/windows/src-tauri/gen/
+/windows/artifacts/
+/windows/*.log
+/windows/*.tsbuildinfo
+/windows/.eslintcache
+/.corepack-cache/
+/.pnpm-store/
+/.tools/
+
 # Local AI context
 /AGENTS.md
 /overview.md

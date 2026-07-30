@@ -1,0 +1,93 @@
+import type { AppLanguage } from "../types";
+
+const messages = {
+  "zh-CN": {
+    "app.name": "DeskCubby",
+    "app.tagline": "把每天安放在桌洞里",
+    "nav.primary": "主要功能",
+    "nav.data": "记录与数据",
+    "nav.home": "首页",
+    "nav.diary": "日记",
+    "nav.meals": "吃历",
+    "nav.daily": "日常记录",
+    "nav.thoughts": "小巧思",
+    "nav.dates": "日期记录",
+    "nav.poetry": "诗词本",
+    "nav.vault": "收藏夹",
+    "nav.usage": "手机使用时间",
+    "nav.backup": "备份",
+    "nav.cloud": "云端同步",
+    "nav.about": "关于",
+    "nav.settings": "设置",
+    "action.collapse": "收起侧栏",
+    "action.expand": "展开侧栏",
+    "action.close": "关闭",
+    "action.cancel": "取消",
+    "action.confirm": "确认",
+    "action.discard": "放弃更改",
+    "action.retry": "重试",
+    "action.backHome": "返回首页",
+    "action.viewUpdate": "查看更新",
+    "status.loading": "正在加载",
+    "status.empty": "这里还没有内容",
+    "status.error": "操作没有完成",
+    "status.localFirst": "本地优先",
+    "update.availableTitle": "发现 DeskCubby 更新",
+    "update.availableDetail": "新版本 {version} 已可用；不会自动下载或安装。",
+    "leave.title": "放弃未保存的更改？",
+    "leave.description": "当前页面还有未保存的内容。离开后，这些更改将不会保留。",
+    "notFound.title": "找不到这个页面",
+    "notFound.description": "这个入口可能已移动，或当前版本尚未提供。",
+    "footer.localFirst": "本地优先 · 数据由你掌控",
+  },
+  en: {
+    "app.name": "DeskCubby",
+    "app.tagline": "A quiet place for every day",
+    "nav.primary": "Core",
+    "nav.data": "Records & data",
+    "nav.home": "Home",
+    "nav.diary": "Diary",
+    "nav.meals": "Meal calendar",
+    "nav.daily": "Daily record",
+    "nav.thoughts": "Thoughts",
+    "nav.dates": "Date records",
+    "nav.poetry": "Poetry",
+    "nav.vault": "Vault",
+    "nav.usage": "Phone screen time",
+    "nav.backup": "Backup",
+    "nav.cloud": "Cloud sync",
+    "nav.about": "About",
+    "nav.settings": "Settings",
+    "action.collapse": "Collapse sidebar",
+    "action.expand": "Expand sidebar",
+    "action.close": "Close",
+    "action.cancel": "Cancel",
+    "action.confirm": "Confirm",
+    "action.discard": "Discard changes",
+    "action.retry": "Retry",
+    "action.backHome": "Back to home",
+    "action.viewUpdate": "View update",
+    "status.loading": "Loading",
+    "status.empty": "Nothing here yet",
+    "status.error": "The action could not be completed",
+    "status.localFirst": "Local first",
+    "update.availableTitle": "DeskCubby update available",
+    "update.availableDetail":
+      "Version {version} is available; it will not download or install automatically.",
+    "leave.title": "Discard unsaved changes?",
+    "leave.description": "This page has unsaved content. Leaving now will discard those changes.",
+    "notFound.title": "Page not found",
+    "notFound.description": "This entry may have moved or is not available in this version.",
+    "footer.localFirst": "Local first · Your data stays yours",
+  },
+} as const;
+
+export type MessageKey = keyof (typeof messages)["zh-CN"];
+
+export function translate(language: AppLanguage, key: MessageKey): string {
+  return messages[language][key] ?? messages["zh-CN"][key] ?? key;
+}
+
+export function localeFor(language: AppLanguage): string {
+  return language === "en" ? "en-US" : "zh-CN";
+}

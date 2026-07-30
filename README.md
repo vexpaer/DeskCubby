@@ -2,13 +2,45 @@
 
 [前往 GitHub Releases 下载最新版](https://github.com/vexpaer/DeskCubby/releases)
 
-DeskCubby 是一个本地优先的 Android 原生个人记录应用。日记正文始终保存在用户通过 Storage Access Framework 授权的 Markdown 文件中；Room 保存可重建索引、小巧思、浏览器记录、AI 会话等结构化数据。可选云端同步不会改变本地文件的 source of truth 地位。
+DeskCubby 是一个本地优先的跨平台个人记录应用。Android 端使用 Kotlin/Jetpack Compose，Windows 端使用 Tauri 2 + React/TypeScript + Rust；两个客户端都把 Markdown 日记和媒体保存在用户自己选择的目录中，应用数据库只保存结构化记录、设置与可重建索引。
 
-当前版本：**0.3.7**
+当前版本：Android **0.3.7**；Windows **0.2.0**。
 
-仓库按平台拆分：完整 Android 工程位于 `android/`，Windows 端预留目录位于 `windows/`；`README.md`、`TUTORIAL.md`、`overview.md`、许可证等项目级文档继续保留在仓库根目录。
+仓库按平台拆分：完整 Android 工程位于 `android/`，Windows 工程位于 `windows/`；`README.md`、`TUTORIAL.md`、`overview.md`、许可证等项目级文档继续保留在仓库根目录。
 
-## 当前功能
+## Windows 0.2.0
+
+Windows 客户端支持 Windows 10/11 x64，采用适合桌面宽屏的侧栏和分栏布局，并保留中文/英文、跟随系统明暗模式、字号缩放以及 Material、Liquid Glass、Organic Future 三套主题。
+
+0.2.0 在 0.1.0 记录核心上加入 Windows 本机收藏夹、WebDAV/S3 云同步、Android 手机使用时间只读展示和签名更新基础设施。已实现范围：
+
+- 首页：日历、今天、每日诗词、最近日记/小巧思、快速输入、日常记录、饮食图片、月度统计、日记字数、年度进度和随机旧日记；不会显示尚未实现功能的入口。
+- 日记：选择并原地使用已有日记目录，扫描 Markdown、按月份分组、创建/重命名、CodeMirror 源码编辑、CommonMark 预览、外部修改冲突处理、软删除、恢复和永久删除。日记正文仍以真实文件为准。
+- 媒体与吃历：选择已有媒体目录，安全导入图片并写相对 Markdown 文件名；兼容 `dc-media.json` 与旧名 `deskcubby-media.json`，显示已有热量/地点但不调用 AI；支持餐别/日期筛选、每行 2 张、3 张或智能换行、非破坏滤镜、缺图占位、全屏查看和带像素上限的 PNG 长图导出。
+- 日常记录：模板增删改、`xx` 快速替换，并可追加到当前日记或今日日记；只有文件写入成功后才清空输入并提示成功。
+- 小巧思：分类、颜色、置顶、重点、拖动排序、软删除、恢复、永久删除以及按分类导出文本。
+- 日期记录、诗词本和每日诗词：完整增删改；每日诗词只访问当前 HTTPS 接口，设置超时与响应上限，失败时使用本地缓存或内置回退。
+- 收藏夹：首次设置密码后，以 PBKDF2-HMAC-SHA256（120,000 次）派生 AES-256-GCM 密钥；正文和备注只以密文保存在 Windows SQLite，派生密钥只在解锁会话内存中存在。支持复制普通正文、打开经过 Rust 校验的 HTTP(S) 链接、编辑、永久删除、拖动/键盘排序、主动锁定和原子改密。收藏夹密文不进入 v18、自动备份或云同步。
+- 手机使用时间：Windows **只显示、不采集**。Android 用户在「手机使用时间」页显式通过 SAF 导出规范 v4 `dc-usage-statistics-v4.json` 后，Windows 可选择「导入快照」或「链接只读文件」。快照导入后与源文件脱离；只读链接可手动刷新，但 Windows 绝不会写入、改名或删除源文件，也不调用 Windows 使用时间 API。v18 和默认 WebDAV/S3 应用 JSON 均不含日期、包名或时长明细。
+- WebDAV/S3：可维护多个服务，选择日记、媒体、应用 JSON以及仅上传/双向同步；凭据用当前 Windows 用户的 DPAPI 加密，不回传前端、不进 v18。默认只允许 HTTPS，HTTP 必须显式确认仅用于可信局域网；双方变化时保留冲突副本，远端 JSON 下载只暂存，预览确认后才恢复。除手动「立即同步」外，保存并开启总开关后会在启动约 2 分钟后尝试一次，之后按设置间隔执行（默认 6 小时）；没有启用配置或生产凭据时不会传输。
+- 设置与备份：设置主页改为接近 Android 的「外观与语言 / 子页面设置 / 应用数据 / 桌面导航 / 关于」层级，支持搜索；子页使用本地草稿、右上角保存、恢复本页默认值和未保存离开确认。支持 Android v18 JSON 的预览导入、手动导入/导出与 `pending/current/previous` 自动备份轮换。选定备份目录后，应用启动约 30 秒进行首次检查，此后约每 5 分钟检查一次；内容未变化时不会重复轮换。
+- 关于与更新：Updater-enabled 发布包可在「设置 → 关于 → 检查更新」读取 HTTPS `latest.json`；默认在启动约 60 秒后检查，此后最多每 24 小时检查一次，只提示而不静默下载或安装。用户确认后才下载精确版本、验证 Tauri updater 签名、安装并重启。生产发布链要求安装包同时具有 Authenticode 签名/时间戳和 Tauri updater 签名，缺任一项即失败；没有生产更新源和公钥的本地构建不会发起检查。
+
+Windows 数据库位于 `%LOCALAPPDATA%\com.deskcubby.windows\deskcubby.db`，启用 WAL、外键、事务迁移与 busy timeout。日记和媒体目录不会被整份复制进应用私有目录；保存前使用 SHA-256 文件版本检测外部修改，冲突时提供“重新加载、覆盖、另存副本”。若文件被外部删除，“重新加载”会接受删除并关闭当前编辑，“覆盖”可安全重建同名文件，“另存副本”则把草稿保存为新文件。
+
+### Android v18 数据兼容
+
+- Windows 0.2.0 只直接导入/导出当前 Android v18 JSON；v1–v17 请先在当前 Android 客户端导入并重新导出为 v18。
+- 导入前显示数量统计并要求确认；确认后在单个数据库事务中替换 Windows 管理的设置、小巧思、分类、日期记录和诗词，失败则完整回滚，并保留导入前恢复点。
+- Android 的 `diaryTreeUri`、`mediaTreeUri`、`poetryFontUri` 等 `content://` URI 只作为不透明兼容字段保留。Windows 目录单独保存，绝不会把 URI 转换为文件路径。
+- Windows 不展示的浏览器收藏、RSS、AI/API Key 和未知字段会保存在由 Windows DPAPI 加密的兼容影子中，随后导出时原样合并，避免往返一次便丢失 Android 数据。导入后的云同步非秘密元数据先继续由兼容影子持有；只有用户首次在 Windows 新建、编辑、复制或删除云配置后，Windows 才按 v18 结构覆盖该字段。WebDAV/S3 凭据、收藏夹密文和手机使用时间明细会在进入影子前及每次导出前清除。
+- v18 JSON 最大 10 MiB，并执行数量、长度、枚举、重复 ID 与关联关系校验。导出的 JSON 与 Android 一样是普通数据文件；AI Key 等 Android 原字段仍可能以明文出现在导出结果中，请妥善保存。
+
+### Windows 0.2.0 明确不包含
+
+Windows 0.2.0 仍不实现浏览器、RSS、AI 聊天或热量估算、小游戏和步数。手机使用时间只有 Android v4 文件的只读展示，不采集 Windows 或手机数据；云同步不会上传统计明细。浏览器/RSS/AI 等 Android 数据继续在兼容影子中无损保留，不由 Windows 界面执行。
+
+## Android 0.3.7 当前功能
 
 ### 界面与导航
 
@@ -66,6 +98,7 @@ DeskCubby 是一个本地优先的 Android 原生个人记录应用。日记正�
 - “步数记录”优先从已授权的 Health Connect 只读聚合每日步数；没有连接 Health Connect 时可请求活动识别权限，改用手机的 `TYPE_STEP_COUNTER` 系统计步传感器。传感器首次采样只建立基线，此后按累计值差额记录，跨重启或跨日不会猜测缺失步数；设备不支持、没有数据、未授权或读取失败时不会伪造 0 步。
 - 两页都提供开始日期、已统计天数、总计、日均以及 7/30/90 天或全部范围。三种统计图以同一行的纯图标切换，点击柱、折线点或方块会在该点上方悬浮显示日期和值，不会弹出页面；柱状图按高低渐变，柱状图和曲线在图内左上/左下叠加最高/最低纵轴标注。
 - 手机使用时间使用 `H`/`M` 紧凑显示时长，不再显示“总览”标题；总览卡新增单日最高和过去 7 天平均。统计图位于范围与图表类型按钮上方，加载权限与历史期间显示加载按钮，不再短暂闪现“统计未开启”；“本机私有统计”说明卡已移除。
+- 手机使用时间页的「导出给 Windows」会先说明包名、每日前台时长和日期范围属于敏感习惯数据，再通过系统 SAF 创建 `dc-usage-statistics-v4.json`。它只导出已经采集的规范 v4 历史，写后会完整回读校验；不会开启统计、申请权限，也不会把明细加入 v18 或云同步。
 - 两个功能默认关闭，开关分别位于“设置 → 子页面设置 → 手机使用时间”和“设置 → 子页面设置 → 步数记录”。开启后仍需进入对应系统授权页；启用任一统计时，WorkManager 每 6 小时尝试补采。
 - 当天记录保持可刷新；过去日期只有完整读取成功才会日结，日结后不再重复计算。关闭开关停止后续采集但保留本机历史。
 - 历史分别保存在应用私有且排除系统备份的 `statistics/usage-statistics.json` 和 `statistics/step-statistics.json`。旧版根目录文件及 AtomicFile 的 `.bak`/`.new` 残留会保留数据迁移。两份统计历史及系统授权不进入 DeskCubby 应用 JSON、WebDAV/S3 云同步或 Android 自动备份/设备迁移备份。
@@ -116,7 +149,7 @@ DeskCubby 是一个本地优先的 Android 原生个人记录应用。日记正�
 - v7 为小巧思增加重点标记列，并新增收藏夹密文表（vault_items）与小游戏存档表（game_states）；这三类数据均只保存在本机。
 - v8 为收藏夹条目增加持久排序字段，升级时保留原显示顺序。
 
-## 构建环境
+## Android 构建环境
 
 - Android SDK 36
 - JDK 17 或更高版本（可以使用 Android Studio 自带的 JDK）
@@ -192,8 +225,78 @@ Release 任务在签名配置缺失或不完整时会直接失败，不会误生
 apksigner verify --verbose android\app\build\outputs\apk\release\DeskCubby.apk
 ```
 
+## Windows 构建环境
+
+Windows 客户端需要 Windows 10/11 x64、Node.js 20+、pnpm、Rust，以及带“使用 C++ 的桌面开发”工作负载的 Visual Studio 2022 Build Tools 和 WebView2 Runtime。仓库的 `windows/rust-toolchain.toml` 固定使用项目级 `stable-x86_64-pc-windows-msvc`，不会依赖机器默认的 GNU target。
+
+以下命令从仓库根目录运行：
+
+```powershell
+cd .\windows
+pnpm install --frozen-lockfile
+
+# 浏览器中的 Vite 开发界面
+pnpm dev
+
+# 带 Rust 后端的桌面开发模式
+pnpm tauri dev
+```
+
+提交 Windows 改动前执行：
+
+```powershell
+cd .\windows
+pnpm lint
+pnpm typecheck
+pnpm test
+cargo fmt --manifest-path .\src-tauri\Cargo.toml --check
+cargo clippy --manifest-path .\src-tauri\Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path .\src-tauri\Cargo.toml
+```
+
+普通本地构建可生成 NSIS，并从同一次 Release 构建复制便携 EXE、生成 SHA-256：
+
+```powershell
+cd .\windows
+pnpm package:windows
+pnpm package:portable
+```
+
+典型输出位置：
+
+- 原始 Release EXE：`windows/src-tauri/target/release/deskcubby-windows.exe`（显式 target 构建时位于 `target/x86_64-pc-windows-msvc/release/`）
+- NSIS 安装包：`windows/src-tauri/target/release/bundle/nsis/`
+- 便携测试文件与校验值：`windows/artifacts/DeskCubby-0.2.0-windows-x64-portable.exe` 和同名 `.sha256`
+
+也可显式构建一个仅供本地测试、禁止发布的未签名包：
+
+```powershell
+cd .\windows
+.\scripts\build-release.ps1 -Mode AllowUnsignedTestBuild
+```
+
+生产发布必须使用受保护环境中的长期 Tauri updater 私钥和一套 Authenticode 身份（PFX 或硬件/云签名命令）：
+
+```powershell
+cd .\windows
+.\scripts\build-release.ps1 -Mode SignedRelease -ReleaseTag windows-v0.2.0
+```
+
+成功的 `SignedRelease` 会产生：
+
+- `windows/artifacts/DeskCubby-0.2.0-windows-x64-setup.exe`
+- `windows/artifacts/DeskCubby-0.2.0-windows-x64-portable.exe`
+- 安装包的 `.sig`、`latest.json` 与 `SHA256SUMS.txt`
+
+这是两套互不替代的签名：Authenticode 签名和可信时间戳用于 Windows 发布者身份/SmartScreen；Tauri updater 的 minisign 签名用于应用内下载验证。`.github/workflows/windows-release.yml` 在 `windows-v*` tag 上执行 `SignedRelease`，校验签名与清单后只创建 **draft** GitHub Release，必须人工复核后才能发布；复核通过后再把签名清单提升到独立的 `windows-stable` 通道，避免与同仓库 Android Release 争用全局 `latest`。
+
+当前仓库及这台开发机**没有**生产 updater 私钥与 Authenticode 证书，检入的基础配置也故意不含 updater 公钥或端点。因此普通本地 0.2.0 构建仍是未签名、更新未配置的测试产物，可能显示“未知发布者”；它不会自动检查更新。`SignedRelease` 或 CI 缺少任一生产秘密、证书、时间戳、安装包 `.sig` 时会直接失败，绝不会降级发布未签名包。Windows 0.1.0 没有 updater 插件，已有用户必须手动安装首个经过双重签名且启用 updater 的 0.2.0（或后续）版本，之后才可使用应用内更新。
+
 ## 使用边界
 
+- Windows 与 Android 共用 v18 结构化 JSON 交换数据，但不会直接打开或共享 Android Room 数据库。日记和媒体真实文件应通过用户选择的普通目录互操作。
+- Windows 只保证直接导入 v18；旧备份先由当前 Android 版本升级。Windows 重新导出会合并 DPAPI 加密影子中的未实现模块与未知字段，但这一机制不是编辑这些字段的界面。
+- Windows 0.2.0 没有浏览器、RSS、AI/热量估算、小游戏或步数；手机使用时间只读取用户显式选择的 Android v4 文件，不采集 Windows 使用时间。
 - 编辑器采用“源码编辑 + 阅读预览”，不会把 CommonMark AST 重新序列化，因此能保留未知的 Obsidian 语法；预览只渲染基础 CommonMark。
 - 源码中的媒体拖动只识别独占一行的 Markdown 图片语法。
 - 图片 Markdown 链接只写媒体文件名；建议在 Obsidian 中把 DeskCubby 的媒体目录配置为附件目录。
@@ -208,6 +311,8 @@ apksigner verify --verbose android\app\build\outputs\apk\release\DeskCubby.apk
 - WebDAV 远端目录需要预先存在，WebDAV/S3 服务必须可靠支持强 ETag 与条件 GET/PUT；不满足这些条件时同步会安全失败。
 - 云端同步默认限制单对象 64 MiB、单次传输 512 MiB、10,000 个对象和 10 分钟总时长，不适合作为不受限制的整盘镜像工具。
 - 云端应用 JSON 的下载只产生待确认的暂存副本；恢复 JSON 不会替换日记正文、媒体文件或 AI 对话历史。
+- Windows 收藏夹只属于当前 Windows 数据库，不进 v18、云同步或恢复点；密码无法找回。Windows 手机使用时间的快照/只读链接也不进 v18 或默认云同步。
+- 自动更新只在生产发布包内嵌可信 HTTPS 更新源和 updater 公钥后生效；自动检查只提示，下载安装始终要求用户确认。本地未配置构建必须显示“更新未配置”。
 - 文件版本历史和更完整的冲突“另存副本”流程尚未加入。
 - 部分云盘文档提供方可能拒绝重命名；这时软删除会失败并保留原文件，不会直接永久删除。
 

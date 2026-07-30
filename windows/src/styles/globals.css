@@ -1,0 +1,148 @@
+html {
+  background: var(--background);
+  font-size: calc(16px * var(--font-scale));
+}
+
+body {
+  overflow: hidden;
+  background:
+    radial-gradient(
+      circle at 82% -15%,
+      color-mix(in srgb, var(--primary) 9%, transparent) 0,
+      transparent 34rem
+    ),
+    var(--background);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--primary) 28%, transparent);
+}
+
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--focus) 72%, transparent);
+  outline-offset: 2px;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 650;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: clamp(1.65rem, 2.2vw, 2.35rem);
+  letter-spacing: -0.035em;
+}
+
+h2 {
+  font-size: 1.15rem;
+  letter-spacing: -0.018em;
+}
+
+h3 {
+  font-size: 1rem;
+}
+
+p {
+  color: var(--text-muted);
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
+button,
+a,
+input,
+textarea,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--surface-raised);
+  color: var(--text);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+input,
+select {
+  min-height: 2.75rem;
+  padding: 0.65rem 0.8rem;
+}
+
+textarea {
+  min-height: 7rem;
+  resize: vertical;
+  padding: 0.75rem 0.85rem;
+  line-height: 1.55;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+  opacity: 1;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 1.15rem;
+  min-height: 1.15rem;
+  accent-color: var(--primary);
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: var(--radius-round);
+  background: color-mix(in srgb, var(--text-muted) 42%, transparent);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-muted) 60%, transparent);
+  background-clip: padding-box;
+}

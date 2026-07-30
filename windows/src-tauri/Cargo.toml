@@ -1,0 +1,63 @@
+[package]
+name = "deskcubby-windows"
+version = "0.2.0"
+description = "DeskCubby for Windows"
+authors = ["DeskCubby contributors"]
+edition = "2024"
+rust-version = "1.85"
+
+[lib]
+name = "deskcubby_windows_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+getrandom = "0.3"
+hex = "0.4"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+minisign-verify = "=0.2.5"
+notify = "8"
+pbkdf2 = "0.12"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "charset"] }
+# Keep the updater plugin's reqwest major available under an explicit alias so
+# its client-builder hook and bounded installer download share the exact type.
+updater-http = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["stream"] }
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+sha2 = "0.10"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-updater = "=2.10.1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time", "sync"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+walkdir = "2"
+zeroize = "1"
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security_Cryptography",
+  "Win32_System_Memory"
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+
+[patch.crates-io]
+# Keep the pinned updater implementation in-tree so its release-manifest
+# response is bounded before JSON parsing.
+tauri-plugin-updater = { path = "vendor/tauri-plugin-updater" }

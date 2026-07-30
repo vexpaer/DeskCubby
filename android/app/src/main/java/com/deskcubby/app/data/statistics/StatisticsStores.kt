@@ -41,7 +41,26 @@ class UsageStatisticsStore @Inject constructor(
     ): UsageStatisticsHistory = store.update(transform)
 
     suspend fun reload(): UsageStatisticsHistory = store.reload()
+
+    /**
+     * Re-reads the private source file and creates the export from that value
+     * while holding the same mutex used by refresh writes. The exported JSON is
+     * always canonical current-schema (v4), even when an older or unsorted
+     * representation was loaded from disk.
+     */
+    suspend fun canonicalExportSnapshot(): UsageStatisticsExportSnapshot {
+        val (encoded, verified) = store.reloadAndEncode(::canonicalUsageStatisticsHistory)
+        return UsageStatisticsExportSnapshot(
+            bytes = encoded.toByteArray(StandardCharsets.UTF_8),
+            history = verified,
+        )
+    }
 }
+
+data class UsageStatisticsExportSnapshot internal constructor(
+    val bytes: ByteArray,
+    val history: UsageStatisticsHistory,
+)
 
 @Singleton
 class StepStatisticsStore @Inject constructor(
@@ -113,6 +132,22 @@ private class AtomicStatisticsStore<T>(
         }
     }
 
+    suspend fun reloadAndEncode(
+        canonicalize: (T) -> T = { it },
+    ): Pair<String, T> = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            val current = readOrEmpty()
+            val canonical = canonicalize(current)
+            encodeAndVerifyStatisticsValue(
+                value = canonical,
+                encode = encode,
+                decode = decode,
+            ).also { (_, verified) ->
+                mutableValue.value = verified
+            }
+        }
+    }
+
     private fun readOrEmpty(): T = try {
         readRequired()
     } catch (_: FileNotFoundException) {
@@ -172,4 +207,35 @@ internal fun <T> encodeAndVerifyStatisticsValue(
         throw StatisticsJsonException("Statistics serialization verification failed.")
     }
     return encoded to decoded
+}
+
+internal fun canonicalUsageStatisticsHistory(
+    history: UsageStatisticsHistory,
+): UsageStatisticsHistory = history.copy(
+    days = history.days
+        .sortedBy(UsageStatisticsDay::date)
+        .map { day ->
+            day.copy(apps = day.apps.sortedBy(UsageAppDuration::packageName))
+        },
+)
+
+internal fun <T> verifyStatisticsExportReadBack(
+    expectedBytes: ByteArray,
+    actualBytes: ByteArray,
+    expectedValue: T,
+    decode: (String) -> T,
+    maximumBytes: Int = MAX_STATISTICS_JSON_BYTES,
+): T {
+    require(maximumBytes > 0)
+    if (expectedBytes.size > maximumBytes || actualBytes.size > maximumBytes) {
+        throw StatisticsJsonException("Statistics JSON exceeds $maximumBytes bytes.")
+    }
+    if (!actualBytes.contentEquals(expectedBytes)) {
+        throw StatisticsJsonException("Statistics export read-back did not match the written bytes.")
+    }
+    val decoded = decode(actualBytes.toString(StandardCharsets.UTF_8))
+    if (decoded != expectedValue) {
+        throw StatisticsJsonException("Statistics export read-back verification failed.")
+    }
+    return decoded
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Process
 import androidx.lifecycle.ViewModel
@@ -24,6 +25,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.LocalDate
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -58,6 +60,13 @@ data class UsageStatisticsUiState(
     val lastSevenDayAverageForegroundMillis: Double = 0.0,
 )
 
+enum class UsageStatisticsExportState {
+    IDLE,
+    EXPORTING,
+    SUCCEEDED,
+    FAILED,
+}
+
 @HiltViewModel
 class UsageStatisticsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -67,6 +76,7 @@ class UsageStatisticsViewModel @Inject constructor(
     private val selectedPackage = MutableStateFlow<String?>(null)
     private val range = MutableStateFlow(StatisticsRange.LAST_30_DAYS)
     private val chartType = MutableStateFlow(StatisticsChartType.BARS)
+    private val mutableExportState = MutableStateFlow(UsageStatisticsExportState.IDLE)
     private val launcherApps = context.getSystemService(LauncherApps::class.java)
     private val launcherLabels: Map<String, String> by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         buildMap {
@@ -106,6 +116,8 @@ class UsageStatisticsViewModel @Inject constructor(
     private val enabled = settingsRepository.settings
         .map { it.usageTrackingEnabled }
         .distinctUntilChanged()
+
+    val exportState: StateFlow<UsageStatisticsExportState> = mutableExportState
 
     val uiState: StateFlow<UsageStatisticsUiState> = combine(
         enabled,
@@ -173,6 +185,37 @@ class UsageStatisticsViewModel @Inject constructor(
     fun refresh() {
         if (!uiState.value.enabled) return
         viewModelScope.launch { repository.refresh() }
+    }
+
+    fun exportHistory(uri: Uri) {
+        if (
+            !mutableExportState.compareAndSet(
+                expect = UsageStatisticsExportState.IDLE,
+                update = UsageStatisticsExportState.EXPORTING,
+            )
+        ) {
+            return
+        }
+        viewModelScope.launch {
+            try {
+                repository.exportHistory(uri)
+                mutableExportState.value = UsageStatisticsExportState.SUCCEEDED
+            } catch (cancelled: CancellationException) {
+                mutableExportState.value = UsageStatisticsExportState.IDLE
+                throw cancelled
+            } catch (_: Exception) {
+                mutableExportState.value = UsageStatisticsExportState.FAILED
+            }
+        }
+    }
+
+    fun consumeExportResult() {
+        if (
+            mutableExportState.value == UsageStatisticsExportState.SUCCEEDED ||
+            mutableExportState.value == UsageStatisticsExportState.FAILED
+        ) {
+            mutableExportState.value = UsageStatisticsExportState.IDLE
+        }
     }
 
     fun selectPackage(packageName: String?) {
