@@ -10,6 +10,7 @@ import com.deskcubby.app.data.local.VaultItemDao
 import com.deskcubby.app.data.local.VaultItemEntity
 import com.deskcubby.app.data.vault.VaultCrypto
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import javax.crypto.SecretKey
@@ -33,8 +34,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Vault metadata lives in its own DataStore file, fully separate from app settings and the
- * JSON backup pipeline: neither this metadata nor the encrypted rows ever enter a backup.
+ * Vault metadata lives in its own DataStore file, fully separate from app settings. DeskCubby
+ * v20 backups can copy this metadata and the encrypted Room rows without exposing a password,
+ * derived key, or plaintext.
  */
 private val Context.vaultMetaDataStore by preferencesDataStore(name = "vault_meta")
 
@@ -106,6 +108,10 @@ private class DataStoreVaultMetadataStore(
         }
     }
 
+    override suspend fun clear() {
+        dataStore.edit { it.clear() }
+    }
+
     private fun MutablePreferences.writeActiveVaultMetadata(metadata: VaultKeyMetadata) {
         this[VaultMetadataKeys.metadataVersion] = VAULT_METADATA_VERSION
         this[VaultMetadataKeys.saltBase64] = encodeVaultSalt(metadata.salt)
@@ -143,6 +149,25 @@ data class VaultItem(
 data class VaultContentState(
     val items: List<VaultItem> = emptyList(),
     val corruptedItemCount: Int = 0,
+)
+
+/**
+ * Portable v20 representation of one persisted password descriptor. It contains no password or
+ * derived key; the verifier and every user row remain AES-GCM ciphertext.
+ */
+data class VaultEncryptedKeyBackup(
+    val saltBase64: String,
+    val verifierCipher: String,
+    val verifierIv: String,
+    val iterations: Int,
+    val generationId: String?,
+)
+
+/** Complete encrypted Vault payload owned by a v20 application backup. */
+data class VaultEncryptedBackup(
+    val active: VaultEncryptedKeyBackup?,
+    val pending: VaultEncryptedKeyBackup?,
+    val items: List<VaultItemEntity>,
 )
 
 enum class VaultPasswordChangeResult {
@@ -318,6 +343,72 @@ class VaultRepository internal constructor(
         }
         mutableSessionKey.value = null
     }
+
+    /**
+     * Captures metadata and rows under the same mutation mutex. No password is needed and no
+     * plaintext is produced.
+     */
+    suspend fun createEncryptedBackup(): VaultEncryptedBackup = operationMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val stored = metadataStore.read()
+            if (stored.hasStoredMetadata && stored.metadata == null) {
+                throw IllegalStateException("Vault metadata is damaged and cannot be backed up.")
+            }
+            val metadata = stored.metadata
+            val rows = vaultItemDao.getAll()
+            if (metadata == null && rows.isNotEmpty()) {
+                throw IllegalStateException("Vault rows exist without usable metadata.")
+            }
+            VaultEncryptedBackup(
+                active = metadata?.active?.toBackup(),
+                pending = metadata?.pending?.toBackup(),
+                items = rows,
+            )
+        }
+    }
+
+    /**
+     * Replaces the encrypted Vault without deriving a key. The session is always locked, and a
+     * synchronous failure restores the previous metadata and rows before returning.
+     */
+    suspend fun restoreEncryptedBackup(backup: VaultEncryptedBackup) =
+        operationMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val targetMetadata = backup.validatedMetadata()
+                val previousStored = metadataStore.read()
+                if (previousStored.hasStoredMetadata && previousStored.metadata == null) {
+                    throw IllegalStateException(
+                        "Current Vault metadata is damaged and cannot be safely replaced.",
+                    )
+                }
+                val previousRows = vaultItemDao.getAll()
+                lockEpoch.incrementAndGet()
+                mutableSessionKey.value = null
+                mutableLockState.value = VaultLockState.LOCKED
+                try {
+                    writeEncryptedBackup(targetMetadata, backup.items)
+                } catch (error: Throwable) {
+                    try {
+                        withContext(kotlinx.coroutines.NonCancellable) {
+                            writeEncryptedBackup(previousStored.metadata, previousRows)
+                        }
+                    } catch (rollbackError: Throwable) {
+                        error.addSuppressed(rollbackError)
+                    }
+                    mutableLockState.value = if (previousStored.metadata == null) {
+                        VaultLockState.NOT_SET
+                    } else {
+                        VaultLockState.LOCKED
+                    }
+                    throw error
+                }
+                mutableLockState.value = if (targetMetadata == null) {
+                    VaultLockState.NOT_SET
+                } else {
+                    VaultLockState.LOCKED
+                }
+            }
+        }
 
     /**
      * Recoverable password-change protocol:
@@ -510,6 +601,21 @@ class VaultRepository internal constructor(
         return resolved.key
     }
 
+    private suspend fun writeEncryptedBackup(
+        metadata: VaultMetadata?,
+        rows: List<VaultItemEntity>,
+    ) {
+        when {
+            metadata == null -> metadataStore.clear()
+            metadata.pending != null -> metadataStore.writePrepared(
+                active = metadata.active,
+                pending = metadata.pending,
+            )
+            else -> metadataStore.writeStable(metadata.active)
+        }
+        vaultItemDao.replaceAll(rows)
+    }
+
     private suspend fun resolvePassword(
         metadata: VaultMetadata,
         password: String,
@@ -596,3 +702,74 @@ class VaultRepository internal constructor(
         const val VERIFIER_PLAINTEXT = "deskcubby-vault-verifier"
     }
 }
+
+private fun VaultKeyMetadata.toBackup(): VaultEncryptedKeyBackup =
+    VaultEncryptedKeyBackup(
+        saltBase64 = encodeVaultSalt(salt),
+        verifierCipher = verifierCipher,
+        verifierIv = verifierIv,
+        iterations = iterations,
+        generationId = generationId,
+    )
+
+private fun VaultEncryptedBackup.validatedMetadata(): VaultMetadata? {
+    require(items.size <= MAX_VAULT_BACKUP_ROWS) { "Vault backup contains too many rows." }
+    require(items.map(VaultItemEntity::id).distinct().size == items.size) {
+        "Vault backup contains duplicate row ids."
+    }
+    items.forEach { item ->
+        require(item.id > 0L || item.id == VAULT_KEY_MARKER_ENTITY_ID) {
+            "Vault backup contains an invalid row id."
+        }
+        require(item.createdAt >= 0L && item.updatedAt >= 0L && item.sortOrder >= 0L) {
+            "Vault backup contains a negative timestamp or sort order."
+        }
+        validateVaultCipher(item.cipherText, item.iv)
+    }
+    if (active == null) {
+        require(pending == null && items.isEmpty()) {
+            "Vault rows or pending metadata exist without active metadata."
+        }
+        return null
+    }
+
+    validateVaultCipher(active.verifierCipher, active.verifierIv)
+    pending?.let { validateVaultCipher(it.verifierCipher, it.verifierIv) }
+    val fields = VaultStoredMetadataFields(
+        metadataVersion = VAULT_METADATA_VERSION,
+        saltBase64 = active.saltBase64,
+        verifierCipher = active.verifierCipher,
+        verifierIv = active.verifierIv,
+        kdfIterations = active.iterations,
+        activeGenerationId = active.generationId,
+        migrationState = pending?.let { VAULT_MIGRATION_STATE_PREPARED },
+        pendingSaltBase64 = pending?.saltBase64,
+        pendingVerifierCipher = pending?.verifierCipher,
+        pendingVerifierIv = pending?.verifierIv,
+        pendingKdfIterations = pending?.iterations,
+        pendingGenerationId = pending?.generationId,
+    )
+    val decoded = decodeVaultStoredMetadata(fields).metadata
+        ?: throw IllegalArgumentException("Vault metadata is invalid.")
+    require((decoded.pending != null) == (pending != null)) {
+        "Vault pending metadata is invalid."
+    }
+    return decoded
+}
+
+private fun validateVaultCipher(cipherBase64: String, ivBase64: String) {
+    require(
+        cipherBase64.isNotBlank() &&
+            cipherBase64.length <= MAX_VAULT_BACKUP_CIPHER_CHARS,
+    ) { "Vault ciphertext is invalid." }
+    require(ivBase64.length <= MAX_VAULT_BACKUP_IV_CHARS) { "Vault IV is invalid." }
+    val cipher = runCatching { Base64.getDecoder().decode(cipherBase64) }
+        .getOrElse { throw IllegalArgumentException("Vault ciphertext is not Base64.", it) }
+    val iv = runCatching { Base64.getDecoder().decode(ivBase64) }
+        .getOrElse { throw IllegalArgumentException("Vault IV is not Base64.", it) }
+    require(cipher.size >= 16 && iv.size == 12) { "Vault AES-GCM payload is invalid." }
+}
+
+private const val MAX_VAULT_BACKUP_ROWS = 50_000
+private const val MAX_VAULT_BACKUP_CIPHER_CHARS = 2 * 1024 * 1024
+private const val MAX_VAULT_BACKUP_IV_CHARS = 128

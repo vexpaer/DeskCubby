@@ -930,11 +930,16 @@ class SettingsViewModel @Inject constructor(
         "$actionZh：${summary.thoughtCount} 条小巧思、${summary.categoryCount} 个小巧思分类、" +
             "${summary.favoriteCount} 个浏览器收藏、" +
             "${summary.dateRecordCount} 个日期记录、${summary.poetryCategoryCount} 个诗词分类、" +
-            "${summary.poemCount} 首诗词；" +
+            "${summary.poemCount} 首诗词、${summary.vaultItemCount} 条收藏夹密文、" +
+            "${summary.gameStateCount} 个游戏存档、${summary.usageDeviceCount} 台设备的 " +
+            "${summary.usageDayCount} 天使用时间；" +
             "$actionEn: ${summary.thoughtCount} thoughts, " +
             "${summary.categoryCount} thought categories, ${summary.favoriteCount} bookmarks, " +
             "${summary.dateRecordCount} date records, " +
-            "${summary.poetryCategoryCount} poetry categories, ${summary.poemCount} poems"
+            "${summary.poetryCategoryCount} poetry categories, ${summary.poemCount} poems, " +
+            "${summary.vaultItemCount} encrypted Vault items, " +
+            "${summary.gameStateCount} game saves, and ${summary.usageDayCount} screen-time days " +
+            "from ${summary.usageDeviceCount} devices"
 
     private fun launch(block: suspend () -> Unit) = viewModelScope.launch {
         try {

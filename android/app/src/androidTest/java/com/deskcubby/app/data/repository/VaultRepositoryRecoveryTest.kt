@@ -27,6 +27,23 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class VaultRepositoryRecoveryTest {
     @Test
+    fun encryptedBackupRestoresOnAnotherRepositoryWithTheSamePassword() = runBlocking {
+        val source = VaultRepository(FakeVaultItemDao(), FakeVaultMetadataStore())
+        assertTrue(source.setupPassword(OLD_PASSWORD))
+        assertTrue(source.addItem("portable secret", "encrypted note"))
+        val backup = source.createEncryptedBackup()
+
+        val restored = VaultRepository(FakeVaultItemDao(), FakeVaultMetadataStore())
+        restored.restoreEncryptedBackup(backup)
+
+        assertEquals(VaultLockState.LOCKED, restored.lockState.value)
+        assertTrue(restored.unlock(OLD_PASSWORD))
+        val item = restored.contentState.first().items.single()
+        assertEquals("portable secret", item.content)
+        assertEquals("encrypted note", item.note)
+    }
+
+    @Test
     fun crashAfterJournalRestartsWithOldPasswordAndRollsBack() = runBlocking {
         assertInjectedCrashRecovers(
             faultPoint = VaultRekeyFaultPoint.AFTER_JOURNAL_WRITTEN,

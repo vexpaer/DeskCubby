@@ -12,8 +12,6 @@ import android.graphics.drawable.Drawable
 import android.os.Process
 import android.os.Build
 import android.util.LruCache
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -38,7 +36,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -50,10 +49,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -81,7 +78,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.statistics.StatisticsCollectionPhase
 import com.deskcubby.app.data.statistics.StatisticsDayState
 import com.deskcubby.app.data.statistics.StatisticsPoint
-import com.deskcubby.app.data.statistics.USAGE_STATISTICS_EXPORT_FILE_NAME
+import com.deskcubby.app.data.statistics.limitUsageDeviceNameInput
 import com.deskcubby.app.ui.statistics.StatisticsChart
 import com.deskcubby.app.ui.statistics.StatisticsChartControls
 import com.deskcubby.app.ui.statistics.StatisticsMessagePanel
@@ -100,66 +97,29 @@ fun UsageStatisticsScreen(
     onOpenTrackingSettings: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val exportState by viewModel.exportState.collectAsStateWithLifecycle()
     var selectedPoint by remember { mutableStateOf<StatisticsPoint?>(null) }
-    var showExportWarning by remember { mutableStateOf(false) }
-    val snackbarHostState = remember { SnackbarHostState() }
-    val exportSuccessMessage = tr(
-        "使用时间已导出并通过回读校验",
-        "Screen time was exported and verified",
-    )
-    val exportFailureMessage = tr(
-        "导出失败，目标文件未通过完整校验",
-        "Export failed because the target did not pass full verification",
-    )
-    val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json"),
-    ) { uri ->
-        uri?.let(viewModel::exportHistory)
+    var showDevicePicker by remember { mutableStateOf(false) }
+    var showRenameDevice by remember { mutableStateOf(false) }
+    var deviceNameDraft by remember(state.currentDeviceName) {
+        mutableStateOf(state.currentDeviceName)
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
-    LaunchedEffect(state.range, state.chartType, state.selectedPackage) {
+    LaunchedEffect(
+        state.range,
+        state.chartType,
+        state.selectedPackage,
+        state.selectedDeviceId,
+    ) {
         selectedPoint = null
-    }
-    LaunchedEffect(exportState) {
-        when (exportState) {
-            UsageStatisticsExportState.SUCCEEDED -> {
-                try {
-                    snackbarHostState.showSnackbar(exportSuccessMessage)
-                } finally {
-                    viewModel.consumeExportResult()
-                }
-            }
-
-            UsageStatisticsExportState.FAILED -> {
-                try {
-                    snackbarHostState.showSnackbar(exportFailureMessage)
-                } finally {
-                    viewModel.consumeExportResult()
-                }
-            }
-
-            UsageStatisticsExportState.IDLE,
-            UsageStatisticsExportState.EXPORTING,
-            -> Unit
-        }
     }
 
     Scaffold(
         modifier = Modifier.padding(bottom = padding.calculateBottomPadding()),
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(tr("手机使用时间", "Screen time")) },
                 actions = {
-                    IconButton(
-                        enabled = !state.initializing &&
-                            exportState != UsageStatisticsExportState.EXPORTING,
-                        onClick = { showExportWarning = true },
-                    ) {
-                        Icon(Icons.Outlined.Download, tr("导出给 Windows", "Export for Windows"))
-                    }
                     IconButton(
                         enabled = !state.initializing &&
                             state.enabled &&
@@ -208,11 +168,17 @@ fun UsageStatisticsScreen(
                     )
                 }
             }
-            item {
-                UsageExportPanel(
-                    exporting = exportState == UsageStatisticsExportState.EXPORTING,
-                    onExport = { showExportWarning = true },
-                )
+            if (!state.initializing) {
+                item {
+                    UsageDevicePanel(
+                        state = state,
+                        onChooseDevice = { showDevicePicker = true },
+                        onRenameCurrentDevice = {
+                            deviceNameDraft = state.currentDeviceName
+                            showRenameDevice = true
+                        },
+                    )
+                }
             }
             if (state.history.days.isNotEmpty()) {
                 item {
@@ -296,30 +262,83 @@ fun UsageStatisticsScreen(
         }
     }
 
-    if (showExportWarning) {
-        AlertDialog(
-            onDismissRequest = { showExportWarning = false },
-            title = { Text(tr("导出手机使用时间？", "Export phone screen time?")) },
-            text = {
-                Text(
-                    tr(
-                        "导出的 JSON 包含应用包名、每天的前台时长、日期和时区，可能反映你的使用习惯。导出前会重新读取应用私有统计文件，但不会开启统计或申请使用情况权限；应用也不会自动把该文件加入 v18 备份或云同步。保存位置由你选择，请避免公开或会自动同步的目录。",
-                        "The JSON contains app package names, daily foreground durations, dates, and time zones, which may reveal usage habits. The private statistics file is re-read before export, but tracking is not enabled and Usage Access is not requested. The app does not automatically add this file to v18 backups or cloud sync. Choose a private location and avoid public or automatically synced folders.",
+    if (showDevicePicker) {
+        ModalBottomSheet(onDismissRequest = { showDevicePicker = false }) {
+            Text(
+                tr("查看设备", "View device"),
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+            UsageDeviceChoiceRow(
+                title = tr("所有设备", "All devices"),
+                subtitle = tr(
+                    "${state.devices.size} 台设备，按日期合计",
+                    "${state.devices.size} devices, summed by date",
+                ),
+                selected = state.selectedDeviceId == null,
+                onClick = {
+                    viewModel.selectDevice(null)
+                    showDevicePicker = false
+                },
+            )
+            state.devices.forEach { device ->
+                UsageDeviceChoiceRow(
+                    title = if (device.isCurrentDevice) {
+                        tr("${device.deviceName}（本机）", "${device.deviceName} (this device)")
+                    } else {
+                        device.deviceName
+                    },
+                    subtitle = tr(
+                        "ID ${device.deviceId.take(8)} · ${device.recordedDays} 天 · ${device.platform}",
+                        "ID ${device.deviceId.take(8)} · ${device.recordedDays} days · ${device.platform}",
                     ),
+                    selected = state.selectedDeviceId == device.deviceId,
+                    onClick = {
+                        viewModel.selectDevice(device.deviceId)
+                        showDevicePicker = false
+                    },
+                )
+            }
+            androidx.compose.foundation.layout.Spacer(Modifier.size(24.dp))
+        }
+    }
+
+    if (showRenameDevice) {
+        AlertDialog(
+            onDismissRequest = { showRenameDevice = false },
+            title = { Text(tr("本机设备名称", "This device name")) },
+            text = {
+                OutlinedTextField(
+                    value = deviceNameDraft,
+                    onValueChange = { value ->
+                        deviceNameDraft = limitUsageDeviceNameInput(value)
+                    },
+                    label = { Text(tr("设备名称", "Device name")) },
+                    supportingText = {
+                        Text(
+                            tr(
+                                "名称会随使用时间同步，随机设备 ID 不会因改名而变化。",
+                                "The name syncs with screen time; the random device ID stays unchanged.",
+                            ),
+                        )
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             },
             confirmButton = {
                 Button(
+                    enabled = deviceNameDraft.isNotBlank(),
                     onClick = {
-                        showExportWarning = false
-                        exportLauncher.launch(USAGE_STATISTICS_EXPORT_FILE_NAME)
+                        viewModel.renameCurrentDevice(deviceNameDraft)
+                        showRenameDevice = false
                     },
                 ) {
-                    Text(tr("继续选择位置", "Choose a location"))
+                    Text(tr("保存", "Save"))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showExportWarning = false }) {
+                TextButton(onClick = { showRenameDevice = false }) {
                     Text(tr("取消", "Cancel"))
                 }
             },
@@ -328,10 +347,14 @@ fun UsageStatisticsScreen(
 }
 
 @Composable
-private fun UsageExportPanel(
-    exporting: Boolean,
-    onExport: () -> Unit,
+private fun UsageDevicePanel(
+    state: UsageStatisticsUiState,
+    onChooseDevice: () -> Unit,
+    onRenameCurrentDevice: () -> Unit,
 ) {
+    val selectedName = state.selectedDeviceId
+        ?.let { selected -> state.devices.firstOrNull { it.deviceId == selected }?.deviceName }
+        ?: tr("所有设备", "All devices")
     GlassPanel(
         modifier = Modifier.fillMaxWidth(),
         cornerRadius = 22.dp,
@@ -339,37 +362,82 @@ private fun UsageExportPanel(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                tr("导出给 Windows", "Export for Windows"),
+                tr("设备历史", "Device history"),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 tr(
-                    "手动导出规范 v4 JSON。导出前会重新读取已有私有历史，不查询系统数据源或开启统计；应用不会自动把文件加入 v18 备份或云同步。请保存到可信的私有位置。",
-                    "Manually exports canonical v4 JSON after re-reading the existing private history. It does not query the system source or enable tracking, and the app does not automatically add the file to v18 backups or cloud sync. Save it in a trusted private location.",
+                    "每台 Android 设备只采集自己的记录。云同步中勾选“多设备使用时间”后，可在这里查看其他设备；“所有设备”会按日期相加。",
+                    "Each Android device collects only its own history. Select “Multi-device screen time” in cloud sync to view other devices here; “All devices” sums them by date.",
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            OutlinedButton(
-                onClick = onExport,
-                enabled = !exporting,
+            Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (exporting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                    )
-                } else {
-                    Icon(Icons.Outlined.Download, contentDescription = null)
+                FilledTonalButton(
+                    onClick = onChooseDevice,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Outlined.Devices, contentDescription = null)
+                    androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
+                    Text(selectedName, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
-                Text(
-                    if (exporting) tr("正在写入并校验", "Writing and verifying")
-                    else tr("选择位置并导出", "Choose location and export"),
-                )
+                IconButton(onClick = onRenameCurrentDevice) {
+                    Icon(
+                        Icons.Outlined.Edit,
+                        contentDescription = tr("修改本机设备名称", "Rename this device"),
+                    )
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun UsageDeviceChoiceRow(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.Devices,
+            contentDescription = null,
+            tint = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 12.dp),
+        ) {
+            Text(title, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (selected) {
+            Icon(
+                Icons.Outlined.Check,
+                contentDescription = tr("已选择", "Selected"),
+                tint = MaterialTheme.colorScheme.primary,
+            )
         }
     }
 }

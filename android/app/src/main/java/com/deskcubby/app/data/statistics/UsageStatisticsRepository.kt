@@ -4,12 +4,8 @@ import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
-import android.net.Uri
 import android.os.Process
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.io.ByteArrayOutputStream
-import java.io.FileOutputStream
-import java.io.InputStream
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -152,42 +148,6 @@ class UsageStatisticsRepository @Inject constructor(
         )
     }
 
-    /**
-     * Explicitly exports the already collected private history. This does not
-     * request Usage Access, refresh the system source, or change the tracking
-     * setting. Success is returned only after the SAF document has been closed,
-     * re-opened, compared byte-for-byte, and decoded as the same canonical v4
-     * history.
-     */
-    suspend fun exportHistory(uri: Uri) {
-        val snapshot = store.canonicalExportSnapshot()
-        withContext(Dispatchers.IO) {
-            currentCoroutineContext().ensureActive()
-            val output = context.contentResolver.openOutputStream(uri, "wt")
-                ?: throw IllegalStateException("The selected export document could not be opened.")
-            output.use { stream ->
-                stream.write(snapshot.bytes)
-                stream.flush()
-                if (stream is FileOutputStream) {
-                    stream.fd.sync()
-                }
-            }
-
-            currentCoroutineContext().ensureActive()
-            val actualBytes = context.contentResolver.openInputStream(uri)
-                ?.use { input -> input.readUsageStatisticsExportBounded() }
-                ?: throw IllegalStateException(
-                    "The exported statistics document could not be read back.",
-                )
-            verifyStatisticsExportReadBack(
-                expectedBytes = snapshot.bytes,
-                actualBytes = actualBytes,
-                expectedValue = snapshot.history,
-                decode = UsageStatisticsJsonCodec::decode,
-            )
-        }
-    }
-
     private suspend fun queryUsageEvents(
         beginDate: LocalDate,
         zone: ZoneId,
@@ -277,25 +237,6 @@ class UsageStatisticsRepository @Inject constructor(
     }
 }
 
-private suspend fun InputStream.readUsageStatisticsExportBounded(): ByteArray {
-    val output = ByteArrayOutputStream()
-    val buffer = ByteArray(8 * 1_024)
-    var total = 0
-    while (true) {
-        currentCoroutineContext().ensureActive()
-        val read = read(buffer)
-        if (read < 0) break
-        total += read
-        if (total > MAX_STATISTICS_JSON_BYTES) {
-            throw StatisticsJsonException(
-                "Statistics JSON exceeds $MAX_STATISTICS_JSON_BYTES bytes.",
-            )
-        }
-        output.write(buffer, 0, read)
-    }
-    return output.toByteArray()
-}
-
 internal fun usageQueryStartDate(
     history: UsageStatisticsHistory,
     today: LocalDate,
@@ -350,4 +291,3 @@ internal fun mergeUsageStatisticsHistory(
 
 private const val MAX_USAGE_BACKFILL_DAYS = 3_650L
 private const val MAX_OPEN_RETRY_DAYS = 31L
-const val USAGE_STATISTICS_EXPORT_FILE_NAME = "dc-usage-statistics-v4.json"

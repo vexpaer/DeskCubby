@@ -64,6 +64,11 @@ internal interface VaultMetadataStore {
 
     /** Atomically makes [active] canonical and removes every pending migration field. */
     suspend fun writeStable(active: VaultKeyMetadata)
+
+    /** Removes all metadata only when an explicit v20 restore contains no configured vault. */
+    suspend fun clear() {
+        throw UnsupportedOperationException("Vault metadata clearing is not implemented.")
+    }
 }
 
 internal const val VAULT_METADATA_VERSION = 2

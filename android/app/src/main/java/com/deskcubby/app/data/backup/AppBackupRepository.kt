@@ -12,6 +12,8 @@ import com.deskcubby.app.data.local.DateRecordDao
 import com.deskcubby.app.data.local.DateRecordEntity
 import com.deskcubby.app.data.local.FlashThoughtDao
 import com.deskcubby.app.data.local.FlashThoughtEntity
+import com.deskcubby.app.data.local.GameStateDao
+import com.deskcubby.app.data.local.GameStateEntity
 import com.deskcubby.app.data.local.PoetryCategoryDao
 import com.deskcubby.app.data.local.PoetryCategoryEntity
 import com.deskcubby.app.data.local.SavedPoemDao
@@ -22,6 +24,10 @@ import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.preferences.SettingsRepository
+import com.deskcubby.app.data.repository.VaultEncryptedBackup
+import com.deskcubby.app.data.repository.VaultRepository
+import com.deskcubby.app.data.statistics.UsageDeviceRecord
+import com.deskcubby.app.data.statistics.UsageDeviceRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -49,6 +55,9 @@ data class AppBackupContent(
     val dateRecords: List<DateRecordEntity>,
     val poetryCategories: List<PoetryCategoryEntity>,
     val poems: List<SavedPoemEntity>,
+    val vault: VaultEncryptedBackup = VaultEncryptedBackup(null, null, emptyList()),
+    val gameStates: List<GameStateEntity> = emptyList(),
+    val usageDevices: List<UsageDeviceRecord> = emptyList(),
 )
 
 class AppBackupException(
@@ -70,7 +79,10 @@ class AppBackupRepository @Inject constructor(
     private val dateRecordDao: DateRecordDao,
     private val poetryCategoryDao: PoetryCategoryDao,
     private val savedPoemDao: SavedPoemDao,
+    private val gameStateDao: GameStateDao,
     private val settingsRepository: SettingsRepository,
+    private val vaultRepository: VaultRepository,
+    private val usageDeviceRepository: UsageDeviceRepository,
 ) {
     private val operationMutex = Mutex()
 
@@ -97,7 +109,18 @@ class AppBackupRepository @Inject constructor(
                 poems = poetry.second,
             )
         }
-        return combine(settingsRepository.settings, databaseContent) { settings, content ->
+        val extraContent = combine(
+            gameStateDao.observeAllForBackup(),
+            vaultRepository.contentState,
+            usageDeviceRepository.records,
+        ) { gameStates, _, usageDevices ->
+            gameStates to usageDevices
+        }
+        return combine(
+            settingsRepository.settings,
+            databaseContent,
+            extraContent,
+        ) { settings, content, extras ->
             AppBackupContent(
                 settings = settings,
                 thoughts = content.thoughts,
@@ -106,6 +129,8 @@ class AppBackupRepository @Inject constructor(
                 dateRecords = content.dateRecords,
                 poetryCategories = content.poetryCategories,
                 poems = content.poems,
+                gameStates = extras.first,
+                usageDevices = extras.second,
             )
         }.flowOn(Dispatchers.IO)
     }
@@ -185,7 +210,11 @@ class AppBackupRepository @Inject constructor(
     ): BackupSummary = operationMutex.withLock {
         withContext(Dispatchers.IO) {
             val root = resolveTree(treeUri, "自动保存", requireWrite = true)
-            writeAutomaticToRoot(root, content)
+            // [content] is the debounce trigger. Re-read every store here so Vault metadata and
+            // usage-device files are captured from the same current save attempt.
+            @Suppress("UNUSED_VARIABLE")
+            val trigger = content
+            writeAutomaticToRoot(root, loadCurrentContent())
         }
     }
 
@@ -212,17 +241,15 @@ class AppBackupRepository @Inject constructor(
     }
 
     private suspend fun restoreBackup(backup: AppBackup): BackupSummary {
-        val previousSettings = try {
-            settingsRepository.settings.first()
+        val previous = try {
+            loadCurrentContent(includeV20Private = backup.formatVersion >= 20)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            throw AppBackupException("导入失败：无法读取当前设置，原有内容未改变。", error)
+            throw AppBackupException("导入失败：无法读取当前数据，原有内容未改变。", error)
         }
+        val previousSettings = previous.settings
 
-        // Apply the reversible DataStore edit first and make the Room transaction the final
-        // commit. If the process dies between stores, existing user-created database content
-        // is never destructively replaced before settings have been durably written.
         val restoredSettings = mergeBackupCloudSyncSettings(
             imported = mergeLegacyBackupAiApiKeys(
                 imported = backup.settings,
@@ -239,56 +266,98 @@ class AppBackupRepository @Inject constructor(
         )
         try {
             settingsRepository.restoreFromBackup(restoredSettings)
-        } catch (error: CancellationException) {
-            rollbackSettingsAfterImportFailure(previousSettings, error)
-            throw error
-        } catch (error: Exception) {
-            rollbackSettingsAfterImportFailure(previousSettings, error)
-            val message = if (error.suppressed.isNotEmpty()) {
-                "导入失败：无法恢复设置，原设置回滚也未完全成功。"
-            } else {
-                "导入失败：无法恢复设置，原有内容未改变。"
-            }
-            throw AppBackupException(message, error)
-        }
-
-        try {
             database.withTransaction {
-                // Thoughts must be removed before their referenced categories, then restored
-                // only after every category exists, so foreign-key checks stay valid.
-                thoughtDao.clearAllForBackup()
-                categoryDao.clearAllForBackup()
-                if (backup.categories.isNotEmpty()) {
-                    categoryDao.insertAllForBackup(backup.categories)
-                }
-                if (backup.thoughts.isNotEmpty()) {
-                    thoughtDao.insertAllForBackup(backup.thoughts)
-                }
-                browserDao.replaceFavoritesForBackup(backup.favorites)
-                dateRecordDao.replaceAllForBackup(backup.dateRecords)
-                savedPoemDao.clearAllForBackup()
-                poetryCategoryDao.clearAllForBackup()
-                if (backup.poetryCategories.isNotEmpty()) {
-                    poetryCategoryDao.insertAllForBackup(backup.poetryCategories)
-                }
-                if (backup.poems.isNotEmpty()) {
-                    savedPoemDao.insertAllForBackup(backup.poems)
-                }
+                replaceDatabaseContent(
+                    thoughts = backup.thoughts,
+                    categories = backup.categories,
+                    favorites = backup.favorites,
+                    dateRecords = backup.dateRecords,
+                    poetryCategories = backup.poetryCategories,
+                    poems = backup.poems,
+                    gameStates = if (backup.formatVersion >= 20) {
+                        mergeGameStateBackups(previous.gameStates, backup.gameStates)
+                    } else {
+                        previous.gameStates
+                    },
+                )
+            }
+            if (backup.formatVersion >= 20) {
+                vaultRepository.restoreEncryptedBackup(backup.vault)
+                usageDeviceRepository.mergeBackup(backup.usageDevices)
             }
         } catch (error: CancellationException) {
-            rollbackSettingsAfterImportFailure(previousSettings, error)
+            rollbackImport(previous, error, restoreV20Private = backup.formatVersion >= 20)
             throw error
         } catch (error: Exception) {
-            rollbackSettingsAfterImportFailure(previousSettings, error)
+            rollbackImport(previous, error, restoreV20Private = backup.formatVersion >= 20)
             val message = if (error.suppressed.isNotEmpty()) {
-                "导入失败：无法写入数据库，原设置回滚也未完全成功。"
+                "导入失败：原数据回滚未完全成功，请保留当前备份文件。"
             } else {
-                "导入失败：无法写入数据库，原设置已恢复且原有内容未改变。"
+                "导入失败：原有内容已恢复。"
             }
             throw AppBackupException(message, error)
         }
 
         return backup.toSummary()
+    }
+
+    private suspend fun replaceDatabaseContent(
+        thoughts: List<FlashThoughtEntity>,
+        categories: List<ThoughtCategoryEntity>,
+        favorites: List<BrowserRecordEntity>,
+        dateRecords: List<DateRecordEntity>,
+        poetryCategories: List<PoetryCategoryEntity>,
+        poems: List<SavedPoemEntity>,
+        gameStates: List<GameStateEntity>,
+    ) {
+        // Thoughts must be removed before their referenced categories, then restored only after
+        // every category exists, so foreign-key checks stay valid.
+        thoughtDao.clearAllForBackup()
+        categoryDao.clearAllForBackup()
+        if (categories.isNotEmpty()) categoryDao.insertAllForBackup(categories)
+        if (thoughts.isNotEmpty()) thoughtDao.insertAllForBackup(thoughts)
+        browserDao.replaceFavoritesForBackup(favorites)
+        dateRecordDao.replaceAllForBackup(dateRecords)
+        savedPoemDao.clearAllForBackup()
+        poetryCategoryDao.clearAllForBackup()
+        if (poetryCategories.isNotEmpty()) {
+            poetryCategoryDao.insertAllForBackup(poetryCategories)
+        }
+        if (poems.isNotEmpty()) savedPoemDao.insertAllForBackup(poems)
+        gameStateDao.replaceAllForBackup(gameStates)
+    }
+
+    private suspend fun rollbackImport(
+        previous: AppBackupContent,
+        originalError: Throwable,
+        restoreV20Private: Boolean,
+    ) {
+        withContext(NonCancellable + Dispatchers.IO) {
+            runCatching {
+                settingsRepository.restoreFromBackup(previous.settings)
+            }.exceptionOrNull()?.let(originalError::addSuppressed)
+            runCatching {
+                database.withTransaction {
+                    replaceDatabaseContent(
+                        thoughts = previous.thoughts,
+                        categories = previous.categories,
+                        favorites = previous.favorites,
+                        dateRecords = previous.dateRecords,
+                        poetryCategories = previous.poetryCategories,
+                        poems = previous.poems,
+                        gameStates = previous.gameStates,
+                    )
+                }
+            }.exceptionOrNull()?.let(originalError::addSuppressed)
+            if (restoreV20Private) {
+                runCatching {
+                    vaultRepository.restoreEncryptedBackup(previous.vault)
+                }.exceptionOrNull()?.let(originalError::addSuppressed)
+                runCatching {
+                    usageDeviceRepository.replaceAllForRollback(previous.usageDevices)
+                }.exceptionOrNull()?.let(originalError::addSuppressed)
+            }
+        }
     }
 
     private fun writeAutomaticToRoot(
@@ -574,7 +643,9 @@ class AppBackupRepository @Inject constructor(
         return false
     }
 
-    private suspend fun loadCurrentContent(): AppBackupContent {
+    private suspend fun loadCurrentContent(
+        includeV20Private: Boolean = true,
+    ): AppBackupContent {
         val settings = settingsRepository.settings.first()
         val databaseContent = database.withTransaction {
             BackupDatabaseContent(
@@ -584,7 +655,18 @@ class AppBackupRepository @Inject constructor(
                 dateRecords = dateRecordDao.getAllForBackup(),
                 poetryCategories = poetryCategoryDao.getAllForBackup(),
                 poems = savedPoemDao.getAllForBackup(),
+                gameStates = gameStateDao.getAllForBackup(),
             )
+        }
+        val vault = if (includeV20Private) {
+            vaultRepository.createEncryptedBackup()
+        } else {
+            VaultEncryptedBackup(null, null, emptyList())
+        }
+        val usageDevices = if (includeV20Private) {
+            usageDeviceRepository.snapshotAll()
+        } else {
+            emptyList()
         }
         return AppBackupContent(
             settings = settings,
@@ -594,20 +676,10 @@ class AppBackupRepository @Inject constructor(
             dateRecords = databaseContent.dateRecords,
             poetryCategories = databaseContent.poetryCategories,
             poems = databaseContent.poems,
+            vault = vault,
+            gameStates = databaseContent.gameStates,
+            usageDevices = usageDevices,
         )
-    }
-
-    private suspend fun rollbackSettingsAfterImportFailure(
-        previousSettings: AppSettings,
-        originalError: Throwable,
-    ) {
-        try {
-            withContext(NonCancellable + Dispatchers.IO) {
-                settingsRepository.restoreFromBackup(previousSettings)
-            }
-        } catch (rollbackError: Exception) {
-            originalError.addSuppressed(rollbackError)
-        }
     }
 
     private fun readDocument(uri: Uri, action: String): String {
@@ -627,7 +699,7 @@ class AppBackupRepository @Inject constructor(
                     if (count < 0) break
                     totalBytes += count
                     if (totalBytes > MAX_IMPORT_BYTES) {
-                        throw AppBackupException("${action}失败：JSON 文件不能超过 10 MiB。")
+                        throw AppBackupException("${action}失败：JSON 文件不能超过 64 MiB。")
                     }
                     output.write(buffer, 0, count)
                 }
@@ -677,6 +749,9 @@ class AppBackupRepository @Inject constructor(
         dateRecords = dateRecords,
         poetryCategories = poetryCategories,
         poems = poems,
+        vault = vault,
+        gameStates = gameStates,
+        usageDevices = usageDevices,
     )
 
     private fun AppBackup.toSummary(): BackupSummary = BackupSummary(
@@ -687,6 +762,10 @@ class AppBackupRepository @Inject constructor(
         categoryCount = categories.size,
         poetryCategoryCount = poetryCategories.size,
         poemCount = poems.size,
+        vaultItemCount = vault.items.count { it.id > 0L },
+        gameStateCount = gameStates.size,
+        usageDeviceCount = usageDevices.size,
+        usageDayCount = usageDevices.sumOf { it.history.days.size },
     )
 
     private data class BackupDatabaseContent(
@@ -696,6 +775,7 @@ class AppBackupRepository @Inject constructor(
         val dateRecords: List<DateRecordEntity>,
         val poetryCategories: List<PoetryCategoryEntity>,
         val poems: List<SavedPoemEntity>,
+        val gameStates: List<GameStateEntity> = emptyList(),
     )
 
     private companion object {
@@ -706,7 +786,7 @@ class AppBackupRepository @Inject constructor(
         const val LEGACY_PENDING_FILE_NAME = "DeskCubby.pending.json"
         const val LEGACY_PREVIOUS_FILE_NAME = "DeskCubby.previous.json"
         const val BACKUP_MIME_TYPE = "application/json"
-        const val MAX_IMPORT_BYTES = 10 * 1024 * 1024
+        const val MAX_IMPORT_BYTES = BackupJsonCodec.MAX_JSON_BYTES
     }
 }
 
@@ -747,6 +827,31 @@ internal fun mergeLegacyBackupAiApiKeys(
 }
 
 private const val PLAINTEXT_AI_KEY_BACKUP_VERSION = 12
+
+internal fun mergeGameStateBackups(
+    current: List<GameStateEntity>,
+    imported: List<GameStateEntity>,
+): List<GameStateEntity> {
+    val currentById = current.associateBy(GameStateEntity::gameId)
+    val importedById = imported.associateBy(GameStateEntity::gameId)
+    return (currentById.keys + importedById.keys)
+        .sorted()
+        .map { gameId ->
+            val local = currentById[gameId]
+            val remote = importedById[gameId]
+            when {
+                local == null -> checkNotNull(remote)
+                remote == null -> local
+                else -> {
+                    val newest = if (remote.updatedAt >= local.updatedAt) remote else local
+                    newest.copy(
+                        highScore = maxOf(local.highScore, remote.highScore),
+                        updatedAt = maxOf(local.updatedAt, remote.updatedAt),
+                    )
+                }
+            }
+        }
+}
 
 internal fun mergeBackupCloudSyncSettings(
     imported: AppSettings,

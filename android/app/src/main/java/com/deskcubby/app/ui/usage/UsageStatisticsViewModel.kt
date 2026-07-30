@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Process
 import androidx.lifecycle.ViewModel
@@ -18,6 +17,10 @@ import com.deskcubby.app.data.statistics.StatisticsRange
 import com.deskcubby.app.data.statistics.UsageStatisticsDay
 import com.deskcubby.app.data.statistics.UsageStatisticsHistory
 import com.deskcubby.app.data.statistics.UsageStatisticsRepository
+import com.deskcubby.app.data.statistics.UsageDeviceRecord
+import com.deskcubby.app.data.statistics.UsageDeviceRepository
+import com.deskcubby.app.data.statistics.UsageDeviceIdentity
+import com.deskcubby.app.data.statistics.combineUsageDeviceHistories
 import com.deskcubby.app.data.statistics.overview
 import com.deskcubby.app.data.statistics.withinStatisticsRange
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -25,8 +28,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.LocalDate
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -44,10 +47,22 @@ data class UsageAppChoice(
     val foregroundMillis: Long,
 )
 
+data class UsageDeviceChoice(
+    val deviceId: String,
+    val deviceName: String,
+    val platform: String,
+    val isCurrentDevice: Boolean,
+    val recordedDays: Int,
+)
+
 data class UsageStatisticsUiState(
     val initializing: Boolean = true,
     val enabled: Boolean = false,
     val history: UsageStatisticsHistory = UsageStatisticsHistory(),
+    val devices: List<UsageDeviceChoice> = emptyList(),
+    val currentDeviceId: String? = null,
+    val currentDeviceName: String = "",
+    val selectedDeviceId: String? = null,
     val collection: StatisticsCollectionState = StatisticsCollectionState(),
     val selectedPackage: String? = null,
     val appChoices: List<UsageAppChoice> = emptyList(),
@@ -60,23 +75,17 @@ data class UsageStatisticsUiState(
     val lastSevenDayAverageForegroundMillis: Double = 0.0,
 )
 
-enum class UsageStatisticsExportState {
-    IDLE,
-    EXPORTING,
-    SUCCEEDED,
-    FAILED,
-}
-
 @HiltViewModel
 class UsageStatisticsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     settingsRepository: SettingsRepository,
     private val repository: UsageStatisticsRepository,
+    private val deviceRepository: UsageDeviceRepository,
 ) : ViewModel() {
+    private val selectedDeviceId = MutableStateFlow<String?>(null)
     private val selectedPackage = MutableStateFlow<String?>(null)
     private val range = MutableStateFlow(StatisticsRange.LAST_30_DAYS)
     private val chartType = MutableStateFlow(StatisticsChartType.BARS)
-    private val mutableExportState = MutableStateFlow(UsageStatisticsExportState.IDLE)
     private val launcherApps = context.getSystemService(LauncherApps::class.java)
     private val launcherLabels: Map<String, String> by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         buildMap {
@@ -117,23 +126,35 @@ class UsageStatisticsViewModel @Inject constructor(
         .map { it.usageTrackingEnabled }
         .distinctUntilChanged()
 
-    val exportState: StateFlow<UsageStatisticsExportState> = mutableExportState
-
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val uiState: StateFlow<UsageStatisticsUiState> = combine(
         enabled,
-        repository.history,
+        deviceRepository.records,
+        deviceRepository.identity,
         repository.collectionState,
+        selectedDeviceId,
         selectedPackage,
         range,
         chartType,
     ) { values ->
+        @Suppress("UNCHECKED_CAST")
+        val records = values[1] as List<UsageDeviceRecord>
+        val identity = values[2] as UsageDeviceIdentity
+        val requestedDeviceId = values[4] as String?
+        val selectedRecord = requestedDeviceId?.let { id ->
+            records.firstOrNull { it.deviceId == id }
+        }
         UsageStatisticsInputs(
             enabled = values[0] as Boolean,
-            history = values[1] as UsageStatisticsHistory,
-            collection = values[2] as StatisticsCollectionState,
-            selectedPackage = values[3] as String?,
-            range = values[4] as StatisticsRange,
-            chartType = values[5] as StatisticsChartType,
+            history = selectedRecord?.history ?: combineUsageDeviceHistories(records),
+            devices = records,
+            currentDeviceId = identity.deviceId,
+            currentDeviceName = identity.deviceName,
+            selectedDeviceId = selectedRecord?.deviceId,
+            collection = values[3] as StatisticsCollectionState,
+            selectedPackage = values[5] as String?,
+            range = values[6] as StatisticsRange,
+            chartType = values[7] as StatisticsChartType,
         )
     }.mapLatest { inputs ->
         val today = LocalDate.now()
@@ -156,6 +177,18 @@ class UsageStatisticsViewModel @Inject constructor(
             initializing = false,
             enabled = inputs.enabled,
             history = inputs.history,
+            devices = inputs.devices.map { record ->
+                UsageDeviceChoice(
+                    deviceId = record.deviceId,
+                    deviceName = record.deviceName,
+                    platform = record.platform,
+                    isCurrentDevice = record.deviceId == inputs.currentDeviceId,
+                    recordedDays = record.history.days.size,
+                )
+            },
+            currentDeviceId = inputs.currentDeviceId,
+            currentDeviceName = inputs.currentDeviceName,
+            selectedDeviceId = inputs.selectedDeviceId,
             collection = inputs.collection,
             selectedPackage = inputs.selectedPackage,
             appChoices = appChoices,
@@ -187,34 +220,20 @@ class UsageStatisticsViewModel @Inject constructor(
         viewModelScope.launch { repository.refresh() }
     }
 
-    fun exportHistory(uri: Uri) {
-        if (
-            !mutableExportState.compareAndSet(
-                expect = UsageStatisticsExportState.IDLE,
-                update = UsageStatisticsExportState.EXPORTING,
-            )
-        ) {
-            return
-        }
-        viewModelScope.launch {
-            try {
-                repository.exportHistory(uri)
-                mutableExportState.value = UsageStatisticsExportState.SUCCEEDED
-            } catch (cancelled: CancellationException) {
-                mutableExportState.value = UsageStatisticsExportState.IDLE
-                throw cancelled
-            } catch (_: Exception) {
-                mutableExportState.value = UsageStatisticsExportState.FAILED
-            }
-        }
+    fun selectDevice(deviceId: String?) {
+        selectedDeviceId.value = deviceId
+        selectedPackage.value = null
     }
 
-    fun consumeExportResult() {
-        if (
-            mutableExportState.value == UsageStatisticsExportState.SUCCEEDED ||
-            mutableExportState.value == UsageStatisticsExportState.FAILED
-        ) {
-            mutableExportState.value = UsageStatisticsExportState.IDLE
+    fun renameCurrentDevice(name: String) {
+        viewModelScope.launch {
+            try {
+                deviceRepository.renameCurrentDevice(name)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The dialog validates user input; an I/O failure leaves the previous name intact.
+            }
         }
     }
 
@@ -252,6 +271,10 @@ class UsageStatisticsViewModel @Inject constructor(
 private data class UsageStatisticsInputs(
     val enabled: Boolean,
     val history: UsageStatisticsHistory,
+    val devices: List<UsageDeviceRecord>,
+    val currentDeviceId: String,
+    val currentDeviceName: String,
+    val selectedDeviceId: String?,
     val collection: StatisticsCollectionState,
     val selectedPackage: String?,
     val range: StatisticsRange,

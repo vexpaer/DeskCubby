@@ -1592,8 +1592,8 @@ private fun CloudSyncSettingsPage(
             text = {
                 Text(
                     tr(
-                        "这会按备份导入应用设置和结构化数据。日记与媒体真实文件不会被 JSON 导入替换。",
-                        "This imports app settings and structured data from the backup. Diary and media files are not replaced by JSON import.",
+                        "这会按备份导入应用设置和结构化数据。v20 还会恢复 Vault 密文/校验元数据、合并小游戏最高分与存档，并按设备和日期合并使用时间；Vault 随后保持锁定。日记与媒体真实文件不会被替换。",
+                        "This imports app settings and structured data. v20 also restores Vault ciphertext/verifier metadata, merges game scores and saves, and merges screen time by device and date; the Vault remains locked. Diary and media files are not replaced.",
                     ),
                 )
             },
@@ -1874,8 +1874,18 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.JSON_BACKUP in selectedContents) {
                     Text(
                         tr(
-                            "应用 JSON 包含结构化记录及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "App JSON contains structured records and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                            "v20 应用 JSON 包含结构化记录、Vault 密文、小游戏存档、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "The v20 app JSON contains structured records, Vault ciphertext, game saves, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (CloudSyncContent.USAGE_STATISTICS in selectedContents) {
+                    Text(
+                        tr(
+                            "使用时间会按设备 ID 自动上传并合并，包含应用包名、日期、时区与前台时长；请只使用可信云端。",
+                            "Screen time is uploaded and merged by device ID. It includes package names, dates, time zones, and foreground durations; use only a trusted cloud service.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2037,6 +2047,7 @@ private fun syncContentLabel(content: CloudSyncContent): String = when (content)
     CloudSyncContent.DIARIES -> tr("日记", "Diaries")
     CloudSyncContent.MEDIA -> tr("媒体", "Media")
     CloudSyncContent.JSON_BACKUP -> tr("应用 JSON", "App JSON")
+    CloudSyncContent.USAGE_STATISTICS -> tr("多设备使用时间", "Multi-device screen time")
 }
 
 @Composable
@@ -2049,6 +2060,7 @@ private fun syncContentsLabel(contents: Set<CloudSyncContent>): String =
                     CloudSyncContent.DIARIES -> "Diaries"
                     CloudSyncContent.MEDIA -> "Media"
                     CloudSyncContent.JSON_BACKUP -> "App JSON"
+                    CloudSyncContent.USAGE_STATISTICS -> "Screen time"
                 }
             }
     } else {
@@ -2059,6 +2071,7 @@ private fun syncContentsLabel(contents: Set<CloudSyncContent>): String =
                     CloudSyncContent.DIARIES -> "日记"
                     CloudSyncContent.MEDIA -> "媒体"
                     CloudSyncContent.JSON_BACKUP -> "应用 JSON"
+                    CloudSyncContent.USAGE_STATISTICS -> "使用时间"
                 }
             }
     }
@@ -2166,8 +2179,8 @@ private fun BackupSettingsPage(
                     )
                     Text(
                         tr(
-                            "${conflict.summary.thoughtCount} 条小巧思，${conflict.summary.categoryCount} 个小巧思分类，${conflict.summary.favoriteCount} 个浏览器收藏，${conflict.summary.dateRecordCount} 个日期记录，${conflict.summary.poetryCategoryCount} 个诗词分类，${conflict.summary.poemCount} 首诗词",
-                            "${conflict.summary.thoughtCount} thoughts, ${conflict.summary.categoryCount} thought categories, ${conflict.summary.favoriteCount} browser bookmarks, ${conflict.summary.dateRecordCount} date records, ${conflict.summary.poetryCategoryCount} poetry categories, ${conflict.summary.poemCount} poems",
+                            "${conflict.summary.thoughtCount} 条小巧思，${conflict.summary.categoryCount} 个小巧思分类，${conflict.summary.favoriteCount} 个浏览器收藏，${conflict.summary.dateRecordCount} 个日期记录，${conflict.summary.poetryCategoryCount} 个诗词分类，${conflict.summary.poemCount} 首诗词，${conflict.summary.vaultItemCount} 条收藏夹密文，${conflict.summary.gameStateCount} 个游戏存档，${conflict.summary.usageDeviceCount} 台设备的 ${conflict.summary.usageDayCount} 天使用时间",
+                            "${conflict.summary.thoughtCount} thoughts, ${conflict.summary.categoryCount} thought categories, ${conflict.summary.favoriteCount} browser bookmarks, ${conflict.summary.dateRecordCount} date records, ${conflict.summary.poetryCategoryCount} poetry categories, ${conflict.summary.poemCount} poems, ${conflict.summary.vaultItemCount} encrypted Vault items, ${conflict.summary.gameStateCount} game saves, and ${conflict.summary.usageDayCount} screen-time days from ${conflict.summary.usageDeviceCount} devices",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -2204,8 +2217,8 @@ private fun BackupSettingsPage(
             text = {
                 Text(
                     tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。日记正文和媒体文件不会被修改。确定继续吗？",
-                        "Importing replaces the current settings, thoughts and categories, browser bookmarks, date records, and poetry book. Diary entries and media files are not changed. Continue?",
+                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v20 还会恢复 Vault 密文与密码校验元数据、合并小游戏存档/最高分和各设备使用时间；Vault 导入后保持锁定。日记正文和媒体文件不会被修改。确定继续吗？",
+                        "Importing replaces current settings, thoughts and categories, browser bookmarks, date records, and the poetry book. v20 also restores Vault ciphertext and password-verifier metadata, merges game saves/high scores and per-device screen time, and leaves the Vault locked. Diary entries and media files are unchanged. Continue?",
                     ),
                 )
             },
@@ -2322,15 +2335,15 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "包含应用设置（含 AI API Key、同步服务元数据与吃历滤镜）、小巧思及其分类、浏览器收藏夹、日期记录、诗词及诗词分类，以及日记和媒体目录路径；不包含日记正文、媒体文件、AI 对话历史、WebDAV 密码、S3 用户名或 Key、手机使用时长或步数统计。",
-                        "Includes app settings (including AI API keys, sync-service metadata and meal filters), thoughts and categories, browser bookmarks, date records, poems and poetry categories, and diary/media folder paths; diary files, media, AI chat history, WebDAV passwords, S3 usernames or keys, screen-time history and step history are excluded.",
+                        "v20 包含应用设置（含 AI API Key、同步服务元数据与吃历滤镜）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、2048/贪吃蛇/俄罗斯方块存档与最高分，以及按设备区分的手机使用时间。Vault 密码和派生密钥不会写入 JSON。",
+                        "v20 includes app settings (including AI API keys, sync metadata and meal filters), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, 2048/Snake/Tetris saves and high scores, and screen-time history grouped by device. Vault passwords and derived keys are never written to JSON.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
                     tr(
-                        "跨设备导入后需重新选择日记和媒体目录、填写云端凭据并手动重新开启同步；没有本机授权的目录路径不会覆盖当前目录。",
-                        "After importing on another device, reselect diary/media folders, enter cloud credentials and explicitly re-enable sync; paths without local access do not replace current folders.",
+                        "不包含日记正文、媒体文件、AI 对话历史、WebDAV 密码、S3 用户名或 Key、步数历史、系统权限或本机随机设备 ID。跨设备导入后需重新选择目录、填写云端凭据并手动开启同步；导入的使用时间按原设备 ID 保留。",
+                        "Diary files, media, AI chat history, WebDAV passwords, S3 usernames/keys, step history, system permissions, and this device's random ID are excluded. After cross-device import, reselect folders, re-enter cloud credentials, and explicitly enable sync; imported screen time keeps its source device ID.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )

@@ -23,6 +23,16 @@ data class StagedCloudSyncJson(
     val lastModifiedMillis: Long,
 )
 
+data class CloudSyncUsageSnapshot(
+    val key: String,
+    val bytes: ByteArray,
+    val lastModifiedMillis: Long,
+    val localId: String,
+) {
+    override fun toString(): String =
+        "CloudSyncUsageSnapshot(key=$key, bytes=<redacted:${bytes.size}>)"
+}
+
 /**
  * JSON downloads are validated and staged for explicit user restore. They are never imported into
  * Room/DataStore merely because a background sync ran.
@@ -37,14 +47,27 @@ interface CloudSyncJsonBridge {
     ): StagedCloudSyncJson
 }
 
+/** Per-device usage objects are encrypted only by transport and merge automatically by date. */
+interface CloudSyncUsageBridge {
+    suspend fun snapshots(maxBytes: Long): List<CloudSyncUsageSnapshot>
+
+    suspend fun mergeIncoming(
+        key: String,
+        bytes: ByteArray,
+        sha256: String,
+    ): CloudSyncUsageSnapshot
+}
+
 class DiaryCloudSyncLocalStore(
     private val diaryRepository: DiaryFileRepository,
     private val settingsProvider: suspend () -> AppSettings,
     private val configId: String,
     private val jsonBridge: CloudSyncJsonBridge? = null,
+    private val usageBridge: CloudSyncUsageBridge? = null,
 ) : CloudSyncLocalStore {
     private val mutex = Mutex()
     private var jsonSnapshot: CloudSyncJsonSnapshot? = null
+    private var usageSnapshots: Map<String, CloudSyncUsageSnapshot> = emptyMap()
 
     override suspend fun list(
         selectedContents: Set<CloudSyncContent>,
@@ -82,6 +105,25 @@ class DiaryCloudSyncLocalStore(
         } else {
             jsonSnapshot = null
         }
+        if (CloudSyncContent.USAGE_STATISTICS in selectedContents) {
+            val bridge = usageBridge ?: throw CloudSyncConfigurationException(
+                "使用时间同步尚未连接到设备历史服务。",
+            )
+            val snapshots = bridge.snapshots(limits.maxObjectBytes)
+            usageSnapshots = snapshots.associateBy(CloudSyncUsageSnapshot::key)
+            result += snapshots.map { snapshot ->
+                LocalSyncObject(
+                    key = snapshot.key,
+                    content = CloudSyncContent.USAGE_STATISTICS,
+                    size = snapshot.bytes.size.toLong(),
+                    lastModifiedMillis = snapshot.lastModifiedMillis.coerceAtLeast(0L),
+                    sha256 = sha256(snapshot.bytes),
+                    localId = snapshot.localId,
+                )
+            }
+        } else {
+            usageSnapshots = emptyMap()
+        }
         if (result.size > limits.maxObjects) {
             throw CloudSyncLimitException("同步文件数量超过上限。")
         }
@@ -103,6 +145,18 @@ class DiaryCloudSyncLocalStore(
             }
             return@withLock snapshot.bytes.copyOf()
         }
+        if (objectInfo.content == CloudSyncContent.USAGE_STATISTICS) {
+            val snapshot = usageSnapshots[objectInfo.key]
+                ?: throw CloudSyncConflictException("使用时间快照已失效，请重新同步。")
+            if (
+                snapshot.localId != objectInfo.localId ||
+                snapshot.bytes.size.toLong() != objectInfo.size ||
+                sha256(snapshot.bytes) != objectInfo.sha256
+            ) {
+                throw CloudSyncConflictException("使用时间在同步读取期间发生变化。")
+            }
+            return@withLock snapshot.bytes.copyOf()
+        }
         diaryRepository.readForCloudSync(
             file = objectInfo.toDiaryFile(),
             maxObjectBytes = maxBytes,
@@ -120,6 +174,26 @@ class DiaryCloudSyncLocalStore(
         requireValidSyncKey(key)
         if (bytes.size.toLong() > limits.maxObjectBytes || sha256(bytes) != contentSha256) {
             throw CloudSyncConflictException("远端文件校验失败，未写入本地。")
+        }
+        if (key.startsWith(USAGE_SYNC_PREFIX)) {
+            val bridge = usageBridge ?: throw CloudSyncConfigurationException(
+                "使用时间同步尚未连接到设备历史服务。",
+            )
+            val merged = bridge.mergeIncoming(key, bytes, contentSha256)
+            if (merged.bytes.size.toLong() > limits.maxObjectBytes) {
+                throw CloudSyncLimitException("合并后的使用时间超过单文件同步上限。")
+            }
+            usageSnapshots = usageSnapshots + (merged.key to merged)
+            return@withLock LocalWriteResult.Applied(
+                LocalSyncObject(
+                    key = merged.key,
+                    content = CloudSyncContent.USAGE_STATISTICS,
+                    size = merged.bytes.size.toLong(),
+                    lastModifiedMillis = merged.lastModifiedMillis.coerceAtLeast(0L),
+                    sha256 = sha256(merged.bytes),
+                    localId = merged.localId,
+                ),
+            )
         }
         if (key == JSON_SYNC_KEY || key == LEGACY_JSON_SYNC_KEY) {
             val bridge = jsonBridge ?: throw CloudSyncConfigurationException(
@@ -204,6 +278,8 @@ class DiaryCloudSyncLocalStore(
             CloudSyncContent.MEDIA -> DiaryCloudSyncArea.MEDIA
             CloudSyncContent.JSON_BACKUP ->
                 throw CloudSyncException("JSON 备份不能作为日记文件读取。")
+            CloudSyncContent.USAGE_STATISTICS ->
+                throw CloudSyncException("使用时间不能作为日记文件读取。")
         }
         return DiaryCloudSyncFile(
             area = area,
@@ -240,6 +316,7 @@ class DiaryCloudSyncLocalStore(
     private companion object {
         const val JSON_SYNC_KEY = "json/dc.json"
         const val LEGACY_JSON_SYNC_KEY = "json/DeskCubby.json"
+        const val USAGE_SYNC_PREFIX = "usage/v1/"
         const val EMPTY_SHA256 =
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }

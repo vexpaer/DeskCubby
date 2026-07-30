@@ -26,6 +26,7 @@ class CloudSyncCoordinator(
     private val diaryRepository: DiaryFileRepository,
     private val settingsProvider: suspend () -> AppSettings,
     private val jsonBridge: CloudSyncJsonBridge? = null,
+    private val usageBridge: CloudSyncUsageBridge? = null,
     private val remoteStoreFactory: CloudSyncRemoteStoreFactory =
         DefaultCloudSyncRemoteStoreFactory(),
     private val stateStore: CloudSyncStateStore =
@@ -77,6 +78,7 @@ class CloudSyncCoordinator(
             settingsProvider = settingsProvider,
             configId = config.id,
             jsonBridge = jsonBridge,
+            usageBridge = usageBridge,
         ),
         remoteStoreFactory = remoteStoreFactory,
         stateStore = stateStore,

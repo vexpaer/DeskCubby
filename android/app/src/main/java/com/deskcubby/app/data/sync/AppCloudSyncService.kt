@@ -7,6 +7,10 @@ import com.deskcubby.app.data.backup.BackupSummary
 import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
+import com.deskcubby.app.data.statistics.USAGE_DEVICE_REMOTE_PREFIX
+import com.deskcubby.app.data.statistics.UsageDeviceJsonCodec
+import com.deskcubby.app.data.statistics.UsageDeviceRecord
+import com.deskcubby.app.data.statistics.UsageDeviceRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileOutputStream
@@ -46,6 +50,7 @@ class AppCloudSyncService @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val backupRepository: AppBackupRepository,
     private val secretStore: CloudSyncSecretStore,
+    usageDeviceRepository: UsageDeviceRepository,
 ) {
     private val incomingDirectory = File(context.filesDir, INCOMING_DIRECTORY)
     private val coordinator = CloudSyncCoordinator(
@@ -56,6 +61,7 @@ class AppCloudSyncService @Inject constructor(
             incomingDirectory = incomingDirectory,
             backupRepository = backupRepository,
         ),
+        usageBridge = AppCloudSyncUsageBridge(usageDeviceRepository),
     )
     private val mutableStatus = MutableStateFlow(
         AppCloudSyncStatus(pendingJsonCount = pendingIncomingJson().size),
@@ -207,7 +213,7 @@ class AppCloudSyncService @Inject constructor(
     private companion object {
         const val INCOMING_DIRECTORY = "cloud-sync-incoming"
         const val INCOMING_PREFIX = "DeskCubby-incoming-"
-        const val MAX_INCOMING_JSON_BYTES = 10L * 1024 * 1024
+        const val MAX_INCOMING_JSON_BYTES = BackupJsonCodec.MAX_JSON_BYTES.toLong()
     }
 }
 
@@ -305,8 +311,54 @@ private class AppCloudSyncJsonBridge(
     }
 
     private companion object {
-        const val MAX_JSON_BYTES = 10 * 1024 * 1024
+        const val MAX_JSON_BYTES = BackupJsonCodec.MAX_JSON_BYTES
         const val MAX_PENDING_FILES = 100
+    }
+}
+
+private class AppCloudSyncUsageBridge(
+    private val repository: UsageDeviceRepository,
+) : CloudSyncUsageBridge {
+    override suspend fun snapshots(maxBytes: Long): List<CloudSyncUsageSnapshot> =
+        repository.snapshotAll().map { record ->
+            record.toSnapshot(maxBytes)
+        }
+
+    override suspend fun mergeIncoming(
+        key: String,
+        bytes: ByteArray,
+        sha256: String,
+    ): CloudSyncUsageSnapshot {
+        if (
+            bytes.isEmpty() ||
+            bytes.size.toLong() > CloudSyncLimits().maxObjectBytes ||
+            com.deskcubby.app.data.sync.sha256(bytes) != sha256
+        ) {
+            throw CloudSyncConflictException("远端使用时间校验失败。")
+        }
+        val record = try {
+            UsageDeviceJsonCodec.decode(bytes.toString(Charsets.UTF_8))
+        } catch (_: Exception) {
+            throw CloudSyncConflictException("远端使用时间格式无效。")
+        }
+        val expectedKey = "$USAGE_DEVICE_REMOTE_PREFIX${record.deviceId}.json"
+        if (key != expectedKey) {
+            throw CloudSyncConflictException("远端使用时间设备标识与路径不一致。")
+        }
+        return repository.mergeIncoming(record).toSnapshot(CloudSyncLimits().maxObjectBytes)
+    }
+
+    private fun UsageDeviceRecord.toSnapshot(maxBytes: Long): CloudSyncUsageSnapshot {
+        val bytes = UsageDeviceJsonCodec.encode(this).toByteArray(Charsets.UTF_8)
+        if (bytes.size.toLong() > maxBytes) {
+            throw CloudSyncLimitException("使用时间设备历史超过单文件同步上限。")
+        }
+        return CloudSyncUsageSnapshot(
+            key = "$USAGE_DEVICE_REMOTE_PREFIX$deviceId.json",
+            bytes = bytes,
+            lastModifiedMillis = updatedAtEpochMillis,
+            localId = deviceId,
+        )
     }
 }
 

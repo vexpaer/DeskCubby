@@ -42,22 +42,17 @@ class UsageStatisticsStore @Inject constructor(
 
     suspend fun reload(): UsageStatisticsHistory = store.reload()
 
-    /**
-     * Re-reads the private source file and creates the export from that value
-     * while holding the same mutex used by refresh writes. The exported JSON is
-     * always canonical current-schema (v4), even when an older or unsorted
-     * representation was loaded from disk.
-     */
-    suspend fun canonicalExportSnapshot(): UsageStatisticsExportSnapshot {
+    /** Re-reads and canonically encodes the private source under the writer mutex. */
+    suspend fun canonicalSnapshot(): UsageStatisticsSnapshot {
         val (encoded, verified) = store.reloadAndEncode(::canonicalUsageStatisticsHistory)
-        return UsageStatisticsExportSnapshot(
+        return UsageStatisticsSnapshot(
             bytes = encoded.toByteArray(StandardCharsets.UTF_8),
             history = verified,
         )
     }
 }
 
-data class UsageStatisticsExportSnapshot internal constructor(
+data class UsageStatisticsSnapshot internal constructor(
     val bytes: ByteArray,
     val history: UsageStatisticsHistory,
 )

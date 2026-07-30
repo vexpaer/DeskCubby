@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <!-- Device usage and health statistics remain on this device unless the user
-         explicitly exports them through a future dedicated flow. -->
+    <!-- Android system backup must not clone a device identity or private statistics.
+         DeskCubby v20 JSON/cloud sync handles the explicit cross-device path. -->
     <exclude
         domain="file"
         path="statistics/" />
@@ -14,6 +14,12 @@
     <exclude
         domain="file"
         path="usage-statistics.json.new" />
+    <exclude
+        domain="file"
+        path="usage-device-histories/" />
+    <exclude
+        domain="file"
+        path="datastore/usage_device_identity.preferences_pb" />
     <exclude
         domain="file"
         path="step-statistics.json" />

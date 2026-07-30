@@ -4,9 +4,11 @@ import com.deskcubby.app.data.local.BrowserRecordEntity
 import com.deskcubby.app.codePointLength
 import com.deskcubby.app.data.local.DateRecordEntity
 import com.deskcubby.app.data.local.FlashThoughtEntity
+import com.deskcubby.app.data.local.GameStateEntity
 import com.deskcubby.app.data.local.PoetryCategoryEntity
 import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
+import com.deskcubby.app.data.local.VaultItemEntity
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
@@ -37,9 +39,16 @@ import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.preferences.migrateMealPhotosWidget
 import com.deskcubby.app.data.preferences.migrateDailyRecordsWidget
 import com.deskcubby.app.data.preferences.normalizeThemeSecondaryColors
+import com.deskcubby.app.data.repository.VAULT_KEY_MARKER_ENTITY_ID
+import com.deskcubby.app.data.repository.VaultEncryptedBackup
+import com.deskcubby.app.data.repository.VaultEncryptedKeyBackup
+import com.deskcubby.app.data.statistics.MAX_USAGE_DEVICES
+import com.deskcubby.app.data.statistics.UsageDeviceJsonCodec
+import com.deskcubby.app.data.statistics.UsageDeviceRecord
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.net.URI
+import java.util.Base64
 import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONException
@@ -47,7 +56,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 19,
+    val formatVersion: Int = 20,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -56,6 +65,13 @@ data class AppBackup(
     val categories: List<ThoughtCategoryEntity> = emptyList(),
     val poetryCategories: List<PoetryCategoryEntity> = emptyList(),
     val poems: List<SavedPoemEntity> = emptyList(),
+    val vault: VaultEncryptedBackup = VaultEncryptedBackup(
+        active = null,
+        pending = null,
+        items = emptyList(),
+    ),
+    val gameStates: List<GameStateEntity> = emptyList(),
+    val usageDevices: List<UsageDeviceRecord> = emptyList(),
 )
 
 data class BackupSummary(
@@ -66,13 +82,17 @@ data class BackupSummary(
     val categoryCount: Int = 0,
     val poetryCategoryCount: Int = 0,
     val poemCount: Int = 0,
+    val vaultItemCount: Int = 0,
+    val gameStateCount: Int = 0,
+    val usageDeviceCount: Int = 0,
+    val usageDayCount: Int = 0,
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 19
+    const val FORMAT_VERSION: Int = 20
 
     private const val FORMAT_NAME = "DeskCubby"
-    private const val MAX_JSON_BYTES = 10 * 1024 * 1024
+    const val MAX_JSON_BYTES = 64 * 1024 * 1024
     private const val MAX_THOUGHTS = 50_000
     private const val MAX_FAVORITES = 20_000
     private const val MAX_DATE_RECORDS = 50_000
@@ -98,6 +118,21 @@ object BackupJsonCodec {
     private const val MAX_AI_API_KEY_CHARS = 8_192
     private const val MAX_CLOUD_SYNC_CONFIGS = 20
     private const val MAX_MORE_DESCRIPTION_CODE_POINTS = 160
+    private const val MAX_VAULT_ITEMS = 50_000
+    private const val MAX_VAULT_CIPHER_CHARS = 2 * 1024 * 1024
+    private const val MAX_VAULT_IV_CHARS = 128
+    private const val MAX_VAULT_SALT_CHARS = 2_048
+    private const val MAX_VAULT_GENERATION_CHARS = 64
+    private const val MAX_GAME_STATES = 16
+    private const val MAX_GAME_ID_CHARS = 64
+    private const val MAX_GAME_SAVE_CHARS = 16 * 1024 * 1024
+    private val SUPPORTED_GAME_IDS = setOf(
+        "2048",
+        "2048_5",
+        "2048_6",
+        "snake",
+        "tetris",
+    )
 
     fun encode(backup: AppBackup): String {
         require(backup.formatVersion == FORMAT_VERSION) {
@@ -113,6 +148,9 @@ object BackupJsonCodec {
             dateRecords = backup.dateRecords,
             poems = backup.poems,
         )
+        validateVaultBackup(backup.vault)
+        validateGameStates(backup.gameStates)
+        validateUsageDevices(backup.usageDevices)
 
         val root = JSONObject()
             .put("format", FORMAT_NAME)
@@ -125,6 +163,9 @@ object BackupJsonCodec {
             .put("dateRecords", encodeDateRecords(backup.dateRecords))
             .put("poetryCategories", encodePoetryCategories(backup.poetryCategories))
             .put("poems", encodePoems(backup.poems))
+            .put("vault", encodeVault(backup.vault))
+            .put("gameStates", encodeGameStates(backup.gameStates))
+            .put("usageDevices", encodeUsageDevices(backup.usageDevices))
         return root.toString(2).also { encoded ->
             requireWithinSizeLimit(encoded)
             // Keep files produced from locally corrupted state just as strict as imported files.
@@ -191,6 +232,21 @@ object BackupJsonCodec {
         } else {
             emptyList()
         }
+        val vault = if (version >= 20) {
+            decodeVault(root.requiredObject("vault"))
+        } else {
+            VaultEncryptedBackup(active = null, pending = null, items = emptyList())
+        }
+        val gameStates = if (version >= 20) {
+            decodeGameStates(root.requiredArray("gameStates"))
+        } else {
+            emptyList()
+        }
+        val usageDevices = if (version >= 20) {
+            decodeUsageDevices(root.requiredArray("usageDevices"))
+        } else {
+            emptyList()
+        }
         return AppBackup(
             formatVersion = version,
             exportedAt = exportedAt,
@@ -201,6 +257,9 @@ object BackupJsonCodec {
             categories = categories,
             poetryCategories = poetryCategories,
             poems = poems,
+            vault = vault,
+            gameStates = gameStates,
+            usageDevices = usageDevices,
         ).also {
             validatePoetryCategoryReferences(it.poems, it.poetryCategories)
         }
@@ -1321,6 +1380,267 @@ object BackupJsonCodec {
         }
     }
 
+    private fun encodeVault(vault: VaultEncryptedBackup): JSONObject = JSONObject()
+        .put("active", vault.active?.let(::encodeVaultKey) ?: JSONObject.NULL)
+        .put("pending", vault.pending?.let(::encodeVaultKey) ?: JSONObject.NULL)
+        .put(
+            "items",
+            JSONArray().apply {
+                vault.items.sortedBy(VaultItemEntity::id).forEach { item ->
+                    put(
+                        JSONObject()
+                            .put("id", item.id)
+                            .put("cipherText", item.cipherText)
+                            .put("iv", item.iv)
+                            .put("createdAt", item.createdAt)
+                            .put("updatedAt", item.updatedAt)
+                            .put("sortOrder", item.sortOrder),
+                    )
+                }
+            },
+        )
+
+    private fun encodeVaultKey(key: VaultEncryptedKeyBackup): JSONObject = JSONObject()
+        .put("saltBase64", key.saltBase64)
+        .put("verifierCipher", key.verifierCipher)
+        .put("verifierIv", key.verifierIv)
+        .put("iterations", key.iterations)
+        .putNullable("generationId", key.generationId)
+
+    private fun decodeVault(json: JSONObject): VaultEncryptedBackup {
+        val active = if (json.isNull("active")) {
+            null
+        } else {
+            decodeVaultKey(json.requiredObject("active"), pending = false)
+        }
+        val pending = if (json.isNull("pending")) {
+            null
+        } else {
+            decodeVaultKey(json.requiredObject("pending"), pending = true)
+        }
+        val itemsJson = json.requiredArray("items")
+        require(itemsJson.length() <= MAX_VAULT_ITEMS) {
+            "Backup contains too many Vault rows"
+        }
+        val ids = HashSet<Long>(itemsJson.length())
+        val items = buildList {
+            repeat(itemsJson.length()) { index ->
+                val item = itemsJson.requiredObject(index, "vault.items")
+                val id = item.requiredLong("id")
+                require(id > 0L || id == VAULT_KEY_MARKER_ENTITY_ID) {
+                    "vault.items[$index].id is invalid"
+                }
+                require(ids.add(id)) { "Duplicate Vault row id: $id" }
+                val createdAt = item.requiredLong("createdAt")
+                val updatedAt = item.requiredLong("updatedAt")
+                val sortOrder = item.requiredLong("sortOrder")
+                require(createdAt >= 0L && updatedAt >= 0L && sortOrder >= 0L) {
+                    "vault.items[$index] contains a negative value"
+                }
+                add(
+                    VaultItemEntity(
+                        id = id,
+                        cipherText = item.requiredString("cipherText")
+                            .requireMaxLength(
+                                "vault.items[$index].cipherText",
+                                MAX_VAULT_CIPHER_CHARS,
+                            ),
+                        iv = item.requiredString("iv")
+                            .requireMaxLength("vault.items[$index].iv", MAX_VAULT_IV_CHARS),
+                        createdAt = createdAt,
+                        updatedAt = updatedAt,
+                        sortOrder = sortOrder,
+                    ),
+                )
+            }
+        }
+        return VaultEncryptedBackup(active = active, pending = pending, items = items)
+            .also(::validateVaultBackup)
+    }
+
+    private fun decodeVaultKey(
+        json: JSONObject,
+        pending: Boolean,
+    ): VaultEncryptedKeyBackup = VaultEncryptedKeyBackup(
+        saltBase64 = json.requiredString("saltBase64")
+            .requireMaxLength("vault.saltBase64", MAX_VAULT_SALT_CHARS),
+        verifierCipher = json.requiredString("verifierCipher")
+            .requireMaxLength("vault.verifierCipher", MAX_VAULT_CIPHER_CHARS),
+        verifierIv = json.requiredString("verifierIv")
+            .requireMaxLength("vault.verifierIv", MAX_VAULT_IV_CHARS),
+        iterations = json.requiredInt("iterations"),
+        generationId = json.requiredNullableString("generationId")
+            ?.requireMaxLength("vault.generationId", MAX_VAULT_GENERATION_CHARS),
+    ).also { key ->
+        validateVaultKey(key, generationRequired = pending)
+    }
+
+    private fun validateVaultBackup(vault: VaultEncryptedBackup) {
+        require(vault.items.size <= MAX_VAULT_ITEMS) { "Backup contains too many Vault rows" }
+        require(vault.items.map(VaultItemEntity::id).distinct().size == vault.items.size) {
+            "Backup contains duplicate Vault row ids"
+        }
+        if (vault.active == null) {
+            require(vault.pending == null && vault.items.isEmpty()) {
+                "Vault rows or pending metadata exist without active metadata"
+            }
+            return
+        }
+        validateVaultKey(vault.active, generationRequired = false)
+        vault.pending?.let { validateVaultKey(it, generationRequired = true) }
+        vault.items.forEachIndexed { index, item ->
+            require(item.id > 0L || item.id == VAULT_KEY_MARKER_ENTITY_ID) {
+                "vault.items[$index].id is invalid"
+            }
+            require(item.createdAt >= 0L && item.updatedAt >= 0L && item.sortOrder >= 0L) {
+                "vault.items[$index] contains a negative value"
+            }
+            validateAesGcmBase64(
+                cipher = item.cipherText,
+                iv = item.iv,
+                field = "vault.items[$index]",
+            )
+        }
+    }
+
+    private fun validateVaultKey(
+        key: VaultEncryptedKeyBackup,
+        generationRequired: Boolean,
+    ) {
+        require(key.saltBase64.length <= MAX_VAULT_SALT_CHARS) { "Vault salt is too long" }
+        val salt = decodeBase64(key.saltBase64, "Vault salt")
+        require(salt.size in 1..1_024) { "Vault salt size is invalid" }
+        require(key.iterations in 1..10_000_000) { "Vault KDF iterations are invalid" }
+        val generation = key.generationId
+        require(!generationRequired || generation != null) {
+            "Pending Vault generation is missing"
+        }
+        require(
+            generation == null || Regex("[A-Za-z0-9-]{1,64}").matches(generation),
+        ) { "Vault generation id is invalid" }
+        validateAesGcmBase64(
+            cipher = key.verifierCipher,
+            iv = key.verifierIv,
+            field = "Vault verifier",
+        )
+    }
+
+    private fun validateAesGcmBase64(
+        cipher: String,
+        iv: String,
+        field: String,
+    ) {
+        require(cipher.isNotBlank() && cipher.length <= MAX_VAULT_CIPHER_CHARS) {
+            "$field ciphertext is invalid"
+        }
+        require(iv.length <= MAX_VAULT_IV_CHARS) { "$field IV is too long" }
+        require(decodeBase64(cipher, "$field ciphertext").size >= 16) {
+            "$field ciphertext is too short"
+        }
+        require(decodeBase64(iv, "$field IV").size == 12) { "$field IV size is invalid" }
+    }
+
+    private fun decodeBase64(value: String, field: String): ByteArray = try {
+        Base64.getDecoder().decode(value)
+    } catch (error: IllegalArgumentException) {
+        throw IllegalArgumentException("$field is not valid Base64", error)
+    }
+
+    private fun encodeGameStates(states: List<GameStateEntity>): JSONArray = JSONArray().apply {
+        states.sortedBy(GameStateEntity::gameId).forEach { state ->
+            put(
+                JSONObject()
+                    .put("gameId", state.gameId)
+                    .put("highScore", state.highScore)
+                    .putNullable("saveJson", state.saveJson)
+                    .put("updatedAt", state.updatedAt),
+            )
+        }
+    }
+
+    private fun decodeGameStates(json: JSONArray): List<GameStateEntity> {
+        require(json.length() <= MAX_GAME_STATES) { "Backup contains too many game states" }
+        val ids = HashSet<String>(json.length())
+        return buildList {
+            repeat(json.length()) { index ->
+                val item = json.requiredObject(index, "gameStates")
+                val state = GameStateEntity(
+                    gameId = item.requiredString("gameId")
+                        .requireMaxLength("gameStates[$index].gameId", MAX_GAME_ID_CHARS),
+                    highScore = item.requiredInt("highScore"),
+                    saveJson = item.requiredNullableString("saveJson")
+                        ?.requireMaxLength(
+                            "gameStates[$index].saveJson",
+                            MAX_GAME_SAVE_CHARS,
+                        ),
+                    updatedAt = item.requiredLong("updatedAt"),
+                )
+                require(ids.add(state.gameId)) { "Duplicate game state id: ${state.gameId}" }
+                validateGameState(state, index)
+                add(state)
+            }
+        }
+    }
+
+    private fun validateGameStates(states: List<GameStateEntity>) {
+        require(states.size <= MAX_GAME_STATES) { "Backup contains too many game states" }
+        require(states.map(GameStateEntity::gameId).distinct().size == states.size) {
+            "Backup contains duplicate game state ids"
+        }
+        states.forEachIndexed(::validateGameState)
+    }
+
+    private fun validateGameState(index: Int, state: GameStateEntity) =
+        validateGameState(state, index)
+
+    private fun validateGameState(state: GameStateEntity, index: Int) {
+        require(state.gameId in SUPPORTED_GAME_IDS) {
+            "gameStates[$index].gameId is unsupported"
+        }
+        require(state.highScore >= 0 && state.updatedAt >= 0L) {
+            "gameStates[$index] contains a negative value"
+        }
+        state.saveJson?.let { save ->
+            save.requireMaxLength("gameStates[$index].saveJson", MAX_GAME_SAVE_CHARS)
+            require(save.isNotBlank()) { "gameStates[$index].saveJson must not be blank" }
+            val tokener = JSONTokener(save)
+            require(tokener.nextValue() is JSONObject && tokener.nextClean() == '\u0000') {
+                "gameStates[$index].saveJson must contain one JSON object"
+            }
+        }
+    }
+
+    private fun encodeUsageDevices(records: List<UsageDeviceRecord>): JSONArray =
+        JSONArray().apply {
+            records.sortedBy(UsageDeviceRecord::deviceId).forEach { record ->
+                put(JSONObject(UsageDeviceJsonCodec.encode(record)))
+            }
+        }
+
+    private fun decodeUsageDevices(json: JSONArray): List<UsageDeviceRecord> {
+        require(json.length() <= MAX_USAGE_DEVICES) { "Backup contains too many usage devices" }
+        val ids = HashSet<String>(json.length())
+        return buildList {
+            repeat(json.length()) { index ->
+                val record = UsageDeviceJsonCodec.decode(
+                    json.requiredObject(index, "usageDevices").toString(),
+                )
+                require(ids.add(record.deviceId)) {
+                    "Duplicate usage device id: ${record.deviceId}"
+                }
+                add(record)
+            }
+        }
+    }
+
+    private fun validateUsageDevices(records: List<UsageDeviceRecord>) {
+        require(records.size <= MAX_USAGE_DEVICES) { "Backup contains too many usage devices" }
+        require(records.map(UsageDeviceRecord::deviceId).distinct().size == records.size) {
+            "Backup contains duplicate usage device ids"
+        }
+        records.forEach { UsageDeviceJsonCodec.encode(it) }
+    }
+
     private fun validateEntityKeys(
         thoughts: List<FlashThoughtEntity>,
         categories: List<ThoughtCategoryEntity>,
@@ -1449,7 +1769,7 @@ object BackupJsonCodec {
 
     private fun requireWithinSizeLimit(json: String) {
         require(json.length <= MAX_JSON_BYTES && json.toByteArray(Charsets.UTF_8).size <= MAX_JSON_BYTES) {
-            "Backup JSON exceeds the 10 MiB limit"
+            "Backup JSON exceeds the 64 MiB limit"
         }
     }
 

@@ -4,9 +4,11 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.deskcubby.app.data.local.BrowserRecordEntity
 import com.deskcubby.app.data.local.DateRecordEntity
 import com.deskcubby.app.data.local.FlashThoughtEntity
+import com.deskcubby.app.data.local.GameStateEntity
 import com.deskcubby.app.data.local.PoetryCategoryEntity
 import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
+import com.deskcubby.app.data.local.VaultItemEntity
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
@@ -24,6 +26,15 @@ import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.repository.VaultEncryptedBackup
+import com.deskcubby.app.data.repository.VaultEncryptedKeyBackup
+import com.deskcubby.app.data.statistics.StatisticsDayState
+import com.deskcubby.app.data.statistics.UsageAppDuration
+import com.deskcubby.app.data.statistics.UsageDeviceRecord
+import com.deskcubby.app.data.statistics.UsageStatisticsDay
+import com.deskcubby.app.data.statistics.UsageStatisticsHistory
+import java.time.LocalDate
+import java.util.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -35,6 +46,109 @@ import org.json.JSONObject
 
 @RunWith(AndroidJUnit4::class)
 class BackupJsonCodecTest {
+    @Test
+    fun versionTwentyRoundTripPreservesEncryptedVaultGamesAndUsageDevices() {
+        val iv = Base64.getEncoder().encodeToString(ByteArray(12) { 2 })
+        val cipher = Base64.getEncoder().encodeToString(ByteArray(32) { 3 })
+        val vault = VaultEncryptedBackup(
+            active = VaultEncryptedKeyBackup(
+                saltBase64 = Base64.getEncoder().encodeToString(ByteArray(16) { 1 }),
+                verifierCipher = cipher,
+                verifierIv = iv,
+                iterations = 120_000,
+                generationId = null,
+            ),
+            pending = null,
+            items = listOf(
+                VaultItemEntity(
+                    id = 9,
+                    cipherText = cipher,
+                    iv = iv,
+                    createdAt = 10,
+                    updatedAt = 11,
+                    sortOrder = 0,
+                ),
+            ),
+        )
+        val gameStates = listOf(
+            GameStateEntity(
+                gameId = "2048",
+                highScore = 4_096,
+                saveJson = """{"score":2048,"undoHistory":[]}""",
+                updatedAt = 12,
+            ),
+            GameStateEntity(
+                gameId = "snake",
+                highScore = 88,
+                saveJson = null,
+                updatedAt = 13,
+            ),
+        )
+        val usageDevices = listOf(
+            UsageDeviceRecord(
+                deviceId = "a85f7025-7404-4b61-89ee-593e65785f48",
+                deviceName = "A 手机",
+                platform = "android",
+                updatedAtEpochMillis = 20,
+                history = UsageStatisticsHistory(
+                    trackingStartedOn = LocalDate.parse("2026-07-29"),
+                    days = listOf(
+                        UsageStatisticsDay(
+                            date = LocalDate.parse("2026-07-29"),
+                            zoneId = "Asia/Shanghai",
+                            state = StatisticsDayState.FINAL,
+                            collectedAtEpochMillis = 20,
+                            apps = listOf(UsageAppDuration("com.example.app", 12_345)),
+                        ),
+                    ),
+                    backfillCompletedThrough = LocalDate.parse("2026-07-29"),
+                ),
+            ),
+        )
+        val source = AppBackup(
+            exportedAt = 21,
+            settings = AppSettings(),
+            thoughts = emptyList(),
+            favorites = emptyList(),
+            vault = vault,
+            gameStates = gameStates,
+            usageDevices = usageDevices,
+        )
+
+        val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
+
+        assertEquals(20, decoded.formatVersion)
+        assertEquals(vault, decoded.vault)
+        assertEquals(gameStates, decoded.gameStates)
+        assertEquals(usageDevices, decoded.usageDevices)
+    }
+
+    @Test
+    fun versionNineteenDoesNotClaimV20PrivateSections() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 19,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        root.put("version", 19)
+        root.remove("vault")
+        root.remove("gameStates")
+        root.remove("usageDevices")
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+
+        assertEquals(19, decoded.formatVersion)
+        assertEquals(null, decoded.vault.active)
+        assertEquals(emptyList<VaultItemEntity>(), decoded.vault.items)
+        assertEquals(emptyList<GameStateEntity>(), decoded.gameStates)
+        assertEquals(emptyList<UsageDeviceRecord>(), decoded.usageDevices)
+    }
+
     @Test
     fun roundTripPreservesContentButNotDeviceBackupFolder() {
         val settings = AppSettings(

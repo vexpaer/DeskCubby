@@ -593,6 +593,12 @@ interface VaultItemDao {
 
 @Dao
 interface GameStateDao {
+    @Query("SELECT * FROM game_states ORDER BY gameId ASC")
+    fun observeAllForBackup(): Flow<List<GameStateEntity>>
+
+    @Query("SELECT * FROM game_states ORDER BY gameId ASC")
+    suspend fun getAllForBackup(): List<GameStateEntity>
+
     @Query("SELECT * FROM game_states WHERE gameId = :gameId LIMIT 1")
     fun observe(gameId: String): Flow<GameStateEntity?>
 
@@ -601,6 +607,18 @@ interface GameStateDao {
 
     @Upsert
     suspend fun upsert(item: GameStateEntity)
+
+    @Upsert
+    suspend fun upsertAll(items: List<GameStateEntity>)
+
+    @Query("DELETE FROM game_states")
+    suspend fun clearAllForBackup()
+
+    @Transaction
+    suspend fun replaceAllForBackup(items: List<GameStateEntity>) {
+        clearAllForBackup()
+        if (items.isNotEmpty()) upsertAll(items)
+    }
 
     @Query("UPDATE game_states SET saveJson = NULL, updatedAt = :now WHERE gameId = :gameId")
     suspend fun clearSave(gameId: String, now: Long)
