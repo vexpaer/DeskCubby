@@ -82,6 +82,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.repository.VaultItem
 import com.deskcubby.app.data.repository.VaultLockState
 import com.deskcubby.app.data.repository.isValidNewVaultPassword
+import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.theme.GlassPanel
@@ -92,6 +93,7 @@ import kotlinx.coroutines.launch
 fun VaultScreen(
     padding: PaddingValues,
     viewModel: VaultViewModel,
+    settings: AppSettings,
 ) {
     val lockState by viewModel.lockState.collectAsStateWithLifecycle()
 
@@ -109,6 +111,7 @@ fun VaultScreen(
         VaultLockState.UNLOCKED -> VaultUnlockedContent(
             padding = padding,
             viewModel = viewModel,
+            rowHeightDp = settings.vaultRowHeightDp,
         )
     }
 }
@@ -333,6 +336,7 @@ private fun VaultLockedContent(
 private fun VaultUnlockedContent(
     padding: PaddingValues,
     viewModel: VaultViewModel,
+    rowHeightDp: Int,
 ) {
     val contentState by viewModel.contentState.collectAsStateWithLifecycle()
     val items = contentState.items
@@ -464,6 +468,7 @@ private fun VaultUnlockedContent(
                     val isDragging = draggingItemId == item.id
                     VaultItemCard(
                         item = item,
+                        rowHeightDp = rowHeightDp,
                         modifier = Modifier
                             .fillMaxWidth()
                             .onGloballyPositioned {
@@ -586,6 +591,7 @@ private fun VaultCorruptionNotice(corruptedItemCount: Int) {
 @Composable
 private fun VaultItemCard(
     item: VaultItem,
+    rowHeightDp: Int,
     modifier: Modifier,
     onCopy: () -> Unit,
     onOpenLink: (String) -> Unit,
@@ -602,6 +608,7 @@ private fun VaultItemCard(
 
     GlassPanel(
         modifier = modifier
+            .heightIn(min = rowHeightDp.dp)
             .combinedClickable(
                 onClickLabel = if (safeUrl != null) {
                     tr("在浏览器中打开链接", "Open link in browser")

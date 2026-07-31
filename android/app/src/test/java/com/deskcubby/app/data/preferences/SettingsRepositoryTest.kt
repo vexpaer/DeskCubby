@@ -133,6 +133,7 @@ class SettingsRepositoryTest {
             name = " Primary\nCloud ",
             endpointUrl = " https://cloud.example.com/dav ",
             remotePath = " /DeskCubby//photos/ ",
+            userAgent = " Custom\nAgent ",
             webDavUsername = " alice ",
             s3Bucket = " archive-bucket ",
             s3Region = " cn-east-1 ",
@@ -153,6 +154,7 @@ class SettingsRepositoryTest {
         assertEquals("Primary Cloud", normalized.single().name)
         assertEquals("https://cloud.example.com/dav", normalized.single().endpointUrl)
         assertEquals("DeskCubby/photos", normalized.single().remotePath)
+        assertEquals("Custom Agent", normalized.single().userAgent)
         assertEquals("alice", normalized.single().webDavUsername)
         assertEquals("archive-bucket", normalized.single().s3Bucket)
         assertEquals("cn-east-1", normalized.single().s3Region)

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
     <!-- Android system backup must not clone a device identity or private statistics.
-         DeskCubby v20 JSON/cloud sync handles the explicit cross-device path. -->
+         DeskCubby v21 JSON/cloud sync handles the explicit cross-device path. -->
     <exclude
         domain="file"
         path="statistics/" />

@@ -43,8 +43,11 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.ArrowDownward
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.RotateRight
@@ -68,6 +71,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -455,6 +459,39 @@ private fun SwipeDirection.toSnakeDirection(): SnakeGame.Direction = when (this)
 // 2048
 // ---------------------------------------------------------------------------------------------
 
+private data class Game2048Palette(
+    val pageBackground: Color,
+    val heading: Color,
+    val board: Color,
+    val emptyTile: Color,
+    val button: Color,
+    val scoreLabel: Color,
+    val lightTileText: Color,
+    val darkTileText: Color,
+)
+
+private val GAME_2048_DAY_PALETTE = Game2048Palette(
+    pageBackground = Color(0xFFFAF8EF),
+    heading = Color(0xFF776E65),
+    board = Color(0xFFBBADA0),
+    emptyTile = Color(0x59EEE4DA),
+    button = Color(0xFF8F7A66),
+    scoreLabel = Color(0xFFEEE4DA),
+    lightTileText = Color(0xFFF9F6F2),
+    darkTileText = Color(0xFF776E65),
+)
+
+private val GAME_2048_NIGHT_PALETTE = Game2048Palette(
+    pageBackground = Color(0xFF1B1917),
+    heading = Color(0xFFF3EDE6),
+    board = Color(0xFF4E453E),
+    emptyTile = Color(0x334E453E),
+    button = Color(0xFFB58B67),
+    scoreLabel = Color(0xFFF3EDE6),
+    lightTileText = Color(0xFFF9F6F2),
+    darkTileText = Color(0xFF5B5047),
+)
+
 @Composable
 private fun Game2048Page(
     viewModel: GamesViewModel,
@@ -468,7 +505,9 @@ private fun Game2048Page(
     var scoreRecorded by remember { mutableStateOf(false) }
     var transition by remember { mutableStateOf<Game2048.MoveResult?>(null) }
     var transitionSequence by remember { mutableIntStateOf(0) }
-    val meta by viewModel.meta(gameId).collectAsStateWithLifecycle()
+    var darkMode by rememberSaveable { mutableStateOf(false) }
+    var animationsEnabled by rememberSaveable { mutableStateOf(true) }
+    val palette = if (darkMode) GAME_2048_NIGHT_PALETTE else GAME_2048_DAY_PALETTE
 
     LaunchedEffect(Unit) {
         if (engine == null) {
@@ -539,21 +578,28 @@ private fun Game2048Page(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(GAME_2048_PAGE_BACKGROUND),
-        contentAlignment = Alignment.TopCenter,
+            .background(palette.pageBackground)
+            .swipeInput(engine != null && !gameOver) { swipe ->
+                val current = engine
+                if (current != null && !current.isGameOver) {
+                    current.moveWithResult(swipe.to2048Direction())?.let { result ->
+                        transition = if (animationsEnabled) result else null
+                        transitionSequence++
+                        frame++
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center,
     ) {
-        val contentWidth = if (maxWidth >= 532.dp) {
-            500.dp
-        } else {
-            minOf(280.dp, (maxWidth - 24.dp).coerceAtLeast(240.dp))
-        }
-        val largeLayout = contentWidth >= 500.dp
+        val contentWidth = minOf(600.dp, (maxWidth - 20.dp).coerceAtLeast(280.dp))
+        val largeLayout = contentWidth >= 480.dp
         Column(
             Modifier
                 .width(contentWidth)
                 .fillMaxHeight()
                 .verticalScroll(rememberScrollState())
-                .padding(top = 8.dp, bottom = 20.dp),
+                .padding(vertical = 16.dp),
+            verticalArrangement = Arrangement.Center,
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -569,17 +615,35 @@ private fun Game2048Page(
                     Icon(
                         Icons.AutoMirrored.Outlined.ArrowBack,
                         contentDescription = null,
-                        tint = GAME_2048_HEADING,
+                        tint = palette.heading,
                     )
-                    Text(tr("返回", "Back"), color = GAME_2048_HEADING)
+                    Text(tr("返回", "Back"), color = palette.heading)
                 }
                 Spacer(Modifier.weight(1f))
-                Site2048Button(
-                    text = tr("无限撤回", "Undo"),
-                    enabled = canUndo,
-                    large = largeLayout,
-                    onClick = ::undoLastMove,
-                )
+                FilledTonalIconButton(
+                    onClick = { darkMode = !darkMode },
+                ) {
+                    Icon(
+                        imageVector = if (darkMode) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                        contentDescription = if (darkMode) {
+                            tr("切换白天模式", "Switch to day mode")
+                        } else {
+                            tr("切换黑夜模式", "Switch to night mode")
+                        },
+                    )
+                }
+                FilledTonalIconButton(
+                    onClick = { animationsEnabled = !animationsEnabled },
+                ) {
+                    Icon(
+                        imageVector = if (animationsEnabled) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                        contentDescription = if (animationsEnabled) {
+                            tr("关闭动画", "Disable animations")
+                        } else {
+                            tr("开启动画", "Enable animations")
+                        },
+                    )
+                }
             }
             Spacer(Modifier.height(8.dp))
             Row(
@@ -587,9 +651,9 @@ private fun Game2048Page(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "2048.org",
+                    text = "2048",
                     modifier = Modifier.weight(1f),
-                    color = GAME_2048_HEADING,
+                    color = palette.heading,
                     fontSize = if (largeLayout) 72.sp else 27.sp,
                     fontWeight = FontWeight.Bold,
                 )
@@ -599,12 +663,8 @@ private fun Game2048Page(
                     addition = transition?.scoreGained ?: 0,
                     transitionSequence = transitionSequence,
                     large = largeLayout,
-                )
-                Spacer(Modifier.width(if (contentWidth >= 500.dp) 6.dp else 4.dp))
-                Site2048ScoreBox(
-                    label = tr("最高", "Best"),
-                    value = maxOf(meta.highScore, score),
-                    large = largeLayout,
+                    animate = animationsEnabled,
+                    palette = palette,
                 )
             }
             Spacer(Modifier.height(if (largeLayout) 26.dp else 16.dp))
@@ -618,7 +678,7 @@ private fun Game2048Page(
                         "Join the numbers and get to the 2048 tile!",
                     ),
                     modifier = Modifier.weight(1f),
-                    color = GAME_2048_HEADING,
+                    color = palette.heading,
                     fontSize = if (largeLayout) 18.sp else 13.sp,
                     lineHeight = if (largeLayout) 24.sp else 17.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -627,6 +687,7 @@ private fun Game2048Page(
                 Site2048Button(
                     text = tr("新游戏", "New Game"),
                     large = largeLayout,
+                    palette = palette,
                     onClick = ::startNewGame,
                 )
             }
@@ -642,13 +703,14 @@ private fun Game2048Page(
                     enabled = engine != null && !gameOver,
                     transition = transition,
                     transitionSequence = transitionSequence,
-                    animate = true,
+                    animate = animationsEnabled,
+                    palette = palette,
                     onMove = { direction ->
                         val current = engine
                         if (current != null && !current.isGameOver) {
                             current.moveWithResult(direction)?.let { result ->
                                 // State and undo history commit before the visual transition.
-                                transition = result
+                                transition = if (animationsEnabled) result else null
                                 transitionSequence++
                                 frame++
                             }
@@ -660,11 +722,21 @@ private fun Game2048Page(
                     Site2048GameOverOverlay(
                         canUndo = canUndo,
                         large = largeLayout,
+                        palette = palette,
                         onUndo = ::undoLastMove,
                         onRestart = ::startNewGame,
                     )
                 }
             }
+        }
+        FilledTonalIconButton(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp),
+            onClick = ::undoLastMove,
+            enabled = canUndo,
+        ) {
+            Icon(Icons.Outlined.BarChart, tr("无限撤回", "Undo"))
         }
     }
 }
@@ -674,6 +746,7 @@ private fun Site2048Button(
     text: String,
     enabled: Boolean = true,
     large: Boolean = false,
+    palette: Game2048Palette,
     onClick: () -> Unit,
 ) {
     Button(
@@ -681,9 +754,9 @@ private fun Site2048Button(
         enabled = enabled,
         shape = RoundedCornerShape(3.dp),
         colors = ButtonDefaults.buttonColors(
-            containerColor = GAME_2048_BUTTON,
+            containerColor = palette.button,
             contentColor = Color.White,
-            disabledContainerColor = GAME_2048_BUTTON.copy(alpha = 0.35f),
+            disabledContainerColor = palette.button.copy(alpha = 0.35f),
             disabledContentColor = Color.White.copy(alpha = 0.7f),
         ),
         contentPadding = if (large) {
@@ -703,12 +776,14 @@ private fun Site2048ScoreBox(
     addition: Int = 0,
     transitionSequence: Int = 0,
     large: Boolean = false,
+    animate: Boolean = true,
+    palette: Game2048Palette,
 ) {
     val additionProgress = remember(transitionSequence, addition) {
-        Animatable(if (addition > 0 && ValueAnimator.areAnimatorsEnabled()) 0f else 1f)
+        Animatable(if (addition > 0 && animate && ValueAnimator.areAnimatorsEnabled()) 0f else 1f)
     }
-    LaunchedEffect(additionProgress, transitionSequence, addition) {
-        if (addition > 0 && ValueAnimator.areAnimatorsEnabled()) {
+    LaunchedEffect(additionProgress, transitionSequence, addition, animate) {
+        if (addition > 0 && animate && ValueAnimator.areAnimatorsEnabled()) {
             additionProgress.animateTo(
                 1f,
                 animationSpec = tween(
@@ -725,7 +800,7 @@ private fun Site2048ScoreBox(
             modifier = Modifier
                 .widthIn(min = if (large) 92.dp else 55.dp)
                 .clip(RoundedCornerShape(3.dp))
-                .background(GAME_2048_BOARD)
+                .background(palette.board)
                 .padding(
                     horizontal = if (large) 15.dp else 8.dp,
                     vertical = if (large) 8.dp else 5.dp,
@@ -734,7 +809,7 @@ private fun Site2048ScoreBox(
         ) {
             Text(
                 label.uppercase(),
-                color = GAME_2048_SCORE_LABEL,
+                color = palette.scoreLabel,
                 fontSize = if (large) 13.sp else 10.sp,
                 lineHeight = if (large) 14.sp else 11.sp,
                 fontWeight = FontWeight.Bold,
@@ -759,7 +834,7 @@ private fun Site2048ScoreBox(
                         )
                     }
                     .graphicsLayer { alpha = 1f - additionProgress.value },
-                color = GAME_2048_HEADING,
+                color = palette.heading,
                 fontSize = if (large) 25.sp else 18.sp,
                 fontWeight = FontWeight.Bold,
             )
@@ -771,31 +846,38 @@ private fun Site2048ScoreBox(
 private fun Site2048GameOverOverlay(
     canUndo: Boolean,
     large: Boolean,
+    palette: Game2048Palette,
     onUndo: () -> Unit,
     onRestart: () -> Unit,
 ) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(GAME_2048_PAGE_BACKGROUND.copy(alpha = 0.82f))
+            .background(palette.pageBackground.copy(alpha = 0.82f))
             .clickable(enabled = false) {},
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 tr("游戏结束！", "Game over!"),
-                color = GAME_2048_HEADING,
+                color = palette.heading,
                 fontSize = if (large) 55.sp else 34.sp,
                 fontWeight = FontWeight.Bold,
             )
             Spacer(Modifier.height(18.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (canUndo) {
-                    Site2048Button(tr("撤回", "Undo"), large = large, onClick = onUndo)
+                    Site2048Button(
+                        tr("撤回", "Undo"),
+                        large = large,
+                        palette = palette,
+                        onClick = onUndo,
+                    )
                 }
                 Site2048Button(
                     tr("再试一次", "Try again"),
                     large = large,
+                    palette = palette,
                     onClick = onRestart,
                 )
             }
@@ -817,6 +899,7 @@ private fun Board2048(
     transition: Game2048.MoveResult?,
     transitionSequence: Int,
     animate: Boolean,
+    palette: Game2048Palette,
     onMove: (Game2048.Direction) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -846,8 +929,7 @@ private fun Board2048(
     BoxWithConstraints(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
-            .background(GAME_2048_BOARD)
-            .swipeInput(enabled) { swipe -> onMove(swipe.to2048Direction()) },
+            .background(palette.board),
     ) {
         val cellGap = when (boardSize) {
             4 -> 10.dp
@@ -876,7 +958,7 @@ private fun Board2048(
                     .offset { cellOffset(index) }
                     .size(tileSize)
                     .clip(RoundedCornerShape(3.dp))
-                    .background(GAME_2048_EMPTY_TILE),
+                    .background(palette.emptyTile),
             )
         }
 
@@ -897,6 +979,7 @@ private fun Board2048(
                     Tile2048(
                         value = motion.value,
                         boardSize = boardSize,
+                        palette = palette,
                         modifier = Modifier
                             .offset { animatedOffset }
                             .size(tileSize),
@@ -933,6 +1016,7 @@ private fun Board2048(
                     Tile2048(
                         value = value,
                         boardSize = boardSize,
+                        palette = palette,
                         modifier = Modifier
                             .offset { cellOffset(index) }
                             .size(tileSize)
@@ -966,6 +1050,7 @@ private fun mergedTileScale(progress: Float): Float {
 private fun Tile2048(
     value: Int,
     boardSize: Int,
+    palette: Game2048Palette,
     modifier: Modifier = Modifier,
 ) {
     val background = when (value) {
@@ -982,7 +1067,7 @@ private fun Tile2048(
         2048 -> Color(0xFFEDC22E)
         else -> Color(0xFF3C3A32)
     }
-    val textColor = if (value <= 4) GAME_2048_HEADING else Color(0xFFF9F6F2)
+    val textColor = if (value <= 4) palette.darkTileText else palette.lightTileText
     BoxWithConstraints(
         modifier
             .clip(RoundedCornerShape(3.dp))
@@ -990,26 +1075,25 @@ private fun Tile2048(
         contentAlignment = Alignment.Center,
     ) {
         if (value > 0) {
-            val largeTile = maxWidth >= 70.dp
             Text(
                 value.toString(),
                 color = textColor,
                 fontWeight = FontWeight.Bold,
-                fontSize = tileFontSize(value, boardSize, largeTile).sp,
+                fontSize = tileFontSize(value, boardSize, maxWidth.value).sp,
             )
         }
     }
 }
 
-private fun tileFontSize(value: Int, boardSize: Int, largeTile: Boolean): Int {
-    val base = when {
-        largeTile && boardSize == 4 -> 55
-        largeTile && boardSize == 5 -> 42
-        largeTile -> 34
-        boardSize == 4 -> 32
-        boardSize == 5 -> 24
-        else -> 19
+private fun tileFontSize(value: Int, boardSize: Int, tileWidthDp: Float): Int {
+    val boardScale = when (boardSize) {
+        4 -> 1f
+        5 -> 0.98f
+        else -> 0.96f
     }
+    val base = (tileWidthDp * 0.47f * boardScale)
+        .roundToInt()
+        .coerceIn(16, 55)
     return when {
         value < 100 -> base
         value < 1_000 -> (base * 0.82f).roundToInt()
@@ -1444,12 +1528,6 @@ private const val GAME_2048_SCORE_ANIMATION_MILLIS = 600
 private const val GAME_2048_SLIDE_END = 1f / 3f
 private val GAME_2048_EASE_IN_OUT = CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
 private val GAME_2048_EASE = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
-private val GAME_2048_PAGE_BACKGROUND = Color(0xFFFAF8EF)
-private val GAME_2048_HEADING = Color(0xFF776E65)
-private val GAME_2048_BOARD = Color(0xFFBBADA0)
-private val GAME_2048_EMPTY_TILE = Color(0x59EEE4DA)
-private val GAME_2048_BUTTON = Color(0xFF8F7A66)
-private val GAME_2048_SCORE_LABEL = Color(0xFFEEE4DA)
 private const val TETRIS_BASE_TICK_MILLIS = 600L
 private const val TETRIS_LEVEL_STEP_MILLIS = 40L
 private const val TETRIS_MIN_TICK_MILLIS = 120L

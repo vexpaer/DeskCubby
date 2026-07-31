@@ -42,6 +42,7 @@ internal class SyncHttpResponse(
 internal class BoundedHttpClient(
     private val connectTimeoutMillis: Int,
     private val readTimeoutMillis: Int,
+    private val userAgent: String = "DeskCubby-Sync/1",
 ) {
     suspend fun execute(request: SyncHttpRequest): SyncHttpResponse =
         suspendCancellableCoroutine { continuation ->
@@ -102,7 +103,7 @@ internal class BoundedHttpClient(
             doInput = true
             requestMethod = request.method
             setRequestProperty("Accept-Encoding", "identity")
-            setRequestProperty("User-Agent", "DeskCubby-Sync/1")
+            setRequestProperty("User-Agent", userAgent)
             request.headers.forEach { (name, value) ->
                 requireSafeHeader(name, value)
                 setRequestProperty(name, value)

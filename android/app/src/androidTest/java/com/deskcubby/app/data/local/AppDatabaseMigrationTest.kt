@@ -204,6 +204,40 @@ class AppDatabaseMigrationTest {
         database.close()
     }
 
+    @Test
+    fun migrate9To10AddsPoemOrderAndPreservesNewestFirstOrder() {
+        val databaseName = "poetry-order-migration-test"
+        helper.createDatabase(databaseName, 9).apply {
+            execSQL(
+                """
+                INSERT INTO saved_poems (id, content, source, createdAt, updatedAt, categoryId)
+                VALUES
+                    (1, '旧诗', '作者一', 10, 10, NULL),
+                    (2, '新诗', '作者二', 20, 20, NULL)
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            databaseName,
+            10,
+            true,
+            AppDatabase.MIGRATION_9_10,
+        )
+        database.query(
+            "SELECT id, sortOrder FROM saved_poems ORDER BY sortOrder ASC",
+        ).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(2L, cursor.getLong(0))
+            assertEquals(0L, cursor.getLong(1))
+            cursor.moveToNext()
+            assertEquals(1L, cursor.getLong(0))
+            assertEquals(1L, cursor.getLong(1))
+        }
+        database.close()
+    }
+
     private companion object {
         const val TEST_DATABASE = "ai-chat-migration-test"
     }

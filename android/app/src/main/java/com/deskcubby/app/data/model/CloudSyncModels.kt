@@ -1,5 +1,7 @@
 package com.deskcubby.app.data.model
 
+const val DEFAULT_CLOUD_SYNC_USER_AGENT = "DeskCubby-Sync/1"
+
 /**
  * Persisted cloud-sync settings.
  *
@@ -14,6 +16,7 @@ data class CloudSyncConfig(
     val serviceType: CloudSyncServiceType = CloudSyncServiceType.WEBDAV,
     val endpointUrl: String = "",
     val remotePath: String = "DeskCubby",
+    val userAgent: String = DEFAULT_CLOUD_SYNC_USER_AGENT,
     val webDavUsername: String = "",
     val webDavPassword: String = "",
     val s3Bucket: String = "",
@@ -44,6 +47,8 @@ data class CloudSyncConfig(
         append(if (endpointUrl.isBlank()) "" else "<configured>")
         append(", remotePath=")
         append(remotePath)
+        append(", userAgent=")
+        append(userAgent)
         append(", webDavUsername=")
         append(if (webDavUsername.isBlank()) "" else "<redacted>")
         append(", webDavPassword=<redacted>, s3Bucket=")

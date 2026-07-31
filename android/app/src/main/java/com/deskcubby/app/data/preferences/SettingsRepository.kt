@@ -24,12 +24,15 @@ import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DEFAULT_MEAL_BUTTON_ICONS
+import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MAX_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MIN_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
@@ -107,6 +110,7 @@ class SettingsRepository @Inject constructor(
         val thoughtDisplayMode = stringPreferencesKey("thought_display_mode")
         val thoughtHighlightColorArgb = intPreferencesKey("thought_highlight_color_argb")
         val thoughtEditorMaxHeightDp = intPreferencesKey("thought_editor_max_height_dp")
+        val vaultRowHeightDp = intPreferencesKey("vault_row_height_dp")
         val poetryFontUri = stringPreferencesKey("poetry_font_uri")
         val poetryFontSizeSp = floatPreferencesKey("poetry_font_size_sp")
         val poetryLineSpacing = floatPreferencesKey("poetry_line_spacing")
@@ -240,6 +244,8 @@ class SettingsRepository @Inject constructor(
             thoughtEditorMaxHeightDp = (prefs[Keys.thoughtEditorMaxHeightDp]
                 ?: defaults.thoughtEditorMaxHeightDp)
                 .coerceIn(MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP, MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP),
+            vaultRowHeightDp = (prefs[Keys.vaultRowHeightDp] ?: defaults.vaultRowHeightDp)
+                .coerceIn(MIN_VAULT_ROW_HEIGHT_DP, MAX_VAULT_ROW_HEIGHT_DP),
             poetryFontUri = prefs[Keys.poetryFontUri]?.takeIf(::hasPersistedReadAccess),
             poetryFontSizeSp = normalizePoetryFontSize(
                 prefs[Keys.poetryFontSizeSp],
@@ -393,6 +399,10 @@ class SettingsRepository @Inject constructor(
     suspend fun setBrowserDesktopMode(value: Boolean) = set(Keys.browserDesktopMode, value)
     suspend fun setThoughtSplitRatio(value: Float) = set(Keys.thoughtSplitRatio, value.coerceIn(0.25f, 0.8f))
     suspend fun setThoughtRowHeight(value: Int) = set(Keys.thoughtRowHeightDp, value.coerceIn(48, 120))
+    suspend fun setVaultRowHeight(value: Int) = set(
+        Keys.vaultRowHeightDp,
+        value.coerceIn(MIN_VAULT_ROW_HEIGHT_DP, MAX_VAULT_ROW_HEIGHT_DP),
+    )
     suspend fun setThoughtReopenMode(value: ThoughtReopenMode) = set(Keys.thoughtReopenMode, value.name)
     suspend fun setLastThoughtPageKey(value: String) =
         set(Keys.lastThoughtPageKey, normalizeThoughtPageKey(value))
@@ -665,6 +675,8 @@ class SettingsRepository @Inject constructor(
                 value.thoughtHighlightColorArgb or 0xFF000000.toInt()
             prefs[Keys.thoughtEditorMaxHeightDp] = value.thoughtEditorMaxHeightDp
                 .coerceIn(MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP, MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP)
+            prefs[Keys.vaultRowHeightDp] = value.vaultRowHeightDp
+                .coerceIn(MIN_VAULT_ROW_HEIGHT_DP, MAX_VAULT_ROW_HEIGHT_DP)
             prefs.setOrRemove(
                 Keys.poetryFontUri,
                 restorableReadUriOrCurrent(value.poetryFontUri, prefs[Keys.poetryFontUri]),
@@ -872,6 +884,7 @@ class SettingsRepository @Inject constructor(
                         }.getOrDefault(CloudSyncServiceType.WEBDAV),
                         endpointUrl = item.optString("endpointUrl"),
                         remotePath = item.optString("remotePath", "DeskCubby"),
+                        userAgent = item.optString("userAgent", DEFAULT_CLOUD_SYNC_USER_AGENT),
                         webDavUsername = item.optString("webDavUsername"),
                         s3Bucket = item.optString("s3Bucket"),
                         s3Region = item.optString("s3Region", "us-east-1"),
@@ -900,6 +913,7 @@ class SettingsRepository @Inject constructor(
                     .put("serviceType", item.serviceType.name)
                     .put("endpointUrl", item.endpointUrl)
                     .put("remotePath", item.remotePath)
+                    .put("userAgent", item.userAgent)
                     .put("webDavUsername", item.webDavUsername)
                     .put("s3Bucket", item.s3Bucket)
                     .put("s3Region", item.s3Region)
@@ -1172,6 +1186,11 @@ internal fun normalizeCloudSyncConfigs(items: List<CloudSyncConfig>): List<Cloud
                 name = item.name.trim().replaceLineBreaks().take(MAX_CLOUD_SYNC_NAME_CHARS),
                 endpointUrl = normalizedEndpoint.take(MAX_URL_CHARS),
                 remotePath = normalizedPath,
+                userAgent = item.userAgent
+                    .trim()
+                    .replaceLineBreaks()
+                    .take(MAX_CLOUD_SYNC_USER_AGENT_CHARS)
+                    .ifBlank { DEFAULT_CLOUD_SYNC_USER_AGENT },
                 webDavUsername = item.webDavUsername.trim().take(MAX_CLOUD_SYNC_USERNAME_CHARS),
                 webDavPassword = "",
                 s3Bucket = item.s3Bucket.trim().take(MAX_CLOUD_SYNC_BUCKET_CHARS),
@@ -1186,6 +1205,9 @@ internal fun normalizeCloudSyncConfigs(items: List<CloudSyncConfig>): List<Cloud
             item.id.isNotEmpty() &&
                 item.name.isNotEmpty() &&
                 item.selectedContents.isNotEmpty() &&
+                item.userAgent.isNotBlank() &&
+                item.userAgent.length <= MAX_CLOUD_SYNC_USER_AGENT_CHARS &&
+                item.userAgent.none(Char::isISOControl) &&
                 item.remotePath.length <= MAX_CLOUD_SYNC_PATH_CHARS &&
                 isValidCloudSyncEndpoint(item.endpointUrl, item.allowInsecureHttp) &&
                 (item.serviceType != CloudSyncServiceType.S3_COMPATIBLE ||
@@ -1350,6 +1372,7 @@ private const val MAX_CLOUD_SYNC_CONFIGS = 20
 private const val MAX_CLOUD_SYNC_ID_CHARS = 128
 private const val MAX_CLOUD_SYNC_NAME_CHARS = 200
 private const val MAX_CLOUD_SYNC_PATH_CHARS = 1_024
+private const val MAX_CLOUD_SYNC_USER_AGENT_CHARS = 512
 private const val MAX_CLOUD_SYNC_USERNAME_CHARS = 512
 private const val MAX_CLOUD_SYNC_BUCKET_CHARS = 255
 private const val MAX_CLOUD_SYNC_REGION_CHARS = 128

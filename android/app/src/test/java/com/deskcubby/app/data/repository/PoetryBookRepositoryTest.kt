@@ -59,7 +59,8 @@ class PoetryBookRepositoryTest {
 
         override fun observeAll(): Flow<List<SavedPoemEntity>> = items.map { current ->
             current.values.sortedWith(
-                compareByDescending<SavedPoemEntity>(SavedPoemEntity::createdAt)
+                compareBy<SavedPoemEntity>(SavedPoemEntity::sortOrder)
+                    .thenByDescending(SavedPoemEntity::createdAt)
                     .thenByDescending(SavedPoemEntity::id),
             )
         }
@@ -88,6 +89,33 @@ class PoetryBookRepositoryTest {
             val id = item.id.takeIf { it > 0 } ?: nextId++
             items.value = items.value + (id to item.copy(id = id))
             return id
+        }
+
+        override suspend fun nextSortOrder(): Long =
+            (items.value.values.maxOfOrNull(SavedPoemEntity::sortOrder) ?: -1L) + 1L
+
+        override suspend fun getIdsInOrder(): List<Long> =
+            items.value.values
+                .sortedWith(
+                    compareBy<SavedPoemEntity>(SavedPoemEntity::sortOrder)
+                        .thenByDescending(SavedPoemEntity::createdAt)
+                        .thenByDescending(SavedPoemEntity::id),
+                )
+                .map(SavedPoemEntity::id)
+
+        override suspend fun getIdsInCategory(categoryId: Long?): List<Long> =
+            items.value.values
+                .filter { it.categoryId == categoryId }
+                .sortedWith(
+                    compareBy<SavedPoemEntity>(SavedPoemEntity::sortOrder)
+                        .thenByDescending(SavedPoemEntity::createdAt)
+                        .thenByDescending(SavedPoemEntity::id),
+                )
+                .map(SavedPoemEntity::id)
+
+        override suspend fun updateSortOrder(id: Long, sortOrder: Long) {
+            val current = items.value[id] ?: return
+            items.value = items.value + (id to current.copy(sortOrder = sortOrder))
         }
 
         override suspend fun update(

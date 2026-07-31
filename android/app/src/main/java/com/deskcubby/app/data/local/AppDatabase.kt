@@ -19,7 +19,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         VaultItemEntity::class,
         GameStateEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -254,6 +254,27 @@ abstract class AppDatabase : RoomDatabase() {
                     "CREATE INDEX IF NOT EXISTS `index_saved_poems_categoryId` " +
                         "ON `saved_poems` (`categoryId`)",
                 )
+            }
+        }
+
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `saved_poems` ADD COLUMN `sortOrder` INTEGER NOT NULL DEFAULT 0",
+                )
+                val orderedIds = buildList {
+                    db.query(
+                        "SELECT id FROM `saved_poems` ORDER BY createdAt DESC, id DESC",
+                    ).use { cursor ->
+                        while (cursor.moveToNext()) add(cursor.getLong(0))
+                    }
+                }
+                orderedIds.forEachIndexed { index, id ->
+                    db.execSQL(
+                        "UPDATE `saved_poems` SET `sortOrder` = ? WHERE `id` = ?",
+                        arrayOf(index.toLong(), id),
+                    )
+                }
             }
         }
     }

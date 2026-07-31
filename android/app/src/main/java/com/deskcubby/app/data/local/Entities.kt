@@ -108,6 +108,7 @@ data class SavedPoemEntity(
     val source: String = "",
     val createdAt: Long,
     val updatedAt: Long,
+    @ColumnInfo(defaultValue = "0") val sortOrder: Long = 0,
     @ColumnInfo(defaultValue = "NULL") val categoryId: Long? = null,
 )
 

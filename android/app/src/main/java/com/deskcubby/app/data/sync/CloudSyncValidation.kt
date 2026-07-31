@@ -27,6 +27,11 @@ internal fun CloudSyncConfig.validateForSync(): ValidatedCloudSyncConfig {
     if (selectedContents.isEmpty()) {
         throw CloudSyncConfigurationException("请至少选择一类需要同步的内容。")
     }
+    if (userAgent.isBlank() || userAgent.length > MAX_USER_AGENT_CHARS ||
+        userAgent.any(Char::isISOControl)
+    ) {
+        throw CloudSyncConfigurationException("User-Agent 无效或过长。")
+    }
 
     val endpoint = try {
         URI(endpointUrl.trim())
@@ -159,3 +164,4 @@ private const val MAX_CONFIG_NAME_CHARS = 200
 private const val MAX_CREDENTIAL_CHARS = 8_192
 private const val MAX_REMOTE_PATH_CHARS = 1_024
 private const val MAX_SYNC_KEY_CHARS = 2_048
+private const val MAX_USER_AGENT_CHARS = 512

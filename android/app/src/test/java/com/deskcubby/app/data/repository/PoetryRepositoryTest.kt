@@ -97,4 +97,27 @@ class PoetryRepositoryTest {
         assertEquals(PoemEditContentStatus.CACHED_FULL_CONTENT_TOO_LONG, resolution.status)
         assertEquals(stored, resolution.content)
     }
+
+    @Test
+    fun refreshSelectionPrefersARecentNovelPoemButAlwaysRemainsBounded() {
+        val first = DailyPoem("第一句", "作者《第一首》", title = "第一首")
+        val second = DailyPoem("第二句", "作者《第二首》", title = "第二首")
+
+        assertEquals(
+            second,
+            PoetryRepository.chooseFreshPoem(
+                candidates = listOf(first, second),
+                current = first,
+                recentFingerprints = listOf(PoetryRepository.poemFingerprint(first)),
+            ),
+        )
+        assertEquals(
+            first,
+            PoetryRepository.chooseFreshPoem(
+                candidates = listOf(first),
+                current = first,
+                recentFingerprints = listOf(PoetryRepository.poemFingerprint(first)),
+            ),
+        )
+    }
 }

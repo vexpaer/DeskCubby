@@ -58,6 +58,7 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Search
@@ -152,6 +153,7 @@ import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
+import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
@@ -163,6 +165,8 @@ import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MAX_VAULT_ROW_HEIGHT_DP
+import com.deskcubby.app.data.model.MIN_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.ThoughtDisplayMode
@@ -182,6 +186,7 @@ import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
 import com.deskcubby.app.ui.home.HomeGreeting
 import com.deskcubby.app.ui.poetry.rememberPoetryFontFamily
+import com.deskcubby.app.ui.poetry.isSevenCharacterPoem
 import com.deskcubby.app.ui.poetry.wrapSevenCharacterVerse
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
@@ -208,6 +213,7 @@ private enum class SettingsPage {
     DIARY,
     BLOG,
     THOUGHT,
+    VAULT,
     POETRY,
     RSS,
     AI,
@@ -745,6 +751,16 @@ fun SettingsScreen(
                 },
             )
 
+            SettingsPage.VAULT -> VaultSettingsPage(
+                settings = settings,
+                contentPadding = inner,
+                saveCoordinator = saveCoordinator,
+                onSave = { rowHeight ->
+                    viewModel.setVaultRowHeight(rowHeight)
+                    completeSave(SettingsPage.SUBPAGES)
+                },
+            )
+
             SettingsPage.POETRY -> PoetrySettingsPage(
                 settings = settings,
                 contentPadding = inner,
@@ -967,6 +983,12 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
         tr("打开位置、内容显示、行高、重点颜色与输入框高度", "Reopen page, display, row height, highlight color and editor height"),
         "thought 小巧思 行高 重点 高亮 颜色 输入框 高度 编辑框",
         SettingsPage.THOUGHT,
+    ),
+    SettingsSearchEntry(
+        tr("收藏夹", "Vault"),
+        tr("收藏夹条目高度", "Vault entry height"),
+        "vault favorites 收藏夹 收藏 高度 行高",
+        SettingsPage.VAULT,
     ),
     SettingsSearchEntry(
         tr("诗词本", "Poetry book"),
@@ -1208,13 +1230,22 @@ private fun SubpageSettingsPage(
         }
         item {
             SettingsMenuItem(
+                title = tr("收藏夹", "Vault"),
+                description = tr("调整收藏夹条目高度", "Adjust vault entry height"),
+                icon = { Icon(Icons.Outlined.Lock, contentDescription = null) },
+                accentColor = settings.menuAccentColor(4),
+                onClick = { onOpen(SettingsPage.VAULT) },
+            )
+        }
+        item {
+            SettingsMenuItem(
                 title = tr("诗词本", "Poetry book"),
                 description = tr(
                     "字体、字号、行距、对齐与出处显示",
                     "Font, size, spacing, alignment and source display",
                 ),
                 icon = { Icon(Icons.Outlined.MenuBook, contentDescription = null) },
-                accentColor = settings.menuAccentColor(4),
+                accentColor = settings.menuAccentColor(5),
                 onClick = { onOpen(SettingsPage.POETRY) },
             )
         }
@@ -1223,7 +1254,7 @@ private fun SubpageSettingsPage(
                 title = tr("RSS 订阅", "RSS"),
                 description = tr("每个订阅的文章数量与摘要显示", "Article limit and summary display"),
                 icon = { Icon(Icons.Outlined.RssFeed, contentDescription = null) },
-                accentColor = settings.menuAccentColor(5),
+                accentColor = settings.menuAccentColor(6),
                 onClick = { onOpen(SettingsPage.RSS) },
             )
         }
@@ -1232,7 +1263,7 @@ private fun SubpageSettingsPage(
                 title = tr("AI 配置", "AI configurations"),
                 description = tr("兼容接口、模型、系统提示词与 API 密钥", "Endpoint, model, system prompt and API key"),
                 icon = { Icon(Icons.Outlined.SmartToy, contentDescription = null) },
-                accentColor = settings.menuAccentColor(6),
+                accentColor = settings.menuAccentColor(7),
                 onClick = { onOpen(SettingsPage.AI) },
             )
         }
@@ -1244,7 +1275,7 @@ private fun SubpageSettingsPage(
                     "Collected pages, two-column cards and custom descriptions",
                 ),
                 icon = { Icon(Icons.Outlined.Apps, contentDescription = null) },
-                accentColor = settings.menuAccentColor(7),
+                accentColor = settings.menuAccentColor(8),
                 onClick = { onOpen(SettingsPage.MORE_PAGE) },
             )
         }
@@ -1257,7 +1288,7 @@ private fun SubpageSettingsPage(
                     tr("权限、开关与本机 JSON", "Permission, switch and on-device JSON")
                 },
                 icon = { Icon(Icons.Outlined.AccessTime, contentDescription = null) },
-                accentColor = settings.menuAccentColor(8),
+                accentColor = settings.menuAccentColor(9),
                 onClick = { onOpen(SettingsPage.USAGE) },
             )
         }
@@ -1270,7 +1301,7 @@ private fun SubpageSettingsPage(
                     tr("健康数据权限与本机 JSON", "Health permission and on-device JSON")
                 },
                 icon = { Icon(Icons.Outlined.DirectionsWalk, contentDescription = null) },
-                accentColor = settings.menuAccentColor(9),
+                accentColor = settings.menuAccentColor(10),
                 onClick = { onOpen(SettingsPage.STEPS) },
             )
         }
@@ -1592,8 +1623,8 @@ private fun CloudSyncSettingsPage(
             text = {
                 Text(
                     tr(
-                        "这会按备份导入应用设置和结构化数据。v20 还会恢复 Vault 密文/校验元数据、合并小游戏最高分与存档，并按设备和日期合并使用时间；Vault 随后保持锁定。日记与媒体真实文件不会被替换。",
-                        "This imports app settings and structured data. v20 also restores Vault ciphertext/verifier metadata, merges game scores and saves, and merges screen time by device and date; the Vault remains locked. Diary and media files are not replaced.",
+                        "这会按备份导入应用设置和结构化数据。v21 还会恢复 Vault 密文/校验元数据、合并小游戏最高分与存档，并按设备和日期合并使用时间；Vault 随后保持锁定。日记与媒体真实文件不会被替换。",
+                        "This imports app settings and structured data. v21 also restores Vault ciphertext/verifier metadata, merges game scores and saves, and merges screen time by device and date; the Vault remains locked. Diary and media files are not replaced.",
                     ),
                 )
             },
@@ -1627,6 +1658,7 @@ private fun CloudSyncConfigDetailPage(
     var serviceType by remember(initial.id) { mutableStateOf(initial.serviceType) }
     var endpointUrl by remember(initial.id) { mutableStateOf(initial.endpointUrl) }
     var remotePath by remember(initial.id) { mutableStateOf(initial.remotePath) }
+    var userAgent by remember(initial.id) { mutableStateOf(initial.userAgent) }
     var webDavUsername by remember(initial.id) { mutableStateOf(initial.webDavUsername) }
     var webDavPassword by remember(initial.id) { mutableStateOf("") }
     var s3Bucket by remember(initial.id) { mutableStateOf(initial.s3Bucket) }
@@ -1650,6 +1682,7 @@ private fun CloudSyncConfigDetailPage(
         serviceType = serviceType,
         endpointUrl = endpointUrl,
         remotePath = remotePath,
+        userAgent = userAgent,
         webDavUsername = webDavUsername,
         webDavPassword = webDavPassword,
         s3Bucket = s3Bucket,
@@ -1663,7 +1696,8 @@ private fun CloudSyncConfigDetailPage(
         direction = direction,
     )
     val dirty = draft != initial || clearCredentials
-    val canSave = name.isNotBlank() && endpointUrl.isNotBlank() &&
+    val canSave = name.isNotBlank() && endpointUrl.isNotBlank() && userAgent.isNotBlank() &&
+        userAgent.none(Char::isISOControl) &&
         selectedContents.isNotEmpty() &&
         (serviceType != CloudSyncServiceType.S3_COMPATIBLE ||
             s3Bucket.isNotBlank() && s3Region.isNotBlank())
@@ -1678,6 +1712,7 @@ private fun CloudSyncConfigDetailPage(
             serviceType = defaults.serviceType
             endpointUrl = defaults.endpointUrl
             remotePath = defaults.remotePath
+            userAgent = defaults.userAgent
             webDavUsername = defaults.webDavUsername
             webDavPassword = ""
             s3Bucket = defaults.s3Bucket
@@ -1769,6 +1804,22 @@ private fun CloudSyncConfigDetailPage(
                         Text(tr("默认 DeskCubby；不能包含 . 或 ..", "Defaults to DeskCubby; . and .. are not allowed"))
                     },
                     singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = userAgent,
+                    onValueChange = { userAgent = it.take(512) },
+                    label = { Text("User-Agent") },
+                    supportingText = {
+                        Text(
+                            tr(
+                                "发送到 S3/WebDAV 请求的客户端标识；默认 ${DEFAULT_CLOUD_SYNC_USER_AGENT}",
+                                "Client identifier sent with S3/WebDAV requests; default ${DEFAULT_CLOUD_SYNC_USER_AGENT}",
+                            ),
+                        )
+                    },
+                    singleLine = true,
+                    isError = userAgent.isBlank() || userAgent.any(Char::isISOControl),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (serviceType == CloudSyncServiceType.WEBDAV) {
@@ -1874,8 +1925,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.JSON_BACKUP in selectedContents) {
                     Text(
                         tr(
-                            "v20 应用 JSON 包含结构化记录、Vault 密文、小游戏存档、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "The v20 app JSON contains structured records, Vault ciphertext, game saves, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                            "v21 应用 JSON 包含结构化记录、Vault 密文、小游戏存档、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "The v21 app JSON contains structured records, Vault ciphertext, game saves, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2217,8 +2268,8 @@ private fun BackupSettingsPage(
             text = {
                 Text(
                     tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v20 还会恢复 Vault 密文与密码校验元数据、合并小游戏存档/最高分和各设备使用时间；Vault 导入后保持锁定。日记正文和媒体文件不会被修改。确定继续吗？",
-                        "Importing replaces current settings, thoughts and categories, browser bookmarks, date records, and the poetry book. v20 also restores Vault ciphertext and password-verifier metadata, merges game saves/high scores and per-device screen time, and leaves the Vault locked. Diary entries and media files are unchanged. Continue?",
+                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v21 还会恢复 Vault 密文与密码校验元数据、合并小游戏存档/最高分和各设备使用时间；Vault 导入后保持锁定。日记正文和媒体文件不会被修改。确定继续吗？",
+                        "Importing replaces current settings, thoughts and categories, browser bookmarks, date records, and the poetry book. v21 also restores Vault ciphertext and password-verifier metadata, merges game saves/high scores and per-device screen time, and leaves the Vault locked. Diary entries and media files are unchanged. Continue?",
                     ),
                 )
             },
@@ -2335,8 +2386,8 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "v20 包含应用设置（含 AI API Key、同步服务元数据与吃历滤镜）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、2048/贪吃蛇/俄罗斯方块存档与最高分，以及按设备区分的手机使用时间。Vault 密码和派生密钥不会写入 JSON。",
-                        "v20 includes app settings (including AI API keys, sync metadata and meal filters), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, 2048/Snake/Tetris saves and high scores, and screen-time history grouped by device. Vault passwords and derived keys are never written to JSON.",
+                        "v21 包含应用设置（含 AI API Key、同步服务元数据与吃历滤镜）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、2048/贪吃蛇/俄罗斯方块存档与最高分，以及按设备区分的手机使用时间。Vault 密码和派生密钥不会写入 JSON。",
+                        "v21 includes app settings (including AI API keys, sync metadata and meal filters), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, 2048/Snake/Tetris saves and high scores, and screen-time history grouped by device. Vault passwords and derived keys are never written to JSON.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -3451,12 +3502,11 @@ private fun PoetrySettingsPage(
             SettingsSection(tr("预览", "Preview")) {
                 Text(
                     text = if (sevenCharacterWrapEnabled) {
-                        wrapSevenCharacterVerse(
-                            tr(
-                                "两个黄鹂鸣翠柳，一行白鹭上青天。",
-                                "Two orioles sing among green willows; a white egret climbs the blue sky.",
-                            ),
+                        val preview = tr(
+                            "两个黄鹂鸣翠柳，一行白鹭上青天。",
+                            "Two orioles sing among green willows; a white egret climbs the blue sky.",
                         )
+                        if (isSevenCharacterPoem(preview)) wrapSevenCharacterVerse(preview) else preview
                     } else {
                         tr(
                             "山中何事？松花酿酒，春水煎茶。",
@@ -4025,6 +4075,74 @@ private fun BlogSettingsPage(
                         onCheckedChange = { browserDesktopMode = it },
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VaultSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onSave: (Int) -> Unit,
+) {
+    var rowHeight by remember(settings.vaultRowHeightDp) {
+        mutableIntStateOf(
+            settings.vaultRowHeightDp.coerceIn(MIN_VAULT_ROW_HEIGHT_DP, MAX_VAULT_ROW_HEIGHT_DP),
+        )
+    }
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = rowHeight != settings.vaultRowHeightDp,
+        onReset = { rowHeight = AppSettings().vaultRowHeightDp },
+    ) { onSave(rowHeight) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            SettingsSection(tr("每行高度", "Row height")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(tr("收藏夹列表", "Vault list"))
+                    Text("$rowHeight dp", color = MaterialTheme.colorScheme.primary)
+                }
+                Slider(
+                    value = rowHeight.toFloat(),
+                    onValueChange = {
+                        rowHeight = it.roundToInt().coerceIn(
+                            MIN_VAULT_ROW_HEIGHT_DP,
+                            MAX_VAULT_ROW_HEIGHT_DP,
+                        )
+                    },
+                    valueRange = MIN_VAULT_ROW_HEIGHT_DP.toFloat()..MAX_VAULT_ROW_HEIGHT_DP.toFloat(),
+                    steps = MAX_VAULT_ROW_HEIGHT_DP - MIN_VAULT_ROW_HEIGHT_DP - 1,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(
+                        tr("紧凑 $MIN_VAULT_ROW_HEIGHT_DP dp", "Compact $MIN_VAULT_ROW_HEIGHT_DP dp"),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        tr("宽松 $MAX_VAULT_ROW_HEIGHT_DP dp", "Spacious $MAX_VAULT_ROW_HEIGHT_DP dp"),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Text(
+                    tr(
+                        "控制收藏夹条目的最小高度；内容较多的条目仍会按内容自然增高。",
+                        "Controls the minimum height of vault entries; longer entries can still grow naturally.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -5589,6 +5707,7 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.DIARY -> tr("日记与媒体", "Diary & media")
     SettingsPage.BLOG -> tr("浏览器", "Browser")
     SettingsPage.THOUGHT -> tr("小巧思", "Thoughts")
+    SettingsPage.VAULT -> tr("收藏夹", "Vault")
     SettingsPage.POETRY -> tr("诗词本", "Poetry book")
     SettingsPage.RSS -> tr("RSS 订阅", "RSS")
     SettingsPage.AI -> tr("AI 配置", "AI configurations")
@@ -5607,6 +5726,7 @@ private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
     SettingsPage.DIARY,
     SettingsPage.BLOG,
     SettingsPage.THOUGHT,
+    SettingsPage.VAULT,
     SettingsPage.POETRY,
     SettingsPage.RSS,
     SettingsPage.AI,

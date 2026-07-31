@@ -328,7 +328,7 @@ fun DeskCubbyRoot(
                     }
                     composable(NavItemId.VAULT.route) {
                         val vaultViewModel: VaultViewModel = hiltViewModel()
-                        VaultScreen(padding = padding, viewModel = vaultViewModel)
+                        VaultScreen(padding = padding, viewModel = vaultViewModel, settings = settings)
                     }
                     composable(NavItemId.GAMES.route) {
                         val gamesViewModel: GamesViewModel = hiltViewModel()

@@ -18,6 +18,7 @@ class DefaultCloudSyncRemoteStoreFactory : CloudSyncRemoteStoreFactory {
         val http = BoundedHttpClient(
             connectTimeoutMillis = limits.connectTimeoutMillis,
             readTimeoutMillis = limits.readTimeoutMillis,
+            userAgent = validated.source.userAgent,
         )
         val transport: ConditionalBlobTransport = when (config.serviceType) {
             CloudSyncServiceType.WEBDAV -> WebDavBlobTransport(validated, http)

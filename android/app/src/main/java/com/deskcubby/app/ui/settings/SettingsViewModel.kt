@@ -325,6 +325,7 @@ class SettingsViewModel @Inject constructor(
     fun setBrowserTheme(value: BrowserTheme) = launch { repository.setBrowserTheme(value) }
     fun setBrowserDesktopMode(value: Boolean) = launch { repository.setBrowserDesktopMode(value) }
     fun setThoughtRowHeight(value: Int) = launch { repository.setThoughtRowHeight(value) }
+    fun setVaultRowHeight(value: Int) = launch { repository.setVaultRowHeight(value) }
     fun setThoughtSettings(
         rowHeightDp: Int,
         reopenMode: ThoughtReopenMode,

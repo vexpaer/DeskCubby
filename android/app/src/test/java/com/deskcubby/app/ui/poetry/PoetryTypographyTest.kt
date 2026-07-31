@@ -27,4 +27,17 @@ class PoetryTypographyTest {
             wrapSevenCharacterVerse("abcdefghijklmno"),
         )
     }
+
+    @Test
+    fun onlyRecognizesPoemsMadeOfSevenCharacterClauses() {
+        assertEquals(
+            true,
+            isSevenCharacterPoem("两个黄鹂鸣翠柳，一行白鹭上青天。"),
+        )
+        assertEquals(
+            false,
+            isSevenCharacterPoem("山中何事？松花酿酒，春水煎茶。"),
+        )
+        assertEquals("望月怀远", poetryTitleFromSource("— 张九龄《望月怀远》"))
+    }
 }

@@ -16,6 +16,41 @@ private val POETRY_TRAILING_PUNCTUATION = setOf(
     '”', '’', '）', ')', '》', '〉', '】', '〕',
 )
 
+private val POETRY_CLAUSE_PUNCTUATION = POETRY_TRAILING_PUNCTUATION + setOf(
+    '“', '‘', '（', '(', '《', '〈', '【', '〔', '—', '-',
+)
+
+/**
+ * Returns true only when the poem is made up of at least two seven-character clauses.
+ *
+ * A setting named “seven-character wrap” must not reflow ci, prose, or short/long verse. The
+ * daily-poetry API sometimes returns an entire poem on one line, so punctuation-delimited clauses
+ * and explicit newlines are both treated as verse boundaries.
+ */
+internal fun isSevenCharacterPoem(text: String): Boolean {
+    val clauses = text
+        .trim()
+        .split(Regex("[，。！？；：、,.!?;:]+"))
+        .flatMap { it.lineSequence() }
+        .map { clause ->
+            clause.filterNot { character ->
+                character.isWhitespace() || character in POETRY_CLAUSE_PUNCTUATION
+            }
+        }
+        .filter(String::isNotBlank)
+        .toList()
+    return clauses.size >= 2 && clauses.all { clause ->
+        clause.codePointCount(0, clause.length) == 7
+    }
+}
+
+/** Extracts the title from the canonical `author《title》` source label when available. */
+internal fun poetryTitleFromSource(source: String): String {
+    val start = source.indexOf('《')
+    val end = source.indexOf('》', startIndex = (start + 1).coerceAtLeast(0))
+    return if (start >= 0 && end > start + 1) source.substring(start + 1, end).trim() else ""
+}
+
 /**
  * Wraps each manually entered line after seven non-punctuation characters and keeps punctuation
  * immediately following the seventh character on the same visual line. Existing newlines remain

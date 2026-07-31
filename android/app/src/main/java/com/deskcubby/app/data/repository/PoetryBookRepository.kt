@@ -48,7 +48,7 @@ class PoetryBookRepository private constructor(
 
     suspend fun create(content: String, source: String = "", categoryId: Long? = null): Long {
         val now = System.currentTimeMillis()
-        val id = dao.insert(
+        val id = dao.insertAtEnd(
             SavedPoemEntity(
                 content = requireContent(content),
                 source = requireSource(source),
@@ -95,6 +95,16 @@ class PoetryBookRepository private constructor(
         check(changed == 1) {
             "Saved poem no longer exists"
         }
+    }
+
+    suspend fun move(id: Long, targetIndex: Int) {
+        require(id > 0) { "Saved poem id must be positive" }
+        dao.move(id, targetIndex)
+    }
+
+    suspend fun moveInCategory(id: Long, targetIndex: Int, categoryId: Long?) {
+        require(id > 0) { "Saved poem id must be positive" }
+        dao.moveInCategory(id, targetIndex, categoryId)
     }
 
     suspend fun createCategory(name: String, colorArgb: Int): Long? {
@@ -162,7 +172,7 @@ class PoetryBookRepository private constructor(
             var addedCount = 0
             preset.poems.forEachIndexed { index, poem ->
                 if (dao.findMatching(categoryId, poem.content, poem.source) == null) {
-                    val inserted = dao.insert(
+                    val inserted = dao.insertAtEnd(
                         SavedPoemEntity(
                             content = poem.content,
                             source = poem.source,

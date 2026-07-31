@@ -16,6 +16,7 @@ import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
+import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
@@ -30,11 +31,13 @@ import com.deskcubby.app.data.model.MAX_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MAX_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MIN_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MIN_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.preferences.migrateMealPhotosWidget
 import com.deskcubby.app.data.preferences.migrateDailyRecordsWidget
@@ -56,7 +59,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 20,
+    val formatVersion: Int = 21,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -89,7 +92,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 20
+    const val FORMAT_VERSION: Int = 21
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -228,7 +231,11 @@ object BackupJsonCodec {
             emptyList()
         }
         val poems = if (version >= 4) {
-            decodePoems(root.requiredArray("poems"), includeCategoryId = version >= 19)
+            decodePoems(
+                root.requiredArray("poems"),
+                includeCategoryId = version >= 19,
+                includeSortOrder = version >= 21,
+            )
         } else {
             emptyList()
         }
@@ -299,6 +306,7 @@ object BackupJsonCodec {
         .put("thoughtDisplayMode", settings.thoughtDisplayMode.name)
         .put("thoughtHighlightColorArgb", settings.thoughtHighlightColorArgb)
         .put("thoughtEditorMaxHeightDp", settings.thoughtEditorMaxHeightDp)
+        .put("vaultRowHeightDp", settings.vaultRowHeightDp)
         .putNullable("poetryFontUri", settings.poetryFontUri)
         .put("poetryFontSizeSp", settings.poetryFontSizeSp)
         .put("poetryLineSpacing", settings.poetryLineSpacing)
@@ -409,6 +417,7 @@ object BackupJsonCodec {
                     .put("serviceType", item.serviceType.name)
                     .put("endpointUrl", item.endpointUrl)
                     .put("remotePath", item.remotePath)
+                    .put("userAgent", item.userAgent)
                     .put("webDavUsername", item.webDavUsername)
                     .put("s3Bucket", item.s3Bucket)
                     .put("s3Region", item.s3Region)
@@ -457,6 +466,11 @@ object BackupJsonCodec {
                 serviceType = item.requiredEnum("serviceType"),
                 endpointUrl = item.requiredString("endpointUrl"),
                 remotePath = item.requiredString("remotePath"),
+                userAgent = if (version >= 21) {
+                    item.requiredString("userAgent")
+                } else {
+                    DEFAULT_CLOUD_SYNC_USER_AGENT
+                },
                 webDavUsername = item.requiredString("webDavUsername"),
                 s3Bucket = item.requiredString("s3Bucket"),
                 s3Region = item.requiredString("s3Region"),
@@ -492,6 +506,10 @@ object BackupJsonCodec {
         }
         require(config.remotePath.split('/').none { it == "." || it == ".." }) {
             "$field.remotePath cannot contain . or .."
+        }
+        require(config.userAgent.isNotBlank() && config.userAgent.length <= 512 &&
+            config.userAgent.none(Char::isISOControl)) {
+            "$field.userAgent is invalid"
         }
         require(config.webDavUsername.length <= 512) { "$field.webDavUsername is too long" }
         require(config.s3Bucket.length <= 255) { "$field.s3Bucket is too long" }
@@ -674,6 +692,15 @@ object BackupJsonCodec {
                 )
             } else {
                 defaults.thoughtEditorMaxHeightDp
+            },
+            vaultRowHeightDp = if (version >= 21) {
+                json.requiredCoercedInt(
+                    "vaultRowHeightDp",
+                    MIN_VAULT_ROW_HEIGHT_DP,
+                    MAX_VAULT_ROW_HEIGHT_DP,
+                )
+            } else {
+                defaults.vaultRowHeightDp
             },
             poetryFontUri = if (version >= 17) {
                 json.requiredNullableString("poetryFontUri")
@@ -1334,6 +1361,7 @@ object BackupJsonCodec {
                     .put("source", poem.source)
                     .put("createdAt", poem.createdAt)
                     .put("updatedAt", poem.updatedAt)
+                    .put("sortOrder", poem.sortOrder)
                     .putNullable("categoryId", poem.categoryId),
             )
         }
@@ -1342,6 +1370,7 @@ object BackupJsonCodec {
     private fun decodePoems(
         json: JSONArray,
         includeCategoryId: Boolean,
+        includeSortOrder: Boolean,
     ): List<SavedPoemEntity> {
         require(json.length() <= MAX_POEMS) { "Backup contains too many poems" }
         val ids = HashSet<Long>(json.length())
@@ -1369,6 +1398,7 @@ object BackupJsonCodec {
                         source = source,
                         createdAt = createdAt,
                         updatedAt = updatedAt,
+                        sortOrder = if (includeSortOrder) item.requiredLong("sortOrder") else 0L,
                         categoryId = if (includeCategoryId) {
                             item.requiredNullableLong("categoryId")
                         } else {

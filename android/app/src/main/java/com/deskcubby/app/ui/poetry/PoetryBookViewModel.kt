@@ -201,6 +201,16 @@ class PoetryBookViewModel @Inject constructor(
         }
     }
 
+    fun move(id: Long, targetIndex: Int, filter: PoetryCategoryFilter) {
+        viewModelScope.launch {
+            when (filter) {
+                PoetryCategoryFilter.All -> repository.move(id, targetIndex)
+                PoetryCategoryFilter.Uncategorized -> repository.moveInCategory(id, targetIndex, null)
+                is PoetryCategoryFilter.Category -> repository.moveInCategory(id, targetIndex, filter.id)
+            }
+        }
+    }
+
     fun createCategory(name: String, colorArgb: Int, onDone: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             try {

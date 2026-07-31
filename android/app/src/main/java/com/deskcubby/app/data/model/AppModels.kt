@@ -100,6 +100,9 @@ const val DEFAULT_THOUGHT_HIGHLIGHT_COLOR_ARGB: Int = 0xFFF6E3A1.toInt()
 const val MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP: Int = 96
 const val MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP: Int = 400
 const val DEFAULT_THOUGHT_EDITOR_MAX_HEIGHT_DP: Int = 168
+const val MIN_VAULT_ROW_HEIGHT_DP: Int = 48
+const val MAX_VAULT_ROW_HEIGHT_DP: Int = 120
+const val DEFAULT_VAULT_ROW_HEIGHT_DP: Int = 56
 const val MIN_POETRY_FONT_SIZE_SP: Float = 14f
 const val MAX_POETRY_FONT_SIZE_SP: Float = 36f
 const val MIN_POETRY_LINE_SPACING: Float = 1f
@@ -335,6 +338,7 @@ data class AppSettings(
     val thoughtDisplayMode: ThoughtDisplayMode = ThoughtDisplayMode.SINGLE_LINE,
     val thoughtHighlightColorArgb: Int = DEFAULT_THOUGHT_HIGHLIGHT_COLOR_ARGB,
     val thoughtEditorMaxHeightDp: Int = DEFAULT_THOUGHT_EDITOR_MAX_HEIGHT_DP,
+    val vaultRowHeightDp: Int = DEFAULT_VAULT_ROW_HEIGHT_DP,
     val poetryFontUri: String? = null,
     val poetryFontSizeSp: Float = 18f,
     val poetryLineSpacing: Float = 1.45f,

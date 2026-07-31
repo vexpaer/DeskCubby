@@ -330,7 +330,7 @@ interface DateRecordDao {
 
 @Dao
 interface SavedPoemDao {
-    @Query("SELECT * FROM saved_poems ORDER BY createdAt DESC, id DESC")
+    @Query("SELECT * FROM saved_poems ORDER BY sortOrder ASC, createdAt DESC, id DESC")
     fun observeAll(): Flow<List<SavedPoemEntity>>
 
     @Query("SELECT * FROM saved_poems WHERE id = :id LIMIT 1")
@@ -357,6 +357,13 @@ interface SavedPoemDao {
     @Insert
     suspend fun insert(item: SavedPoemEntity): Long
 
+    @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM saved_poems")
+    suspend fun nextSortOrder(): Long
+
+    @Transaction
+    suspend fun insertAtEnd(item: SavedPoemEntity): Long =
+        insert(item.copy(sortOrder = nextSortOrder()))
+
     @Query(
         "UPDATE saved_poems SET content = :content, source = :source, categoryId = :categoryId, " +
             "updatedAt = :updatedAt " +
@@ -372,6 +379,55 @@ interface SavedPoemDao {
 
     @Query("UPDATE saved_poems SET categoryId = :categoryId, updatedAt = :updatedAt WHERE id = :id")
     suspend fun setCategory(id: Long, categoryId: Long?, updatedAt: Long): Int
+
+    @Query("SELECT id FROM saved_poems ORDER BY sortOrder ASC, createdAt DESC, id DESC")
+    suspend fun getIdsInOrder(): List<Long>
+
+    @Query(
+        "SELECT id FROM saved_poems WHERE " +
+            "(:categoryId IS NULL AND categoryId IS NULL) OR categoryId = :categoryId " +
+            "ORDER BY sortOrder ASC, createdAt DESC, id DESC",
+    )
+    suspend fun getIdsInCategory(categoryId: Long?): List<Long>
+
+    @Query("UPDATE saved_poems SET sortOrder = :sortOrder WHERE id = :id")
+    suspend fun updateSortOrder(id: Long, sortOrder: Long)
+
+    @Transaction
+    suspend fun replaceOrder(orderedIds: List<Long>) {
+        orderedIds.forEachIndexed { index, id -> updateSortOrder(id, index.toLong()) }
+    }
+
+    @Transaction
+    suspend fun move(id: Long, targetIndex: Int) {
+        val orderedIds = getIdsInOrder().toMutableList()
+        val sourceIndex = orderedIds.indexOf(id)
+        if (sourceIndex < 0) return
+        val destination = targetIndex.coerceIn(0, orderedIds.lastIndex)
+        if (sourceIndex == destination) return
+        orderedIds.add(destination, orderedIds.removeAt(sourceIndex))
+        replaceOrder(orderedIds)
+    }
+
+    @Transaction
+    suspend fun moveInCategory(id: Long, targetIndex: Int, categoryId: Long?) {
+        val allIds = getIdsInOrder().toMutableList()
+        val categoryIds = getIdsInCategory(categoryId).toMutableList()
+        val sourceIndex = categoryIds.indexOf(id)
+        if (sourceIndex < 0 || categoryIds.isEmpty()) return
+        val destination = targetIndex.coerceIn(0, categoryIds.lastIndex)
+        if (sourceIndex == destination) return
+        categoryIds.add(destination, categoryIds.removeAt(sourceIndex))
+
+        val categoryIdSet = categoryIds.toHashSet()
+        var replacementIndex = 0
+        allIds.indices.forEach { index ->
+            if (allIds[index] in categoryIdSet) {
+                allIds[index] = categoryIds[replacementIndex++]
+            }
+        }
+        replaceOrder(allIds)
+    }
 
     @Query(
         "SELECT id FROM saved_poems WHERE categoryId = :categoryId AND content = :content " +

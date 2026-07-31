@@ -47,7 +47,7 @@ import org.json.JSONObject
 @RunWith(AndroidJUnit4::class)
 class BackupJsonCodecTest {
     @Test
-    fun versionTwentyRoundTripPreservesEncryptedVaultGamesAndUsageDevices() {
+    fun versionTwentyOneRoundTripPreservesEncryptedVaultGamesAndUsageDevices() {
         val iv = Base64.getEncoder().encodeToString(ByteArray(12) { 2 })
         val cipher = Base64.getEncoder().encodeToString(ByteArray(32) { 3 })
         val vault = VaultEncryptedBackup(
@@ -117,10 +117,47 @@ class BackupJsonCodecTest {
 
         val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
 
-        assertEquals(20, decoded.formatVersion)
+        assertEquals(21, decoded.formatVersion)
         assertEquals(vault, decoded.vault)
         assertEquals(gameStates, decoded.gameStates)
         assertEquals(usageDevices, decoded.usageDevices)
+    }
+
+    @Test
+    fun versionTwentyDefaultsFieldsIntroducedInVersionTwentyOne() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 20,
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                    poems = listOf(testPoem(1).copy(sortOrder = 11)),
+                    settings = AppSettings(
+                        cloudSyncConfigs = listOf(
+                            CloudSyncConfig(
+                                id = "legacy-cloud",
+                                name = "Legacy cloud",
+                                endpointUrl = "https://cloud.example.com/dav",
+                                userAgent = "Legacy/20",
+                            ),
+                        ),
+                        vaultRowHeightDp = 92,
+                    ),
+                ),
+            ),
+        )
+        root.put("version", 20)
+        root.getJSONObject("settings").remove("vaultRowHeightDp")
+        root.getJSONObject("settings").getJSONArray("cloudSyncConfigs")
+            .getJSONObject(0).remove("userAgent")
+        root.getJSONArray("poems").getJSONObject(0).remove("sortOrder")
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+
+        assertEquals(20, decoded.formatVersion)
+        assertEquals(AppSettings().vaultRowHeightDp, decoded.settings.vaultRowHeightDp)
+        assertEquals("DeskCubby-Sync/1", decoded.settings.cloudSyncConfigs.single().userAgent)
+        assertEquals(0L, decoded.poems.single().sortOrder)
     }
 
     @Test
@@ -183,6 +220,7 @@ class BackupJsonCodecTest {
             poetryShowSource = false,
             poetryShowQuoteMark = false,
             poetrySevenCharacterWrapEnabled = true,
+            vaultRowHeightDp = 88,
             mealCalendarImageMaxHeightDp = 188,
             mealCalendarShowCaptions = false,
             dailyEventTemplates = listOf(
@@ -271,6 +309,7 @@ class BackupJsonCodecTest {
             source = "张九龄《望月怀远》",
             createdAt = 33,
             updatedAt = 34,
+            sortOrder = 7,
             categoryId = poetryCategory.id,
         )
 
@@ -409,6 +448,7 @@ class BackupJsonCodecTest {
             name = "Personal WebDAV",
             endpointUrl = "https://cloud.example.com/dav",
             remotePath = "DeskCubby/personal",
+            userAgent = "DeskCubby-Test/7",
             webDavUsername = "alice",
             webDavPassword = "webdav-password-marker",
             s3AccessKey = "unused-access-key-marker",
@@ -470,6 +510,10 @@ class BackupJsonCodecTest {
         assertEquals(false, encodedSettings.getBoolean("cloudSyncEnabled"))
         for (index in 0 until encodedConfigs.length()) {
             val item = encodedConfigs.getJSONObject(index)
+            assertEquals(
+                if (index == 0) "DeskCubby-Test/7" else "DeskCubby-Sync/1",
+                item.getString("userAgent"),
+            )
             assertFalse(item.has("webDavPassword"))
             assertFalse(item.has("s3AccessKey"))
             assertFalse(item.has("s3SecretKey"))
@@ -510,6 +554,7 @@ class BackupJsonCodecTest {
         )
         assertEquals(filter, decoded.settings.mealPhotoFilter)
         assertEquals(navItems, decoded.settings.navItems)
+        assertEquals(88, decoded.settings.vaultRowHeightDp)
     }
 
     @Test

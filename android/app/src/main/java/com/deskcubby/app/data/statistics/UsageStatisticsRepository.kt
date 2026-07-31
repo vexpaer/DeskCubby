@@ -5,6 +5,9 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Process
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Clock
 import java.time.Instant
@@ -19,9 +22,13 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+
+private val Context.usageStartupDataStore by preferencesDataStore(name = "usage_startup_state")
+private val LAST_APP_OPEN_COLLECTION_DATE = stringPreferencesKey("last_app_open_collection_date")
 
 @Singleton
 class UsageStatisticsRepository @Inject constructor(
@@ -66,6 +73,24 @@ class UsageStatisticsRepository @Inject constructor(
             refreshGeneration += 1L
             outcome
         }
+    }
+
+    /** Refreshes once per local calendar day when the application process starts. */
+    suspend fun refreshOnAppOpenIfNeeded(
+        clock: Clock = Clock.systemDefaultZone(),
+    ): StatisticsRefreshOutcome? {
+        val today = LocalDate.now(clock).toString()
+        val alreadyCollected = context.usageStartupDataStore.data
+            .first()[LAST_APP_OPEN_COLLECTION_DATE] == today
+        if (alreadyCollected) return null
+
+        val outcome = refresh(clock)
+        if (outcome == StatisticsRefreshOutcome.SUCCESS) {
+            context.usageStartupDataStore.edit { prefs ->
+                prefs[LAST_APP_OPEN_COLLECTION_DATE] = today
+            }
+        }
+        return outcome
     }
 
     private suspend fun performRefresh(clock: Clock): StatisticsRefreshOutcome {

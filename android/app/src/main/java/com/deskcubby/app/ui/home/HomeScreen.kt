@@ -756,8 +756,8 @@ private fun MealPhotosWidget(
         ) {
             mealQuickActions.forEachIndexed { index, action ->
                 val label = action.label(language)
-                val chooseLabel = if (language == AppLanguage.ENGLISH) "Choose $label photo" else "选择${label}图片"
                 val cameraLabel = if (language == AppLanguage.ENGLISH) "Take $label photo" else "拍摄${label}图片"
+                val chooseLabel = if (language == AppLanguage.ENGLISH) "Choose $label photo" else "选择${label}图片"
                 Surface(
                     modifier = Modifier
                         .weight(1f)
@@ -765,11 +765,11 @@ private fun MealPhotosWidget(
                         .semantics { contentDescription = label }
                         .combinedClickable(
                             enabled = !uploading,
-                            onClickLabel = chooseLabel,
+                            onClickLabel = cameraLabel,
                             role = Role.Button,
-                            onLongClickLabel = cameraLabel,
-                            onClick = { onChoosePhoto(action) },
-                            onLongClick = { onTakePhoto(action) },
+                            onLongClickLabel = chooseLabel,
+                            onClick = { onTakePhoto(action) },
+                            onLongClick = { onChoosePhoto(action) },
                         ),
                     shape = if (organic) visuals.badgeShape else MaterialTheme.shapes.medium,
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -787,15 +787,6 @@ private fun MealPhotosWidget(
                 }
             }
         }
-        Text(
-            text = if (uploading) {
-                tr("正在加入今日日记…", "Adding to today's diary…")
-            } else {
-                tr("单击选图，长按拍照", "Tap to choose; hold to take a photo")
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 

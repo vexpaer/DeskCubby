@@ -35,6 +35,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -47,10 +49,12 @@ import androidx.compose.material.icons.outlined.Label
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -67,6 +71,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,6 +79,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
@@ -84,6 +90,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.local.PoetryCategoryEntity
 import com.deskcubby.app.data.local.SavedPoemEntity
@@ -94,9 +101,11 @@ import com.deskcubby.app.data.repository.PoemEditContentStatus
 import com.deskcubby.app.data.repository.PoetryPresetCategorySummary
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.ColorPickerDialog
+import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.tr
+import kotlin.math.abs
 
 @Composable
 fun PoetryBookScreen(
@@ -148,6 +157,11 @@ fun PoetryBookScreen(
     var editingCategory by remember { mutableStateOf<PoetryCategoryEntity?>(null) }
     var creatingCustomCategory by remember { mutableStateOf(false) }
     var pendingCategoryDelete by remember { mutableStateOf<PoetryCategoryEntity?>(null) }
+    var sorting by rememberSaveable { mutableStateOf(false) }
+    var draggingPoemId by remember { mutableStateOf<Long?>(null) }
+    var draggingDistancePx by remember { mutableStateOf(0f) }
+    var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
+    val listState = rememberLazyListState()
     val poetryFontFamily = rememberPoetryFontFamily(settings.poetryFontUri)
     val presetImportMessage = presetImportResult?.let { result ->
         tr(
@@ -169,6 +183,26 @@ fun PoetryBookScreen(
         }
     }
 
+    fun findDragTargetIndex(itemId: Long, verticalDistancePx: Float): Int? {
+        val visibleItems = listState.layoutInfo.visibleItemsInfo
+        val sourceInfo = visibleItems.firstOrNull { it.key == itemId } ?: return null
+        val targetCenter = sourceInfo.offset + sourceInfo.size / 2f + verticalDistancePx
+        return visibleItems.firstOrNull { info ->
+            targetCenter >= info.offset && targetCenter <= info.offset + info.size
+        }?.index ?: visibleItems.minByOrNull { info ->
+            abs(targetCenter - (info.offset + info.size / 2f))
+        }?.index
+    }
+
+    val dragSourceIndex = draggingPoemId?.let { id ->
+        visiblePoems.indexOfFirst { it.id == id }.takeIf { it >= 0 }
+    }
+    val insertionSlot = dragSourceIndex?.let { sourceIndex ->
+        dragTargetIndex?.let { targetIndex ->
+            if (targetIndex > sourceIndex) targetIndex + 1 else targetIndex
+        }
+    }
+
     Scaffold(
         modifier = Modifier
             .padding(bottom = padding.calculateBottomPadding())
@@ -178,6 +212,22 @@ fun PoetryBookScreen(
             TopAppBar(
                 title = { Text(tr("诗词本", "Poetry book")) },
                 actions = {
+                    TextButton(
+                        onClick = {
+                            sorting = !sorting
+                            draggingPoemId = null
+                            draggingDistancePx = 0f
+                            dragTargetIndex = null
+                        },
+                    ) {
+                        Icon(
+                            imageVector = if (sorting) Icons.Outlined.Check else Icons.Outlined.Tune,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (sorting) tr("完成", "Done") else tr("排序", "Sort"))
+                    }
                     IconButton(onClick = { showCategoryManager = true }) {
                         Icon(Icons.Outlined.FolderOpen, tr("管理诗词分类", "Manage poetry categories"))
                     }
@@ -223,6 +273,7 @@ fun PoetryBookScreen(
                 )
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
@@ -234,16 +285,80 @@ fun PoetryBookScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(visiblePoems, key = { it.id }) { poem ->
-                        SavedPoemCard(
-                            poem = poem,
-                            category = categoriesById[poem.categoryId],
-                            loadingForEdit =
-                                (editorState as? PoetryEditorState.Loading)?.poemId == poem.id,
-                            settings = settings,
-                            fontFamily = poetryFontFamily,
-                            onShowActions = { pendingActions = poem },
-                        )
+                    itemsIndexed(visiblePoems, key = { _, poem -> poem.id }) { index, poem ->
+                        val isDragging = draggingPoemId == poem.id
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .zIndex(if (isDragging) 1f else 0f),
+                        ) {
+                            SavedPoemCard(
+                                poem = poem,
+                                category = categoriesById[poem.categoryId],
+                                loadingForEdit =
+                                    (editorState as? PoetryEditorState.Loading)?.poemId == poem.id,
+                                settings = settings,
+                                fontFamily = poetryFontFamily,
+                                sorting = sorting,
+                                dragging = isDragging,
+                                dragDistancePx = draggingDistancePx,
+                                onShowActions = { pendingActions = poem },
+                                onDragStarted = {
+                                    draggingPoemId = poem.id
+                                    draggingDistancePx = 0f
+                                    dragTargetIndex = index
+                                },
+                                onDragChanged = { distance ->
+                                    draggingDistancePx = distance
+                                    dragTargetIndex = findDragTargetIndex(poem.id, distance)
+                                },
+                                onDragCancelled = {
+                                    draggingPoemId = null
+                                    draggingDistancePx = 0f
+                                    dragTargetIndex = null
+                                },
+                                onDragFinished = { distance ->
+                                    val targetIndex = findDragTargetIndex(poem.id, distance)
+                                        ?: dragTargetIndex
+                                    draggingPoemId = null
+                                    draggingDistancePx = 0f
+                                    dragTargetIndex = null
+                                    if (targetIndex != null && targetIndex != index) {
+                                        viewModel.move(poem.id, targetIndex, selectedCategory)
+                                    }
+                                },
+                                onMoveUp = {
+                                    if (index <= 0) false else {
+                                        viewModel.move(poem.id, index - 1, selectedCategory)
+                                        true
+                                    }
+                                },
+                                onMoveDown = {
+                                    if (index >= visiblePoems.lastIndex) false else {
+                                        viewModel.move(poem.id, index + 1, selectedCategory)
+                                        true
+                                    }
+                                },
+                            )
+                            if (draggingPoemId != null && insertionSlot == index) {
+                                HorizontalDivider(
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .padding(horizontal = 8.dp),
+                                    thickness = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            if (index == visiblePoems.lastIndex && insertionSlot == visiblePoems.size) {
+                                HorizontalDivider(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .padding(horizontal = 8.dp),
+                                    thickness = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -576,7 +691,16 @@ private fun SavedPoemCard(
     loadingForEdit: Boolean,
     settings: AppSettings,
     fontFamily: FontFamily?,
+    sorting: Boolean,
+    dragging: Boolean,
+    dragDistancePx: Float,
     onShowActions: () -> Unit,
+    onDragStarted: () -> Unit,
+    onDragChanged: (Float) -> Unit,
+    onDragCancelled: () -> Unit,
+    onDragFinished: (Float) -> Unit,
+    onMoveUp: () -> Boolean,
+    onMoveDown: () -> Boolean,
 ) {
     val textAlignment = when (settings.poetryTextAlignment) {
         PoetryTextAlignment.START -> TextAlign.Start
@@ -585,8 +709,12 @@ private fun SavedPoemCard(
     GlassPanel(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                translationY = if (dragging) dragDistancePx else 0f
+                alpha = if (dragging) 0.62f else 1f
+            }
             .combinedClickable(
-                enabled = !loadingForEdit,
+                enabled = !loadingForEdit && !sorting,
                 onLongClickLabel = tr("显示编辑、分类和删除操作", "Show edit, category, and delete actions"),
                 onClick = {},
                 onLongClick = onShowActions,
@@ -594,62 +722,96 @@ private fun SavedPoemCard(
         cornerRadius = 20.dp,
         padding = PaddingValues(horizontal = 16.dp, vertical = 13.dp),
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-            if (settings.poetryShowQuoteMark) {
+        if (sorting) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val title = poetryTitleFromSource(poem.source)
                 Text(
-                    text = "“",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.width(6.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                category?.let {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CategoryColorDot(it.colorArgb)
-                        Spacer(Modifier.width(5.dp))
-                        Text(
-                            it.name,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Spacer(Modifier.height(5.dp))
-                }
-                Text(
-                    text = if (settings.poetrySevenCharacterWrapEnabled) {
-                        wrapSevenCharacterVerse(poem.content)
-                    } else {
-                        poem.content
+                    text = buildString {
+                        if (title.isNotBlank()) append("《$title》 ")
+                        append(poem.content.replace(Regex("\\s+"), " ").trim())
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.weight(1f),
                     fontFamily = fontFamily,
                     fontSize = settings.poetryFontSizeSp.sp,
-                    lineHeight = (settings.poetryFontSizeSp * settings.poetryLineSpacing).sp,
                     fontWeight = FontWeight.Medium,
-                    textAlign = textAlignment,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                if (settings.poetryShowSource && poem.source.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
+                FourDotDragHandle(
+                    enabled = !loadingForEdit,
+                    translateSelf = false,
+                    onDragStarted = onDragStarted,
+                    onDragChanged = onDragChanged,
+                    onDragCancelled = onDragCancelled,
+                    onMoveUp = onMoveUp,
+                    onMoveDown = onMoveDown,
+                    onDragFinished = onDragFinished,
+                )
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                if (settings.poetryShowQuoteMark) {
                     Text(
-                        text = "—— ${poem.source}",
+                        text = "“",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                Column(Modifier.weight(1f)) {
+                    category?.let {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CategoryColorDot(it.colorArgb)
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                it.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(Modifier.height(5.dp))
+                    }
+                    Text(
+                        text = if (
+                            settings.poetrySevenCharacterWrapEnabled &&
+                            isSevenCharacterPoem(poem.content)
+                        ) {
+                            wrapSevenCharacterVerse(poem.content)
+                        } else {
+                            poem.content
+                        },
                         modifier = Modifier.fillMaxWidth(),
-                        style = MaterialTheme.typography.bodySmall,
                         fontFamily = fontFamily,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontStyle = FontStyle.Italic,
+                        fontSize = settings.poetryFontSizeSp.sp,
+                        lineHeight = (settings.poetryFontSizeSp * settings.poetryLineSpacing).sp,
+                        fontWeight = FontWeight.Medium,
                         textAlign = textAlignment,
                     )
-                }
-                if (loadingForEdit) {
-                    Spacer(Modifier.height(8.dp))
-                    CircularProgressIndicator(
-                        modifier = Modifier
-                            .size(22.dp)
-                            .align(Alignment.End),
-                        strokeWidth = 2.dp,
-                    )
+                    if (settings.poetryShowSource && poem.source.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "—— ${poem.source}",
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = fontFamily,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontStyle = FontStyle.Italic,
+                            textAlign = textAlignment,
+                        )
+                    }
+                    if (loadingForEdit) {
+                        Spacer(Modifier.height(8.dp))
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .align(Alignment.End),
+                            strokeWidth = 2.dp,
+                        )
+                    }
                 }
             }
         }

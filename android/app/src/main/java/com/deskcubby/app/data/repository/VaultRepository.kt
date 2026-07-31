@@ -35,7 +35,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Vault metadata lives in its own DataStore file, fully separate from app settings. DeskCubby
- * v20 backups can copy this metadata and the encrypted Room rows without exposing a password,
+ * v21 backups can copy this metadata and the encrypted Room rows without exposing a password,
  * derived key, or plaintext.
  */
 private val Context.vaultMetaDataStore by preferencesDataStore(name = "vault_meta")
@@ -152,7 +152,7 @@ data class VaultContentState(
 )
 
 /**
- * Portable v20 representation of one persisted password descriptor. It contains no password or
+ * Portable v21 representation of one persisted password descriptor. It contains no password or
  * derived key; the verifier and every user row remain AES-GCM ciphertext.
  */
 data class VaultEncryptedKeyBackup(
@@ -163,7 +163,7 @@ data class VaultEncryptedKeyBackup(
     val generationId: String?,
 )
 
-/** Complete encrypted Vault payload owned by a v20 application backup. */
+/** Complete encrypted Vault payload owned by a v21 application backup. */
 data class VaultEncryptedBackup(
     val active: VaultEncryptedKeyBackup?,
     val pending: VaultEncryptedKeyBackup?,
