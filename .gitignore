@@ -34,6 +34,10 @@ android/app/build/
 /.pnpm-store/
 /.tools/
 
+# Local Android release handoff
+/publish-android-release.bat
+/.android-release-notes-v*.md
+
 # Local AI context
 /AGENTS.md
 /overview.md
