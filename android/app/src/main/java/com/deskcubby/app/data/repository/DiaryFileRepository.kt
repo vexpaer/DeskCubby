@@ -111,6 +111,11 @@ data class DiaryPreviewMedia(
     val locationName: String? = null,
 )
 
+data class DiaryMediaDeleteResult(
+    val document: DiaryEditorDocument,
+    val mediaFileDeleted: Boolean,
+)
+
 data class MealCalendarExportResult(
     val width: Int,
     val height: Int,
@@ -929,6 +934,18 @@ class DiaryFileRepository @Inject constructor(
         check(readText(target.uri) == encoded) { "媒体信息 JSON 写入后的校验失败" }
     }
 
+    /** Caller must hold [mediaMutex]. Removes a stale sidecar entry with read-back verification. */
+    private fun removeMediaMetaEntryUnlocked(root: DocumentFile, key: String) {
+        val current = readMediaMetaEntries(root).toMutableMap()
+        if (current.remove(key.lowercase(Locale.ROOT)) == null) return
+        val encoded = encodeMediaMeta(current)
+        val target = currentMediaMetaFile(root)
+            ?: root.createFile("application/json", MEDIA_META_FILE_NAME)
+            ?: error("无法在媒体目录创建 $MEDIA_META_FILE_NAME")
+        writeText(target.uri, encoded)
+        check(readText(target.uri) == encoded) { "媒体信息 JSON 写入后的校验失败" }
+    }
+
     private fun readPhotoLatLong(sourceUri: Uri): DoubleArray? {
         val candidates = buildList {
             // MediaStore redacts EXIF location on API 29+ unless the original is requested
@@ -1053,6 +1070,100 @@ class DiaryFileRepository @Inject constructor(
             if (!force && onDisk.sha256 != expectedSha256) throw ExternalFileConflictException(onDisk)
             writeText(target, content)
             load(target)
+        }
+    }
+
+    /**
+     * Removes every reference to one local media file from the current diary, verifies the diary
+     * write, and only then deletes the direct child in the user-selected media directory.
+     */
+    suspend fun deleteMediaAndReferences(
+        diaryUri: String,
+        editorContent: String,
+        expectedSha256: String,
+        markdownTarget: String,
+        settings: AppSettings,
+    ): DiaryMediaDeleteResult = writeMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val cleanedTarget = markdownTarget.trim().trim('<', '>')
+            val parsedTarget = runCatching { Uri.parse(cleanedTarget) }.getOrNull()
+            require(parsedTarget?.scheme.isNullOrBlank()) {
+                "只能删除所选媒体目录中的本地文件"
+            }
+            val fileName = decodedTargetFileName(cleanedTarget)
+                ?: error("无法确定要删除的媒体文件")
+            require(
+                !fileName.equals(MEDIA_META_FILE_NAME, ignoreCase = true) &&
+                    !fileName.equals(LEGACY_MEDIA_META_FILE_NAME, ignoreCase = true),
+            ) { "不能删除媒体信息文件" }
+            val updatedContent = DiaryTextUtils.removeMediaReferences(
+                editorContent,
+                markdownTarget,
+            )
+            require(updatedContent != editorContent) { "日记中已找不到该媒体引用" }
+
+            val targetUri = Uri.parse(diaryUri)
+            val onDisk = load(targetUri)
+            if (onDisk.sha256 != expectedSha256) throw ExternalFileConflictException(onDisk)
+            val mediaRoot = settings.mediaTreeUri?.let(::tree)
+                ?: error("请先在设置中选择媒体目录")
+
+            withContext(NonCancellable + Dispatchers.IO) {
+                try {
+                    writeText(targetUri, updatedContent)
+                    check(readText(targetUri) == updatedContent) {
+                        "删除媒体引用后的日记回读校验失败"
+                    }
+                } catch (writeError: Exception) {
+                    val committed = runCatching { readText(targetUri) == updatedContent }
+                        .getOrDefault(false)
+                    if (!committed) {
+                        runCatching {
+                            writeText(targetUri, onDisk.content)
+                            check(readText(targetUri) == onDisk.content) {
+                                "日记原文恢复校验失败"
+                            }
+                        }.exceptionOrNull()?.let(writeError::addSuppressed)
+                        throw writeError
+                    }
+                }
+
+                val mediaFileDeleted = try {
+                    mediaMutex.withLock {
+                        val mediaFile = mediaRoot.listFiles().firstOrNull { candidate ->
+                            candidate.isFile && candidate.name.equals(fileName, ignoreCase = true)
+                        }
+                        val deleted = if (mediaFile == null) {
+                            false
+                        } else {
+                            mediaFile.delete()
+                            val stillExists = mediaRoot.listFiles().any { candidate ->
+                                candidate.isFile && candidate.name.equals(fileName, ignoreCase = true)
+                            }
+                            check(!stillExists) { "媒体文件删除失败" }
+                            true
+                        }
+                        // Metadata cleanup is best effort after the primary file operation. A
+                        // stale entry must never turn a successful file deletion into a rollback
+                        // that restores a now-broken Markdown reference.
+                        runCatching { removeMediaMetaEntryUnlocked(mediaRoot, fileName) }
+                        deleted
+                    }
+                } catch (deleteError: Exception) {
+                    runCatching {
+                        writeText(targetUri, editorContent)
+                        check(readText(targetUri) == editorContent) {
+                            "媒体删除失败后无法恢复日记引用"
+                        }
+                    }.exceptionOrNull()?.let(deleteError::addSuppressed)
+                    throw deleteError
+                }
+
+                DiaryMediaDeleteResult(
+                    document = load(targetUri),
+                    mediaFileDeleted = mediaFileDeleted,
+                )
+            }
         }
     }
 

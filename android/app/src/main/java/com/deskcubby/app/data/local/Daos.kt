@@ -400,33 +400,18 @@ interface SavedPoemDao {
 
     @Transaction
     suspend fun move(id: Long, targetIndex: Int) {
-        val orderedIds = getIdsInOrder().toMutableList()
-        val sourceIndex = orderedIds.indexOf(id)
-        if (sourceIndex < 0) return
-        val destination = targetIndex.coerceIn(0, orderedIds.lastIndex)
-        if (sourceIndex == destination) return
-        orderedIds.add(destination, orderedIds.removeAt(sourceIndex))
-        replaceOrder(orderedIds)
+        val orderedIds = getIdsInOrder()
+        val reorderedIds = movePoemIdToIndex(orderedIds, id, targetIndex)
+        if (reorderedIds != orderedIds) replaceOrder(reorderedIds)
     }
 
     @Transaction
     suspend fun moveInCategory(id: Long, targetIndex: Int, categoryId: Long?) {
-        val allIds = getIdsInOrder().toMutableList()
-        val categoryIds = getIdsInCategory(categoryId).toMutableList()
-        val sourceIndex = categoryIds.indexOf(id)
-        if (sourceIndex < 0 || categoryIds.isEmpty()) return
-        val destination = targetIndex.coerceIn(0, categoryIds.lastIndex)
-        if (sourceIndex == destination) return
-        categoryIds.add(destination, categoryIds.removeAt(sourceIndex))
-
-        val categoryIdSet = categoryIds.toHashSet()
-        var replacementIndex = 0
-        allIds.indices.forEach { index ->
-            if (allIds[index] in categoryIdSet) {
-                allIds[index] = categoryIds[replacementIndex++]
-            }
-        }
-        replaceOrder(allIds)
+        val allIds = getIdsInOrder()
+        val categoryIds = getIdsInCategory(categoryId)
+        val reorderedCategoryIds = movePoemIdToIndex(categoryIds, id, targetIndex)
+        if (reorderedCategoryIds == categoryIds) return
+        replaceOrder(replacePoemSubsetOrder(allIds, reorderedCategoryIds))
     }
 
     @Query(
@@ -437,6 +422,40 @@ interface SavedPoemDao {
 
     @Query("DELETE FROM saved_poems WHERE id = :id")
     suspend fun delete(id: Long): Int
+
+}
+
+/** Reorders against the pre-move list so index zero is a valid destination and source. */
+internal fun movePoemIdToIndex(
+    orderedIds: List<Long>,
+    id: Long,
+    targetIndex: Int,
+): List<Long> {
+    val sourceIndex = orderedIds.indexOf(id)
+    if (sourceIndex < 0 || orderedIds.size < 2) return orderedIds
+    val destination = targetIndex.coerceIn(0, orderedIds.lastIndex)
+    if (sourceIndex == destination) return orderedIds
+    return orderedIds.toMutableList().apply {
+        val moving = removeAt(sourceIndex)
+        add(destination.coerceIn(0, size), moving)
+    }
+}
+
+/** Places a filtered category order back into the same global slots without moving other poems. */
+internal fun replacePoemSubsetOrder(
+    allIds: List<Long>,
+    orderedSubsetIds: List<Long>,
+): List<Long> {
+    val subset = orderedSubsetIds.toHashSet()
+    if (subset.size != orderedSubsetIds.size) return allIds
+    var replacementIndex = 0
+    return allIds.map { id ->
+        if (id in subset && replacementIndex < orderedSubsetIds.size) {
+            orderedSubsetIds[replacementIndex++]
+        } else {
+            id
+        }
+    }.takeIf { replacementIndex == orderedSubsetIds.size } ?: allIds
 }
 
 @Dao
@@ -487,12 +506,21 @@ interface PoetryCategoryDao {
     @Query("UPDATE saved_poems SET categoryId = NULL WHERE categoryId = :categoryId")
     suspend fun uncategorizePoems(categoryId: Long)
 
+    @Query("DELETE FROM saved_poems WHERE categoryId = :categoryId")
+    suspend fun deletePoems(categoryId: Long): Int
+
     @Query("DELETE FROM poetry_categories WHERE id = :id")
     suspend fun delete(id: Long): Int
 
     @Transaction
     suspend fun deleteAndUncategorize(id: Long): Boolean {
         uncategorizePoems(id)
+        return delete(id) > 0
+    }
+
+    @Transaction
+    suspend fun deleteWithPoems(id: Long): Boolean {
+        deletePoems(id)
         return delete(id) > 0
     }
 }

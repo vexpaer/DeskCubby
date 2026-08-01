@@ -39,7 +39,7 @@ import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Create
-import androidx.compose.material.icons.outlined.DirectionsWalk
+import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Language
@@ -678,7 +678,10 @@ private fun DeskBottomBar(
 }
 
 private fun String.isDefaultLabelFor(id: NavItemId): Boolean =
-    this == id.defaultLabel || (id == NavItemId.BLOG && this == "博客") || (id == NavItemId.THOUGHT && this == "闪思")
+    this == id.defaultLabel ||
+        (id == NavItemId.BLOG && this == "博客") ||
+        (id == NavItemId.THOUGHT && this == "闪思") ||
+        (id == NavItemId.STEPS && this == "步数记录")
 
 fun iconFor(key: String): ImageVector = when (key) {
     "home" -> Icons.Outlined.Home
@@ -699,6 +702,6 @@ fun iconFor(key: String): ImageVector = when (key) {
     "lock" -> Icons.Outlined.Lock
     "game" -> Icons.Outlined.SportsEsports
     "usage" -> Icons.Outlined.AccessTime
-    "steps" -> Icons.Outlined.DirectionsWalk
+    "steps" -> Icons.Outlined.MonitorHeart
     else -> Icons.Outlined.MenuBook
 }

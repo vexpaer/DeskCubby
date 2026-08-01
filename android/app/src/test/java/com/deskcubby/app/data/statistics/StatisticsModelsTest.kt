@@ -25,6 +25,27 @@ class StatisticsModelsTest {
     }
 
     @Test
+    fun healthOverviewSelectsDistanceAndActiveCaloriesIndependently() {
+        val history = StepStatisticsHistory(
+            trackingStartedOn = LocalDate.parse("2026-07-27"),
+            days = listOf(
+                StepStatisticsDay(
+                    date = LocalDate.parse("2026-07-27"),
+                    zoneId = "Asia/Shanghai",
+                    state = StatisticsDayState.FINAL,
+                    collectedAtEpochMillis = 1,
+                    steps = 8_000,
+                    distanceMeters = 5_250.5,
+                    activeCaloriesKilocalories = 420.0,
+                ),
+            ),
+        )
+
+        assertEquals(5_250.5, history.overview(HealthMetric.DISTANCE).total, 0.0)
+        assertEquals(420.0, history.overview(HealthMetric.ACTIVE_CALORIES).total, 0.0)
+    }
+
+    @Test
     fun rangeIncludesTodayAndRequestedNumberOfCivilDates() {
         val days = (1L..40L).map { LocalDate.parse("2026-07-28").minusDays(it) }
         val result = days.withinStatisticsRange(

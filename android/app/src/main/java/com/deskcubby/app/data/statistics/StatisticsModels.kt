@@ -49,6 +49,8 @@ data class StepStatisticsDay(
     val state: StatisticsDayState,
     val collectedAtEpochMillis: Long,
     val steps: Long?,
+    val distanceMeters: Double? = null,
+    val activeCaloriesKilocalories: Double? = null,
 )
 
 data class StepStatisticsHistory(
@@ -56,6 +58,12 @@ data class StepStatisticsHistory(
     val days: List<StepStatisticsDay> = emptyList(),
     val deviceSensorBaseline: DeviceStepSensorBaseline? = null,
 )
+
+enum class HealthMetric {
+    STEPS,
+    DISTANCE,
+    ACTIVE_CALORIES,
+}
 
 /**
  * Last cumulative TYPE_STEP_COUNTER sample. It is device-local collection state rather than a
@@ -159,8 +167,16 @@ private fun usageOverview(
     )
 }
 
-fun StepStatisticsHistory.overview(): StatisticsOverview {
-    val values = days.mapNotNull { it.steps?.toDouble() }
+fun StepStatisticsDay.value(metric: HealthMetric): Double? = when (metric) {
+    HealthMetric.STEPS -> steps?.toDouble()
+    HealthMetric.DISTANCE -> distanceMeters
+    HealthMetric.ACTIVE_CALORIES -> activeCaloriesKilocalories
+}
+
+fun StepStatisticsHistory.overview(
+    metric: HealthMetric = HealthMetric.STEPS,
+): StatisticsOverview {
+    val values = days.mapNotNull { it.value(metric) }
     return StatisticsOverview(
         trackingStartedOn = trackingStartedOn,
         recordedDays = days.size,

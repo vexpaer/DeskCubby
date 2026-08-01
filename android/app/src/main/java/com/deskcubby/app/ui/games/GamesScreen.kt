@@ -10,7 +10,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -43,7 +44,6 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.ArrowDownward
-import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
@@ -83,6 +83,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
@@ -409,37 +410,55 @@ private fun GameOverDialog(
 // Swipe handling
 // ---------------------------------------------------------------------------------------------
 
-private enum class SwipeDirection { UP, DOWN, LEFT, RIGHT }
+internal enum class SwipeDirection { UP, DOWN, LEFT, RIGHT }
 
-/** Accumulates one drag and reports a single dominant-axis swipe when it ends. */
+/**
+ * Observes one drag and reports a single dominant-axis swipe when it ends.
+ *
+ * The final pointer pass is intentional. The 2048 page can be vertically scrollable on a short
+ * screen, so its scroll container may consume the vertical position change before an outer drag
+ * detector sees it. Absolute pointer positions remain available on the final pass and let all
+ * four directions work without preventing the page itself from scrolling.
+ */
 private fun Modifier.swipeInput(enabled: Boolean, onSwipe: (SwipeDirection) -> Unit): Modifier =
     pointerInput(enabled) {
         if (!enabled) return@pointerInput
-        var dragX = 0f
-        var dragY = 0f
         val threshold = 42.dp.toPx()
-        detectDragGestures(
-            onDragStart = {
-                dragX = 0f
-                dragY = 0f
-            },
-            onDrag = { change, amount ->
-                change.consume()
-                dragX += amount.x
-                dragY += amount.y
-            },
-            onDragEnd = {
-                val direction = when {
-                    abs(dragX) < threshold && abs(dragY) < threshold -> null
-                    abs(dragX) >= abs(dragY) ->
-                        if (dragX > 0) SwipeDirection.RIGHT else SwipeDirection.LEFT
-                    else ->
-                        if (dragY > 0) SwipeDirection.DOWN else SwipeDirection.UP
-                }
-                direction?.let(onSwipe)
-            },
-        )
+        awaitEachGesture {
+            val down = awaitFirstDown(
+                requireUnconsumed = false,
+                pass = PointerEventPass.Initial,
+            )
+            val start = down.position
+            var end = start
+            var pressed = true
+            while (pressed) {
+                val change = awaitPointerEvent(PointerEventPass.Final)
+                    .changes
+                    .firstOrNull { it.id == down.id }
+                    ?: break
+                end = change.position
+                pressed = change.pressed
+            }
+            swipeDirectionForDrag(
+                dragX = end.x - start.x,
+                dragY = end.y - start.y,
+                threshold = threshold,
+            )?.let(onSwipe)
+        }
     }
+
+internal fun swipeDirectionForDrag(
+    dragX: Float,
+    dragY: Float,
+    threshold: Float,
+): SwipeDirection? = when {
+    abs(dragX) < threshold && abs(dragY) < threshold -> null
+    abs(dragX) >= abs(dragY) ->
+        if (dragX > 0) SwipeDirection.RIGHT else SwipeDirection.LEFT
+    else ->
+        if (dragY > 0) SwipeDirection.DOWN else SwipeDirection.UP
+}
 
 private fun SwipeDirection.to2048Direction(): Game2048.Direction = when (this) {
     SwipeDirection.UP -> Game2048.Direction.UP
@@ -736,7 +755,7 @@ private fun Game2048Page(
             onClick = ::undoLastMove,
             enabled = canUndo,
         ) {
-            Icon(Icons.Outlined.BarChart, tr("无限撤回", "Undo"))
+            Icon(Icons.AutoMirrored.Outlined.Undo, tr("无限撤回", "Undo"))
         }
     }
 }

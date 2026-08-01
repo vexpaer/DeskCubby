@@ -153,7 +153,12 @@ object StepStatisticsJsonCodec {
                     .put(KEY_ZONE_ID, day.zoneId)
                     .put(KEY_STATE, day.state.name)
                     .put(KEY_COLLECTED_AT, day.collectedAtEpochMillis)
-                    .put(KEY_STEPS, day.steps ?: JSONObject.NULL),
+                    .put(KEY_STEPS, day.steps ?: JSONObject.NULL)
+                    .put(KEY_DISTANCE_METERS, day.distanceMeters ?: JSONObject.NULL)
+                    .put(
+                        KEY_ACTIVE_CALORIES_KILOCALORIES,
+                        day.activeCaloriesKilocalories ?: JSONObject.NULL,
+                    ),
             )
         }
         root.put(KEY_DAYS, days)
@@ -206,18 +211,49 @@ object StepStatisticsJsonCodec {
         val days = buildList(dayArray.length()) {
             repeat(dayArray.length()) { index ->
                 val day = dayArray.requiredObject(index)
-                day.requireExactKeys(
-                    KEY_DATE,
-                    KEY_ZONE_ID,
-                    KEY_STATE,
-                    KEY_COLLECTED_AT,
-                    KEY_STEPS,
-                )
+                if (version >= HEALTH_STEP_STATISTICS_SCHEMA_VERSION) {
+                    day.requireExactKeys(
+                        KEY_DATE,
+                        KEY_ZONE_ID,
+                        KEY_STATE,
+                        KEY_COLLECTED_AT,
+                        KEY_STEPS,
+                        KEY_DISTANCE_METERS,
+                        KEY_ACTIVE_CALORIES_KILOCALORIES,
+                    )
+                } else {
+                    day.requireExactKeys(
+                        KEY_DATE,
+                        KEY_ZONE_ID,
+                        KEY_STATE,
+                        KEY_COLLECTED_AT,
+                        KEY_STEPS,
+                    )
+                }
                 val steps = if (day.isNull(KEY_STEPS)) {
                     null
                 } else {
                     day.requiredLong(KEY_STEPS, minimum = 0, maximum = MAX_STEPS_PER_DAY)
                 }
+                val distanceMeters = if (version >= HEALTH_STEP_STATISTICS_SCHEMA_VERSION) {
+                    day.requiredNullableDouble(
+                        KEY_DISTANCE_METERS,
+                        minimum = 0.0,
+                        maximum = MAX_DISTANCE_METERS_PER_DAY,
+                    )
+                } else {
+                    null
+                }
+                val activeCaloriesKilocalories =
+                    if (version >= HEALTH_STEP_STATISTICS_SCHEMA_VERSION) {
+                        day.requiredNullableDouble(
+                            KEY_ACTIVE_CALORIES_KILOCALORIES,
+                            minimum = 0.0,
+                            maximum = MAX_ACTIVE_CALORIES_KILOCALORIES_PER_DAY,
+                        )
+                    } else {
+                        null
+                    }
                 add(
                     StepStatisticsDay(
                         date = day.requiredDate(KEY_DATE),
@@ -229,6 +265,8 @@ object StepStatisticsJsonCodec {
                             maximum = Long.MAX_VALUE,
                         ),
                         steps = steps,
+                        distanceMeters = distanceMeters,
+                        activeCaloriesKilocalories = activeCaloriesKilocalories,
                     ),
                 )
             }
@@ -289,6 +327,21 @@ private fun validateStepHistory(history: StepStatisticsHistory) {
         if (day.collectedAtEpochMillis < 0) invalid("collectedAt must be non-negative.")
         if (day.steps != null && day.steps !in 0..MAX_STEPS_PER_DAY) {
             invalid("Step count is outside the accepted daily range.")
+        }
+        if (
+            day.distanceMeters != null &&
+            (!day.distanceMeters.isFinite() ||
+                day.distanceMeters !in 0.0..MAX_DISTANCE_METERS_PER_DAY)
+        ) {
+            invalid("Distance is outside the accepted daily range.")
+        }
+        if (
+            day.activeCaloriesKilocalories != null &&
+            (!day.activeCaloriesKilocalories.isFinite() ||
+                day.activeCaloriesKilocalories !in
+                    0.0..MAX_ACTIVE_CALORIES_KILOCALORIES_PER_DAY)
+        ) {
+            invalid("Active calories are outside the accepted daily range.")
         }
     }
     history.deviceSensorBaseline?.let { baseline ->
@@ -388,6 +441,21 @@ private fun JSONObject.requiredLong(key: String, minimum: Long, maximum: Long): 
     return number
 }
 
+private fun JSONObject.requiredNullableDouble(
+    key: String,
+    minimum: Double,
+    maximum: Double,
+): Double? {
+    if (!has(key)) invalid("$key is missing.")
+    if (isNull(key)) return null
+    val number = opt(key) as? Number ?: invalid("$key must be a number.")
+    val value = number.toDouble()
+    if (!value.isFinite() || value !in minimum..maximum) {
+        invalid("$key is outside the accepted range.")
+    }
+    return value
+}
+
 private fun JSONObject.requiredDate(key: String): LocalDate {
     val text = requiredString(key, MAX_DATE_CHARS)
     return try {
@@ -420,7 +488,9 @@ internal const val PROVIDER_TIMESTAMP_USAGE_STATISTICS_SCHEMA_VERSION = 2
 internal const val EXACT_DAY_USAGE_STATISTICS_SCHEMA_VERSION = 3
 internal const val USAGE_STATISTICS_SCHEMA_VERSION = 4
 internal const val LEGACY_STEP_STATISTICS_SCHEMA_VERSION = 1
-internal const val STEP_STATISTICS_SCHEMA_VERSION = 2
+internal const val DEVICE_SENSOR_STEP_STATISTICS_SCHEMA_VERSION = 2
+internal const val HEALTH_STEP_STATISTICS_SCHEMA_VERSION = 3
+internal const val STEP_STATISTICS_SCHEMA_VERSION = HEALTH_STEP_STATISTICS_SCHEMA_VERSION
 internal const val MAX_STATISTICS_JSON_BYTES = 10 * 1024 * 1024
 private const val MAX_STATISTICS_DAYS = 36_600
 private const val MAX_APPS_PER_DAY = 4_096
@@ -430,6 +500,8 @@ private const val MAX_DATE_CHARS = 10
 private const val MAX_STATE_CHARS = 16
 private const val MAX_FOREGROUND_MILLIS_PER_APP_DAY = 26L * 60L * 60L * 1_000L
 private const val MAX_STEPS_PER_DAY = 1_000_000L
+private const val MAX_DISTANCE_METERS_PER_DAY = 1_000_000.0
+private const val MAX_ACTIVE_CALORIES_KILOCALORIES_PER_DAY = 100_000.0
 
 private const val KEY_SCHEMA_VERSION = "schemaVersion"
 private const val KEY_TRACKING_STARTED_ON = "trackingStartedOn"
@@ -443,6 +515,8 @@ private const val KEY_APPS = "apps"
 private const val KEY_PACKAGE_NAME = "packageName"
 private const val KEY_FOREGROUND_MILLIS = "foregroundMillis"
 private const val KEY_STEPS = "steps"
+private const val KEY_DISTANCE_METERS = "distanceMeters"
+private const val KEY_ACTIVE_CALORIES_KILOCALORIES = "activeCaloriesKilocalories"
 private const val KEY_DEVICE_SENSOR_BASELINE = "deviceSensorBaseline"
 private const val KEY_CUMULATIVE_STEPS = "cumulativeSteps"
 private const val KEY_CAPTURED_AT = "capturedAtEpochMillis"

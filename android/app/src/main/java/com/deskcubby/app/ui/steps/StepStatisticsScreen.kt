@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,9 +44,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.statistics.StatisticsCollectionPhase
 import com.deskcubby.app.data.statistics.StatisticsDayState
 import com.deskcubby.app.data.statistics.StatisticsPoint
+import com.deskcubby.app.data.statistics.HealthMetric
 import com.deskcubby.app.data.statistics.StepHealthConnectAction
 import com.deskcubby.app.data.statistics.StepHealthConnectAccess
 import com.deskcubby.app.data.statistics.StepStatisticsRepository
+import com.deskcubby.app.data.statistics.value
 import com.deskcubby.app.ui.statistics.StatisticsChart
 import com.deskcubby.app.ui.statistics.StatisticsChartControls
 import com.deskcubby.app.ui.statistics.StatisticsMessagePanel
@@ -53,6 +56,7 @@ import com.deskcubby.app.ui.statistics.StatisticsOverviewPanel
 import com.deskcubby.app.ui.statistics.formatStepCount
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.tr
+import java.util.Locale
 
 @Composable
 fun StepStatisticsScreen(
@@ -63,7 +67,7 @@ fun StepStatisticsScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedPoint by remember { mutableStateOf<StatisticsPoint?>(null) }
-    LaunchedEffect(state.range, state.chartType) { selectedPoint = null }
+    LaunchedEffect(state.range, state.chartType, state.metric) { selectedPoint = null }
     val permissionContract = remember { StepHealthConnectAccess.permissionContract() }
     val permissionLauncher = rememberLauncherForActivityResult(permissionContract) {
         viewModel.onPermissionResult()
@@ -80,7 +84,7 @@ fun StepStatisticsScreen(
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         topBar = {
             TopAppBar(
-                title = { Text(tr("步数记录", "Steps")) },
+                title = { Text(tr("健康", "Health")) },
                 actions = {
                     IconButton(
                         enabled = state.enabled &&
@@ -108,7 +112,7 @@ fun StepStatisticsScreen(
                     onRequestPermissions = {
                         permissionLauncher.launch(
                             state.permissionsToRequest.ifEmpty {
-                                setOf(StepHealthConnectAccess.stepReadPermission)
+                                StepHealthConnectAccess.healthReadPermissions
                             },
                         )
                     },
@@ -122,10 +126,35 @@ fun StepStatisticsScreen(
             }
             if (state.history.days.isNotEmpty()) {
                 item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        HealthMetric.entries.forEach { metric ->
+                            FilterChip(
+                                selected = state.metric == metric,
+                                onClick = { viewModel.selectMetric(metric) },
+                                label = {
+                                    Text(
+                                        when (metric) {
+                                            HealthMetric.STEPS -> tr("步数", "Steps")
+                                            HealthMetric.DISTANCE -> tr("距离", "Distance")
+                                            HealthMetric.ACTIVE_CALORIES -> tr("热量", "Calories")
+                                        },
+                                    )
+                                },
+                            )
+                        }
+                    }
+                }
+                item {
                     StatisticsOverviewPanel(
                         overview = state.overview,
-                        totalText = formatStepCount(state.overview.total),
-                        averageText = formatStepCount(state.overview.averagePerDataDay),
+                        totalText = formatHealthValue(state.metric, state.overview.total),
+                        averageText = formatHealthValue(
+                            state.metric,
+                            state.overview.averagePerDataDay,
+                        ),
                     )
                 }
                 item {
@@ -146,7 +175,7 @@ fun StepStatisticsScreen(
                             points = state.points,
                             chartType = state.chartType,
                             valueDescription = { value ->
-                                value?.let(::formatStepCount) ?: "—"
+                                value?.let { formatHealthValue(state.metric, it) } ?: "—"
                             },
                             selectedPoint = selectedPoint,
                             onPointSelected = { selectedPoint = it },
@@ -164,9 +193,11 @@ fun StepStatisticsScreen(
                     items = state.history.days.sortedByDescending { it.date },
                     key = { it.date.toString() },
                 ) { day ->
-                    StepDayRow(
+                    HealthDayRow(
                         date = day.date.toString(),
-                        value = day.steps?.toDouble()?.let(::formatStepCount) ?: "—",
+                        value = day.value(state.metric)?.let {
+                            formatHealthValue(state.metric, it)
+                        } ?: "—",
                         open = day.state == StatisticsDayState.OPEN,
                     )
                 }
@@ -176,7 +207,7 @@ fun StepStatisticsScreen(
             ) {
                 item {
                     StatisticsMessagePanel(
-                        title = tr("还没有步数记录", "No step records yet"),
+                        title = tr("还没有健康记录", "No health records yet"),
                         message = if (state.usingDeviceStepCounter) {
                             tr(
                                 "本机计步传感器首次采样只建立基线，再次采样后才会显示实测差额。",
@@ -184,8 +215,8 @@ fun StepStatisticsScreen(
                             )
                         } else {
                             tr(
-                                "Health Connect 成功返回但没有聚合值时会显示“—”，不会伪造成 0 步。",
-                                "A successful Health Connect response with no aggregate is shown as “—”, never fabricated as zero.",
+                                "Health Connect 没有返回步数、距离或热量聚合值时会显示“—”，不会伪造为 0。",
+                                "Missing Health Connect aggregates for steps, distance, or calories are shown as “—”, never fabricated as zero.",
                             )
                         },
                     )
@@ -209,10 +240,10 @@ private fun StepCollectionMessage(
         !state.enabled -> StatisticsMessagePanel(
             title = tr("统计已关闭", "Tracking is off"),
             message = tr(
-                "开启后，步数只保存在应用私有的 step-statistics.json 中；关闭不会删除已有历史。",
-                "When enabled, steps stay in the private step-statistics.json file. Turning it off keeps existing history.",
+                "开启后，步数、距离和活动热量只保存在应用私有的 step-statistics.json 中；关闭不会删除已有历史。",
+                "When enabled, steps, distance, and active calories stay in the private step-statistics.json file. Turning it off keeps existing history.",
             ),
-            actionLabel = tr("打开步数设置", "Open step settings"),
+            actionLabel = tr("打开健康设置", "Open health settings"),
             onAction = onOpenTrackingSettings,
         )
 
@@ -225,8 +256,8 @@ private fun StepCollectionMessage(
                         tr("需要系统更新", "System update required")
                     else ->
                         tr(
-                            "没有可用的步数数据源",
-                            "No step source is available",
+                            "没有可用的健康数据源",
+                            "No health source is available",
                         )
                 },
                 message = when (state.healthConnectAction) {
@@ -267,7 +298,7 @@ private fun StepCollectionMessage(
                 ) {
                     tr("需要活动识别权限", "Activity recognition required")
                 } else {
-                    tr("需要步数读取权限", "Step permission required")
+                    tr("需要健康数据读取权限", "Health permissions required")
                 },
                 message = if (
                     state.collection.technicalDetail ==
@@ -279,8 +310,8 @@ private fun StepCollectionMessage(
                     )
                 } else {
                     tr(
-                        "仅请求读取步数；设备支持时也会请求后台读取，以便每 6 小时补充日结。拒绝后不会伪造数据。",
-                        "Only step reading is requested. Background reading is also requested when supported for six-hour catch-up. Denial never fabricates data.",
+                        "请求读取步数、距离和活动热量；设备支持时也会请求后台读取，以便每 6 小时补充日结。拒绝后不会伪造数据。",
+                        "Read access is requested for steps, distance, and active calories. Background reading is also requested when supported for six-hour catch-up. Denial never fabricates data.",
                     )
                 },
                 actionLabel = if (
@@ -289,7 +320,7 @@ private fun StepCollectionMessage(
                 ) {
                     tr("授权系统计步", "Allow step counter")
                 } else {
-                    tr("授权读取步数", "Grant step access")
+                    tr("授权读取健康数据", "Grant health access")
                 },
                 onAction = if (
                     state.collection.technicalDetail ==
@@ -349,8 +380,8 @@ private fun StepCollectionMessage(
             StatisticsMessagePanel(
                 title = tr("正在刷新", "Refreshing"),
                 message = tr(
-                    "正在读取可用的 Health Connect 或本机计步传感器。",
-                    "Reading the available Health Connect or on-device step counter source.",
+                    "正在读取 Health Connect 的步数、距离和热量，或读取本机计步传感器。",
+                    "Reading steps, distance, and calories from Health Connect, or the on-device step counter.",
                 ),
             )
 
@@ -362,8 +393,8 @@ private fun StepCollectionMessage(
             },
             message = if (state.usingDeviceStepCounter) {
                 tr(
-                    "无需 Health Connect。应用按两次系统累计值的差额记录步数；首次采样建立基线，跨重启或跨日时不会猜测缺失步数。",
-                    "Health Connect is not required. Steps are recorded from differences between cumulative sensor samples; the first sample establishes a baseline and missing steps across reboot or midnight are not guessed.",
+                    "无需 Health Connect。应用按两次系统累计值的差额记录步数；传感器不提供距离和热量，首次采样建立基线，跨重启或跨日时不会猜测缺失值。",
+                    "Health Connect is not required. Steps are recorded from differences between cumulative sensor samples; the sensor provides no distance or calories, and missing values across reboot or midnight are not guessed.",
                 )
             } else {
                 tr(
@@ -392,7 +423,7 @@ private fun StepCollectionMessage(
 }
 
 @Composable
-private fun StepDayRow(
+private fun HealthDayRow(
     date: String,
     value: String,
     open: Boolean,
@@ -419,4 +450,15 @@ private fun StepDayRow(
             Text(value, fontWeight = FontWeight.SemiBold)
         }
     }
+}
+
+private fun formatHealthValue(metric: HealthMetric, value: Double): String = when (metric) {
+    HealthMetric.STEPS -> formatStepCount(value)
+    HealthMetric.DISTANCE -> if (value >= 1_000.0) {
+        String.format(Locale.getDefault(), "%.2f km", value / 1_000.0)
+    } else {
+        String.format(Locale.getDefault(), "%.0f m", value)
+    }
+    HealthMetric.ACTIVE_CALORIES ->
+        String.format(Locale.getDefault(), "%.0f kcal", value)
 }

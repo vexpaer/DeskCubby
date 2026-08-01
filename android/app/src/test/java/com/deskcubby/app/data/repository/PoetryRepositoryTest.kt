@@ -1,6 +1,7 @@
 package com.deskcubby.app.data.repository
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class PoetryRepositoryTest {
@@ -99,7 +100,7 @@ class PoetryRepositoryTest {
     }
 
     @Test
-    fun refreshSelectionPrefersARecentNovelPoemButAlwaysRemainsBounded() {
+    fun refreshSelectionPrefersANovelPoemAndNeverFallsBackToARepeat() {
         val first = DailyPoem("第一句", "作者《第一首》", title = "第一首")
         val second = DailyPoem("第二句", "作者《第二首》", title = "第二首")
 
@@ -111,8 +112,7 @@ class PoetryRepositoryTest {
                 recentFingerprints = listOf(PoetryRepository.poemFingerprint(first)),
             ),
         )
-        assertEquals(
-            first,
+        assertNull(
             PoetryRepository.chooseFreshPoem(
                 candidates = listOf(first),
                 current = first,

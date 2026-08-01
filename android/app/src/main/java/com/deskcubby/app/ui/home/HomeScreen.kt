@@ -142,6 +142,7 @@ fun HomeScreen(
     val thoughtCategories by viewModel.thoughtCategories.collectAsStateWithLifecycle()
     val dateRecords by viewModel.dateRecords.collectAsStateWithLifecycle()
     val poem by viewModel.poem.collectAsStateWithLifecycle()
+    val poemRefreshing by viewModel.poemRefreshing.collectAsStateWithLifecycle()
     val mealUploadInProgress by viewModel.mealUploadInProgress.collectAsStateWithLifecycle()
     val dailyRecordInProgress by viewModel.dailyRecordInProgress.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
@@ -313,7 +314,10 @@ fun HomeScreen(
                     onOpenDateRecords = onOpenDateRecords,
                     onOpenWebsite = onOpenWebsite,
                     onQuickThought = viewModel::addThought,
-                    onRefreshPoem = { viewModel.refreshPoem() },
+                    poemRefreshing = poemRefreshing,
+                    onRefreshPoem = {
+                        viewModel.refreshPoem(settings.appLanguage)
+                    },
                     onSavePoem = { viewModel.savePoem(poem, settings.appLanguage) },
                     mealUploadInProgress = mealInteractionBusy,
                     onChooseMealPhoto = chooseMealPhoto,
@@ -339,6 +343,7 @@ private fun HomeWidget(
     thoughtCategories: List<ThoughtCategoryEntity>,
     dateRecords: List<DateRecordEntity>,
     poem: DailyPoem,
+    poemRefreshing: Boolean,
     onOpenDiary: (String) -> Unit,
     onOpenThoughts: () -> Unit,
     onOpenDateRecords: () -> Unit,
@@ -377,7 +382,10 @@ private fun HomeWidget(
                     Text(poem.source, style = MaterialTheme.typography.bodySmall)
                 }
                 Column {
-                    IconButton(onClick = onRefreshPoem) {
+                    IconButton(
+                        onClick = onRefreshPoem,
+                        enabled = !poemRefreshing,
+                    ) {
                         Icon(Icons.Outlined.Refresh, tr("换一句", "Refresh poem"))
                     }
                     IconButton(onClick = onSavePoem) {

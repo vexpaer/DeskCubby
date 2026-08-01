@@ -205,6 +205,8 @@ class StatisticsJsonCodecsTest {
                     state = StatisticsDayState.OPEN,
                     collectedAtEpochMillis = 42,
                     steps = 123,
+                    distanceMeters = 4_321.5,
+                    activeCaloriesKilocalories = 456.75,
                 ),
             ),
             deviceSensorBaseline = DeviceStepSensorBaseline(
@@ -221,11 +223,30 @@ class StatisticsJsonCodecsTest {
 
         val versionOne = JSONObject(StepStatisticsJsonCodec.encode(history))
             .put("schemaVersion", 1)
-            .apply { remove("deviceSensorBaseline") }
-        assertNull(
-            StepStatisticsJsonCodec.decode(versionOne.toString())
-                .deviceSensorBaseline,
-        )
+            .apply {
+                remove("deviceSensorBaseline")
+                getJSONArray("days").getJSONObject(0).apply {
+                    remove("distanceMeters")
+                    remove("activeCaloriesKilocalories")
+                }
+            }
+        val decodedVersionOne = StepStatisticsJsonCodec.decode(versionOne.toString())
+        assertNull(decodedVersionOne.deviceSensorBaseline)
+        assertNull(decodedVersionOne.days.single().distanceMeters)
+        assertNull(decodedVersionOne.days.single().activeCaloriesKilocalories)
+
+        val versionTwo = JSONObject(StepStatisticsJsonCodec.encode(history))
+            .put("schemaVersion", 2)
+            .apply {
+                getJSONArray("days").getJSONObject(0).apply {
+                    remove("distanceMeters")
+                    remove("activeCaloriesKilocalories")
+                }
+            }
+        val decodedVersionTwo = StepStatisticsJsonCodec.decode(versionTwo.toString())
+        assertEquals(history.deviceSensorBaseline, decodedVersionTwo.deviceSensorBaseline)
+        assertNull(decodedVersionTwo.days.single().distanceMeters)
+        assertNull(decodedVersionTwo.days.single().activeCaloriesKilocalories)
     }
 
     @Test

@@ -801,8 +801,11 @@ class SettingsRepository @Inject constructor(
                             item.has("showInMore") -> item.optBoolean("showInMore")
                             else -> id.defaultShowInMore && !visible
                         },
-                        moreDescription = normalizeMoreDescription(
-                            item.optString("moreDescription", id.defaultDescription),
+                        moreDescription = migrateLegacyDefaultDescription(
+                            id,
+                            normalizeMoreDescription(
+                                item.optString("moreDescription", id.defaultDescription),
+                            ),
                         ),
                     ),
                 )
@@ -1108,8 +1111,16 @@ class SettingsRepository @Inject constructor(
     private fun migrateLegacyDefaultLabel(id: NavItemId, label: String): String = when {
         id == NavItemId.BLOG && label == "博客" -> id.defaultLabel
         id == NavItemId.THOUGHT && label == "闪思" -> id.defaultLabel
+        id == NavItemId.STEPS && label == "步数记录" -> id.defaultLabel
         else -> label
     }
+
+    private fun migrateLegacyDefaultDescription(id: NavItemId, description: String): String =
+        when {
+            id == NavItemId.STEPS && description == "自动读取并可视化每日步数" ->
+                id.defaultDescription
+            else -> description
+        }
 
     private inline fun <reified T : Enum<T>> String?.enumValueOr(fallback: T): T =
         this?.let { value -> enumValues<T>().firstOrNull { it.name == value } } ?: fallback

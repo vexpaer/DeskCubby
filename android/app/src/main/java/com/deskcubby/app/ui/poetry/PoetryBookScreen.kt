@@ -187,11 +187,16 @@ fun PoetryBookScreen(
         val visibleItems = listState.layoutInfo.visibleItemsInfo
         val sourceInfo = visibleItems.firstOrNull { it.key == itemId } ?: return null
         val targetCenter = sourceInfo.offset + sourceInfo.size / 2f + verticalDistancePx
-        return visibleItems.firstOrNull { info ->
+        val targetInfo = visibleItems.firstOrNull { info ->
             targetCenter >= info.offset && targetCenter <= info.offset + info.size
-        }?.index ?: visibleItems.minByOrNull { info ->
+        } ?: visibleItems.minByOrNull { info ->
             abs(targetCenter - (info.offset + info.size / 2f))
-        }?.index
+        } ?: return null
+        // LazyList layout information can briefly describe the previous order after Room emits a
+        // reorder. Resolve its stable key back into the current list instead of trusting that
+        // transient index; this is especially important for moves from or to index zero.
+        val targetKey = targetInfo.key as? Long ?: return null
+        return visiblePoems.indexOfFirst { it.id == targetKey }.takeIf { it >= 0 }
     }
 
     val dragSourceIndex = draggingPoemId?.let { id ->
@@ -587,24 +592,37 @@ fun PoetryBookScreen(
         )
     }
     pendingCategoryDelete?.let { category ->
+        val poemCount = poems.count { it.categoryId == category.id }
         AlertDialog(
             onDismissRequest = { pendingCategoryDelete = null },
             title = { Text(tr("删除分类？", "Delete category?")) },
             text = {
                 Text(
                     tr(
-                        "“${category.name}”中的诗词会保留，并归入“未分类”。",
-                        "Poems in “${category.name}” will be kept as uncategorized.",
+                        "“${category.name}”中有 $poemCount 首诗词。请选择保留诗词并归入“未分类”，或将分类和其中诗词一起永久删除。",
+                        "“${category.name}” contains $poemCount poems. Keep them as uncategorized, or permanently delete the category and its poems.",
                     ),
                 )
             },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.deleteCategory(category.id)
-                        pendingCategoryDelete = null
-                    },
-                ) { Text(tr("删除分类", "Delete category")) }
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(
+                        onClick = {
+                            viewModel.deleteCategory(category.id, deletePoems = false)
+                            pendingCategoryDelete = null
+                        },
+                    ) {
+                        Text(tr("仅删除分类（诗词变为未分类）", "Delete category only"))
+                    }
+                    TextButton(
+                        onClick = {
+                            viewModel.deleteCategory(category.id, deletePoems = true)
+                            pendingCategoryDelete = null
+                        },
+                    ) {
+                        Text(tr("分类和诗词一起删除", "Delete category and poems"))
+                    }
+                }
             },
             dismissButton = {
                 TextButton(onClick = { pendingCategoryDelete = null }) {

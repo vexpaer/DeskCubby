@@ -8,11 +8,13 @@ import com.deskcubby.app.data.statistics.StatisticsCollectionState
 import com.deskcubby.app.data.statistics.StatisticsOverview
 import com.deskcubby.app.data.statistics.StatisticsPoint
 import com.deskcubby.app.data.statistics.StatisticsRange
+import com.deskcubby.app.data.statistics.HealthMetric
 import com.deskcubby.app.data.statistics.StepHealthConnectAction
 import com.deskcubby.app.data.statistics.StepStatisticsHistory
 import com.deskcubby.app.data.statistics.StepStatisticsRepository
 import com.deskcubby.app.data.statistics.overview
 import com.deskcubby.app.data.statistics.withinStatisticsRange
+import com.deskcubby.app.data.statistics.value
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import javax.inject.Inject
@@ -32,6 +34,7 @@ data class StepStatisticsUiState(
     val collection: StatisticsCollectionState = StatisticsCollectionState(),
     val range: StatisticsRange = StatisticsRange.LAST_30_DAYS,
     val chartType: StatisticsChartType = StatisticsChartType.BARS,
+    val metric: HealthMetric = HealthMetric.STEPS,
     val overview: StatisticsOverview = StatisticsOverview(null, 0, 0, 0.0, 0.0),
     val points: List<StatisticsPoint> = emptyList(),
     val permissionsToRequest: Set<String> = emptySet(),
@@ -48,20 +51,25 @@ class StepStatisticsViewModel @Inject constructor(
 ) : ViewModel() {
     private val range = MutableStateFlow(StatisticsRange.LAST_30_DAYS)
     private val chartType = MutableStateFlow(StatisticsChartType.BARS)
+    private val metric = MutableStateFlow(HealthMetric.STEPS)
     private val enabled = settingsRepository.settings
         .map { it.stepTrackingEnabled }
         .distinctUntilChanged()
+
+    private val displayOptions = combine(range, chartType, metric) {
+            selectedRange, selectedChart, selectedMetric ->
+        HealthDisplayOptions(selectedRange, selectedChart, selectedMetric)
+    }
 
     val uiState: StateFlow<StepStatisticsUiState> = combine(
         enabled,
         repository.history,
         repository.collectionState,
-        range,
-        chartType,
-    ) { isEnabled, history, collection, selectedRange, selectedChart ->
+        displayOptions,
+    ) { isEnabled, history, collection, options ->
         val today = LocalDate.now()
         val days = history.days.withinStatisticsRange(
-            range = selectedRange,
+            range = options.range,
             today = today,
             dateOf = { it.date },
         )
@@ -70,11 +78,15 @@ class StepStatisticsViewModel @Inject constructor(
             enabled = isEnabled,
             history = history,
             collection = collection,
-            range = selectedRange,
-            chartType = selectedChart,
-            overview = history.overview(),
+            range = options.range,
+            chartType = options.chartType,
+            metric = options.metric,
+            overview = history.copy(
+                trackingStartedOn = days.firstOrNull()?.date,
+                days = days,
+            ).overview(options.metric),
             points = days.map { day ->
-                StatisticsPoint(day.date, day.steps?.toDouble())
+                StatisticsPoint(day.date, day.value(options.metric))
             },
             permissionsToRequest = runCatching(repository::permissionsToRequest)
                 .getOrDefault(emptySet()),
@@ -124,4 +136,14 @@ class StepStatisticsViewModel @Inject constructor(
     fun selectChartType(value: StatisticsChartType) {
         chartType.value = value
     }
+
+    fun selectMetric(value: HealthMetric) {
+        metric.value = value
+    }
 }
+
+private data class HealthDisplayOptions(
+    val range: StatisticsRange,
+    val chartType: StatisticsChartType,
+    val metric: HealthMetric,
+)

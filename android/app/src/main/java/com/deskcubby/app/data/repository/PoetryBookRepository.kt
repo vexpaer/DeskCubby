@@ -11,6 +11,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 @Singleton
 class PoetryBookRepository private constructor(
@@ -20,6 +22,8 @@ class PoetryBookRepository private constructor(
     private val presetCatalog: PoetryPresetCatalog?,
     @Suppress("UNUSED_PARAMETER") testOnly: Boolean,
 ) {
+    private val reorderMutex = Mutex()
+
     @Inject
     constructor(
         dao: SavedPoemDao,
@@ -97,15 +101,16 @@ class PoetryBookRepository private constructor(
         }
     }
 
-    suspend fun move(id: Long, targetIndex: Int) {
+    suspend fun move(id: Long, targetIndex: Int) = reorderMutex.withLock {
         require(id > 0) { "Saved poem id must be positive" }
         dao.move(id, targetIndex)
     }
 
-    suspend fun moveInCategory(id: Long, targetIndex: Int, categoryId: Long?) {
-        require(id > 0) { "Saved poem id must be positive" }
-        dao.moveInCategory(id, targetIndex, categoryId)
-    }
+    suspend fun moveInCategory(id: Long, targetIndex: Int, categoryId: Long?) =
+        reorderMutex.withLock {
+            require(id > 0) { "Saved poem id must be positive" }
+            dao.moveInCategory(id, targetIndex, categoryId)
+        }
 
     suspend fun createCategory(name: String, colorArgb: Int): Long? {
         val categoryDao = requireNotNull(categoryDao)
@@ -144,8 +149,12 @@ class PoetryBookRepository private constructor(
         }
     }
 
-    suspend fun deleteCategory(id: Long): Boolean =
-        id > 0 && requireNotNull(categoryDao).deleteAndUncategorize(id)
+    suspend fun deleteCategory(id: Long, deletePoems: Boolean = false): Boolean =
+        id > 0 && if (deletePoems) {
+            requireNotNull(categoryDao).deleteWithPoems(id)
+        } else {
+            requireNotNull(categoryDao).deleteAndUncategorize(id)
+        }
 
     fun presetCategorySummaries(): List<PoetryPresetCategorySummary> =
         requireNotNull(presetCatalog).summaries()

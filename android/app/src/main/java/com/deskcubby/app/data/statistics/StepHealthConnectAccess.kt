@@ -10,6 +10,8 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.StepsRecord
 
 enum class StepHealthConnectAction {
@@ -22,6 +24,15 @@ enum class StepHealthConnectAction {
 object StepHealthConnectAccess {
     val stepReadPermission: String =
         HealthPermission.getReadPermission(StepsRecord::class)
+    val distanceReadPermission: String =
+        HealthPermission.getReadPermission(DistanceRecord::class)
+    val activeCaloriesReadPermission: String =
+        HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class)
+    val healthReadPermissions: Set<String> = setOf(
+        stepReadPermission,
+        distanceReadPermission,
+        activeCaloriesReadPermission,
+    )
 
     fun permissionContract(): ActivityResultContract<Set<String>, Set<String>> =
         PermissionController.createRequestPermissionResultContract()
@@ -85,11 +96,11 @@ object StepHealthConnectAccess {
 
     fun permissionsToRequest(context: Context): Set<String> {
         if (HealthConnectClient.getSdkStatus(context) != HealthConnectClient.SDK_AVAILABLE) {
-            return setOf(stepReadPermission)
+            return healthReadPermissions
         }
         val client = HealthConnectClient.getOrCreate(context)
         return buildSet {
-            add(stepReadPermission)
+            addAll(healthReadPermissions)
             if (
                 client.features.getFeatureStatus(
                     HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND,

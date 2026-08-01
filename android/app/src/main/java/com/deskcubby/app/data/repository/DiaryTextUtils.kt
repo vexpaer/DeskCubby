@@ -1,6 +1,8 @@
 package com.deskcubby.app.data.repository
 
 import java.security.MessageDigest
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 internal object DiaryTextUtils {
@@ -56,6 +58,31 @@ internal object DiaryTextUtils {
         return lines.joinToString(lineEnding) + if (hadTrailingLineEnding) lineEnding else ""
     }
 
+    /** Removes every Markdown image that resolves to the same media-directory file name. */
+    fun removeMediaReferences(source: String, target: String): String {
+        val targetFileName = normalizedMediaTargetFileName(target) ?: return source
+        return MARKDOWN_IMAGE_REGEX.replace(source) { match ->
+            val candidate = match.groupValues[2].ifBlank { match.groupValues[3] }
+            if (normalizedMediaTargetFileName(candidate) == targetFileName) "" else match.value
+        }
+    }
+
+    private fun normalizedMediaTargetFileName(target: String): String? {
+        val encodedName = target
+            .trim()
+            .trim('<', '>')
+            .replace('\\', '/')
+            .substringAfterLast('/')
+            .takeIf(String::isNotBlank)
+            ?: return null
+        return runCatching {
+            URLDecoder.decode(
+                encodedName.replace("+", "%2B"),
+                StandardCharsets.UTF_8.name(),
+            )
+        }.getOrDefault(encodedName).trim().lowercase(Locale.ROOT).takeIf(String::isNotBlank)
+    }
+
     fun nextMediaFileName(
         pattern: String,
         dateText: String,
@@ -93,4 +120,8 @@ internal object DiaryTextUtils {
         chunks[target] = firstBody to chunks[target].second
         return chunks.joinToString(separator = "") { (body, separator) -> body + separator }
     }
+
+    private val MARKDOWN_IMAGE_REGEX = Regex(
+        """!\[([^\]\r\n]*)]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:\s+(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\([^\)\r\n]*\)))?\s*\)""",
+    )
 }

@@ -1081,6 +1081,7 @@ fun DiaryEditorScreen(
     var categoryMenu by remember { mutableStateOf(false) }
     var pendingCategory by remember { mutableStateOf<String?>(null) }
     var captionTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var mediaDeleteTarget by remember { mutableStateOf<String?>(null) }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let { viewModel.importImage(it, pendingCategory) }
         pendingCategory = null
@@ -1206,11 +1207,13 @@ fun DiaryEditorScreen(
                     mediaTreeUri = settings.mediaTreeUri,
                     resolveMediaBatch = viewModel::resolveDiaryPreviewMedia,
                     onEditCaption = { markdown, caption -> captionTarget = markdown to caption },
+                    onDeleteMedia = { target -> mediaDeleteTarget = target },
                 )
                 else -> MarkdownSourceEditor(
                     value = editorValue,
                     onValueChange = { value -> editorValue = value; viewModel.onContentChanged(value.text) },
                     onMoveMediaLine = viewModel::moveSourceLine,
+                    onDeleteMedia = { target -> mediaDeleteTarget = target },
                 )
             }
             if (state.saving) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
@@ -1242,21 +1245,54 @@ fun DiaryEditorScreen(
             onConfirm = { viewModel.updateImageCaption(markdown, it); captionTarget = null },
         )
     }
+    mediaDeleteTarget?.let { target ->
+        val displayName = target.trim().trim('<', '>').replace('\\', '/').substringAfterLast('/')
+        AlertDialog(
+            onDismissRequest = { mediaDeleteTarget = null },
+            title = { Text(tr("删除媒体？", "Delete media?")) },
+            text = {
+                Text(
+                    tr(
+                        "将从当前日记移除对“$displayName”的全部引用，并删除媒体目录中的对应文件。此操作无法撤回。",
+                        "All references to “$displayName” will be removed from this diary, and the matching file in the media folder will be deleted. This cannot be undone.",
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        mediaDeleteTarget = null
+                        viewModel.deleteMedia(target)
+                    },
+                ) { Text(tr("删除", "Delete")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { mediaDeleteTarget = null }) {
+                    Text(tr("取消", "Cancel"))
+                }
+            },
+        )
+    }
 }
 
 private data class MediaSourceLine(
     val index: Int,
     val startOffset: Int,
     val endOffset: Int,
+    val target: String,
 )
 
-private val markdownMediaLinePattern = Regex("""^\s*!\[[^\]]*\]\((?:<[^>]+>|[^)]*)\)\s*$""")
+private val markdownMediaPattern = Regex(
+    """!\[[^\]\r\n]*]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:\s+(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\([^\)\r\n]*\)))?\s*\)""",
+)
+private val markdownMediaLinePattern = Regex("""^\s*${markdownMediaPattern.pattern}\s*$""")
 
 @Composable
 private fun MarkdownSourceEditor(
     value: TextFieldValue,
     onValueChange: (TextFieldValue) -> Unit,
     onMoveMediaLine: (fromIndex: Int, toIndex: Int) -> Unit,
+    onDeleteMedia: (target: String) -> Unit,
 ) {
     val scrollState = rememberScrollState()
     val density = LocalDensity.current
@@ -1269,7 +1305,7 @@ private fun MarkdownSourceEditor(
     val topPadding = 16.dp
     // The handle is an overlay and must never participate in text measurement. Keeping it
     // close to the editor's normal line height also prevents adjacent media rows overlapping.
-    val handleSize = 24.dp
+    val handleSize = 36.dp
 
     Surface(
         modifier = Modifier.fillMaxSize().padding(12.dp),
@@ -1317,7 +1353,7 @@ private fun MarkdownSourceEditor(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = viewportHeight)
-                            .padding(start = 16.dp, top = topPadding, end = 40.dp, bottom = 40.dp),
+                            .padding(start = 16.dp, top = topPadding, end = 88.dp, bottom = 40.dp),
                         textStyle = MaterialTheme.typography.bodyLarge.copy(
                             color = MaterialTheme.colorScheme.onSurface,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
@@ -1329,7 +1365,7 @@ private fun MarkdownSourceEditor(
                     if (value.text.isEmpty()) {
                         Text(
                             text = tr("开始记录…", "Start writing…"),
-                            modifier = Modifier.padding(start = 16.dp, top = topPadding, end = 40.dp),
+                            modifier = Modifier.padding(start = 16.dp, top = topPadding, end = 88.dp),
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
@@ -1410,6 +1446,17 @@ private fun MarkdownSourceEditor(
                                 } else {
                                     Spacer(Modifier.weight(1f))
                                 }
+                                IconButton(
+                                    modifier = Modifier.size(handleSize),
+                                    enabled = !isDragging,
+                                    onClick = { onDeleteMedia(mediaLine.target) },
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Delete,
+                                        contentDescription = tr("删除媒体", "Delete media"),
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
                                 FourDotDragHandle(
                                     modifier = Modifier.size(handleSize),
                                     translateSelf = false,
@@ -1476,8 +1523,17 @@ private fun MarkdownSourceEditor(
 private fun findMediaSourceLines(source: String): List<MediaSourceLine> = buildList {
     var startOffset = 0
     source.split('\n').forEachIndexed { index, line ->
-        if (markdownMediaLinePattern.matches(line)) {
-            add(MediaSourceLine(index = index, startOffset = startOffset, endOffset = startOffset + line.length))
+        val match = markdownMediaLinePattern.matchEntire(line)
+        if (match != null) {
+            val target = match.groupValues[1].ifBlank { match.groupValues[2] }
+            add(
+                MediaSourceLine(
+                    index = index,
+                    startOffset = startOffset,
+                    endOffset = startOffset + line.length,
+                    target = target,
+                ),
+            )
         }
         startOffset += line.length + 1
     }
@@ -1491,6 +1547,7 @@ private fun MarkdownPreview(
     mediaTreeUri: String?,
     resolveMediaBatch: suspend (Collection<String>) -> Map<String, DiaryPreviewMedia>,
     onEditCaption: (String, String) -> Unit,
+    onDeleteMedia: (String) -> Unit,
 ) {
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     val visuals = deskCubbyVisuals
@@ -1586,8 +1643,22 @@ private fun MarkdownPreview(
                                     )
                                 }
                             }
-                            TextButton(onClick = { onEditCaption(part.fullMarkdown, part.caption) }) {
-                                Text(part.caption.ifBlank { tr("点击添加图片说明", "Tap to add a caption") })
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                TextButton(
+                                    modifier = Modifier.weight(1f),
+                                    onClick = { onEditCaption(part.fullMarkdown, part.caption) },
+                                ) {
+                                    Text(part.caption.ifBlank { tr("点击添加图片说明", "Tap to add a caption") })
+                                }
+                                IconButton(onClick = { onDeleteMedia(part.target) }) {
+                                    Icon(
+                                        Icons.Outlined.Delete,
+                                        contentDescription = tr("删除媒体", "Delete media"),
+                                    )
+                                }
                             }
                         }
                     }

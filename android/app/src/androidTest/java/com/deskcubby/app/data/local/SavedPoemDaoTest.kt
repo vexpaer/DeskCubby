@@ -17,12 +17,14 @@ import org.junit.runner.RunWith
 class SavedPoemDaoTest {
     private lateinit var database: AppDatabase
     private lateinit var poemDao: SavedPoemDao
+    private lateinit var categoryDao: PoetryCategoryDao
 
     @Before
     fun createDatabase() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
         poemDao = database.savedPoemDao()
+        categoryDao = database.poetryCategoryDao()
     }
 
     @After
@@ -120,17 +122,62 @@ class SavedPoemDaoTest {
         assertTrue(poemDao.getAllForBackup().isEmpty())
     }
 
+    @Test
+    fun moveSupportsChangingTheFirstPoemAndMovingAnotherPoemToFirst() = runBlocking {
+        val first = poemDao.insertAtEnd(poem(content = "first", createdAt = 30L))
+        val second = poemDao.insertAtEnd(poem(content = "second", createdAt = 20L))
+        val third = poemDao.insertAtEnd(poem(content = "third", createdAt = 10L))
+
+        poemDao.move(first, targetIndex = 2)
+        assertEquals(listOf(second, third, first), poemDao.observeAll().first().map { it.id })
+
+        poemDao.move(first, targetIndex = 0)
+        assertEquals(listOf(first, second, third), poemDao.observeAll().first().map { it.id })
+    }
+
+    @Test
+    fun categoryDeletionSupportsKeepingOrDeletingItsPoems() = runBlocking {
+        val keepCategory = categoryDao.insert(
+            category(id = 1L, name = "Keep poems"),
+        )
+        val deleteCategory = categoryDao.insert(
+            category(id = 2L, name = "Delete poems"),
+        )
+        val keptPoem = poemDao.insertAtEnd(
+            poem(content = "becomes uncategorized", createdAt = 30L, categoryId = keepCategory),
+        )
+        poemDao.insertAtEnd(
+            poem(content = "deleted with category", createdAt = 20L, categoryId = deleteCategory),
+        )
+
+        assertTrue(categoryDao.deleteAndUncategorize(keepCategory))
+        assertEquals(null, poemDao.getById(keptPoem)?.categoryId)
+        assertTrue(categoryDao.deleteWithPoems(deleteCategory))
+        assertEquals(listOf(keptPoem), poemDao.getAllForBackup().map { it.id })
+    }
+
     private fun poem(
         content: String,
         createdAt: Long,
         id: Long = 0L,
         source: String = "",
         updatedAt: Long = createdAt,
+        categoryId: Long? = null,
     ) = SavedPoemEntity(
         id = id,
         content = content,
         source = source,
         createdAt = createdAt,
         updatedAt = updatedAt,
+        categoryId = categoryId,
+    )
+
+    private fun category(id: Long, name: String) = PoetryCategoryEntity(
+        id = id,
+        name = name,
+        colorArgb = 0xFF336699.toInt(),
+        sortOrder = id,
+        createdAt = id,
+        updatedAt = id,
     )
 }

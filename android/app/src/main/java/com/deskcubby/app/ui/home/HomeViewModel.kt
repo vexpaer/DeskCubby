@@ -15,6 +15,7 @@ import com.deskcubby.app.data.repository.DateRecordRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.CalorieEstimationRepository
 import com.deskcubby.app.data.repository.PoetryRepository
+import com.deskcubby.app.data.repository.PoetryRefreshResult
 import com.deskcubby.app.data.repository.PoetryBookRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -65,6 +66,8 @@ class HomeViewModel @Inject constructor(
         SharingStarted.Eagerly,
         PoetryRepository.FALLBACK,
     )
+    private val _poemRefreshing = MutableStateFlow(false)
+    val poemRefreshing: StateFlow<Boolean> = _poemRefreshing.asStateFlow()
     private val _mealUploadInProgress = MutableStateFlow(false)
     val mealUploadInProgress: StateFlow<Boolean> = _mealUploadInProgress.asStateFlow()
     private val mealUploadMutex = Mutex()
@@ -73,14 +76,28 @@ class HomeViewModel @Inject constructor(
     private val _dailyRecordInProgress = MutableStateFlow<Set<String>>(emptySet())
     val dailyRecordInProgress: StateFlow<Set<String>> = _dailyRecordInProgress.asStateFlow()
 
-    fun refreshPoem(force: Boolean = true) {
+    fun refreshPoem(language: AppLanguage, force: Boolean = true) {
+        if (_poemRefreshing.value) return
+        _poemRefreshing.value = true
         viewModelScope.launch {
             try {
-                poetryRepository.refresh(force)
+                if (poetryRepository.refresh(force) == PoetryRefreshResult.NO_UNSEEN_POEM) {
+                    _message.value = if (language == AppLanguage.ENGLISH) {
+                        "No new poem is available right now; today's poem was kept"
+                    } else {
+                        "暂时没有未看过的新诗词，已保留当前内容"
+                    }
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                // Keep showing the cached/fallback poem when refresh is unavailable.
+                _message.value = if (language == AppLanguage.ENGLISH) {
+                    "Could not refresh the poem; the current poem was kept"
+                } else {
+                    "诗词刷新失败，已保留当前内容"
+                }
+            } finally {
+                _poemRefreshing.value = false
             }
         }
     }

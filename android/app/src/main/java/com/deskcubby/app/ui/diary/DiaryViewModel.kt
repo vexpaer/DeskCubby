@@ -369,6 +369,67 @@ class DiaryViewModel @Inject constructor(
         onContentChanged(DiaryTextUtils.moveSourceLine(source, fromIndex, toIndex))
     }
 
+    fun deleteMedia(markdownTarget: String) {
+        viewModelScope.launch {
+            saveMutex.withLock {
+                val snapshot = _editorState.value
+                val document = snapshot.document ?: return@withLock
+                if (snapshot.loading || snapshot.conflict != null) return@withLock
+                _editorState.value = snapshot.copy(saving = true, error = null)
+                try {
+                    val result = repository.deleteMediaAndReferences(
+                        diaryUri = document.uri,
+                        editorContent = snapshot.content,
+                        expectedSha256 = document.sha256,
+                        markdownTarget = markdownTarget,
+                        settings = settings.value,
+                    )
+                    val latest = _editorState.value
+                    val latestWithoutReferences = DiaryTextUtils.removeMediaReferences(
+                        latest.content,
+                        markdownTarget,
+                    )
+                    val changedDuringDelete = latestWithoutReferences != result.document.content
+                    undoStack.clear()
+                    redoStack.clear()
+                    _editorState.value = latest.copy(
+                        document = result.document,
+                        content = latestWithoutReferences,
+                        saving = false,
+                        dirty = changedDuringDelete,
+                        conflict = null,
+                        error = null,
+                    )
+                    if (changedDuringDelete) saveRequests.tryEmit(Unit)
+                    _message.value = if (result.mediaFileDeleted) {
+                        localized(
+                            "媒体文件及日记引用已删除",
+                            "Media file and diary references deleted",
+                        )
+                    } else {
+                        localized(
+                            "媒体文件已不存在，日记引用已删除",
+                            "The media file was already missing; diary references deleted",
+                        )
+                    }
+                    refresh()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: ExternalFileConflictException) {
+                    _editorState.value = _editorState.value.copy(
+                        saving = false,
+                        conflict = error.diskDocument,
+                    )
+                } catch (error: Exception) {
+                    _editorState.value = _editorState.value.copy(
+                        saving = false,
+                        error = error.userMessage(),
+                    )
+                }
+            }
+        }
+    }
+
     suspend fun resolveMedia(target: String): Uri? = repository.resolveMedia(target, settings.value)
 
     suspend fun resolveDiaryPreviewMedia(

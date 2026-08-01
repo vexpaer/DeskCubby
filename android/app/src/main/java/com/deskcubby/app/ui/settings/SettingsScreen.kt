@@ -51,7 +51,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.DirectionsWalk
+import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Home
@@ -871,10 +871,10 @@ fun SettingsScreen(
             )
 
             SettingsPage.STEPS -> DeviceTrackingSettingsPage(
-                title = tr("步数记录", "Step tracking"),
+                title = tr("健康", "Health"),
                 explanation = tr(
-                    "优先读取已授权的 Health Connect；未连接时可改用手机的系统计步传感器，从首次采样开始按差额记录。结果写入本机独立 JSON，不进入应用备份或云同步。",
-                    "Uses authorized Health Connect first, or the phone's step-counter sensor when Health Connect is not connected. Sensor tracking starts with the first sample and stores only measured differences in a separate on-device JSON excluded from backups and cloud sync.",
+                    "优先从已授权的 Health Connect 读取步数、距离和活动热量；未连接时可改用手机计步传感器，从首次采样开始只记录可信步数差额。结果写入本机独立 JSON，不进入应用备份或云同步。",
+                    "Reads steps, distance, and active calories from authorized Health Connect. Without it, the phone's step counter records only measured step differences from the first sample. Results stay in a separate on-device JSON excluded from backups and cloud sync.",
                 ),
                 enabled = settings.stepTrackingEnabled,
                 contentPadding = inner,
@@ -1036,9 +1036,9 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
         SettingsPage.USAGE,
     ),
     SettingsSearchEntry(
-        tr("步数记录", "Step tracking"),
-        tr("系统健康数据授权与每日步数", "System health permission and daily steps"),
-        "steps health connect 步数 健康 统计",
+        tr("健康", "Health"),
+        tr("Health Connect 的步数、距离与活动热量", "Health Connect steps, distance, and active calories"),
+        "steps distance calories health connect 步数 距离 热量 健康 统计",
         SettingsPage.STEPS,
     ),
     SettingsSearchEntry(
@@ -1294,13 +1294,13 @@ private fun SubpageSettingsPage(
         }
         item {
             SettingsMenuItem(
-                title = tr("步数记录", "Step tracking"),
+                title = tr("健康", "Health"),
                 description = if (settings.stepTrackingEnabled) {
-                    tr("已开启系统步数读取", "System step reading is enabled")
+                    tr("已开启健康数据读取", "Health data reading is enabled")
                 } else {
                     tr("健康数据权限与本机 JSON", "Health permission and on-device JSON")
                 },
-                icon = { Icon(Icons.Outlined.DirectionsWalk, contentDescription = null) },
+                icon = { Icon(Icons.Outlined.MonitorHeart, contentDescription = null) },
                 accentColor = settings.menuAccentColor(10),
                 onClick = { onOpen(SettingsPage.STEPS) },
             )
@@ -5715,7 +5715,7 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.NAVIGATION -> tr("底部导航", "Bottom navigation")
     SettingsPage.MORE_PAGE -> tr("导航页", "Navigation page")
     SettingsPage.USAGE -> tr("手机使用时间", "Screen time")
-    SettingsPage.STEPS -> tr("步数记录", "Step tracking")
+    SettingsPage.STEPS -> tr("健康", "Health")
     SettingsPage.ABOUT -> tr("关于", "About")
 }
 

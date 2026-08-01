@@ -68,4 +68,18 @@ class DiaryTextUtilsTest {
         val original = "![图](photo.jpg)\n正文"
         assertEquals("正文\n![图](photo.jpg)", DiaryTextUtils.moveSourceLine(original, fromIndex = 0, toIndex = 1))
     }
+
+    @Test
+    fun deletingMediaRemovesEveryReferenceToTheSameFileOnly() {
+        val original = buildString {
+            append("![封面](<Meal%20Photo.JPG>)\n")
+            append("正文 ![缩略图](folder/Meal%20Photo.JPG) 继续\n")
+            append("![保留](other.jpg)")
+        }
+
+        assertEquals(
+            "\n正文  继续\n![保留](other.jpg)",
+            DiaryTextUtils.removeMediaReferences(original, "meal photo.jpg"),
+        )
+    }
 }

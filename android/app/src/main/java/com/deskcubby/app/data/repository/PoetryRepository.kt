@@ -36,6 +36,12 @@ data class DailyPoem(
     val title: String = "",
 )
 
+enum class PoetryRefreshResult {
+    UPDATED,
+    ALREADY_CURRENT_FOR_DAY,
+    NO_UNSEEN_POEM,
+}
+
 enum class PoemEditContentStatus {
     STORED_CONTENT,
     EXPANDED_FROM_DAILY_CACHE,
@@ -63,6 +69,8 @@ class PoetryRepository @Inject constructor(
         val dynasty = stringPreferencesKey("dynasty")
         val title = stringPreferencesKey("title")
         val recentFingerprints = stringPreferencesKey("recent_fingerprints")
+        val dailyFingerprintDate = stringPreferencesKey("daily_fingerprint_date")
+        val dailyFingerprints = stringPreferencesKey("daily_fingerprints")
     }
 
     val poem: Flow<DailyPoem> = context.poetryDataStore.data.map { prefs ->
@@ -82,11 +90,14 @@ class PoetryRepository @Inject constructor(
         )
     }
 
-    suspend fun refresh(force: Boolean = false) = refreshMutex.withLock {
+    suspend fun refresh(force: Boolean = false): PoetryRefreshResult = refreshMutex.withLock {
         withContext(Dispatchers.IO) {
             val existing = context.poetryDataStore.data.first()
             val cachedAt = existing[Keys.updatedAt] ?: 0L
-            if (!force && cachedAt > 0 && dateOf(cachedAt) == LocalDate.now()) return@withContext
+            val today = LocalDate.now()
+            if (!force && cachedAt > 0 && dateOf(cachedAt) == today) {
+                return@withContext PoetryRefreshResult.ALREADY_CURRENT_FOR_DAY
+            }
 
             var token = existing[Keys.token] ?: fetchToken()
             val recent = decodeRecentFingerprints(existing[Keys.recentFingerprints])
@@ -98,22 +109,58 @@ class PoetryRepository @Inject constructor(
                     dynasty = existing[Keys.dynasty].orEmpty(),
                     title = existing[Keys.title].orEmpty(),
                 )
+            } ?: FALLBACK
+            val dailySeen = if (existing[Keys.dailyFingerprintDate] == today.toString()) {
+                decodeRecentFingerprints(existing[Keys.dailyFingerprints])
+            } else if (cachedAt > 0 && dateOf(cachedAt) == today) {
+                // 0.4.1 had only a rolling recent list. Treat it conservatively as today's list
+                // during the one-time upgrade so a poem already shown before upgrading does not
+                // reappear later that day.
+                recent
+            } else {
+                emptyList()
             }
-            val candidates = buildList {
-                repeat(if (force) MAX_REFRESH_ATTEMPTS else 1) { attempt ->
-                    val response = runCatching { request(SENTENCE_URL, token) }.getOrElse { firstError ->
-                        if (existing[Keys.token] == null || attempt != 0) throw firstError
-                        token = fetchToken()
-                        request(SENTENCE_URL, token)
-                    }
-                    add(parseSentence(response))
-                    token = JSONObject(response).optString("token").takeIf(String::isNotBlank) ?: token
+            val blocked = (dailySeen + poemFingerprint(current))
+                .filter(String::isNotBlank)
+                .toHashSet()
+            if (blocked.size >= MAX_DAILY_POEMS) {
+                return@withContext PoetryRefreshResult.NO_UNSEEN_POEM
+            }
+            var refreshedToken = false
+            var selected: DailyPoem? = null
+            val attemptCount = if (force) MAX_REFRESH_ATTEMPTS else 1
+            var attempt = 0
+            while (selected == null && attempt < attemptCount) {
+                attempt++
+                val response = try {
+                    request(SENTENCE_URL, token)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (firstError: Exception) {
+                    if (refreshedToken) throw firstError
+                    refreshedToken = true
+                    token = fetchToken()
+                    request(SENTENCE_URL, token)
+                }
+                val candidate = parseSentence(response)
+                token = JSONObject(response).optString("token")
+                    .takeIf(String::isNotBlank)
+                    ?: token
+                if (poemFingerprint(candidate) !in blocked) {
+                    selected = candidate
+                    break
                 }
             }
-            val parsed = chooseFreshPoem(candidates, current, recent)
-                ?: error("Poetry API returned no poem")
+            val parsed = selected
+                ?: return@withContext PoetryRefreshResult.NO_UNSEEN_POEM
+            val dailyAfterRefresh = encodeRecentFingerprints(
+                (dailySeen + poemFingerprint(current) + poemFingerprint(parsed))
+                    .filter(String::isNotBlank)
+                    .distinct()
+                    .takeLast(MAX_DAILY_POEMS),
+            )
             val recentAfterRefresh = encodeRecentFingerprints(
-                (listOf(poemFingerprint(parsed)) + recent + listOfNotNull(current?.let(::poemFingerprint)))
+                (listOf(poemFingerprint(parsed)) + recent + poemFingerprint(current))
                     .filter(String::isNotBlank)
                     .distinct()
                     .take(MAX_RECENT_POEMS),
@@ -126,8 +173,11 @@ class PoetryRepository @Inject constructor(
                 prefs[Keys.dynasty] = parsed.dynasty
                 prefs[Keys.title] = parsed.title
                 prefs[Keys.recentFingerprints] = recentAfterRefresh
+                prefs[Keys.dailyFingerprintDate] = today.toString()
+                prefs[Keys.dailyFingerprints] = dailyAfterRefresh
                 prefs[Keys.updatedAt] = System.currentTimeMillis()
             }
+            PoetryRefreshResult.UPDATED
         }
     }
 
@@ -234,8 +284,7 @@ class PoetryRepository @Inject constructor(
         /**
          * The sentence endpoint is random, but it can return the same sentence repeatedly. Keep
          * the selection bounded: prefer a candidate that is not the current or a recent poem, and
-         * fall back to the last response after a small number of attempts instead of retrying
-         * forever when the service's random pool is small.
+         * return null after a bounded number of attempts instead of redisplaying a blocked poem.
          */
         internal fun chooseFreshPoem(
             candidates: List<DailyPoem>,
@@ -246,7 +295,7 @@ class PoetryRepository @Inject constructor(
             val blocked = recentFingerprints.toMutableSet().apply {
                 current?.let { add(poemFingerprint(it)) }
             }
-            return candidates.firstOrNull { poemFingerprint(it) !in blocked } ?: candidates.last()
+            return candidates.firstOrNull { poemFingerprint(it) !in blocked }
         }
 
         internal fun poemFingerprint(poem: DailyPoem): String =
@@ -328,5 +377,6 @@ class PoetryRepository @Inject constructor(
         private const val MAX_EDITABLE_POEM_CONTENT_CHARS = 4_000
         private const val MAX_REFRESH_ATTEMPTS = 5
         private const val MAX_RECENT_POEMS = 12
+        private const val MAX_DAILY_POEMS = 128
     }
 }

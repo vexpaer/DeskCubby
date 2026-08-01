@@ -203,10 +203,18 @@ class PoetryBookViewModel @Inject constructor(
 
     fun move(id: Long, targetIndex: Int, filter: PoetryCategoryFilter) {
         viewModelScope.launch {
-            when (filter) {
-                PoetryCategoryFilter.All -> repository.move(id, targetIndex)
-                PoetryCategoryFilter.Uncategorized -> repository.moveInCategory(id, targetIndex, null)
-                is PoetryCategoryFilter.Category -> repository.moveInCategory(id, targetIndex, filter.id)
+            try {
+                when (filter) {
+                    PoetryCategoryFilter.All -> repository.move(id, targetIndex)
+                    PoetryCategoryFilter.Uncategorized ->
+                        repository.moveInCategory(id, targetIndex, null)
+                    is PoetryCategoryFilter.Category ->
+                        repository.moveInCategory(id, targetIndex, filter.id)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                mutableError.value = PoetryOperationFailure.CATEGORY
             }
         }
     }
@@ -242,9 +250,11 @@ class PoetryBookViewModel @Inject constructor(
         }
     }
 
-    fun deleteCategory(id: Long) {
+    fun deleteCategory(id: Long, deletePoems: Boolean = false) {
         launchOperation(PoetryOperationFailure.CATEGORY) {
-            repository.deleteCategory(id)
+            check(repository.deleteCategory(id, deletePoems)) {
+                "Poetry category no longer exists"
+            }
         }
     }
 

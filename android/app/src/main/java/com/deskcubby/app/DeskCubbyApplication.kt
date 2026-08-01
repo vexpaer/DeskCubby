@@ -33,7 +33,7 @@ class DeskCubbyApplication : Application() {
         statisticsScheduler.start()
         applicationScope.launch {
             try {
-                poetryRepository.refresh(force = true)
+                poetryRepository.refresh(force = false)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {

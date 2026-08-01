@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.time.TimeRangeFilter
@@ -56,6 +58,14 @@ class StepStatisticsRepository @Inject constructor(
                 .getGrantedPermissions()
     }
 
+    suspend fun hasHealthReadPermissions(): Boolean {
+        if (sdkStatus() != HealthConnectClient.SDK_AVAILABLE) return false
+        val granted = HealthConnectClient.getOrCreate(context)
+            .permissionController
+            .getGrantedPermissions()
+        return granted.containsAll(StepHealthConnectAccess.healthReadPermissions)
+    }
+
     suspend fun canReadInBackground(): Boolean {
         if (sdkStatus() != HealthConnectClient.SDK_AVAILABLE) return false
         val client = HealthConnectClient.getOrCreate(context)
@@ -82,8 +92,8 @@ class StepStatisticsRepository @Inject constructor(
                 val client = HealthConnectClient.getOrCreate(context)
                 val granted = client.permissionController.getGrantedPermissions()
                 healthPermissionDetail = when {
-                    StepHealthConnectAccess.stepReadPermission !in granted ->
-                        DETAIL_STEP_PERMISSION
+                    !granted.containsAll(StepHealthConnectAccess.healthReadPermissions) ->
+                        DETAIL_HEALTH_PERMISSION
                     fromBackground &&
                         client.features.getFeatureStatus(
                             HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND,
@@ -249,7 +259,11 @@ class StepStatisticsRepository @Inject constructor(
         val safeEnd = if (end.isAfter(start)) end else start.plusMillis(1)
         val aggregate = client.aggregate(
             AggregateRequest(
-                metrics = setOf(StepsRecord.COUNT_TOTAL),
+                metrics = setOf(
+                    StepsRecord.COUNT_TOTAL,
+                    DistanceRecord.DISTANCE_TOTAL,
+                    ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL,
+                ),
                 timeRangeFilter = TimeRangeFilter.between(start, safeEnd),
             ),
         )
@@ -259,13 +273,17 @@ class StepStatisticsRepository @Inject constructor(
             state = if (date == today) StatisticsDayState.OPEN else StatisticsDayState.FINAL,
             collectedAtEpochMillis = nowMillis,
             steps = aggregate[StepsRecord.COUNT_TOTAL],
+            distanceMeters = aggregate[DistanceRecord.DISTANCE_TOTAL]?.inMeters,
+            activeCaloriesKilocalories =
+                aggregate[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories,
         )
     }
 
     companion object {
         const val DETAIL_SDK_UNAVAILABLE = "health_connect_unavailable"
         const val DETAIL_PROVIDER_UPDATE_REQUIRED = "health_connect_update_required"
-        const val DETAIL_STEP_PERMISSION = "step_permission_required"
+        const val DETAIL_HEALTH_PERMISSION = "health_permission_required"
+        const val DETAIL_STEP_PERMISSION = DETAIL_HEALTH_PERMISSION
         const val DETAIL_BACKGROUND_PERMISSION = "background_permission_required"
         const val DETAIL_OPEN_HEALTH_CONNECT_FAILED = "health_connect_open_failed"
         const val DETAIL_HEALTH_CONNECT = "health_connect"
@@ -311,6 +329,8 @@ internal fun mergeDeviceStepCounterSample(
         state = StatisticsDayState.OPEN,
         collectedAtEpochMillis = capturedAtEpochMillis,
         steps = updatedSteps,
+        distanceMeters = existing?.distanceMeters,
+        activeCaloriesKilocalories = existing?.activeCaloriesKilocalories,
     )
     return history.copy(
         trackingStartedOn = history.trackingStartedOn?.let { existingStart ->
