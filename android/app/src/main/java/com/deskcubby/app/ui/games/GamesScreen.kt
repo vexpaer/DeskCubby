@@ -72,6 +72,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -96,6 +97,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.deskcubby.app.games.Game2048
 import com.deskcubby.app.games.SnakeGame
 import com.deskcubby.app.games.TetrisGame
+import com.deskcubby.app.data.model.Game2048AnimationSpeed
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.tr
 import kotlin.math.abs
@@ -105,12 +107,26 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 @Composable
-fun GamesScreen(padding: PaddingValues, viewModel: GamesViewModel) {
-    var launch by remember { mutableStateOf<GameLaunch?>(null) }
+fun GamesScreen(
+    padding: PaddingValues,
+    viewModel: GamesViewModel,
+    onGameOpenChanged: (Boolean) -> Unit = {},
+) {
+    var launch by rememberSaveable(
+        stateSaver = Saver(
+            save = { active -> active?.gameId.orEmpty() },
+            restore = { gameId ->
+                gameId.takeIf(GamesViewModel.GAME_IDS::contains)
+                    ?.let { GameLaunch(it, resume = true) }
+            },
+        ),
+    ) { mutableStateOf<GameLaunch?>(null) }
     val onLaunch: (String, Boolean) -> Unit = { gameId, resume ->
         if (!resume) viewModel.clearSave(gameId)
         launch = GameLaunch(gameId, resume)
     }
+    LaunchedEffect(launch != null) { onGameOpenChanged(launch != null) }
+    DisposableEffect(Unit) { onDispose { onGameOpenChanged(false) } }
     Box(
         Modifier
             .fillMaxSize()
@@ -125,6 +141,7 @@ fun GamesScreen(padding: PaddingValues, viewModel: GamesViewModel) {
         if (current == null) {
             GameListPage(viewModel, onLaunch)
         } else {
+            GamePlayTimeEffect(current.gameId, viewModel)
             when (current.gameId) {
                 GamesViewModel.GAME_2048 -> Game2048Page(
                     viewModel = viewModel,
@@ -149,6 +166,16 @@ fun GamesScreen(padding: PaddingValues, viewModel: GamesViewModel) {
                 )
                 GamesViewModel.GAME_SNAKE -> SnakePage(viewModel, current.resume) { launch = null }
                 GamesViewModel.GAME_TETRIS -> TetrisPage(viewModel, current.resume) { launch = null }
+                GamesViewModel.GAME_MINESWEEPER -> MinesweeperPage(
+                    viewModel = viewModel,
+                    resume = current.resume,
+                    onExit = { launch = null },
+                )
+                GamesViewModel.GAME_SPIDER -> SpiderSolitairePage(
+                    viewModel = viewModel,
+                    resume = current.resume,
+                    onExit = { launch = null },
+                )
                 else -> GameListPage(viewModel, onLaunch)
             }
         }
@@ -210,6 +237,20 @@ private fun GameListPage(viewModel: GamesViewModel, onLaunch: (String, Boolean) 
             viewModel = viewModel,
             onLaunch = onLaunch,
         )
+        GameCard(
+            gameId = GamesViewModel.GAME_MINESWEEPER,
+            title = tr("扫雷", "Minesweeper"),
+            subtitle = tr("自定义行数、列数和雷数", "Custom rows, columns, and mine count"),
+            viewModel = viewModel,
+            onLaunch = onLaunch,
+        )
+        GameCard(
+            gameId = GamesViewModel.GAME_SPIDER,
+            title = tr("蜘蛛纸牌", "Spider Solitaire"),
+            subtitle = tr("横屏一花色玩法，支持保存与撤回", "Landscape one-suit play with save and undo"),
+            viewModel = viewModel,
+            onLaunch = onLaunch,
+        )
     }
 }
 
@@ -234,6 +275,11 @@ private fun GameCard(
                     Text(
                         subtitle,
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        tr("累计游玩 ", "Total play ") + formatGameDuration(meta.totalPlayMillis),
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -377,6 +423,34 @@ private fun GameAutoPauseEffect(onPauseAndSave: () -> Unit) {
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             latestPauseAndSave()
+        }
+    }
+}
+
+@Composable
+private fun GamePlayTimeEffect(gameId: String, viewModel: GamesViewModel) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, gameId) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> viewModel.beginPlayTime(gameId)
+                Lifecycle.Event.ON_PAUSE -> viewModel.endPlayTime(gameId)
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            viewModel.beginPlayTime(gameId)
+        }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.endPlayTime(gameId)
+        }
+    }
+    LaunchedEffect(gameId) {
+        while (isActive) {
+            delay(30_000L)
+            viewModel.checkpointPlayTime(gameId)
         }
     }
 }
@@ -526,6 +600,8 @@ private fun Game2048Page(
     var transitionSequence by remember { mutableIntStateOf(0) }
     var darkMode by rememberSaveable { mutableStateOf(false) }
     var animationsEnabled by rememberSaveable { mutableStateOf(true) }
+    val animationSpeed by viewModel.animationSpeed.collectAsStateWithLifecycle()
+    val animationDurationMillis = animationSpeed.durationMillis
     val palette = if (darkMode) GAME_2048_NIGHT_PALETTE else GAME_2048_DAY_PALETTE
 
     LaunchedEffect(Unit) {
@@ -651,6 +727,18 @@ private fun Game2048Page(
                         },
                     )
                 }
+                TextButton(
+                    onClick = { viewModel.setAnimationSpeed(animationSpeed.next()) },
+                ) {
+                    Text(
+                        when (animationSpeed) {
+                            Game2048AnimationSpeed.SLOW -> tr("慢速", "Slow")
+                            Game2048AnimationSpeed.NORMAL -> tr("标准", "Normal")
+                            Game2048AnimationSpeed.FAST -> tr("快速", "Fast")
+                        },
+                        color = palette.heading,
+                    )
+                }
                 FilledTonalIconButton(
                     onClick = { animationsEnabled = !animationsEnabled },
                 ) {
@@ -683,6 +771,7 @@ private fun Game2048Page(
                     transitionSequence = transitionSequence,
                     large = largeLayout,
                     animate = animationsEnabled,
+                    animationDurationMillis = animationDurationMillis,
                     palette = palette,
                 )
             }
@@ -723,6 +812,7 @@ private fun Game2048Page(
                     transition = transition,
                     transitionSequence = transitionSequence,
                     animate = animationsEnabled,
+                    animationDurationMillis = animationDurationMillis,
                     palette = palette,
                     onMove = { direction ->
                         val current = engine
@@ -796,6 +886,7 @@ private fun Site2048ScoreBox(
     transitionSequence: Int = 0,
     large: Boolean = false,
     animate: Boolean = true,
+    animationDurationMillis: Int,
     palette: Game2048Palette,
 ) {
     val additionProgress = remember(transitionSequence, addition) {
@@ -806,7 +897,7 @@ private fun Site2048ScoreBox(
             additionProgress.animateTo(
                 1f,
                 animationSpec = tween(
-                    durationMillis = GAME_2048_SCORE_ANIMATION_MILLIS,
+                    durationMillis = animationDurationMillis * 2,
                     easing = CubicBezierEasing(0.42f, 0f, 1f, 1f),
                 ),
             )
@@ -918,6 +1009,7 @@ private fun Board2048(
     transition: Game2048.MoveResult?,
     transitionSequence: Int,
     animate: Boolean,
+    animationDurationMillis: Int,
     palette: Game2048Palette,
     onMove: (Game2048.Direction) -> Unit,
     modifier: Modifier = Modifier,
@@ -938,7 +1030,7 @@ private fun Board2048(
             progress.animateTo(
                 targetValue = 1f,
                 animationSpec = tween(
-                    durationMillis = GAME_2048_ANIMATION_MILLIS,
+                    durationMillis = animationDurationMillis,
                     easing = LinearEasing,
                 ),
             )
@@ -1542,11 +1634,34 @@ private fun NextPiecePanel(cells: List<TetrisGame.Cell>, color: Color) {
 }
 
 private const val SNAKE_TICK_MILLIS = 220L
-private const val GAME_2048_ANIMATION_MILLIS = 300
-private const val GAME_2048_SCORE_ANIMATION_MILLIS = 600
 private const val GAME_2048_SLIDE_END = 1f / 3f
 private val GAME_2048_EASE_IN_OUT = CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
 private val GAME_2048_EASE = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
 private const val TETRIS_BASE_TICK_MILLIS = 600L
 private const val TETRIS_LEVEL_STEP_MILLIS = 40L
 private const val TETRIS_MIN_TICK_MILLIS = 120L
+
+private val Game2048AnimationSpeed.durationMillis: Int
+    get() = when (this) {
+        Game2048AnimationSpeed.SLOW -> 500
+        Game2048AnimationSpeed.NORMAL -> 300
+        Game2048AnimationSpeed.FAST -> 150
+    }
+
+private fun Game2048AnimationSpeed.next(): Game2048AnimationSpeed = when (this) {
+    Game2048AnimationSpeed.SLOW -> Game2048AnimationSpeed.NORMAL
+    Game2048AnimationSpeed.NORMAL -> Game2048AnimationSpeed.FAST
+    Game2048AnimationSpeed.FAST -> Game2048AnimationSpeed.SLOW
+}
+
+@Composable
+private fun formatGameDuration(millis: Long): String {
+    val minutes = millis.coerceAtLeast(0L) / 60_000L
+    val hours = minutes / 60L
+    val remainder = minutes % 60L
+    return when {
+        hours > 0 -> tr("${hours}小时${remainder}分钟", "${hours}h ${remainder}m")
+        minutes > 0 -> tr("${minutes}分钟", "${minutes}m")
+        else -> tr("不足 1 分钟", "< 1m")
+    }
+}

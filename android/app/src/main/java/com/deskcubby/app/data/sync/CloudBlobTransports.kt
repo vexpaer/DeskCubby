@@ -5,6 +5,8 @@ import com.deskcubby.app.data.model.CloudSyncServiceType
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.time.ZonedDateTime
+import java.time.Instant
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.Locale
@@ -53,7 +55,7 @@ private class WebDavBlobTransport(
     ): BlobRead? {
         val headers = buildMap {
             authorization?.let { put("Authorization", it) }
-            expectedVersion?.let { put("If-Match", it) }
+            expectedVersion?.takeUnless(::isLastModifiedVersion)?.let { put("If-Match", it) }
         }
         val response = http.execute(
             SyncHttpRequest(
@@ -69,7 +71,10 @@ private class WebDavBlobTransport(
             200 -> Unit
             else -> throw statusException("WebDAV 读取", response.status)
         }
-        val metadata = response.toBlobMetadata()
+        val metadata = response.toBlobMetadata(
+            allowLastModifiedFallback = true,
+            fallbackSha256 = sha256(response.body),
+        )
         if (expectedVersion != null && metadata.version != expectedVersion) {
             throw CloudSyncConflictException()
         }
@@ -89,13 +94,29 @@ private class WebDavBlobTransport(
         condition: BlobWriteCondition,
     ): BlobMetadata {
         val uri = appendStorageName(collectionUri, storageName)
+        val fallbackCondition = (condition as? BlobWriteCondition.MustMatch)
+            ?.version
+            ?.let(::decodeLastModifiedVersion)
+        if (fallbackCondition != null) {
+            val current = get(storageName, MAX_ETAGLESS_PRECONDITION_BYTES)
+                ?: throw CloudSyncConflictException()
+            if (current.metadata.version != (condition as BlobWriteCondition.MustMatch).version) {
+                throw CloudSyncConflictException()
+            }
+        }
         val headers = buildMap {
             authorization?.let { put("Authorization", it) }
             put("Content-Type", "application/octet-stream")
             put("X-DeskCubby-Sha256", sha256)
             when (condition) {
                 BlobWriteCondition.MustNotExist -> put("If-None-Match", "*")
-                is BlobWriteCondition.MustMatch -> put("If-Match", condition.version)
+                is BlobWriteCondition.MustMatch -> {
+                    if (fallbackCondition == null) {
+                        put("If-Match", condition.version)
+                    } else {
+                        put("If-Unmodified-Since", formatHttpDate(fallbackCondition.epochSecond))
+                    }
+                }
             }
         }
         val response = http.execute(
@@ -228,33 +249,72 @@ private class S3BlobTransport(
     }
 }
 
-private fun SyncHttpResponse.toBlobMetadata(
+internal fun SyncHttpResponse.toBlobMetadata(
     allowMissingVersion: Boolean = false,
+    allowLastModifiedFallback: Boolean = false,
+    fallbackSha256: String? = null,
 ): BlobMetadata {
-    val version = firstHeader("etag").orEmpty()
-    if (!allowMissingVersion && version.isBlank()) {
-        throw CloudSyncException("云端服务未提供 ETag，无法执行安全的条件同步。")
-    }
-    if (version.length > MAX_ETAG_CHARS || version.any { it == '\r' || it == '\n' }) {
+    val returnedEtag = firstHeader("etag").orEmpty().trim()
+    if (returnedEtag.length > MAX_ETAG_CHARS || returnedEtag.any { it == '\r' || it == '\n' }) {
         throw CloudSyncException("云端服务返回了无效的 ETag。")
     }
-    if (version.startsWith("W/", ignoreCase = true)) {
-        throw CloudSyncException("云端服务仅提供弱 ETag，无法执行安全的条件同步。")
-    }
+    val strongEtag = returnedEtag.takeUnless { it.startsWith("W/", ignoreCase = true) }.orEmpty()
     val size = firstHeader("content-length")?.toLongOrNull() ?: -1L
-    val lastModified = firstHeader("last-modified")?.let { raw ->
+    val lastModifiedHeader = firstHeader("last-modified")
+    val parsedLastModified = lastModifiedHeader?.let { raw ->
         runCatching {
             ZonedDateTime.parse(raw, DateTimeFormatter.RFC_1123_DATE_TIME)
                 .toInstant()
                 .toEpochMilli()
         }.getOrNull()
-    } ?: System.currentTimeMillis()
+    }
+    val fallbackVersion = if (
+        strongEtag.isBlank() && allowLastModifiedFallback && parsedLastModified != null &&
+        parsedLastModified >= 0L &&
+        fallbackSha256 != null && SHA256.matches(fallbackSha256)
+    ) {
+        encodeLastModifiedVersion(parsedLastModified / 1_000L, fallbackSha256)
+    } else {
+        ""
+    }
+    val version = strongEtag.ifBlank { fallbackVersion }
+    if (!allowMissingVersion && version.isBlank()) {
+        val reason = if (returnedEtag.startsWith("W/", ignoreCase = true)) {
+            "云端服务仅提供弱 ETag，且没有可靠的 Last-Modified，无法执行条件同步。"
+        } else {
+            "云端服务未提供 ETag 或可靠的 Last-Modified，无法执行条件同步。"
+        }
+        throw CloudSyncException(reason)
+    }
+    val lastModified = parsedLastModified ?: System.currentTimeMillis()
     return BlobMetadata(
         version = version,
         size = size,
         lastModifiedMillis = lastModified.coerceAtLeast(0L),
     )
 }
+
+internal data class LastModifiedVersion(val epochSecond: Long, val sha256: String)
+
+internal fun encodeLastModifiedVersion(epochSecond: Long, sha256: String): String =
+    "$LAST_MODIFIED_VERSION_PREFIX$epochSecond:$sha256"
+
+internal fun decodeLastModifiedVersion(version: String): LastModifiedVersion? {
+    if (!version.startsWith(LAST_MODIFIED_VERSION_PREFIX)) return null
+    val fields = version.removePrefix(LAST_MODIFIED_VERSION_PREFIX).split(':')
+    if (fields.size != 2) return null
+    val epochSecond = fields[0].toLongOrNull()?.takeIf { it >= 0L } ?: return null
+    val hash = fields[1].takeIf(SHA256::matches) ?: return null
+    return LastModifiedVersion(epochSecond, hash)
+}
+
+private fun isLastModifiedVersion(version: String): Boolean =
+    decodeLastModifiedVersion(version) != null
+
+internal fun formatHttpDate(epochSecond: Long): String =
+    DateTimeFormatter.RFC_1123_DATE_TIME.format(
+        Instant.ofEpochSecond(epochSecond).atZone(ZoneOffset.UTC),
+    )
 
 private fun statusException(action: String, status: Int): CloudSyncException {
     val detail = when (status) {
@@ -397,3 +457,6 @@ private val S3_ERROR_CODE = Regex("[A-Za-z0-9._-]{1,128}")
 private val HEX = "0123456789ABCDEF".toCharArray()
 private const val MAX_ETAG_CHARS = 4_096
 private const val MAX_ERROR_BYTES = 64L * 1024
+private const val MAX_ETAGLESS_PRECONDITION_BYTES = 64L * 1024 * 1024
+private const val LAST_MODIFIED_VERSION_PREFIX = "deskcubby-lm-v1:"
+private val SHA256 = Regex("[0-9a-f]{64}")

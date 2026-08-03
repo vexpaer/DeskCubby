@@ -4,6 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.deskcubby.app.data.local.GameStateDao
 import com.deskcubby.app.data.local.GameStateEntity
+import com.deskcubby.app.data.model.Game2048AnimationSpeed
+import com.deskcubby.app.data.preferences.SettingsRepository
+import com.deskcubby.app.data.statistics.EngagementKind
+import com.deskcubby.app.data.statistics.EngagementTimeRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -11,6 +15,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -18,9 +23,23 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class GamesViewModel @Inject constructor(
     private val gameStateDao: GameStateDao,
+    private val engagementTimeRepository: EngagementTimeRepository,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
-    data class GameMeta(val highScore: Int = 0, val hasSave: Boolean = false)
+    data class GameMeta(
+        val highScore: Int = 0,
+        val hasSave: Boolean = false,
+        val totalPlayMillis: Long = 0L,
+    )
+
+    val animationSpeed: StateFlow<Game2048AnimationSpeed> = settingsRepository.settings
+        .map { settings -> settings.game2048AnimationSpeed }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = Game2048AnimationSpeed.NORMAL,
+        )
 
     private sealed interface PersistenceCommand {
         val gameId: String
@@ -52,11 +71,14 @@ class GamesViewModel @Inject constructor(
     private val persistenceCommands = Channel<PersistenceCommand>(Channel.UNLIMITED)
 
     private val metas: Map<String, StateFlow<GameMeta>> = GAME_IDS.associateWith { gameId ->
-        gameStateDao.observe(gameId)
-            .map { entity ->
+        combine(
+            gameStateDao.observe(gameId),
+            engagementTimeRepository.snapshot,
+        ) { entity, times ->
                 GameMeta(
                     highScore = entity?.highScore ?: 0,
                     hasSave = entity?.saveJson?.isNotBlank() == true,
+                    totalPlayMillis = times.total(EngagementKind.GAME, gameId),
                 )
             }
             .stateIn(
@@ -126,6 +148,26 @@ class GamesViewModel @Inject constructor(
         persistenceCommands.trySend(PersistenceCommand.Clear(gameId))
     }
 
+    fun beginPlayTime(gameId: String) {
+        engagementTimeRepository.begin(EngagementKind.GAME, gameId)
+    }
+
+    fun checkpointPlayTime(gameId: String) = viewModelScope.launch {
+        persistEngagementTime {
+            engagementTimeRepository.checkpoint(EngagementKind.GAME, gameId)
+        }
+    }
+
+    fun endPlayTime(gameId: String) = viewModelScope.launch {
+        persistEngagementTime {
+            engagementTimeRepository.end(EngagementKind.GAME, gameId)
+        }
+    }
+
+    fun setAnimationSpeed(value: Game2048AnimationSpeed) = viewModelScope.launch {
+        settingsRepository.setGame2048AnimationSpeed(value)
+    }
+
     private suspend fun upsert(gameId: String, saveJson: String?, score: Int) {
         val existing = gameStateDao.get(gameId)
         gameStateDao.upsert(
@@ -138,18 +180,32 @@ class GamesViewModel @Inject constructor(
         )
     }
 
+    private suspend fun persistEngagementTime(block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // A damaged/full private store must not terminate active gameplay.
+        }
+    }
+
     companion object {
         const val GAME_2048 = "2048"
         const val GAME_2048_5 = "2048_5"
         const val GAME_2048_6 = "2048_6"
         const val GAME_SNAKE = "snake"
         const val GAME_TETRIS = "tetris"
+        const val GAME_MINESWEEPER = "minesweeper"
+        const val GAME_SPIDER = "spider"
         val GAME_IDS = listOf(
             GAME_2048,
             GAME_2048_5,
             GAME_2048_6,
             GAME_SNAKE,
             GAME_TETRIS,
+            GAME_MINESWEEPER,
+            GAME_SPIDER,
         )
     }
 }

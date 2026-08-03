@@ -25,6 +25,7 @@ import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.MusicVisualizerStyle
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.PoetryTextAlignment
@@ -40,6 +41,8 @@ import com.deskcubby.app.data.repository.UpdateDownloadFailure
 import com.deskcubby.app.data.repository.UpdateDownloadResult
 import com.deskcubby.app.data.repository.UpdateInstallRequest
 import com.deskcubby.app.data.repository.UpdateRepository
+import com.deskcubby.app.data.repository.AppDataUsageRepository
+import com.deskcubby.app.data.repository.AppDataUsageSnapshot
 import com.deskcubby.app.data.sync.AppCloudSyncService
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncSecretStore
@@ -86,6 +89,12 @@ data class BackupJsonPreviewState(
     val error: String? = null,
 )
 
+data class AppDataUsageState(
+    val loading: Boolean = false,
+    val snapshot: AppDataUsageSnapshot? = null,
+    val failed: Boolean = false,
+)
+
 sealed interface UpdateDownloadState {
     data object Idle : UpdateDownloadState
     data class Downloading(
@@ -117,6 +126,7 @@ class SettingsViewModel @Inject constructor(
     private val cloudSyncService: AppCloudSyncService,
     private val cloudSyncSecretStore: CloudSyncSecretStore,
     private val updateRepository: UpdateRepository,
+    private val appDataUsageRepository: AppDataUsageRepository,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
     private val _ready = MutableStateFlow(false)
@@ -140,6 +150,8 @@ class SettingsViewModel @Inject constructor(
     val backupJsonPreview: StateFlow<BackupJsonPreviewState> = _backupJsonPreview.asStateFlow()
     val autoBackupStatus: StateFlow<AutoBackupStatus> = autoBackupCoordinator.status
     val cloudSyncStatus: StateFlow<AppCloudSyncStatus> = cloudSyncService.status
+    private val _appDataUsage = MutableStateFlow(AppDataUsageState())
+    val appDataUsage: StateFlow<AppDataUsageState> = _appDataUsage.asStateFlow()
 
     private val _settingsError = MutableStateFlow<String?>(null)
     val settingsError: StateFlow<String?> = _settingsError.asStateFlow()
@@ -170,6 +182,25 @@ class SettingsViewModel @Inject constructor(
                 _updateCheckResult.value = updateRepository.checkForUpdate()
             } finally {
                 _updateCheckInProgress.value = false
+            }
+        }
+    }
+
+    fun refreshAppDataUsage() {
+        if (_appDataUsage.value.loading) return
+        viewModelScope.launch {
+            _appDataUsage.value = _appDataUsage.value.copy(loading = true, failed = false)
+            try {
+                _appDataUsage.value = AppDataUsageState(
+                    snapshot = appDataUsageRepository.calculate(settings.value),
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                _appDataUsage.value = AppDataUsageState(
+                    snapshot = _appDataUsage.value.snapshot,
+                    failed = true,
+                )
             }
         }
     }
@@ -596,9 +627,17 @@ class SettingsViewModel @Inject constructor(
         defaultPage: NavItemId,
         items: List<NavItemConfig>,
         showLabels: Boolean,
+        musicVisualizerEnabled: Boolean,
+        musicVisualizerStyle: MusicVisualizerStyle,
         onDone: (Boolean) -> Unit = {},
     ) = launchSave(onDone) {
-        repository.setNavigationSettings(defaultPage, items, showLabels)
+        repository.setNavigationSettings(
+            defaultPage,
+            items,
+            showLabels,
+            musicVisualizerEnabled,
+            musicVisualizerStyle,
+        )
     }
     fun setMorePageSettings(
         showDescriptions: Boolean,

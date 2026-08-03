@@ -20,9 +20,11 @@ import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.HomeGreetingTemplate
+import com.deskcubby.app.data.model.Game2048AnimationSpeed
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.MusicVisualizerStyle
 import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.ThoughtDisplayMode
@@ -49,7 +51,7 @@ import org.json.JSONObject
 @RunWith(AndroidJUnit4::class)
 class BackupJsonCodecTest {
     @Test
-    fun versionTwentyTwoRoundTripPreservesEncryptedVaultGamesUsageAndWidgets() {
+    fun versionTwentyThreeRoundTripPreservesEncryptedVaultGamesUsageWidgetsAndNewSettings() {
         val iv = Base64.getEncoder().encodeToString(ByteArray(12) { 2 })
         val cipher = Base64.getEncoder().encodeToString(ByteArray(32) { 3 })
         val vault = VaultEncryptedBackup(
@@ -84,6 +86,18 @@ class BackupJsonCodecTest {
                 highScore = 88,
                 saveJson = null,
                 updatedAt = 13,
+            ),
+            GameStateEntity(
+                gameId = "minesweeper",
+                highScore = 8_100,
+                saveJson = """{"w":9,"h":9,"count":10}""",
+                updatedAt = 14,
+            ),
+            GameStateEntity(
+                gameId = "spider",
+                highScore = 620,
+                saveJson = """{"columns":[]}""",
+                updatedAt = 15,
             ),
         )
         val usageDevices = listOf(
@@ -124,6 +138,9 @@ class BackupJsonCodecTest {
                         appLabel = "Maps",
                     ),
                 ),
+                musicVisualizerEnabled = true,
+                musicVisualizerStyle = MusicVisualizerStyle.CURVE,
+                game2048AnimationSpeed = Game2048AnimationSpeed.FAST,
             ),
             thoughts = emptyList(),
             favorites = emptyList(),
@@ -134,11 +151,14 @@ class BackupJsonCodecTest {
 
         val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
 
-        assertEquals(22, decoded.formatVersion)
+        assertEquals(23, decoded.formatVersion)
         assertEquals(vault, decoded.vault)
         assertEquals(gameStates, decoded.gameStates)
         assertEquals(usageDevices, decoded.usageDevices)
         assertEquals(source.settings.desktopWidgetConfigs, decoded.settings.desktopWidgetConfigs)
+        assertEquals(true, decoded.settings.musicVisualizerEnabled)
+        assertEquals(MusicVisualizerStyle.CURVE, decoded.settings.musicVisualizerStyle)
+        assertEquals(Game2048AnimationSpeed.FAST, decoded.settings.game2048AnimationSpeed)
     }
 
     @Test
@@ -163,7 +183,63 @@ class BackupJsonCodecTest {
     }
 
     @Test
-    fun versionTwentyTwoRejectsInvalidDesktopWidgetConfiguration() {
+    fun versionTwentyTwoDefaultsMusicVisualizationAnd2048Speed() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 22,
+                    settings = AppSettings(
+                        musicVisualizerEnabled = true,
+                        musicVisualizerStyle = MusicVisualizerStyle.WAVEFORM,
+                        game2048AnimationSpeed = Game2048AnimationSpeed.SLOW,
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        root.put("version", 22)
+        root.getJSONObject("settings").apply {
+            remove("musicVisualizerEnabled")
+            remove("musicVisualizerStyle")
+            remove("game2048AnimationSpeed")
+        }
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+        val defaults = AppSettings()
+
+        assertEquals(22, decoded.formatVersion)
+        assertEquals(defaults.musicVisualizerEnabled, decoded.settings.musicVisualizerEnabled)
+        assertEquals(defaults.musicVisualizerStyle, decoded.settings.musicVisualizerStyle)
+        assertEquals(defaults.game2048AnimationSpeed, decoded.settings.game2048AnimationSpeed)
+    }
+
+    @Test
+    fun versionTwentyThreeRejectsInvalidMusicVisualizationAnd2048Speed() {
+        fun currentRoot() = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 23,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put("musicVisualizerEnabled", "true")
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put("musicVisualizerStyle", "UNKNOWN")
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put("game2048AnimationSpeed", "INSTANT")
+        })
+    }
+
+    @Test
+    fun versionTwentyThreeRejectsInvalidDesktopWidgetConfiguration() {
         val root = JSONObject(
             BackupJsonCodec.encode(
                 AppBackup(
