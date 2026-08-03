@@ -26,7 +26,6 @@ import kotlinx.coroutines.sync.withLock
 class StepStatisticsRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val store: StepStatisticsStore,
-    private val deviceStepCounterAccess: DeviceStepCounterAccess,
 ) {
     private val refreshMutex = Mutex()
     private val mutableCollectionState = MutableStateFlow(StatisticsCollectionState())
@@ -42,13 +41,6 @@ class StepStatisticsRepository @Inject constructor(
 
     fun healthConnectAction(): StepHealthConnectAction =
         StepHealthConnectAccess.action(context)
-
-    fun isDeviceStepCounterAvailable(): Boolean = deviceStepCounterAccess.isAvailable()
-
-    fun isDeviceStepCounterPermissionRequired(): Boolean =
-        deviceStepCounterAccess.isAvailable() && !deviceStepCounterAccess.hasPermission()
-
-    fun deviceStepCounterPermission(): String? = deviceStepCounterAccess.runtimePermission()
 
     suspend fun hasStepReadPermission(): Boolean {
         if (sdkStatus() != HealthConnectClient.SDK_AVAILABLE) return false
@@ -87,11 +79,10 @@ class StepStatisticsRepository @Inject constructor(
             technicalDetail = null,
         )
         try {
-            var healthPermissionDetail: String? = null
             if (availability == HealthConnectClient.SDK_AVAILABLE) {
                 val client = HealthConnectClient.getOrCreate(context)
                 val granted = client.permissionController.getGrantedPermissions()
-                healthPermissionDetail = when {
+                val healthPermissionDetail = when {
                     !granted.containsAll(StepHealthConnectAccess.healthReadPermissions) ->
                         DETAIL_HEALTH_PERMISSION
                     fromBackground &&
@@ -114,38 +105,6 @@ class StepStatisticsRepository @Inject constructor(
                     )
                     return@withLock StatisticsRefreshOutcome.SUCCESS
                 }
-            }
-
-            if (deviceStepCounterAccess.isAvailable()) {
-                if (!deviceStepCounterAccess.hasPermission()) {
-                    mutableCollectionState.value = StatisticsCollectionState(
-                        phase = StatisticsCollectionPhase.PERMISSION_REQUIRED,
-                        technicalDetail = DETAIL_DEVICE_SENSOR_PERMISSION,
-                    )
-                    return@withLock StatisticsRefreshOutcome.PERMISSION_REQUIRED
-                }
-                val cumulativeSteps = deviceStepCounterAccess.readCumulativeSteps()
-                    ?: throw IllegalStateException("Device step counter did not return a sample.")
-                val today = LocalDate.now(clock)
-                val refreshed = store.update { latest ->
-                    mergeDeviceStepCounterSample(
-                        history = latest,
-                        date = today,
-                        zoneId = clock.zone.id,
-                        capturedAtEpochMillis = clock.millis(),
-                        cumulativeSteps = cumulativeSteps,
-                    )
-                }
-                mutableCollectionState.value = StatisticsCollectionState(
-                    phase = StatisticsCollectionPhase.READY,
-                    lastSuccessfulRefreshEpochMillis =
-                        refreshed.deviceSensorBaseline?.capturedAtEpochMillis,
-                    technicalDetail = DETAIL_DEVICE_STEP_COUNTER,
-                )
-                return@withLock StatisticsRefreshOutcome.SUCCESS
-            }
-
-            if (healthPermissionDetail != null) {
                 mutableCollectionState.value = StatisticsCollectionState(
                     phase = StatisticsCollectionPhase.PERMISSION_REQUIRED,
                     technicalDetail = healthPermissionDetail,
@@ -168,11 +127,7 @@ class StepStatisticsRepository @Inject constructor(
         } catch (error: SecurityException) {
             mutableCollectionState.value = StatisticsCollectionState(
                 phase = StatisticsCollectionPhase.PERMISSION_REQUIRED,
-                technicalDetail = if (deviceStepCounterAccess.isAvailable()) {
-                    DETAIL_DEVICE_SENSOR_PERMISSION
-                } else {
-                    DETAIL_STEP_PERMISSION
-                },
+                technicalDetail = DETAIL_STEP_PERMISSION,
             )
             StatisticsRefreshOutcome.PERMISSION_REQUIRED
         } catch (error: UnsupportedOperationException) {
@@ -287,65 +242,8 @@ class StepStatisticsRepository @Inject constructor(
         const val DETAIL_BACKGROUND_PERMISSION = "background_permission_required"
         const val DETAIL_OPEN_HEALTH_CONNECT_FAILED = "health_connect_open_failed"
         const val DETAIL_HEALTH_CONNECT = "health_connect"
-        const val DETAIL_DEVICE_STEP_COUNTER = "device_step_counter"
-        const val DETAIL_DEVICE_SENSOR_PERMISSION = "device_sensor_permission_required"
     }
-}
-
-internal fun mergeDeviceStepCounterSample(
-    history: StepStatisticsHistory,
-    date: LocalDate,
-    zoneId: String,
-    capturedAtEpochMillis: Long,
-    cumulativeSteps: Long,
-): StepStatisticsHistory {
-    require(cumulativeSteps >= 0)
-    require(capturedAtEpochMillis >= 0)
-    val previous = history.deviceSensorBaseline
-    val byDate = history.days.associateBy(StepStatisticsDay::date).toMutableMap()
-    if (previous != null && previous.date.isBefore(date)) {
-        byDate[previous.date]?.takeIf { it.state == StatisticsDayState.OPEN }?.let { old ->
-            byDate[previous.date] = old.copy(state = StatisticsDayState.FINAL)
-        }
-    }
-    val existing = byDate[date]
-    val delta = if (
-        previous != null &&
-        previous.date == date &&
-        cumulativeSteps >= previous.cumulativeSteps
-    ) {
-        cumulativeSteps - previous.cumulativeSteps
-    } else {
-        null
-    }
-    val updatedSteps = when {
-        delta == null -> existing?.steps
-        existing?.steps == null && delta == 0L -> null
-        else -> ((existing?.steps ?: 0L) + delta).coerceAtMost(MAX_SENSOR_STEPS_PER_DAY)
-    }
-    byDate[date] = StepStatisticsDay(
-        date = date,
-        zoneId = zoneId,
-        state = StatisticsDayState.OPEN,
-        collectedAtEpochMillis = capturedAtEpochMillis,
-        steps = updatedSteps,
-        distanceMeters = existing?.distanceMeters,
-        activeCaloriesKilocalories = existing?.activeCaloriesKilocalories,
-    )
-    return history.copy(
-        trackingStartedOn = history.trackingStartedOn?.let { existingStart ->
-            minOf(existingStart, date)
-        } ?: date,
-        days = byDate.values.sortedBy(StepStatisticsDay::date),
-        deviceSensorBaseline = DeviceStepSensorBaseline(
-            date = date,
-            cumulativeSteps = cumulativeSteps,
-            capturedAtEpochMillis = capturedAtEpochMillis,
-        ),
-    )
 }
 
 private fun java.time.Instant.coerceAtMost(maximum: java.time.Instant): java.time.Instant =
     if (isAfter(maximum)) maximum else this
-
-private const val MAX_SENSOR_STEPS_PER_DAY = 1_000_000L

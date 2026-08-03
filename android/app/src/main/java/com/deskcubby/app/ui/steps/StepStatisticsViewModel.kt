@@ -39,9 +39,6 @@ data class StepStatisticsUiState(
     val points: List<StatisticsPoint> = emptyList(),
     val permissionsToRequest: Set<String> = emptySet(),
     val healthConnectAction: StepHealthConnectAction = StepHealthConnectAction.UNSUPPORTED,
-    val deviceStepCounterAvailable: Boolean = false,
-    val deviceStepCounterPermission: String? = null,
-    val usingDeviceStepCounter: Boolean = false,
 )
 
 @HiltViewModel
@@ -92,15 +89,6 @@ class StepStatisticsViewModel @Inject constructor(
                 .getOrDefault(emptySet()),
             healthConnectAction = runCatching(repository::healthConnectAction)
                 .getOrDefault(StepHealthConnectAction.UNSUPPORTED),
-            deviceStepCounterAvailable = runCatching(
-                repository::isDeviceStepCounterAvailable,
-            ).getOrDefault(false),
-            deviceStepCounterPermission = runCatching(
-                repository::deviceStepCounterPermission,
-            ).getOrNull(),
-            usingDeviceStepCounter =
-                collection.technicalDetail ==
-                    StepStatisticsRepository.DETAIL_DEVICE_STEP_COUNTER,
         )
     }.stateIn(
         scope = viewModelScope,

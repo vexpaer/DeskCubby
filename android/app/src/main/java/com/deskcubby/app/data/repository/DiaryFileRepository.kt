@@ -67,6 +67,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.roundToInt
+import org.json.JSONArray
 import org.json.JSONObject
 
 class ExternalFileConflictException(
@@ -154,6 +155,7 @@ class DiaryFileRepository @Inject constructor(
     private val resolver: ContentResolver = context.contentResolver
     private val writeMutex = Mutex()
     private val mediaMutex = Mutex()
+    private val mealCalendarCacheMutex = Mutex()
 
     suspend fun scan(settings: AppSettings): List<DiaryDocument> = withContext(Dispatchers.IO) {
         val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext emptyList()
@@ -201,12 +203,15 @@ class DiaryFileRepository @Inject constructor(
     }
 
     /**
-     * Builds the meal photo wall directly from the current Markdown files. A media-directory
-     * lookup table is created once per scan so resolving many photos does not repeatedly query
-     * the Storage Access Framework provider. Unreadable or malformed individual diary files are
-     * ignored; a broken file should not hide valid meal photos from every other day.
+     * Builds the meal photo wall from Markdown files. Parsed image references are kept in a
+     * bounded, rebuildable app-cache index and reused only when a SAF document reports the same
+     * URI, name, modification time and length. Providers that cannot report a modification time
+     * are deliberately reparsed so the cache can never mask an external edit.
      */
-    suspend fun scanMealCalendar(settings: AppSettings): List<MealCalendarDay> = withContext(Dispatchers.IO) {
+    suspend fun scanMealCalendar(
+        settings: AppSettings,
+        forceRefresh: Boolean = false,
+    ): List<MealCalendarDay> = withContext(Dispatchers.IO) {
         val diaryRoot = settings.diaryTreeUri?.let(::tree) ?: return@withContext emptyList()
         val mediaSnapshot = settings.mediaTreeUri?.let(::tree)?.let { root ->
             mediaMutex.withLock { snapshotMediaDirectoryUnlocked(root) }
@@ -214,67 +219,251 @@ class DiaryFileRepository @Inject constructor(
         val mediaByName = mediaSnapshot.byName
         val mediaMetaEntries = mediaSnapshot.metaEntries
 
-        val photosByDate = linkedMapOf<String, MutableList<MealCalendarPhoto>>()
-        val diaries = diaryRoot.listFiles()
-            .asSequence()
-            .filter { it.isFile && it.name?.endsWith(".md", ignoreCase = true) == true }
-            .map { document ->
-                val name = document.name.orEmpty()
-                Triple(
-                    document,
-                    name,
-                    extractDate(name, document.lastModified(), settings.fileNamePattern),
+        mealCalendarCacheMutex.withLock {
+            val rootUri = settings.diaryTreeUri.orEmpty()
+            val cached = if (forceRefresh) {
+                emptyMap()
+            } else {
+                readMealCalendarParseCache(rootUri)
+            }
+            val refreshedCache = LinkedHashMap<String, MealDiaryParseCacheEntry>()
+            val photosByDate = linkedMapOf<String, MutableList<MealCalendarPhoto>>()
+            val diaries = diaryRoot.listFiles()
+                .asSequence()
+                .filter { it.isFile && it.name?.endsWith(".md", ignoreCase = true) == true }
+                .map { document ->
+                    val name = document.name.orEmpty()
+                    val modified = document.lastModified()
+                    MealDiaryScanDocument(
+                        document = document,
+                        name = name,
+                        modified = modified,
+                        size = document.length(),
+                        date = extractDate(name, modified, settings.fileNamePattern),
+                    )
+                }
+                .sortedWith(
+                    compareByDescending<MealDiaryScanDocument> { it.date }
+                        .thenByDescending { it.name },
                 )
-            }
-            .sortedWith(
-                compareByDescending<Triple<DocumentFile, String, LocalDate>> { it.third }
-                    .thenByDescending { it.second },
-            )
 
-        for ((diary, _, diaryDate) in diaries) {
-            currentCoroutineContext().ensureActive()
-            val content = try {
-                readText(diary.uri)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                continue
-            }
-            val dateIso = diaryDate.toString()
-            for (match in MARKDOWN_IMAGE_REGEX.findAll(content)) {
+            for (diary in diaries) {
                 currentCoroutineContext().ensureActive()
-                val caption = match.groupValues[1].trim()
-                val target = match.groupValues[2].ifBlank { match.groupValues[3] }
-                val category = mealCategoryFromCaption(caption)
-                    ?: mealCategoryFromFileName(target)
-                    ?: continue
-                val mediaUri = resolveMealMediaUri(target, mediaByName) ?: continue
-                val metaKey = decodedTargetFileName(target)?.lowercase(Locale.ROOT).orEmpty()
-                val meta = mediaMetaEntries[metaKey]
-                photosByDate.getOrPut(dateIso) { mutableListOf() }
-                    .add(
+                val uri = diary.document.uri.toString()
+                val cachedEntry = cached[uri]?.takeIf { entry ->
+                    diary.modified > 0L &&
+                        entry.name == diary.name &&
+                        entry.lastModified == diary.modified &&
+                        entry.size == diary.size
+                }
+                var stableForCache = cachedEntry != null
+                val references = cachedEntry?.references ?: try {
+                    parseMealImageReferences(readText(diary.document.uri)).also {
+                        // Do not publish a cache stamp when the provider reports that the file
+                        // changed while it was being read. The current best-effort result remains
+                        // visible, but the next load reparses it instead of trusting mixed state.
+                        stableForCache = diary.modified > 0L &&
+                            diary.document.lastModified() == diary.modified &&
+                            diary.document.length() == diary.size
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    continue
+                }
+                if (stableForCache) {
+                    refreshedCache[uri] = MealDiaryParseCacheEntry(
+                        uri = uri,
+                        name = diary.name,
+                        lastModified = diary.modified,
+                        size = diary.size,
+                        references = references,
+                    )
+                }
+
+                val dateIso = diary.date.toString()
+                references.forEach { reference ->
+                    currentCoroutineContext().ensureActive()
+                    val category = mealCategoryFromCaption(reference.caption)
+                        ?: mealCategoryFromFileName(reference.target)
+                        ?: return@forEach
+                    val mediaUri = resolveMealMediaUri(reference.target, mediaByName)
+                        ?: return@forEach
+                    val metaKey = decodedTargetFileName(reference.target)
+                        ?.lowercase(Locale.ROOT)
+                        .orEmpty()
+                    val meta = mediaMetaEntries[metaKey]
+                    photosByDate.getOrPut(dateIso) { mutableListOf() }.add(
                         MealCalendarPhoto(
-                            uri = mediaUri, caption = caption, category = category,
-                            diaryUri = diary.uri, markdown = match.value,
+                            uri = mediaUri,
+                            caption = reference.caption,
+                            category = category,
+                            diaryUri = diary.document.uri,
+                            markdown = reference.markdown,
                             // The JSON sidecar wins; captions written by older releases
                             // (e.g. "午餐-800kJ") remain readable as a fallback.
-                            energyKj = meta?.energyKj ?: energyFromCaption(caption),
+                            energyKj = meta?.energyKj ?: energyFromCaption(reference.caption),
                             fileName = metaKey,
                             locationName = meta?.let(::mediaMetaDisplayLocation),
                         ),
                     )
+                }
             }
-        }
-
-        photosByDate
-            .map { (dateIso, photos) ->
+            // Avoid an fsync on every visit when every diary reused the same cache entry.
+            if (forceRefresh || refreshedCache != cached) {
+                writeMealCalendarParseCache(rootUri, refreshedCache.values.toList())
+            }
+            photosByDate.map { (dateIso, photos) ->
                 MealCalendarDay(
                     dateIso = dateIso,
                     photos = photos.sortedBy { it.category.sortOrder },
                 )
-            }
-            .sortedByDescending(MealCalendarDay::dateIso)
+            }.sortedByDescending(MealCalendarDay::dateIso)
+        }
     }
+
+    private fun parseMealImageReferences(content: String): List<MealImageReference> =
+        MARKDOWN_IMAGE_REGEX.findAll(content).map { match ->
+            MealImageReference(
+                caption = match.groupValues[1].trim(),
+                target = match.groupValues[2].ifBlank { match.groupValues[3] },
+                markdown = match.value,
+            )
+        }.toList()
+
+    private fun readMealCalendarParseCache(
+        rootUri: String,
+    ): Map<String, MealDiaryParseCacheEntry> = runCatching {
+        val file = File(context.cacheDir, MEAL_PARSE_CACHE_FILE_NAME)
+        if (!file.isFile || file.length() !in 1..MEAL_PARSE_CACHE_MAX_BYTES) {
+            return@runCatching emptyMap()
+        }
+        val root = FileInputStream(file).use { input ->
+            JSONObject(input.readBytes().toString(Charsets.UTF_8))
+        }
+        if (root.optInt("version") != MEAL_PARSE_CACHE_VERSION ||
+            root.optString("rootUri") != rootUri
+        ) {
+            return@runCatching emptyMap()
+        }
+        val entries = root.getJSONArray("entries")
+        require(entries.length() <= MEAL_PARSE_CACHE_MAX_DIARIES)
+        var referenceCount = 0
+        buildMap(entries.length()) {
+            for (entryIndex in 0 until entries.length()) {
+                val item = entries.getJSONObject(entryIndex)
+                val uri = item.getString("uri")
+                val name = item.getString("name")
+                val modified = item.getLong("lastModified")
+                val size = item.getLong("size")
+                require(uri.length <= MEAL_PARSE_CACHE_MAX_URI_CHARS)
+                require(name.length <= MEAL_PARSE_CACHE_MAX_NAME_CHARS)
+                require(modified > 0L && size >= 0L)
+                val rawReferences = item.getJSONArray("references")
+                referenceCount += rawReferences.length()
+                require(referenceCount <= MEAL_PARSE_CACHE_MAX_REFERENCES)
+                val references = buildList(rawReferences.length()) {
+                    for (referenceIndex in 0 until rawReferences.length()) {
+                        val reference = rawReferences.getJSONObject(referenceIndex)
+                        val caption = reference.getString("caption")
+                        val target = reference.getString("target")
+                        val markdown = reference.getString("markdown")
+                        require(caption.length <= MEAL_PARSE_CACHE_MAX_CAPTION_CHARS)
+                        require(target.length <= MEAL_PARSE_CACHE_MAX_TARGET_CHARS)
+                        require(markdown.length <= MEAL_PARSE_CACHE_MAX_MARKDOWN_CHARS)
+                        add(MealImageReference(caption, target, markdown))
+                    }
+                }
+                put(uri, MealDiaryParseCacheEntry(uri, name, modified, size, references))
+            }
+        }
+    }.getOrDefault(emptyMap())
+
+    private fun writeMealCalendarParseCache(
+        rootUri: String,
+        entries: List<MealDiaryParseCacheEntry>,
+    ) {
+        if (rootUri.length > MEAL_PARSE_CACHE_MAX_URI_CHARS ||
+            entries.size > MEAL_PARSE_CACHE_MAX_DIARIES ||
+            entries.sumOf { it.references.size } > MEAL_PARSE_CACHE_MAX_REFERENCES
+        ) {
+            return
+        }
+        val encoded = runCatching {
+            JSONObject()
+                .put("version", MEAL_PARSE_CACHE_VERSION)
+                .put("rootUri", rootUri)
+                .put(
+                    "entries",
+                    JSONArray().apply {
+                        entries.forEach { entry ->
+                            if (entry.uri.length > MEAL_PARSE_CACHE_MAX_URI_CHARS ||
+                                entry.name.length > MEAL_PARSE_CACHE_MAX_NAME_CHARS ||
+                                entry.references.any {
+                                    it.caption.length > MEAL_PARSE_CACHE_MAX_CAPTION_CHARS ||
+                                        it.target.length > MEAL_PARSE_CACHE_MAX_TARGET_CHARS ||
+                                        it.markdown.length > MEAL_PARSE_CACHE_MAX_MARKDOWN_CHARS
+                                }
+                            ) {
+                                return@runCatching null
+                            }
+                            put(
+                                JSONObject()
+                                    .put("uri", entry.uri)
+                                    .put("name", entry.name)
+                                    .put("lastModified", entry.lastModified)
+                                    .put("size", entry.size)
+                                    .put(
+                                        "references",
+                                        JSONArray().apply {
+                                            entry.references.forEach { reference ->
+                                                put(
+                                                    JSONObject()
+                                                        .put("caption", reference.caption)
+                                                        .put("target", reference.target)
+                                                        .put("markdown", reference.markdown),
+                                                )
+                                            }
+                                        },
+                                    ),
+                            )
+                        }
+                    },
+                )
+                .toString()
+                .toByteArray(Charsets.UTF_8)
+                .takeIf { it.size <= MEAL_PARSE_CACHE_MAX_BYTES }
+        }.getOrNull() ?: return
+        runCatching {
+            FileOutputStream(File(context.cacheDir, MEAL_PARSE_CACHE_FILE_NAME), false).use { output ->
+                output.write(encoded)
+                output.flush()
+                output.fd.sync()
+            }
+        }
+    }
+
+    private data class MealDiaryScanDocument(
+        val document: DocumentFile,
+        val name: String,
+        val modified: Long,
+        val size: Long,
+        val date: LocalDate,
+    )
+
+    private data class MealImageReference(
+        val caption: String,
+        val target: String,
+        val markdown: String,
+    )
+
+    private data class MealDiaryParseCacheEntry(
+        val uri: String,
+        val name: String,
+        val lastModified: Long,
+        val size: Long,
+        val references: List<MealImageReference>,
+    )
 
     /**
      * Renders an inclusive day range of the current meal-category selection to one bounded PNG.
@@ -822,10 +1011,16 @@ class DiaryFileRepository @Inject constructor(
         photo: MealCalendarPhoto,
         energyKj: Int,
         settings: AppSettings,
+    ) = setMealPhotoEnergy(photo.fileName, energyKj, settings)
+
+    suspend fun setMealPhotoEnergy(
+        fileName: String,
+        energyKj: Int,
+        settings: AppSettings,
     ) = mediaMutex.withLock {
         withContext(Dispatchers.IO) {
             val root = settings.mediaTreeUri?.let(::tree) ?: error("请先在设置中选择媒体目录")
-            val key = photo.fileName.takeIf(String::isNotBlank)
+            val key = fileName.takeIf(String::isNotBlank)
                 ?: error("无法确定图片文件名，热量未记录")
             updateMediaMetaEntryUnlocked(root, key) { entry -> entry.copy(energyKj = energyKj) }
         }
@@ -2198,6 +2393,16 @@ class DiaryFileRepository @Inject constructor(
         private const val MEAL_EXPORT_CACHE_SUFFIX = ".png"
         private const val MEAL_EXPORT_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L
         private const val MEAL_EXPORT_VALIDATION_MAX_EDGE = 256
+        private const val MEAL_PARSE_CACHE_FILE_NAME = "meal-calendar-index-v1.json"
+        private const val MEAL_PARSE_CACHE_VERSION = 1
+        private const val MEAL_PARSE_CACHE_MAX_BYTES = 4L * 1024L * 1024L
+        private const val MEAL_PARSE_CACHE_MAX_DIARIES = 5_000
+        private const val MEAL_PARSE_CACHE_MAX_REFERENCES = 50_000
+        private const val MEAL_PARSE_CACHE_MAX_URI_CHARS = 8_192
+        private const val MEAL_PARSE_CACHE_MAX_NAME_CHARS = 1_024
+        private const val MEAL_PARSE_CACHE_MAX_CAPTION_CHARS = 2_048
+        private const val MEAL_PARSE_CACHE_MAX_TARGET_CHARS = 8_192
+        private const val MEAL_PARSE_CACHE_MAX_MARKDOWN_CHARS = 32_768
         private val COMPRESSIBLE_IMAGE_MIMES = setOf(
             "image/jpeg",
             "image/jpg",

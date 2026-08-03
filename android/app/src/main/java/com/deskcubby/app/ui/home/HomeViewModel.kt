@@ -15,7 +15,6 @@ import com.deskcubby.app.data.repository.DateRecordRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.CalorieEstimationRepository
 import com.deskcubby.app.data.repository.PoetryRepository
-import com.deskcubby.app.data.repository.PoetryRefreshResult
 import com.deskcubby.app.data.repository.PoetryBookRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -81,13 +80,7 @@ class HomeViewModel @Inject constructor(
         _poemRefreshing.value = true
         viewModelScope.launch {
             try {
-                if (poetryRepository.refresh(force) == PoetryRefreshResult.NO_UNSEEN_POEM) {
-                    _message.value = if (language == AppLanguage.ENGLISH) {
-                        "No new poem is available right now; today's poem was kept"
-                    } else {
-                        "暂时没有未看过的新诗词，已保留当前内容"
-                    }
-                }
+                poetryRepository.refresh(force)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -172,10 +165,11 @@ class HomeViewModel @Inject constructor(
                         if (settings.calorieEstimationEnabled) {
                             try {
                                 val energy = calorieRepository.estimate(media.documentUri, settings)
-                                diaryFileRepository.scanMealCalendar(settings).asSequence()
-                                    .flatMap { it.photos.asSequence() }
-                                    .firstOrNull { it.uri.toString() == media.documentUri }
-                                    ?.let { diaryFileRepository.setMealPhotoEnergy(it, energy, settings) }
+                                diaryFileRepository.setMealPhotoEnergy(
+                                    media.fileName,
+                                    energy,
+                                    settings,
+                                )
                                 _message.value = "${_message.value} · ${energy}kJ"
                             } catch (error: Exception) {
                                 _message.value = "${_message.value} · 热量估算失败：${error.message.orEmpty()}"

@@ -7,16 +7,41 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.ui.DeskCubbyRoot
+import com.deskcubby.app.widget.DesktopWidgetRenderer
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.MutableStateFlow
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    private val externalNavigationRoute = MutableStateFlow<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        externalNavigationRoute.value = intent
+            ?.getStringExtra(DesktopWidgetRenderer.EXTRA_START_ROUTE)
         enableEdgeToEdge()
-        setContent { DeskCubbyRoot() }
+        setContent {
+            val route = externalNavigationRoute.collectAsStateWithLifecycle().value
+            DeskCubbyRoot(
+                externalNavigationRoute = route,
+                onExternalNavigationHandled = {
+                    if (externalNavigationRoute.value == route) {
+                        externalNavigationRoute.value = null
+                    }
+                },
+            )
+        }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        externalNavigationRoute.value = intent.getStringExtra(
+            DesktopWidgetRenderer.EXTRA_START_ROUTE,
+        )
     }
 }
 

@@ -38,6 +38,8 @@ class PoetryPresetCatalog @Inject constructor(
     internal fun category(id: String): PoetryPresetCategory? =
         categories.firstOrNull { it.summary.id == id }
 
+    internal fun allPoems(): List<PoetryPresetPoem> = categories.flatMap { it.poems }
+
     private fun decodeAsset(): List<PoetryPresetCategory> {
         val bytes = context.assets.open(ASSET_NAME).use { input ->
             input.readBytes().also {

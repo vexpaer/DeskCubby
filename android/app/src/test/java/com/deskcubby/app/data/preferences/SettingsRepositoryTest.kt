@@ -5,6 +5,8 @@ import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncServiceType
+import com.deskcubby.app.data.model.DesktopWidgetConfig
+import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
@@ -436,5 +438,60 @@ class SettingsRepositoryTest {
         assertEquals(1f, normalizePoetryLineSpacing(0.1f), 0f)
         assertEquals(2f, normalizePoetryLineSpacing(9f), 0f)
         assertEquals(1.45f, normalizePoetryLineSpacing(Float.POSITIVE_INFINITY), 0f)
+    }
+
+    @Test
+    fun normalizeDesktopWidgetConfigsBoundsAndSanitizesUntrustedFields() {
+        val normalized = normalizeDesktopWidgetConfigs(
+            listOf(
+                DesktopWidgetConfig(
+                    id = " card-1 ",
+                    name = " My\nCard ",
+                    widthCells = -4,
+                    heightCells = 99,
+                    backgroundColorArgb = 0x00112233,
+                    textColorArgb = 0x00445566,
+                    backgroundImageUri = " file:///private/image.jpg ",
+                    homeModuleId = "not-a-module",
+                    appLabel = " App\rName ",
+                ),
+            ),
+        ).single()
+
+        assertEquals("card-1", normalized.id)
+        assertEquals("My Card", normalized.name)
+        assertEquals(1, normalized.widthCells)
+        assertEquals(6, normalized.heightCells)
+        assertEquals(0xFF112233.toInt(), normalized.backgroundColorArgb)
+        assertEquals(0xFF445566.toInt(), normalized.textColorArgb)
+        assertEquals(null, normalized.backgroundImageUri)
+        assertEquals("today", normalized.homeModuleId)
+        assertEquals("App Name", normalized.appLabel)
+    }
+
+    @Test
+    fun normalizeDesktopWidgetConfigsRejectsUnsafeIdsAndIncompleteShortcuts() {
+        val normalized = normalizeDesktopWidgetConfigs(
+            listOf(
+                DesktopWidgetConfig(id = "unsafe id", name = "Unsafe"),
+                DesktopWidgetConfig(
+                    id = "shortcut",
+                    name = "Shortcut",
+                    contentType = DesktopWidgetContentType.APP_SHORTCUT,
+                    appPackageName = "not a package",
+                ),
+                DesktopWidgetConfig(
+                    id = "valid",
+                    name = "Valid",
+                    contentType = DesktopWidgetContentType.APP_SHORTCUT,
+                    appPackageName = " com.example.reader ",
+                ),
+                DesktopWidgetConfig(id = "valid", name = "Duplicate"),
+            ),
+        )
+
+        assertEquals(1, normalized.size)
+        assertEquals("valid", normalized.single().id)
+        assertEquals("com.example.reader", normalized.single().appPackageName)
     }
 }

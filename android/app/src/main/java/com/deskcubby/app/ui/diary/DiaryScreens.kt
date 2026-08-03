@@ -540,7 +540,7 @@ fun MealCalendarScreen(
                     )
                     IconButton(
                         enabled = mealOperationsEnabled,
-                        onClick = viewModel::refreshMealCalendar,
+                        onClick = viewModel::forceRefreshMealCalendar,
                     ) {
                         Icon(Icons.Outlined.Refresh, tr("刷新", "Refresh"))
                     }
@@ -559,7 +559,7 @@ fun MealCalendarScreen(
                         title = tr("无法读取吃历", "Could not load meal calendar"),
                         description = state.error.orEmpty(),
                         actionLabel = tr("重试", "Retry"),
-                        onAction = viewModel::refreshMealCalendar,
+                        onAction = viewModel::forceRefreshMealCalendar,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -572,7 +572,7 @@ fun MealCalendarScreen(
                             "Photos captioned Breakfast, Lunch, Dinner, Fruit, or Late snack will appear here.",
                         ),
                         actionLabel = tr("刷新", "Refresh"),
-                        onAction = viewModel::refreshMealCalendar,
+                        onAction = viewModel::forceRefreshMealCalendar,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

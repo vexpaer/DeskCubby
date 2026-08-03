@@ -3,7 +3,6 @@
 package com.deskcubby.app.ui.steps
 
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -72,11 +71,6 @@ fun StepStatisticsScreen(
     val permissionLauncher = rememberLauncherForActivityResult(permissionContract) {
         viewModel.onPermissionResult()
     }
-    val deviceSensorPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) {
-        viewModel.onPermissionResult()
-    }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
 
     Scaffold(
@@ -104,26 +98,6 @@ fun StepStatisticsScreen(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
-                StepCollectionMessage(
-                    state = state,
-                    onOpenTrackingSettings = onOpenTrackingSettings,
-                    onOpenHealthConnect = onOpenHealthConnect,
-                    onRequestPermissions = {
-                        permissionLauncher.launch(
-                            state.permissionsToRequest.ifEmpty {
-                                StepHealthConnectAccess.healthReadPermissions
-                            },
-                        )
-                    },
-                    onRequestDeviceSensorPermission = {
-                        state.deviceStepCounterPermission?.let(
-                            deviceSensorPermissionLauncher::launch,
-                        )
-                    },
-                    onRetry = viewModel::refresh,
-                )
-            }
             if (state.history.days.isNotEmpty()) {
                 item {
                     Row(
@@ -208,19 +182,27 @@ fun StepStatisticsScreen(
                 item {
                     StatisticsMessagePanel(
                         title = tr("还没有健康记录", "No health records yet"),
-                        message = if (state.usingDeviceStepCounter) {
-                            tr(
-                                "本机计步传感器首次采样只建立基线，再次采样后才会显示实测差额。",
-                                "The first on-device sensor sample only establishes a baseline. A measured difference appears after a later sample.",
-                            )
-                        } else {
-                            tr(
-                                "Health Connect 没有返回步数、距离或热量聚合值时会显示“—”，不会伪造为 0。",
-                                "Missing Health Connect aggregates for steps, distance, or calories are shown as “—”, never fabricated as zero.",
-                            )
-                        },
+                        message = tr(
+                            "Health Connect 没有返回步数、距离或热量聚合值时会显示“—”，不会伪造为 0。",
+                            "Missing Health Connect aggregates for steps, distance, or calories are shown as “—”, never fabricated as zero.",
+                        ),
                     )
                 }
+            }
+            item {
+                StepCollectionMessage(
+                    state = state,
+                    onOpenTrackingSettings = onOpenTrackingSettings,
+                    onOpenHealthConnect = onOpenHealthConnect,
+                    onRequestPermissions = {
+                        permissionLauncher.launch(
+                            state.permissionsToRequest.ifEmpty {
+                                StepHealthConnectAccess.healthReadPermissions
+                            },
+                        )
+                    },
+                    onRetry = viewModel::refresh,
+                )
             }
         }
     }
@@ -233,7 +215,6 @@ private fun StepCollectionMessage(
     onOpenTrackingSettings: () -> Unit,
     onOpenHealthConnect: () -> Unit,
     onRequestPermissions: () -> Unit,
-    onRequestDeviceSensorPermission: () -> Unit,
     onRetry: () -> Unit,
 ) {
     when {
@@ -270,8 +251,8 @@ private fun StepCollectionMessage(
                         "On Android 14 and newer, Health Connect is provided by the system. Install an available system update first.",
                     )
                     else -> tr(
-                        "此设备既没有可用的 Health Connect，也没有系统计步传感器；不会写入伪造步数。",
-                        "Neither Health Connect nor a system step counter is available. No steps are fabricated.",
+                        "此设备没有可用的 Health Connect；DeskCubby 不会改用其他计步来源或写入伪造数据。",
+                        "Health Connect is unavailable on this device. DeskCubby does not switch to another step source or fabricate data.",
                     )
                 },
                 actionLabel = when (state.healthConnectAction) {
@@ -292,44 +273,13 @@ private fun StepCollectionMessage(
 
         state.collection.phase == StatisticsCollectionPhase.PERMISSION_REQUIRED ->
             StatisticsMessagePanel(
-                title = if (
-                    state.collection.technicalDetail ==
-                    StepStatisticsRepository.DETAIL_DEVICE_SENSOR_PERMISSION
-                ) {
-                    tr("需要活动识别权限", "Activity recognition required")
-                } else {
-                    tr("需要健康数据读取权限", "Health permissions required")
-                },
-                message = if (
-                    state.collection.technicalDetail ==
-                    StepStatisticsRepository.DETAIL_DEVICE_SENSOR_PERMISSION
-                ) {
-                    tr(
-                        "此手机可直接提供系统累计步数。授权后会从首次采样开始统计；传感器无法恢复授权前的逐日历史。",
-                        "This phone exposes a system step counter. Tracking starts with the first sample; the sensor cannot reconstruct daily history from before permission.",
-                    )
-                } else {
-                    tr(
-                        "请求读取步数、距离和活动热量；设备支持时也会请求后台读取，以便每 6 小时补充日结。拒绝后不会伪造数据。",
-                        "Read access is requested for steps, distance, and active calories. Background reading is also requested when supported for six-hour catch-up. Denial never fabricates data.",
-                    )
-                },
-                actionLabel = if (
-                    state.collection.technicalDetail ==
-                    StepStatisticsRepository.DETAIL_DEVICE_SENSOR_PERMISSION
-                ) {
-                    tr("授权系统计步", "Allow step counter")
-                } else {
-                    tr("授权读取健康数据", "Grant health access")
-                },
-                onAction = if (
-                    state.collection.technicalDetail ==
-                    StepStatisticsRepository.DETAIL_DEVICE_SENSOR_PERMISSION
-                ) {
-                    onRequestDeviceSensorPermission
-                } else {
-                    onRequestPermissions
-                },
+                title = tr("需要健康数据读取权限", "Health permissions required"),
+                message = tr(
+                    "请求 Health Connect 的步数、距离和活动热量读取权限；设备支持时也会请求后台读取，以便每 6 小时补充日结。拒绝后不会改用其他数据源。",
+                    "Health Connect read access is requested for steps, distance, and active calories. Background reading is also requested when supported for six-hour catch-up. Denial does not switch to another source.",
+                ),
+                actionLabel = tr("授权读取健康数据", "Grant health access"),
+                onAction = onRequestPermissions,
             )
 
         state.collection.phase == StatisticsCollectionPhase.ERROR ->
@@ -380,30 +330,18 @@ private fun StepCollectionMessage(
             StatisticsMessagePanel(
                 title = tr("正在刷新", "Refreshing"),
                 message = tr(
-                    "正在读取 Health Connect 的步数、距离和热量，或读取本机计步传感器。",
-                    "Reading steps, distance, and calories from Health Connect, or the on-device step counter.",
+                    "正在从 Health Connect 读取步数、距离和活动热量。",
+                    "Reading steps, distance, and active calories from Health Connect.",
                 ),
             )
 
         else -> StatisticsMessagePanel(
-            title = if (state.usingDeviceStepCounter) {
-                tr("本机计步传感器", "On-device step counter")
-            } else {
-                tr("Health Connect 数据源", "Health Connect source")
-            },
-            message = if (state.usingDeviceStepCounter) {
-                tr(
-                    "无需 Health Connect。应用按两次系统累计值的差额记录步数；传感器不提供距离和热量，首次采样建立基线，跨重启或跨日时不会猜测缺失值。",
-                    "Health Connect is not required. Steps are recorded from differences between cumulative sensor samples; the sensor provides no distance or calories, and missing values across reboot or midnight are not guessed.",
-                )
-            } else {
-                tr(
-                    "今天的数据可刷新；过去日期成功日结后不会重复计算。健康数据和权限不会进入应用备份或云同步。",
-                    "Today can refresh. Finalized past dates are never recalculated. Health data and permissions are excluded from backups and cloud sync.",
-                )
-            },
+            title = tr("Health Connect 数据源", "Health Connect source"),
+            message = tr(
+                "今天的数据可刷新；过去日期成功日结后不会重复计算。健康数据和权限不会进入应用备份或云同步。",
+                "Today can refresh. Finalized past dates are never recalculated. Health data and permissions are excluded from backups and cloud sync.",
+            ),
             actionLabel = if (
-                !state.usingDeviceStepCounter &&
                 state.healthConnectAction == StepHealthConnectAction.MANAGE_OR_PERMISSIONS
             ) {
                 tr("管理 Health Connect", "Manage Health Connect")
@@ -411,7 +349,6 @@ private fun StepCollectionMessage(
                 null
             },
             onAction = if (
-                !state.usingDeviceStepCounter &&
                 state.healthConnectAction == StepHealthConnectAction.MANAGE_OR_PERMISSIONS
             ) {
                 onOpenHealthConnect

@@ -133,11 +133,19 @@ class DiaryViewModel @Inject constructor(
     }
 
     fun refreshMealCalendar() {
+        refreshMealCalendar(force = false)
+    }
+
+    fun forceRefreshMealCalendar() {
+        refreshMealCalendar(force = true)
+    }
+
+    private fun refreshMealCalendar(force: Boolean) {
         mealCalendarRefreshJob?.cancel()
         mealCalendarRefreshJob = viewModelScope.launch {
             _mealCalendarState.value = _mealCalendarState.value.copy(loading = true, error = null)
             try {
-                val items = repository.scanMealCalendar(settings.value)
+                val items = repository.scanMealCalendar(settings.value, forceRefresh = force)
                 _mealCalendarState.value = MealCalendarState(items = items)
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -155,15 +163,35 @@ class DiaryViewModel @Inject constructor(
         viewModelScope.launch {
             _mealCalendarState.value = _mealCalendarState.value.copy(loading = true, error = null)
             try {
-                val selected = repository.scanMealCalendar(settings.value)
+                val currentItems = _mealCalendarState.value.items.takeIf { it.isNotEmpty() }
+                    ?: repository.scanMealCalendar(settings.value)
+                val selected = currentItems
                     .filter { dateIso == null || it.dateIso == dateIso }
-                    .flatMap { it.photos }.filter { force || it.energyKj == null }
+                    .flatMap { it.photos }
+                    .filter { force || it.energyKj == null }
+                    .distinctBy { it.fileName.ifBlank { it.uri.toString() } }
+                val updatedEnergy = mutableMapOf<String, Int>()
                 selected.forEach { photo ->
                     val energy = calorieRepository.estimate(photo.uri.toString(), settings.value)
                     repository.setMealPhotoEnergy(photo, energy, settings.value)
+                    updatedEnergy[photo.fileName] = energy
                 }
-                _mealCalendarState.value = MealCalendarState(items = repository.scanMealCalendar(settings.value))
-                _message.value = if (selected.isEmpty()) "没有需要计算的饮食图片" else "已完成 ${selected.size} 张图片的热量估算"
+                val updatedItems = currentItems.map { day ->
+                    day.copy(
+                        photos = day.photos.map { photo ->
+                            updatedEnergy[photo.fileName]?.let { photo.copy(energyKj = it) } ?: photo
+                        },
+                    )
+                }
+                _mealCalendarState.value = MealCalendarState(items = updatedItems)
+                _message.value = if (selected.isEmpty()) {
+                    localized("没有需要计算的饮食图片", "No meal photos need calculation")
+                } else {
+                    localized(
+                        "已完成 ${selected.size} 张图片的热量估算",
+                        "Estimated energy for ${selected.size} photos",
+                    )
+                }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { _mealCalendarState.value = _mealCalendarState.value.copy(loading = false, error = error.userMessage()) }
         }

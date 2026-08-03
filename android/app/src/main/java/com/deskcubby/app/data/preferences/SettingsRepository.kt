@@ -27,6 +27,10 @@ import com.deskcubby.app.data.model.DEFAULT_MEAL_BUTTON_ICONS
 import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.DEFAULT_DESKTOP_WIDGET_CONFIGS
+import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
+import com.deskcubby.app.data.model.DesktopWidgetConfig
+import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
@@ -36,11 +40,13 @@ import com.deskcubby.app.data.model.MIN_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_CELLS
 import com.deskcubby.app.data.model.MAX_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_CELLS
 import com.deskcubby.app.data.model.MIN_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
@@ -160,6 +166,7 @@ class SettingsRepository @Inject constructor(
         val mealPhotosWidgetMigrated = booleanPreferencesKey("meal_photos_widget_migrated")
         val dailyRecordsWidgetMigrated = booleanPreferencesKey("daily_records_widget_migrated")
         val homeWidgetTitles = stringPreferencesKey("home_widget_titles")
+        val desktopWidgetConfigs = stringPreferencesKey("desktop_widget_configs_v1")
     }
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data
@@ -337,6 +344,9 @@ class SettingsRepository @Inject constructor(
                     migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
                 )
             },
+            desktopWidgetConfigs = decodeDesktopWidgetConfigs(
+                prefs[Keys.desktopWidgetConfigs],
+            ),
         )
     }
 
@@ -554,6 +564,12 @@ class SettingsRepository @Inject constructor(
     suspend fun setHomeWidgetTitles(value: List<String>) =
         set(Keys.homeWidgetTitles, encodeStringList(value.distinct()))
 
+    suspend fun setDesktopWidgetConfigs(value: List<DesktopWidgetConfig>) =
+        set(
+            Keys.desktopWidgetConfigs,
+            encodeDesktopWidgetConfigs(normalizeDesktopWidgetConfigs(value)),
+        )
+
     suspend fun setNavItems(value: List<NavItemConfig>) {
         context.settingsDataStore.edit { prefs ->
             migrateMorePageOrderIfNeeded(prefs)
@@ -603,6 +619,9 @@ class SettingsRepository @Inject constructor(
         val normalizedMorePageOrder = normalizeMorePageOrder(value.morePageOrder, normalizedNav)
         val normalizedMealPhotoFilter = value.mealPhotoFilter.normalized()
         val normalizedCloudSyncConfigs = normalizeCloudSyncConfigs(value.cloudSyncConfigs)
+        val normalizedDesktopWidgetConfigs = normalizeDesktopWidgetConfigs(
+            value.desktopWidgetConfigs,
+        )
         val visibleIds = normalizedNav.filter(NavItemConfig::visible).map(NavItemConfig::id).toSet()
         val normalizedDefaultPage = value.defaultPage.takeIf(visibleIds::contains)
             ?: visibleIds.firstOrNull()
@@ -610,6 +629,22 @@ class SettingsRepository @Inject constructor(
 
         context.settingsDataStore.edit { prefs ->
             val currentCloudSyncConfigs = decodeCloudSyncConfigs(prefs[Keys.cloudSyncConfigs])
+            val currentDesktopWidgetConfigs = decodeDesktopWidgetConfigs(
+                prefs[Keys.desktopWidgetConfigs],
+            )
+            val restoredDesktopWidgetConfigs = normalizedDesktopWidgetConfigs.map { restored ->
+                val restoredImage = restored.backgroundImageUri
+                restored.copy(
+                    backgroundImageUri = when {
+                        restoredImage == null -> null
+                        hasPersistedReadAccess(restoredImage) -> restoredImage
+                        else -> currentDesktopWidgetConfigs
+                            .firstOrNull { it.id == restored.id }
+                            ?.backgroundImageUri
+                            ?.takeIf(::hasPersistedReadAccess)
+                    },
+                )
+            }
             val restoredCloudSyncConfigs = normalizedCloudSyncConfigs.map { restored ->
                 val local = currentCloudSyncConfigs.firstOrNull { it.id == restored.id }
                 if (
@@ -733,6 +768,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.mealPhotosWidgetMigrated] = true
             prefs[Keys.dailyRecordsWidgetMigrated] = true
             prefs[Keys.homeWidgetTitles] = encodeStringList(value.homeWidgetTitles.distinct())
+            prefs[Keys.desktopWidgetConfigs] = encodeDesktopWidgetConfigs(
+                restoredDesktopWidgetConfigs,
+            )
         }
     }
 
@@ -934,6 +972,80 @@ class SettingsRepository @Inject constructor(
             )
         }
     }.toString()
+
+    private fun decodeDesktopWidgetConfigs(raw: String?): List<DesktopWidgetConfig> {
+        if (raw == null) return DEFAULT_DESKTOP_WIDGET_CONFIGS
+        return runCatching {
+            val array = JSONArray(raw)
+            require(array.length() <= MAX_DESKTOP_WIDGET_CONFIGS)
+            buildList(array.length()) {
+                for (index in 0 until array.length()) {
+                    val item = array.getJSONObject(index)
+                    add(
+                        DesktopWidgetConfig(
+                            id = item.optString("id"),
+                            name = item.optString("name"),
+                            widthCells = item.optInt("widthCells", 2),
+                            heightCells = item.optInt("heightCells", 2),
+                            backgroundColorArgb = item.optInt(
+                                "backgroundColorArgb",
+                                0xFF263238.toInt(),
+                            ),
+                            textColorArgb = item.optInt(
+                                "textColorArgb",
+                                0xFFFFFFFF.toInt(),
+                            ),
+                            backgroundImageUri = if (item.isNull("backgroundImageUri")) {
+                                null
+                            } else {
+                                item.optString("backgroundImageUri").takeIf(String::isNotBlank)
+                            },
+                            contentType = item.optString("contentType")
+                                .enumValueOr(DesktopWidgetContentType.HOME_MODULE),
+                            homeModuleId = item.optString("homeModuleId", "today"),
+                            appPackageName = if (item.isNull("appPackageName")) {
+                                null
+                            } else {
+                                item.optString("appPackageName").takeIf(String::isNotBlank)
+                            },
+                            appLabel = if (item.isNull("appLabel")) {
+                                null
+                            } else {
+                                item.optString("appLabel").takeIf(String::isNotBlank)
+                            },
+                        ),
+                    )
+                }
+            }
+        }.map(::normalizeDesktopWidgetConfigs)
+            .getOrElse { DEFAULT_DESKTOP_WIDGET_CONFIGS }
+            .map { item ->
+                item.copy(
+                    backgroundImageUri = item.backgroundImageUri
+                        ?.takeIf(::hasPersistedReadAccess),
+                )
+            }
+    }
+
+    private fun encodeDesktopWidgetConfigs(items: List<DesktopWidgetConfig>): String =
+        JSONArray().apply {
+            normalizeDesktopWidgetConfigs(items).forEach { item ->
+                put(
+                    JSONObject()
+                        .put("id", item.id)
+                        .put("name", item.name)
+                        .put("widthCells", item.widthCells)
+                        .put("heightCells", item.heightCells)
+                        .put("backgroundColorArgb", item.backgroundColorArgb)
+                        .put("textColorArgb", item.textColorArgb)
+                        .put("backgroundImageUri", item.backgroundImageUri ?: JSONObject.NULL)
+                        .put("contentType", item.contentType.name)
+                        .put("homeModuleId", item.homeModuleId)
+                        .put("appPackageName", item.appPackageName ?: JSONObject.NULL)
+                        .put("appLabel", item.appLabel ?: JSONObject.NULL),
+                )
+            }
+        }.toString()
 
     private fun decodeWidgets(raw: String?, fallback: List<String>): List<String> {
         if (raw == null) return fallback
@@ -1363,6 +1475,54 @@ internal fun normalizeRssSubscriptions(items: List<RssSubscription>): List<RssSu
         .take(MAX_RSS_SUBSCRIPTIONS)
         .toList()
 
+internal fun normalizeDesktopWidgetConfigs(
+    items: List<DesktopWidgetConfig>,
+): List<DesktopWidgetConfig> = items.asSequence()
+    .map { item ->
+        val packageName = item.appPackageName
+            ?.trim()
+            ?.take(MAX_DESKTOP_WIDGET_PACKAGE_CHARS)
+            ?.takeIf(DESKTOP_WIDGET_PACKAGE_REGEX::matches)
+        item.copy(
+            id = item.id.trim().take(MAX_DESKTOP_WIDGET_ID_CHARS)
+                .takeIf(DESKTOP_WIDGET_ID_REGEX::matches)
+                .orEmpty(),
+            name = item.name.trim().replaceLineBreaks()
+                .takeCodePoints(MAX_DESKTOP_WIDGET_NAME_CODE_POINTS),
+            widthCells = item.widthCells.coerceIn(
+                MIN_DESKTOP_WIDGET_CELLS,
+                MAX_DESKTOP_WIDGET_CELLS,
+            ),
+            heightCells = item.heightCells.coerceIn(
+                MIN_DESKTOP_WIDGET_CELLS,
+                MAX_DESKTOP_WIDGET_CELLS,
+            ),
+            backgroundColorArgb = opaqueArgb(item.backgroundColorArgb),
+            textColorArgb = opaqueArgb(item.textColorArgb),
+            backgroundImageUri = item.backgroundImageUri
+                ?.trim()
+                ?.take(MAX_URL_CHARS)
+                ?.takeIf { it.startsWith("content://") },
+            homeModuleId = item.homeModuleId
+                .takeIf(DESKTOP_WIDGET_HOME_MODULE_IDS::contains)
+                ?: "today",
+            appPackageName = packageName,
+            appLabel = item.appLabel
+                ?.trim()
+                ?.replaceLineBreaks()
+                ?.takeCodePoints(MAX_DESKTOP_WIDGET_APP_LABEL_CODE_POINTS)
+                ?.takeIf(String::isNotBlank),
+        )
+    }
+    .filter { item ->
+        item.id.isNotBlank() && item.name.isNotBlank() &&
+            (item.contentType != DesktopWidgetContentType.APP_SHORTCUT ||
+                item.appPackageName != null)
+    }
+    .distinctBy(DesktopWidgetConfig::id)
+    .take(MAX_DESKTOP_WIDGET_CONFIGS)
+    .toList()
+
 private fun opaqueArgb(value: Int): Int = value or 0xFF000000.toInt()
 
 private const val MAX_USER_NAME_CHARS = 32
@@ -1388,6 +1548,14 @@ private const val MAX_CLOUD_SYNC_USERNAME_CHARS = 512
 private const val MAX_CLOUD_SYNC_BUCKET_CHARS = 255
 private const val MAX_CLOUD_SYNC_REGION_CHARS = 128
 private const val MAX_CLOUD_SYNC_CREDENTIAL_CHARS = 8_192
+internal const val MAX_DESKTOP_WIDGET_CONFIGS = 50
+private const val MAX_DESKTOP_WIDGET_ID_CHARS = 80
+private const val MAX_DESKTOP_WIDGET_NAME_CODE_POINTS = 80
+private const val MAX_DESKTOP_WIDGET_PACKAGE_CHARS = 255
+private const val MAX_DESKTOP_WIDGET_APP_LABEL_CODE_POINTS = 100
+private val DESKTOP_WIDGET_PACKAGE_REGEX =
+    Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+")
+private val DESKTOP_WIDGET_ID_REGEX = Regex("[A-Za-z0-9._-]{1,80}")
 internal const val MAX_MORE_DESCRIPTION_CODE_POINTS = 160
 
 internal fun normalizeMoreDescription(value: String): String =

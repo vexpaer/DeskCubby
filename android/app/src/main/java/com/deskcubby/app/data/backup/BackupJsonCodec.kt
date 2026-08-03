@@ -17,7 +17,11 @@ import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
+import com.deskcubby.app.data.model.DEFAULT_DESKTOP_WIDGET_CONFIGS
+import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
 import com.deskcubby.app.data.model.DailyEventTemplate
+import com.deskcubby.app.data.model.DesktopWidgetConfig
+import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
@@ -27,12 +31,14 @@ import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_CELLS
 import com.deskcubby.app.data.model.MAX_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MAX_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_CELLS
 import com.deskcubby.app.data.model.MIN_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
@@ -59,7 +65,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 21,
+    val formatVersion: Int = 22,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -92,7 +98,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 21
+    const val FORMAT_VERSION: Int = 22
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -120,6 +126,11 @@ object BackupJsonCodec {
     private const val MAX_RSS_SUBSCRIPTIONS = 100
     private const val MAX_AI_API_KEY_CHARS = 8_192
     private const val MAX_CLOUD_SYNC_CONFIGS = 20
+    private const val MAX_DESKTOP_WIDGET_CONFIGS = 50
+    private const val MAX_DESKTOP_WIDGET_ID_CHARS = 80
+    private const val MAX_DESKTOP_WIDGET_NAME_CHARS = 80
+    private const val MAX_DESKTOP_WIDGET_APP_LABEL_CHARS = 100
+    private const val MAX_DESKTOP_WIDGET_PACKAGE_CHARS = 255
     private const val MAX_MORE_DESCRIPTION_CODE_POINTS = 160
     private const val MAX_VAULT_ITEMS = 50_000
     private const val MAX_VAULT_CIPHER_CHARS = 2 * 1024 * 1024
@@ -136,6 +147,9 @@ object BackupJsonCodec {
         "snake",
         "tetris",
     )
+    private val DESKTOP_WIDGET_PACKAGE_REGEX =
+        Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+")
+    private val DESKTOP_WIDGET_ID_REGEX = Regex("[A-Za-z0-9._-]{1,80}")
 
     fun encode(backup: AppBackup): String {
         require(backup.formatVersion == FORMAT_VERSION) {
@@ -402,6 +416,110 @@ object BackupJsonCodec {
         .put("morePageShowDescriptions", settings.morePageShowDescriptions)
         .put("homeWidgets", settings.homeWidgets.toJsonArray())
         .put("homeWidgetTitles", settings.homeWidgetTitles.toJsonArray())
+        .put("desktopWidgetConfigs", encodeDesktopWidgetConfigs(settings.desktopWidgetConfigs))
+
+    private fun encodeDesktopWidgetConfigs(
+        configs: List<DesktopWidgetConfig>,
+    ): JSONArray = JSONArray().apply {
+        require(configs.size <= MAX_DESKTOP_WIDGET_CONFIGS) {
+            "Too many desktop widget configurations"
+        }
+        val ids = HashSet<String>(configs.size)
+        configs.forEachIndexed { index, item ->
+            validateDesktopWidgetConfig(item, "desktopWidgetConfigs[$index]")
+            require(ids.add(item.id)) { "Duplicate desktop widget configuration: ${item.id}" }
+            put(
+                JSONObject()
+                    .put("id", item.id)
+                    .put("name", item.name)
+                    .put("widthCells", item.widthCells)
+                    .put("heightCells", item.heightCells)
+                    .put("backgroundColorArgb", item.backgroundColorArgb)
+                    .put("textColorArgb", item.textColorArgb)
+                    .putNullable("backgroundImageUri", item.backgroundImageUri)
+                    .put("contentType", item.contentType.name)
+                    .put("homeModuleId", item.homeModuleId)
+                    .putNullable("appPackageName", item.appPackageName)
+                    .putNullable("appLabel", item.appLabel),
+            )
+        }
+    }
+
+    private fun decodeDesktopWidgetConfigs(json: JSONArray): List<DesktopWidgetConfig> {
+        require(json.length() <= MAX_DESKTOP_WIDGET_CONFIGS) {
+            "Too many desktop widget configurations"
+        }
+        val ids = HashSet<String>(json.length())
+        return buildList(json.length()) {
+            for (index in 0 until json.length()) {
+                val item = json.requiredObject(index, "desktopWidgetConfigs")
+                val decoded = DesktopWidgetConfig(
+                    id = item.requiredString("id"),
+                    name = item.requiredString("name"),
+                    widthCells = item.requiredInt("widthCells"),
+                    heightCells = item.requiredInt("heightCells"),
+                    backgroundColorArgb = item.requiredInt("backgroundColorArgb"),
+                    textColorArgb = item.requiredInt("textColorArgb"),
+                    backgroundImageUri = item.requiredNullableString("backgroundImageUri"),
+                    contentType = item.requiredEnum("contentType"),
+                    homeModuleId = item.requiredString("homeModuleId"),
+                    appPackageName = item.requiredNullableString("appPackageName"),
+                    appLabel = item.requiredNullableString("appLabel"),
+                )
+                validateDesktopWidgetConfig(decoded, "desktopWidgetConfigs[$index]")
+                require(ids.add(decoded.id)) {
+                    "Duplicate desktop widget configuration: ${decoded.id}"
+                }
+                add(decoded)
+            }
+        }
+    }
+
+    private fun validateDesktopWidgetConfig(config: DesktopWidgetConfig, field: String) {
+        require(
+            config.id.length <= MAX_DESKTOP_WIDGET_ID_CHARS &&
+                DESKTOP_WIDGET_ID_REGEX.matches(config.id),
+        ) {
+            "$field.id is invalid"
+        }
+        require(
+            config.name.isNotBlank() &&
+                config.name.codePointLength() <= MAX_DESKTOP_WIDGET_NAME_CHARS,
+        ) { "$field.name is invalid" }
+        require(config.widthCells in MIN_DESKTOP_WIDGET_CELLS..MAX_DESKTOP_WIDGET_CELLS) {
+            "$field.widthCells is out of range"
+        }
+        require(config.heightCells in MIN_DESKTOP_WIDGET_CELLS..MAX_DESKTOP_WIDGET_CELLS) {
+            "$field.heightCells is out of range"
+        }
+        config.backgroundImageUri?.let { uri ->
+            require(uri.length <= MAX_URL_CHARS && uri.startsWith("content://")) {
+                "$field.backgroundImageUri is invalid"
+            }
+        }
+        require(config.homeModuleId in DESKTOP_WIDGET_HOME_MODULE_IDS) {
+            "$field.homeModuleId is invalid"
+        }
+        config.appLabel?.let {
+            require(it.codePointLength() <= MAX_DESKTOP_WIDGET_APP_LABEL_CHARS) {
+                "$field.appLabel is too long"
+            }
+        }
+        if (config.contentType == DesktopWidgetContentType.APP_SHORTCUT) {
+            val packageName = config.appPackageName.orEmpty()
+            require(
+                packageName.length <= MAX_DESKTOP_WIDGET_PACKAGE_CHARS &&
+                    DESKTOP_WIDGET_PACKAGE_REGEX.matches(packageName),
+            ) { "$field.appPackageName is invalid" }
+        } else {
+            config.appPackageName?.let { packageName ->
+                require(
+                    packageName.length <= MAX_DESKTOP_WIDGET_PACKAGE_CHARS &&
+                        DESKTOP_WIDGET_PACKAGE_REGEX.matches(packageName),
+                ) { "$field.appPackageName is invalid" }
+            }
+        }
+    }
 
     private fun encodeCloudSyncConfigs(configs: List<CloudSyncConfig>): JSONArray = JSONArray().apply {
         require(configs.size <= MAX_CLOUD_SYNC_CONFIGS) { "Too many cloud sync configurations" }
@@ -884,6 +1002,11 @@ object BackupJsonCodec {
             },
             homeWidgets = homeWidgets,
             homeWidgetTitles = homeWidgetTitles,
+            desktopWidgetConfigs = if (version >= 22) {
+                decodeDesktopWidgetConfigs(json.requiredArray("desktopWidgetConfigs"))
+            } else {
+                DEFAULT_DESKTOP_WIDGET_CONFIGS
+            },
         )
     }
 

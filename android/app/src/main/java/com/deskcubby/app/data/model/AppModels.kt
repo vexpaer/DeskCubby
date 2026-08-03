@@ -18,6 +18,52 @@ enum class MealPhotosPerRow { TWO, THREE, SMART }
 
 enum class PoetryTextAlignment { START, CENTER }
 
+enum class DesktopWidgetContentType { HOME_MODULE, APP_SHORTCUT }
+
+val DESKTOP_WIDGET_HOME_MODULE_IDS: List<String> = listOf(
+    "calendar",
+    "weather",
+    "poem",
+    "today",
+    "date_records",
+    "streak",
+    "month_diaries",
+    "total_words",
+    "recent_diary",
+    "recent_thought",
+    "quick_input",
+    "daily_records",
+    "meal_photos",
+    "random_diary",
+    "year_progress",
+    "website",
+)
+
+const val MIN_DESKTOP_WIDGET_CELLS: Int = 1
+const val MAX_DESKTOP_WIDGET_CELLS: Int = 6
+
+/** A reusable design that can be bound to one or more launcher App Widget instances. */
+data class DesktopWidgetConfig(
+    val id: String,
+    val name: String,
+    val widthCells: Int = 2,
+    val heightCells: Int = 2,
+    val backgroundColorArgb: Int = 0xFF263238.toInt(),
+    val textColorArgb: Int = 0xFFFFFFFF.toInt(),
+    val backgroundImageUri: String? = null,
+    val contentType: DesktopWidgetContentType = DesktopWidgetContentType.HOME_MODULE,
+    val homeModuleId: String = "today",
+    val appPackageName: String? = null,
+    val appLabel: String? = null,
+)
+
+val DEFAULT_DESKTOP_WIDGET_CONFIGS: List<DesktopWidgetConfig> = listOf(
+    DesktopWidgetConfig(
+        id = "default-today",
+        name = "今天 / Today",
+    ),
+)
+
 /**
  * Row sizes for wrapped meal-calendar photos. SMART mixes rows of 3 and 2 so the
  * last row is never left with a single dangling photo (4=2+2, 5=3+2, 7=3+2+2).
@@ -218,6 +264,16 @@ enum class NavItemId(
         defaultVisible = false,
         defaultShowInMore = true,
     ),
+    WIDGETS(
+        "desktop_widgets",
+        "小卡片",
+        "Widgets",
+        "widgets",
+        "设计并添加可缩放的桌面小卡片",
+        "Design and add resizable home-screen widgets",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
     MORE(
         "more",
         "导航",
@@ -407,6 +463,7 @@ data class AppSettings(
         "year_progress",
         "website",
     ),
+    val desktopWidgetConfigs: List<DesktopWidgetConfig> = DEFAULT_DESKTOP_WIDGET_CONFIGS,
 )
 
 data class DiaryDocument(

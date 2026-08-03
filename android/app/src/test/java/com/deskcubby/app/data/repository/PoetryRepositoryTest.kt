@@ -120,4 +120,22 @@ class PoetryRepositoryTest {
             ),
         )
     }
+
+    @Test
+    fun offlineCatalogAlwaysProvidesAnotherPoemWhenAvailable() {
+        val first = PoetryPresetPoem("第一句\n第一首全文", "甲《第一首》")
+        val second = PoetryPresetPoem("第二句\n第二首全文", "乙《第二首》")
+        val current = DailyPoem("第一句", "— 甲《第一首》", title = "第一首")
+
+        val selected = PoetryRepository.chooseOfflinePoem(
+            presets = listOf(first, second),
+            current = current,
+            blockedFingerprints = setOf(PoetryRepository.poemFingerprint(current)),
+            seed = 0,
+        )
+
+        assertEquals("第二句", selected?.content)
+        assertEquals("第二句\n第二首全文", selected?.fullContent)
+        assertEquals("— 乙《第二首》", selected?.source)
+    }
 }

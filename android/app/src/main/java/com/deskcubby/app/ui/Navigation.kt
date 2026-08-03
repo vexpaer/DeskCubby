@@ -49,6 +49,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.ViewDay
+import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -122,6 +123,8 @@ import com.deskcubby.app.ui.thought.ThoughtTrashScreen
 import com.deskcubby.app.ui.thought.ThoughtViewModel
 import com.deskcubby.app.ui.vault.VaultScreen
 import com.deskcubby.app.ui.vault.VaultViewModel
+import com.deskcubby.app.ui.widgets.DesktopWidgetsScreen
+import com.deskcubby.app.ui.widgets.DesktopWidgetsViewModel
 import com.deskcubby.app.data.statistics.StepHealthConnectAccess
 
 object Routes {
@@ -148,6 +151,8 @@ fun DeskCubbyRoot(
     homeViewModel: HomeViewModel = hiltViewModel(),
     dateRecordViewModel: DateRecordViewModel = hiltViewModel(),
     dailyRecordViewModel: DailyRecordViewModel = hiltViewModel(),
+    externalNavigationRoute: String? = null,
+    onExternalNavigationHandled: () -> Unit = {},
 ) {
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val ready by settingsViewModel.ready.collectAsStateWithLifecycle()
@@ -193,6 +198,12 @@ fun DeskCubbyRoot(
                 launchSingleTop = true
                 restoreState = false
             }
+        }
+        LaunchedEffect(externalNavigationRoute) {
+            externalNavigationRoute
+                ?.takeIf { requested -> NavItemId.entries.any { it.route == requested } }
+                ?.let(navigateMain)
+            if (externalNavigationRoute != null) onExternalNavigationHandled()
         }
 
         Scaffold(
@@ -358,6 +369,13 @@ fun DeskCubbyRoot(
                                     stepStatisticsViewModel.onHealthConnectOpenFailed()
                                 }
                             },
+                        )
+                    }
+                    composable(NavItemId.WIDGETS.route) {
+                        val desktopWidgetsViewModel: DesktopWidgetsViewModel = hiltViewModel()
+                        DesktopWidgetsScreen(
+                            padding = padding,
+                            viewModel = desktopWidgetsViewModel,
                         )
                     }
                     composable(NavItemId.MORE.route) {
@@ -703,5 +721,6 @@ fun iconFor(key: String): ImageVector = when (key) {
     "game" -> Icons.Outlined.SportsEsports
     "usage" -> Icons.Outlined.AccessTime
     "steps" -> Icons.Outlined.MonitorHeart
+    "widgets" -> Icons.Outlined.Widgets
     else -> Icons.Outlined.MenuBook
 }

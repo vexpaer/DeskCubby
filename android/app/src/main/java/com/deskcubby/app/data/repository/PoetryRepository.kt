@@ -1,6 +1,7 @@
 package com.deskcubby.app.data.repository
 
 import android.content.Context
+import com.deskcubby.app.takeCodePoints
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -8,6 +9,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -21,6 +23,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -39,8 +43,9 @@ data class DailyPoem(
 enum class PoetryRefreshResult {
     UPDATED,
     ALREADY_CURRENT_FOR_DAY,
-    NO_UNSEEN_POEM,
 }
+
+private enum class PoetryProvider { JINRISHICI, HITOKOTO, GUSHI_CI }
 
 enum class PoemEditContentStatus {
     STORED_CONTENT,
@@ -58,6 +63,7 @@ data class PoemEditContentResolution(
 @Singleton
 class PoetryRepository @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val presetCatalog: PoetryPresetCatalog,
 ) {
     private val refreshMutex = Mutex()
     private object Keys {
@@ -99,7 +105,7 @@ class PoetryRepository @Inject constructor(
                 return@withContext PoetryRefreshResult.ALREADY_CURRENT_FOR_DAY
             }
 
-            var token = existing[Keys.token] ?: fetchToken()
+            var token = existing[Keys.token]
             val recent = decodeRecentFingerprints(existing[Keys.recentFingerprints])
             val current = existing[Keys.content]?.let { content ->
                 DailyPoem(
@@ -123,36 +129,49 @@ class PoetryRepository @Inject constructor(
             val blocked = (dailySeen + poemFingerprint(current))
                 .filter(String::isNotBlank)
                 .toHashSet()
-            if (blocked.size >= MAX_DAILY_POEMS) {
-                return@withContext PoetryRefreshResult.NO_UNSEEN_POEM
-            }
-            var refreshedToken = false
             var selected: DailyPoem? = null
-            val attemptCount = if (force) MAX_REFRESH_ATTEMPTS else 1
-            var attempt = 0
-            while (selected == null && attempt < attemptCount) {
-                attempt++
-                val response = try {
-                    request(SENTENCE_URL, token)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (firstError: Exception) {
-                    if (refreshedToken) throw firstError
-                    refreshedToken = true
-                    token = fetchToken()
-                    request(SENTENCE_URL, token)
-                }
-                val candidate = parseSentence(response)
-                token = JSONObject(response).optString("token")
-                    .takeIf(String::isNotBlank)
-                    ?: token
-                if (poemFingerprint(candidate) !in blocked) {
-                    selected = candidate
-                    break
+            val providers = rotatedProviders(
+                startIndex = Math.floorMod(
+                    today.toEpochDay() + dailySeen.size,
+                    PoetryProvider.entries.size.toLong(),
+                ).toInt(),
+            )
+            val attemptsPerProvider = if (force) MANUAL_ATTEMPTS_PER_PROVIDER else 1
+            providerLoop@ for (provider in providers) {
+                repeat(attemptsPerProvider) {
+                    val candidate = try {
+                        when (provider) {
+                            PoetryProvider.JINRISHICI -> {
+                                val (poem, refreshedToken) = fetchJinrishiciPoem(token)
+                                token = refreshedToken
+                                poem
+                            }
+                            PoetryProvider.HITOKOTO -> parseHitokoto(
+                                request(HITOKOTO_URL, null),
+                            )
+                            PoetryProvider.GUSHI_CI -> parseGushiCi(
+                                request(GUSHI_CI_URL, null),
+                            )
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (candidate != null && poemFingerprint(candidate) !in blocked) {
+                        selected = candidate
+                        break@providerLoop
+                    }
                 }
             }
-            val parsed = selected
-                ?: return@withContext PoetryRefreshResult.NO_UNSEEN_POEM
+            val parsed = selected ?: runCatching {
+                chooseOfflinePoem(
+                    presets = presetCatalog.allPoems(),
+                    current = current,
+                    blockedFingerprints = blocked,
+                    seed = today.toEpochDay() + dailySeen.size,
+                )
+            }.getOrNull() ?: throw IllegalStateException("No poetry source is available")
             val dailyAfterRefresh = encodeRecentFingerprints(
                 (dailySeen + poemFingerprint(current) + poemFingerprint(parsed))
                     .filter(String::isNotBlank)
@@ -166,7 +185,7 @@ class PoetryRepository @Inject constructor(
                     .take(MAX_RECENT_POEMS),
             )
             context.poetryDataStore.edit { prefs ->
-                prefs[Keys.token] = token
+                token?.takeIf(String::isNotBlank)?.let { prefs[Keys.token] = it }
                 prefs[Keys.content] = parsed.content
                 prefs[Keys.source] = parsed.source
                 prefs[Keys.fullContent] = parsed.fullContent
@@ -204,26 +223,68 @@ class PoetryRepository @Inject constructor(
         return resolveSavedContentForEdit(storedContent, storedSource, cached)
     }
 
-    private fun fetchToken(): String {
+    private suspend fun fetchToken(): String {
         val response = JSONObject(request(TOKEN_URL, null))
         require(response.optString("status") == "success") { response.optString("errMessage", "Token request failed") }
         return response.getString("data")
     }
 
-    private fun request(url: String, token: String?): String {
+    private suspend fun fetchJinrishiciPoem(cachedToken: String?): Pair<DailyPoem, String> {
+        var activeToken = cachedToken?.takeIf(String::isNotBlank)
+        var lastError: Exception? = null
+        repeat(2) { attempt ->
+            try {
+                if (activeToken.isNullOrBlank()) activeToken = fetchToken()
+                val response = request(JINRISHICI_SENTENCE_URL, activeToken)
+                val responseToken = JSONObject(response).optString("token")
+                    .takeIf(String::isNotBlank)
+                    ?: requireNotNull(activeToken)
+                return parseSentence(response) to responseToken
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                lastError = error
+                if (attempt == 0) activeToken = null
+            }
+        }
+        throw lastError ?: IllegalStateException("Poetry request failed")
+    }
+
+    private suspend fun request(url: String, token: String?): String {
+        val endpoint = URL(url)
+        require(endpoint.protocol == "https") { "Poetry endpoint must use HTTPS" }
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 6_000
             readTimeout = 8_000
+            instanceFollowRedirects = false
             setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", "DeskCubby Android")
             token?.let { setRequestProperty("X-User-Token", it) }
         }
         return try {
-            val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
-            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            require(connection.responseCode in 200..299) { "Poetry API ${connection.responseCode}: $body" }
-            body
+            val status = connection.responseCode
+            require(status in 200..299) { "Poetry service returned HTTP $status" }
+            val declaredLength = connection.contentLengthLong
+            require(declaredLength <= MAX_RESPONSE_BYTES || declaredLength < 0L) {
+                "Poetry response is too large"
+            }
+            connection.inputStream.use { input ->
+                val output = ByteArrayOutputStream(
+                    declaredLength.coerceIn(0L, MAX_RESPONSE_BYTES.toLong()).toInt(),
+                )
+                val buffer = ByteArray(8 * 1024)
+                var total = 0
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    require(total <= MAX_RESPONSE_BYTES) { "Poetry response is too large" }
+                    output.write(buffer, 0, read)
+                }
+                output.toString(Charsets.UTF_8.name())
+            }
         } finally {
             connection.disconnect()
         }
@@ -231,7 +292,9 @@ class PoetryRepository @Inject constructor(
 
     companion object {
         private const val TOKEN_URL = "https://v2.jinrishici.com/token"
-        private const val SENTENCE_URL = "https://v2.jinrishici.com/sentence"
+        private const val JINRISHICI_SENTENCE_URL = "https://v2.jinrishici.com/sentence"
+        private const val HITOKOTO_URL = "https://v1.hitokoto.cn/?c=i&encode=json&max_length=64"
+        private const val GUSHI_CI_URL = "https://api.gushi.ci/all.json"
         val FALLBACK = DailyPoem(
             content = "山中何事？松花酿酒，春水煎茶。",
             source = "— 张可久《人月圆·山中书事》",
@@ -261,6 +324,82 @@ class PoetryRepository @Inject constructor(
                 fullContent = fullContent,
                 dynasty = origin?.optString("dynasty").orEmpty(),
                 title = title,
+            )
+        }
+
+        internal fun parseHitokoto(raw: String): DailyPoem {
+            val root = JSONObject(raw)
+            val content = root.getString("hitokoto").trim()
+            require(content.isNotEmpty() && content.codePointCount(0, content.length) <= MAX_SENTENCE_CODE_POINTS)
+            val title = root.optString("from").trim().takeCodePoints(MAX_TITLE_CODE_POINTS)
+            val author = root.optString("from_who").trim().takeCodePoints(MAX_AUTHOR_CODE_POINTS)
+            return DailyPoem(
+                content = content,
+                source = if (title.isBlank() && author.isBlank()) {
+                    "— 一言·诗词"
+                } else {
+                    formatSource(title, author)
+                },
+                title = title,
+            )
+        }
+
+        internal fun parseGushiCi(raw: String): DailyPoem {
+            val root = JSONObject(raw)
+            val content = root.getString("content").trim()
+            require(content.isNotEmpty() && content.codePointCount(0, content.length) <= MAX_SENTENCE_CODE_POINTS)
+            val title = root.optString("origin").trim().takeCodePoints(MAX_TITLE_CODE_POINTS)
+            val author = root.optString("author").trim().takeCodePoints(MAX_AUTHOR_CODE_POINTS)
+            return DailyPoem(
+                content = content,
+                source = if (title.isBlank() && author.isBlank()) {
+                    "— 古诗词·一言"
+                } else {
+                    formatSource(title, author)
+                },
+                title = title,
+            )
+        }
+
+        private fun rotatedProviders(startIndex: Int): List<PoetryProvider> {
+            val providers = PoetryProvider.entries
+            if (providers.isEmpty()) return emptyList()
+            val normalized = Math.floorMod(startIndex, providers.size)
+            return List(providers.size) { offset -> providers[(normalized + offset) % providers.size] }
+        }
+
+        internal fun chooseOfflinePoem(
+            presets: List<PoetryPresetPoem>,
+            current: DailyPoem?,
+            blockedFingerprints: Set<String>,
+            seed: Long,
+        ): DailyPoem? {
+            if (presets.isEmpty()) return null
+            val candidates = presets.map(::dailyPoemFromPreset)
+            val blocked = blockedFingerprints.toMutableSet().apply {
+                current?.let { add(poemFingerprint(it)) }
+            }
+            val start = Math.floorMod(seed, candidates.size.toLong()).toInt()
+            return candidates.indices
+                .asSequence()
+                .map { offset -> candidates[(start + offset) % candidates.size] }
+                .firstOrNull { poemFingerprint(it) !in blocked }
+                ?: candidates[start]
+        }
+
+        private fun dailyPoemFromPreset(preset: PoetryPresetPoem): DailyPoem {
+            val normalizedBody = preset.content.trim()
+            val excerpt = normalizedBody.lineSequence()
+                .map(String::trim)
+                .firstOrNull(String::isNotBlank)
+                .orEmpty()
+                .takeCodePoints(MAX_SENTENCE_CODE_POINTS)
+            val source = preset.source.trim()
+            return DailyPoem(
+                content = excerpt.ifBlank { normalizedBody.takeCodePoints(MAX_SENTENCE_CODE_POINTS) },
+                source = source.takeIf { it.startsWith('—') } ?: "— $source",
+                fullContent = normalizedBody,
+                title = titleFromFormattedSource(source),
             )
         }
 
@@ -375,8 +514,12 @@ class PoetryRepository @Inject constructor(
 
         private val POEM_WHITESPACE = Regex("\\s+")
         private const val MAX_EDITABLE_POEM_CONTENT_CHARS = 4_000
-        private const val MAX_REFRESH_ATTEMPTS = 5
+        private const val MANUAL_ATTEMPTS_PER_PROVIDER = 2
+        private const val MAX_RESPONSE_BYTES = 64 * 1024
+        private const val MAX_SENTENCE_CODE_POINTS = 160
+        private const val MAX_TITLE_CODE_POINTS = 200
+        private const val MAX_AUTHOR_CODE_POINTS = 100
         private const val MAX_RECENT_POEMS = 12
-        private const val MAX_DAILY_POEMS = 128
+        private const val MAX_DAILY_POEMS = 512
     }
 }

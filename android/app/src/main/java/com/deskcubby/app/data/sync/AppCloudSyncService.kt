@@ -53,6 +53,10 @@ class AppCloudSyncService @Inject constructor(
     usageDeviceRepository: UsageDeviceRepository,
 ) {
     private val incomingDirectory = File(context.filesDir, INCOMING_DIRECTORY)
+    private val runtimePreferences = context.getSharedPreferences(
+        RUNTIME_PREFERENCES,
+        Context.MODE_PRIVATE,
+    )
     private val coordinator = CloudSyncCoordinator(
         context = context,
         diaryRepository = diaryRepository,
@@ -64,7 +68,12 @@ class AppCloudSyncService @Inject constructor(
         usageBridge = AppCloudSyncUsageBridge(usageDeviceRepository),
     )
     private val mutableStatus = MutableStateFlow(
-        AppCloudSyncStatus(pendingJsonCount = pendingIncomingJson().size),
+        AppCloudSyncStatus(
+            lastFinishedAt = runtimePreferences
+                .getLong(KEY_LAST_FINISHED_AT, 0L)
+                .takeIf { it > 0L },
+            pendingJsonCount = pendingIncomingJson().size,
+        ),
     )
     val status: StateFlow<AppCloudSyncStatus> = mutableStatus.asStateFlow()
 
@@ -93,11 +102,15 @@ class AppCloudSyncService @Inject constructor(
                 }
             }
             val failed = runs.count { it.errorMessage != null }
+            val finishedAt = runs.mapNotNull { it.result?.finishedAtMillis }
+                .maxOrNull()
+                ?: System.currentTimeMillis()
+            persistLastFinishedAt(finishedAt)
             mutableStatus.value = mutableStatus.value.copy(
                 running = false,
                 activeConfigId = null,
                 progress = null,
-                lastFinishedAt = System.currentTimeMillis(),
+                lastFinishedAt = finishedAt,
                 lastRuns = runs,
                 message = if (failed == 0) {
                     "云端同步完成 / Cloud sync completed"
@@ -142,6 +155,7 @@ class AppCloudSyncService @Inject constructor(
             coordinator.sync(config) { progress ->
                 mutableStatus.update { it.copy(progress = progress) }
             }.also { result ->
+                persistLastFinishedAt(result.finishedAtMillis)
                 mutableStatus.update {
                     it.copy(
                         running = false,
@@ -210,10 +224,17 @@ class AppCloudSyncService @Inject constructor(
         return file
     }
 
+    private fun persistLastFinishedAt(value: Long) {
+        if (value <= 0L) return
+        runtimePreferences.edit().putLong(KEY_LAST_FINISHED_AT, value).apply()
+    }
+
     private companion object {
         const val INCOMING_DIRECTORY = "cloud-sync-incoming"
         const val INCOMING_PREFIX = "DeskCubby-incoming-"
         const val MAX_INCOMING_JSON_BYTES = BackupJsonCodec.MAX_JSON_BYTES.toLong()
+        const val RUNTIME_PREFERENCES = "cloud_sync_runtime"
+        const val KEY_LAST_FINISHED_AT = "last_finished_at"
     }
 }
 

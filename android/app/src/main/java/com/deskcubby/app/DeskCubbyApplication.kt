@@ -3,10 +3,12 @@ package com.deskcubby.app
 import android.app.Application
 import com.deskcubby.app.data.backup.AutoBackupCoordinator
 import com.deskcubby.app.data.repository.PoetryRepository
+import com.deskcubby.app.data.repository.PoetryRefreshResult
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.statistics.UsageStatisticsRepository
 import com.deskcubby.app.data.statistics.StatisticsScheduler
 import com.deskcubby.app.data.sync.CloudSyncScheduler
+import com.deskcubby.app.widget.DeskCubbyWidgetProvider
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -31,9 +33,12 @@ class DeskCubbyApplication : Application() {
         autoBackupCoordinator.start()
         cloudSyncScheduler.start()
         statisticsScheduler.start()
+        DeskCubbyWidgetProvider.requestUpdate(this)
         applicationScope.launch {
             try {
-                poetryRepository.refresh(force = false)
+                if (poetryRepository.refresh(force = false) == PoetryRefreshResult.UPDATED) {
+                    DeskCubbyWidgetProvider.requestUpdate(this@DeskCubbyApplication)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {

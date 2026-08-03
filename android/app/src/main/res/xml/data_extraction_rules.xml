@@ -28,6 +28,12 @@
         <exclude
             domain="file"
             path="step-statistics.json.new" />
+        <exclude
+            domain="sharedpref"
+            path="desktop_widget_instances.xml" />
+        <exclude
+            domain="sharedpref"
+            path="cloud_sync_runtime.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude
@@ -57,5 +63,11 @@
         <exclude
             domain="file"
             path="step-statistics.json.new" />
+        <exclude
+            domain="sharedpref"
+            path="desktop_widget_instances.xml" />
+        <exclude
+            domain="sharedpref"
+            path="cloud_sync_runtime.xml" />
     </device-transfer>
 </data-extraction-rules>

@@ -17,6 +17,8 @@ import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DailyEventTemplate
+import com.deskcubby.app.data.model.DesktopWidgetConfig
+import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
@@ -47,7 +49,7 @@ import org.json.JSONObject
 @RunWith(AndroidJUnit4::class)
 class BackupJsonCodecTest {
     @Test
-    fun versionTwentyOneRoundTripPreservesEncryptedVaultGamesAndUsageDevices() {
+    fun versionTwentyTwoRoundTripPreservesEncryptedVaultGamesUsageAndWidgets() {
         val iv = Base64.getEncoder().encodeToString(ByteArray(12) { 2 })
         val cipher = Base64.getEncoder().encodeToString(ByteArray(32) { 3 })
         val vault = VaultEncryptedBackup(
@@ -107,7 +109,22 @@ class BackupJsonCodecTest {
         )
         val source = AppBackup(
             exportedAt = 21,
-            settings = AppSettings(),
+            settings = AppSettings(
+                desktopWidgetConfigs = listOf(
+                    DesktopWidgetConfig(
+                        id = "launch-maps",
+                        name = "地图",
+                        widthCells = 2,
+                        heightCells = 1,
+                        backgroundColorArgb = 0xFF102030.toInt(),
+                        textColorArgb = 0xFFF0E0D0.toInt(),
+                        backgroundImageUri = "content://images/widget-background",
+                        contentType = DesktopWidgetContentType.APP_SHORTCUT,
+                        appPackageName = "com.example.maps",
+                        appLabel = "Maps",
+                    ),
+                ),
+            ),
             thoughts = emptyList(),
             favorites = emptyList(),
             vault = vault,
@@ -117,10 +134,52 @@ class BackupJsonCodecTest {
 
         val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
 
-        assertEquals(21, decoded.formatVersion)
+        assertEquals(22, decoded.formatVersion)
         assertEquals(vault, decoded.vault)
         assertEquals(gameStates, decoded.gameStates)
         assertEquals(usageDevices, decoded.usageDevices)
+        assertEquals(source.settings.desktopWidgetConfigs, decoded.settings.desktopWidgetConfigs)
+    }
+
+    @Test
+    fun versionTwentyOneDefaultsDesktopWidgetConfigurations() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 21,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        root.put("version", 21)
+        root.getJSONObject("settings").remove("desktopWidgetConfigs")
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+
+        assertEquals(21, decoded.formatVersion)
+        assertEquals(AppSettings().desktopWidgetConfigs, decoded.settings.desktopWidgetConfigs)
+    }
+
+    @Test
+    fun versionTwentyTwoRejectsInvalidDesktopWidgetConfiguration() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 22,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        root.getJSONObject("settings")
+            .getJSONArray("desktopWidgetConfigs")
+            .getJSONObject(0)
+            .put("widthCells", 99)
+
+        assertDecodeRejected(root)
     }
 
     @Test

@@ -873,8 +873,8 @@ fun SettingsScreen(
             SettingsPage.STEPS -> DeviceTrackingSettingsPage(
                 title = tr("健康", "Health"),
                 explanation = tr(
-                    "优先从已授权的 Health Connect 读取步数、距离和活动热量；未连接时可改用手机计步传感器，从首次采样开始只记录可信步数差额。结果写入本机独立 JSON，不进入应用备份或云同步。",
-                    "Reads steps, distance, and active calories from authorized Health Connect. Without it, the phone's step counter records only measured step differences from the first sample. Results stay in a separate on-device JSON excluded from backups and cloud sync.",
+                    "只从已授权的 Health Connect 读取步数、距离和活动热量，不再改用手机计步传感器。结果写入本机独立 JSON，不进入应用备份或云同步。",
+                    "Reads steps, distance, and active calories only from authorized Health Connect and no longer falls back to the phone's step counter. Results stay in a separate on-device JSON excluded from backups and cloud sync.",
                 ),
                 enabled = settings.stepTrackingEnabled,
                 contentPadding = inner,
@@ -1475,6 +1475,13 @@ private fun CloudSyncSettingsPage(
                 status.error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error)
                 }
+                Text(
+                    status.lastFinishedAt?.let { finishedAt ->
+                        tr("上次同步时间：", "Last sync: ") + formatBackupTime(finishedAt)
+                    } ?: tr("上次同步时间：尚未同步", "Last sync: Never"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 status.lastRuns.takeIf(List<*>::isNotEmpty)?.let { runs ->
                     val uploaded = runs.sumOf { it.result?.uploadedCount ?: 0 }
                     val downloaded = runs.sumOf { it.result?.downloadedCount ?: 0 }
@@ -1623,8 +1630,8 @@ private fun CloudSyncSettingsPage(
             text = {
                 Text(
                     tr(
-                        "这会按备份导入应用设置和结构化数据。v21 还会恢复 Vault 密文/校验元数据、合并小游戏最高分与存档，并按设备和日期合并使用时间；Vault 随后保持锁定。日记与媒体真实文件不会被替换。",
-                        "This imports app settings and structured data. v21 also restores Vault ciphertext/verifier metadata, merges game scores and saves, and merges screen time by device and date; the Vault remains locked. Diary and media files are not replaced.",
+                        "这会按备份导入应用设置和结构化数据。v22 还会恢复桌面小卡片设计、Vault 密文/校验元数据、合并小游戏最高分与存档，并按设备和日期合并使用时间；Vault 随后保持锁定。日记与媒体真实文件不会被替换。",
+                        "This imports app settings and structured data. v22 also restores desktop-widget designs and Vault ciphertext/verifier metadata, merges game scores and saves, and merges screen time by device and date; the Vault remains locked. Diary and media files are not replaced.",
                     ),
                 )
             },
@@ -1925,8 +1932,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.JSON_BACKUP in selectedContents) {
                     Text(
                         tr(
-                            "v21 应用 JSON 包含结构化记录、Vault 密文、小游戏存档、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "The v21 app JSON contains structured records, Vault ciphertext, game saves, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                            "v22 应用 JSON 包含桌面小卡片设计、结构化记录、Vault 密文、小游戏存档、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "The v22 app JSON contains desktop-widget designs, structured records, Vault ciphertext, game saves, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2268,8 +2275,8 @@ private fun BackupSettingsPage(
             text = {
                 Text(
                     tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v21 还会恢复 Vault 密文与密码校验元数据、合并小游戏存档/最高分和各设备使用时间；Vault 导入后保持锁定。日记正文和媒体文件不会被修改。确定继续吗？",
-                        "Importing replaces current settings, thoughts and categories, browser bookmarks, date records, and the poetry book. v21 also restores Vault ciphertext and password-verifier metadata, merges game saves/high scores and per-device screen time, and leaves the Vault locked. Diary entries and media files are unchanged. Continue?",
+                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v22 还会恢复桌面小卡片设计与 Vault 密文/密码校验元数据、合并小游戏存档/最高分和各设备使用时间；Vault 导入后保持锁定。日记正文和媒体文件不会被修改。确定继续吗？",
+                        "Importing replaces current settings, thoughts and categories, browser bookmarks, date records, and the poetry book. v22 also restores desktop-widget designs and Vault ciphertext/password-verifier metadata, merges game saves/high scores and per-device screen time, and leaves the Vault locked. Diary entries and media files are unchanged. Continue?",
                     ),
                 )
             },
@@ -2386,8 +2393,8 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "v21 包含应用设置（含 AI API Key、同步服务元数据与吃历滤镜）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、2048/贪吃蛇/俄罗斯方块存档与最高分，以及按设备区分的手机使用时间。Vault 密码和派生密钥不会写入 JSON。",
-                        "v21 includes app settings (including AI API keys, sync metadata and meal filters), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, 2048/Snake/Tetris saves and high scores, and screen-time history grouped by device. Vault passwords and derived keys are never written to JSON.",
+                        "v22 包含应用设置（含 AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、2048/贪吃蛇/俄罗斯方块存档与最高分，以及按设备区分的手机使用时间。卡片背景图片本身、Vault 密码和派生密钥不会写入 JSON。",
+                        "v22 includes app settings (including AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, 2048/Snake/Tetris saves and high scores, and screen-time history grouped by device. Widget background image files, Vault passwords, and derived keys are never written to JSON.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -5619,7 +5626,7 @@ private fun NavConfigRow(
     val icons = listOf(
         "home", "book", "poetry", "language", "bolt", "settings", "calendar",
         "event", "rss", "ai", "apps", "star", "write", "sparkle", "day",
-        "lock", "game", "usage", "steps",
+        "lock", "game", "usage", "steps", "widgets",
     )
     val visibilityDescription = tr(
         "${item.id.defaultLabel}是否显示在底栏",
