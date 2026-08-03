@@ -32,6 +32,7 @@ import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.HomeGreetingTemplate
+import com.deskcubby.app.data.model.Game2048AnimationSpeed
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MAX_VAULT_ROW_HEIGHT_DP
@@ -52,6 +53,7 @@ import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.MusicVisualizerStyle
 import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.ThoughtDisplayMode
@@ -160,6 +162,9 @@ class SettingsRepository @Inject constructor(
         val morePageOrder = stringPreferencesKey("more_page_order")
         val defaultPage = stringPreferencesKey("default_page")
         val bottomNavShowLabels = booleanPreferencesKey("bottom_nav_show_labels")
+        val musicVisualizerEnabled = booleanPreferencesKey("music_visualizer_enabled")
+        val musicVisualizerStyle = stringPreferencesKey("music_visualizer_style")
+        val game2048AnimationSpeed = stringPreferencesKey("game_2048_animation_speed")
         val morePageShowDescriptions = booleanPreferencesKey("more_page_show_descriptions")
         val homeWidgetBordersEnabled = booleanPreferencesKey("home_widget_borders_enabled")
         val homeWidgets = stringPreferencesKey("home_widgets")
@@ -319,6 +324,12 @@ class SettingsRepository @Inject constructor(
             morePageOrder = decodeMorePageOrder(prefs[Keys.morePageOrder], nav),
             defaultPage = requestedDefault.takeIf { it in visibleIds } ?: visibleIds.firstOrNull() ?: NavItemId.SETTINGS,
             bottomNavShowLabels = prefs[Keys.bottomNavShowLabels] ?: defaults.bottomNavShowLabels,
+            musicVisualizerEnabled = prefs[Keys.musicVisualizerEnabled]
+                ?: defaults.musicVisualizerEnabled,
+            musicVisualizerStyle = prefs[Keys.musicVisualizerStyle]
+                .enumValueOr(defaults.musicVisualizerStyle),
+            game2048AnimationSpeed = prefs[Keys.game2048AnimationSpeed]
+                .enumValueOr(defaults.game2048AnimationSpeed),
             morePageShowDescriptions = prefs[Keys.morePageShowDescriptions]
                 ?: defaults.morePageShowDescriptions,
             homeWidgetBordersEnabled = prefs[Keys.homeWidgetBordersEnabled]
@@ -534,6 +545,8 @@ class SettingsRepository @Inject constructor(
     suspend fun acknowledgeNavigationIntro() = set(Keys.navigationIntroAcknowledged, true)
     suspend fun setDefaultPage(value: NavItemId) = set(Keys.defaultPage, value.name)
     suspend fun setBottomNavShowLabels(value: Boolean) = set(Keys.bottomNavShowLabels, value)
+    suspend fun setGame2048AnimationSpeed(value: Game2048AnimationSpeed) =
+        set(Keys.game2048AnimationSpeed, value.name)
     suspend fun setHomeWidgetBordersEnabled(value: Boolean) = set(Keys.homeWidgetBordersEnabled, value)
     suspend fun setHomePageSettings(
         userName: String,
@@ -581,6 +594,8 @@ class SettingsRepository @Inject constructor(
         defaultPage: NavItemId,
         items: List<NavItemConfig>,
         showLabels: Boolean,
+        musicVisualizerEnabled: Boolean,
+        musicVisualizerStyle: MusicVisualizerStyle,
     ) {
         val normalized = normalizeNavItems(items)
         val visibleIds = normalized.filter { it.visible || it.id == NavItemId.SETTINGS }.map { it.id }.toSet()
@@ -590,6 +605,8 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.navItems] = encodeNav(normalized)
             prefs[Keys.defaultPage] = safeDefault.name
             prefs[Keys.bottomNavShowLabels] = showLabels
+            prefs[Keys.musicVisualizerEnabled] = musicVisualizerEnabled
+            prefs[Keys.musicVisualizerStyle] = musicVisualizerStyle.name
         }
     }
 
@@ -762,6 +779,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.morePageOrder] = encodeMorePageOrder(normalizedMorePageOrder)
             prefs[Keys.defaultPage] = normalizedDefaultPage.name
             prefs[Keys.bottomNavShowLabels] = value.bottomNavShowLabels
+            prefs[Keys.musicVisualizerEnabled] = value.musicVisualizerEnabled
+            prefs[Keys.musicVisualizerStyle] = value.musicVisualizerStyle.name
+            prefs[Keys.game2048AnimationSpeed] = value.game2048AnimationSpeed.name
             prefs[Keys.morePageShowDescriptions] = value.morePageShowDescriptions
             prefs[Keys.homeWidgetBordersEnabled] = value.homeWidgetBordersEnabled
             prefs[Keys.homeWidgets] = encodeStringList(value.homeWidgets.distinct())

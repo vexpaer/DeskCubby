@@ -455,8 +455,8 @@ private fun VaultUnlockedContent(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(inner),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 100.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 100.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 if (corruptedItemCount > 0) {
                     item {
@@ -605,6 +605,12 @@ private fun VaultItemCard(
     onMoveDown: () -> Boolean,
 ) {
     val safeUrl = remember(item.content) { safeVaultHttpUrlOrNull(item.content) }
+    val compact = rowHeightDp <= 56
+    val verticalPadding = when {
+        rowHeightDp <= 48 -> 0.dp
+        rowHeightDp <= 56 -> 2.dp
+        else -> 10.dp
+    }
 
     GlassPanel(
         modifier = modifier
@@ -621,8 +627,11 @@ private fun VaultItemCard(
                 },
                 onLongClick = onEdit,
             ),
-        cornerRadius = 22.dp,
-        padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        cornerRadius = if (compact) 14.dp else 22.dp,
+        padding = PaddingValues(
+            horizontal = if (compact) 8.dp else 16.dp,
+            vertical = verticalPadding,
+        ),
     ) {
         Column(Modifier.fillMaxWidth()) {
             Row(
@@ -634,7 +643,7 @@ private fun VaultItemCard(
                     modifier = Modifier
                         .weight(1f)
                         .padding(end = 4.dp),
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
                     color = if (safeUrl != null) {
                         MaterialTheme.colorScheme.primary
                     } else {

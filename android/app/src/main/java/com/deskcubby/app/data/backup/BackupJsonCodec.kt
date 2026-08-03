@@ -23,9 +23,11 @@ import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.HomeGreetingTemplate
+import com.deskcubby.app.data.model.Game2048AnimationSpeed
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.MusicVisualizerStyle
 import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.VisualStyle
@@ -65,7 +67,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 22,
+    val formatVersion: Int = 23,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -98,7 +100,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 22
+    const val FORMAT_VERSION: Int = 23
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -146,6 +148,8 @@ object BackupJsonCodec {
         "2048_6",
         "snake",
         "tetris",
+        "minesweeper",
+        "spider",
     )
     private val DESKTOP_WIDGET_PACKAGE_REGEX =
         Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+")
@@ -413,6 +417,9 @@ object BackupJsonCodec {
         )
         .put("defaultPage", settings.defaultPage.name)
         .put("bottomNavShowLabels", settings.bottomNavShowLabels)
+        .put("musicVisualizerEnabled", settings.musicVisualizerEnabled)
+        .put("musicVisualizerStyle", settings.musicVisualizerStyle.name)
+        .put("game2048AnimationSpeed", settings.game2048AnimationSpeed.name)
         .put("morePageShowDescriptions", settings.morePageShowDescriptions)
         .put("homeWidgets", settings.homeWidgets.toJsonArray())
         .put("homeWidgetTitles", settings.homeWidgetTitles.toJsonArray())
@@ -995,6 +1002,21 @@ object BackupJsonCodec {
             },
             defaultPage = json.requiredEnum("defaultPage"),
             bottomNavShowLabels = json.requiredBoolean("bottomNavShowLabels"),
+            musicVisualizerEnabled = if (version >= 23) {
+                json.requiredBoolean("musicVisualizerEnabled")
+            } else {
+                defaults.musicVisualizerEnabled
+            },
+            musicVisualizerStyle = if (version >= 23) {
+                json.requiredEnum<MusicVisualizerStyle>("musicVisualizerStyle")
+            } else {
+                defaults.musicVisualizerStyle
+            },
+            game2048AnimationSpeed = if (version >= 23) {
+                json.requiredEnum<Game2048AnimationSpeed>("game2048AnimationSpeed")
+            } else {
+                defaults.game2048AnimationSpeed
+            },
             morePageShowDescriptions = if (version >= 15) {
                 json.requiredBoolean("morePageShowDescriptions")
             } else {

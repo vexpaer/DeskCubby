@@ -1,9 +1,11 @@
 package com.deskcubby.app.ui.settings
 
+import android.Manifest
 import android.net.Uri
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,6 +43,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AccessTime
@@ -59,7 +62,6 @@ import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Save
@@ -125,6 +127,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -140,6 +143,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.core.content.ContextCompat
 import com.deskcubby.app.BuildConfig
 import com.deskcubby.app.R
 import com.deskcubby.app.takeCodePoints
@@ -159,6 +163,7 @@ import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.MusicVisualizerStyle
 import com.deskcubby.app.data.model.MAX_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
@@ -417,6 +422,7 @@ fun SettingsScreen(
     val backupJsonPreview by viewModel.backupJsonPreview.collectAsStateWithLifecycle()
     val autoBackupStatus by viewModel.autoBackupStatus.collectAsStateWithLifecycle()
     val cloudSyncStatus by viewModel.cloudSyncStatus.collectAsStateWithLifecycle()
+    val appDataUsage by viewModel.appDataUsage.collectAsStateWithLifecycle()
     val settingsError by viewModel.settingsError.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val rootPage = remember(startPage) { startPage.toSettingsPage() }
@@ -671,6 +677,7 @@ fun SettingsScreen(
 
             SettingsPage.BACKUP -> BackupSettingsPage(
                 settings = settings,
+                dataUsage = appDataUsage,
                 backupTreeUri = settings.backupTreeUri,
                 operation = backupOperation,
                 autoBackupStatus = autoBackupStatus,
@@ -687,6 +694,7 @@ fun SettingsScreen(
                 onOpenJsonPreview = viewModel::openBackupJsonPreview,
                 onCloseJsonPreview = viewModel::closeBackupJsonPreview,
                 onOpenCloudSync = { page = SettingsPage.SYNC },
+                onRefreshDataUsage = viewModel::refreshAppDataUsage,
             )
 
             SettingsPage.DIARY -> DiarySettingsPage(
@@ -835,8 +843,14 @@ fun SettingsScreen(
                 settings = settings,
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
-                onSave = { defaultPage, navItems, showLabels, onDone ->
-                    viewModel.setNavigationSettings(defaultPage, navItems, showLabels) { success ->
+                onSave = { defaultPage, navItems, showLabels, visualizerEnabled, visualizerStyle, onDone ->
+                    viewModel.setNavigationSettings(
+                        defaultPage,
+                        navItems,
+                        showLabels,
+                        visualizerEnabled,
+                        visualizerStyle,
+                    ) { success ->
                         onDone(success)
                         if (success) completeSave(SettingsPage.MAIN)
                     }
@@ -1205,7 +1219,7 @@ private fun SubpageSettingsPage(
                 } else {
                     tr("日记目录已配置", "Diary folder configured")
                 },
-                icon = { Icon(Icons.Outlined.MenuBook, contentDescription = null) },
+                icon = { Icon(Icons.AutoMirrored.Outlined.MenuBook, contentDescription = null) },
                 accentColor = settings.menuAccentColor(1),
                 onClick = { onOpen(SettingsPage.DIARY) },
             )
@@ -1244,7 +1258,7 @@ private fun SubpageSettingsPage(
                     "字体、字号、行距、对齐与出处显示",
                     "Font, size, spacing, alignment and source display",
                 ),
-                icon = { Icon(Icons.Outlined.MenuBook, contentDescription = null) },
+                icon = { Icon(Icons.AutoMirrored.Outlined.MenuBook, contentDescription = null) },
                 accentColor = settings.menuAccentColor(5),
                 onClick = { onOpen(SettingsPage.POETRY) },
             )
@@ -1630,8 +1644,8 @@ private fun CloudSyncSettingsPage(
             text = {
                 Text(
                     tr(
-                        "这会按备份导入应用设置和结构化数据。v22 还会恢复桌面小卡片设计、Vault 密文/校验元数据、合并小游戏最高分与存档，并按设备和日期合并使用时间；Vault 随后保持锁定。日记与媒体真实文件不会被替换。",
-                        "This imports app settings and structured data. v22 also restores desktop-widget designs and Vault ciphertext/verifier metadata, merges game scores and saves, and merges screen time by device and date; the Vault remains locked. Diary and media files are not replaced.",
+                        "这会按 v23 备份导入应用设置和结构化数据，恢复桌面小卡片设计、Vault 密文/校验元数据，合并小游戏最高分与存档，并按设备和日期合并使用时间；Vault 随后保持锁定。日记与媒体真实文件不会被替换。",
+                        "This imports v23 app settings and structured data, restores desktop-widget designs and Vault ciphertext/verifier metadata, merges game scores and saves, and merges screen time by device and date. The Vault remains locked, and diary/media files are not replaced.",
                     ),
                 )
             },
@@ -1932,8 +1946,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.JSON_BACKUP in selectedContents) {
                     Text(
                         tr(
-                            "v22 应用 JSON 包含桌面小卡片设计、结构化记录、Vault 密文、小游戏存档、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "The v22 app JSON contains desktop-widget designs, structured records, Vault ciphertext, game saves, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                            "v23 应用 JSON 包含桌面小卡片设计、结构化记录、Vault 密文、小游戏存档、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "The v23 app JSON contains desktop-widget designs, structured records, Vault ciphertext, game saves, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2137,6 +2151,7 @@ private fun syncContentsLabel(contents: Set<CloudSyncContent>): String =
 @Composable
 private fun BackupSettingsPage(
     settings: AppSettings,
+    dataUsage: AppDataUsageState,
     backupTreeUri: String?,
     operation: BackupOperationState,
     autoBackupStatus: AutoBackupStatus,
@@ -2153,7 +2168,9 @@ private fun BackupSettingsPage(
     onOpenJsonPreview: () -> Unit,
     onCloseJsonPreview: () -> Unit,
     onOpenCloudSync: () -> Unit,
+    onRefreshDataUsage: () -> Unit,
 ) {
+    LaunchedEffect(Unit) { onRefreshDataUsage() }
     var pendingImportUri by rememberSaveable { mutableStateOf<String?>(null) }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let(onSelectFolder)
@@ -2275,8 +2292,8 @@ private fun BackupSettingsPage(
             text = {
                 Text(
                     tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v22 还会恢复桌面小卡片设计与 Vault 密文/密码校验元数据、合并小游戏存档/最高分和各设备使用时间；Vault 导入后保持锁定。日记正文和媒体文件不会被修改。确定继续吗？",
-                        "Importing replaces current settings, thoughts and categories, browser bookmarks, date records, and the poetry book. v22 also restores desktop-widget designs and Vault ciphertext/password-verifier metadata, merges game saves/high scores and per-device screen time, and leaves the Vault locked. Diary entries and media files are unchanged. Continue?",
+                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v23 还会恢复桌面小卡片设计与 Vault 密文/密码校验元数据，合并小游戏存档/最高分和各设备使用时间；Vault 导入后保持锁定。日记正文和媒体文件不会被修改。确定继续吗？",
+                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. v23 also restores desktop-widget designs and Vault ciphertext/password-verifier metadata, merges game saves/high scores and per-device screen time, and leaves the Vault locked. Diary and media files are unchanged. Continue?",
                     ),
                 )
             },
@@ -2299,6 +2316,62 @@ private fun BackupSettingsPage(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        item {
+            SettingsSection(tr("存储占用", "Storage usage")) {
+                val snapshot = dataUsage.snapshot
+                if (snapshot == null && dataUsage.loading) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AppLoadingIndicator(size = 20.dp, strokeWidth = 2.dp)
+                        Text(tr("正在统计…", "Calculating…"))
+                    }
+                } else if (snapshot != null) {
+                    val privateTotal = snapshot.entries.filterNot { it.userOwned }.sumOf { it.bytes }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(tr("应用及私有数据合计", "App and private data total"), fontWeight = FontWeight.SemiBold)
+                        Text(formatStorageBytes(privateTotal), color = MaterialTheme.colorScheme.primary)
+                    }
+                    snapshot.entries.forEach { entry ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(
+                                dataUsageLabel(entry.key) + if (entry.userOwned) {
+                                    tr("（用户目录）", " (user folder)")
+                                } else {
+                                    ""
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Text(
+                                (if (entry.partial) "≥ " else "") + formatStorageBytes(entry.bytes),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                    Text(
+                        tr(
+                            "日记和媒体是用户选择目录中的真实文件，不计入应用私有数据合计；“≥”表示提供方内容过多或统计超时，只显示已读取部分。",
+                            "Diary and media are real files in user-selected folders and are excluded from the private-data total. “≥” means the provider was too large or timed out, so only the measured portion is shown.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (dataUsage.failed) {
+                    Text(
+                        tr("无法计算应用数据占用空间", "Could not calculate app storage usage"),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                OutlinedButton(
+                    onClick = onRefreshDataUsage,
+                    enabled = !dataUsage.loading,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(tr("重新统计", "Recalculate")) }
+            }
+        }
         item {
             SettingsMenuItem(
                 title = tr("云端同步", "Cloud sync"),
@@ -2393,15 +2466,15 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "v22 包含应用设置（含 AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、2048/贪吃蛇/俄罗斯方块存档与最高分，以及按设备区分的手机使用时间。卡片背景图片本身、Vault 密码和派生密钥不会写入 JSON。",
-                        "v22 includes app settings (including AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, 2048/Snake/Tetris saves and high scores, and screen-time history grouped by device. Widget background image files, Vault passwords, and derived keys are never written to JSON.",
+                        "v23 包含应用设置（含音乐可视化样式、2048 动画速度、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、2048/贪吃蛇/俄罗斯方块/扫雷/蜘蛛纸牌存档与最高分，以及按设备区分的手机使用时间。",
+                        "v23 includes app settings (including music-visualizer style, 2048 animation speed, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, saves and high scores for 2048/Snake/Tetris/Minesweeper/Spider, and screen-time history grouped by device.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
                     tr(
-                        "不包含日记正文、媒体文件、AI 对话历史、WebDAV 密码、S3 用户名或 Key、步数历史、系统权限或本机随机设备 ID。跨设备导入后需重新选择目录、填写云端凭据并手动开启同步；导入的使用时间按原设备 ID 保留。",
-                        "Diary files, media, AI chat history, WebDAV passwords, S3 usernames/keys, step history, system permissions, and this device's random ID are excluded. After cross-device import, reselect folders, re-enter cloud credentials, and explicitly enable sync; imported screen time keeps its source device ID.",
+                        "不包含日记正文、媒体文件、阅读书架/进度、阅读与小游戏累计时长 JSON、AI 对话历史、卡片背景图片、Vault 密码/派生密钥、云端凭据、健康历史、系统权限或本机随机设备 ID。跨设备导入后需重新选择目录、导入书籍、填写云端凭据并重新授权。",
+                        "Diary/media files, reader library/progress, reading and game-time JSON, AI chats, widget images, Vault passwords/derived keys, cloud credentials, health history, system permissions, and this device's random ID are excluded. After cross-device import, reselect folders, re-import books, re-enter cloud credentials, and grant permissions again.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -4875,11 +4948,39 @@ private fun NavigationSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
     saveCoordinator: SettingsSaveCoordinator,
-    onSave: (NavItemId, List<NavItemConfig>, Boolean, (Boolean) -> Unit) -> Unit,
+    onSave: (
+        NavItemId,
+        List<NavItemConfig>,
+        Boolean,
+        Boolean,
+        MusicVisualizerStyle,
+        (Boolean) -> Unit,
+    ) -> Unit,
 ) {
+    val context = LocalContext.current
     var defaultPage by remember(settings.defaultPage) { mutableStateOf(settings.defaultPage) }
     var navItems by remember(settings.navItems) { mutableStateOf(settings.navItems.map { it.copy() }) }
     var showLabels by remember(settings.bottomNavShowLabels) { mutableStateOf(settings.bottomNavShowLabels) }
+    var visualizerEnabled by remember(settings.musicVisualizerEnabled) {
+        mutableStateOf(settings.musicVisualizerEnabled)
+    }
+    var visualizerStyle by remember(settings.musicVisualizerStyle) {
+        mutableStateOf(settings.musicVisualizerStyle)
+    }
+    var audioPermissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    var visualizerPermissionDenied by remember { mutableStateOf(false) }
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        audioPermissionGranted = granted
+        visualizerEnabled = granted
+        visualizerPermissionDenied = !granted
+    }
     val navCenters = remember { mutableStateMapOf<NavItemId, Float>() }
     var draggingNavId by remember { mutableStateOf<NavItemId?>(null) }
     var navDragDistancePx by remember { mutableStateOf(0f) }
@@ -4923,18 +5024,29 @@ private fun NavigationSettingsPage(
     RegisterSettingsSave(
         coordinator = saveCoordinator,
         dirty = defaultPage != settings.defaultPage || navItems != settings.navItems ||
-            showLabels != settings.bottomNavShowLabels,
+            showLabels != settings.bottomNavShowLabels ||
+            visualizerEnabled != settings.musicVisualizerEnabled ||
+            visualizerStyle != settings.musicVisualizerStyle,
         enabled = !saving,
         onReset = {
             val defaults = AppSettings()
             defaultPage = defaults.defaultPage
             navItems = defaults.navItems
             showLabels = defaults.bottomNavShowLabels
+            visualizerEnabled = defaults.musicVisualizerEnabled
+            visualizerStyle = defaults.musicVisualizerStyle
+            visualizerPermissionDenied = false
             clearNavDrag()
         },
     ) {
         saving = true
-        onSave(defaultPage, navItems, showLabels) { saving = false }
+        onSave(
+            defaultPage,
+            navItems,
+            showLabels,
+            visualizerEnabled,
+            visualizerStyle,
+        ) { saving = false }
     }
 
     LazyColumn(
@@ -4956,6 +5068,72 @@ private fun NavigationSettingsPage(
                         )
                     }
                     Switch(checked = showLabels, onCheckedChange = { showLabels = it })
+                }
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("音乐可视化", "Music visualization"))
+                        Text(
+                            tr(
+                                "播放音乐时用实时频谱或波形让底栏跟随节奏；音频只在内存中绘制，不会保存。",
+                                "Animate the bottom bar from live spectrum or waveform data while music plays. Audio is drawn in memory and never stored.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(
+                        checked = visualizerEnabled && audioPermissionGranted,
+                        onCheckedChange = { enabled ->
+                            visualizerPermissionDenied = false
+                            if (!enabled) {
+                                visualizerEnabled = false
+                            } else if (
+                                ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.RECORD_AUDIO,
+                            ) == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                audioPermissionGranted = true
+                                visualizerEnabled = true
+                            } else {
+                                audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        },
+                    )
+                }
+                if (visualizerPermissionDenied || visualizerEnabled && !audioPermissionGranted) {
+                    Text(
+                        tr(
+                            "需要音频权限才能读取系统播放的实时波形；拒绝后底栏不会捕获声音。",
+                            "Audio permission is required for live system-playback data; no sound is captured after denial.",
+                        ),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (visualizerEnabled && audioPermissionGranted) {
+                    Text(tr("显示方式", "Visualization style"), fontWeight = FontWeight.SemiBold)
+                    MusicVisualizerStyle.entries.forEach { style ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { visualizerStyle = style },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = visualizerStyle == style,
+                                onClick = { visualizerStyle = style },
+                            )
+                            Text(
+                                when (style) {
+                                    MusicVisualizerStyle.BARS -> tr("频谱直方图", "Spectrum bars")
+                                    MusicVisualizerStyle.WAVEFORM -> tr("实时波形", "Waveform")
+                                    MusicVisualizerStyle.CURVE -> tr("频谱曲线", "Spectrum curve")
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -5283,7 +5461,7 @@ private fun AboutSettingsPage(
                     Text(tr("GitHub 仓库", "GitHub repository"))
                 }
                 TextButton(onClick = { openUrl(context, TUTORIAL_URL) }) {
-                    Icon(Icons.Outlined.MenuBook, contentDescription = null)
+                    Icon(Icons.AutoMirrored.Outlined.MenuBook, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(tr("应用教学", "App tutorial"))
                 }
@@ -5626,7 +5804,7 @@ private fun NavConfigRow(
     val icons = listOf(
         "home", "book", "poetry", "language", "bolt", "settings", "calendar",
         "event", "rss", "ai", "apps", "star", "write", "sparkle", "day",
-        "lock", "game", "usage", "steps", "widgets",
+        "lock", "reader", "game", "usage", "steps", "widgets",
     )
     val visibilityDescription = tr(
         "${item.id.defaultLabel}是否显示在底栏",
@@ -5760,6 +5938,38 @@ private fun defaultBackupFileName(): String =
 
 private fun formatBackupTime(timestamp: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(timestamp))
+
+@Composable
+private fun dataUsageLabel(key: String): String = when (key) {
+    "code" -> tr("应用安装包", "Installed app")
+    "database" -> tr("结构化数据库", "Structured database")
+    "settings" -> tr("设置与偏好", "Settings and preferences")
+    "reader" -> tr("书架、阅读设置与进度", "Library, reading settings, and progress")
+    "engagement" -> tr("阅读/小游戏时间 JSON", "Reading/game time JSON")
+    "statistics" -> tr("手机使用时间等统计", "Screen-time statistics")
+    "other_files" -> tr("备份、云状态与其他文件", "Backups, cloud state, and other files")
+    "cache" -> tr("缓存", "Cache")
+    "external_app" -> tr("应用专属外部文件", "App-specific external files")
+    "diary_tree" -> tr("日记目录", "Diary folder")
+    "media_tree" -> tr("媒体目录", "Media folder")
+    else -> key
+}
+
+private fun formatStorageBytes(bytes: Long): String {
+    val safe = bytes.coerceAtLeast(0L).toDouble()
+    val units = listOf("B", "KiB", "MiB", "GiB", "TiB")
+    var value = safe
+    var index = 0
+    while (value >= 1024.0 && index < units.lastIndex) {
+        value /= 1024.0
+        index++
+    }
+    return if (index == 0) {
+        "${value.toLong()} ${units[index]}"
+    } else {
+        String.format(Locale.ROOT, "%.1f %s", value, units[index])
+    }
+}
 
 @Composable
 private fun updateDownloadFailureMessage(reason: UpdateDownloadFailure): String = when (reason) {

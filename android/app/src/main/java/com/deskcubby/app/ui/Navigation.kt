@@ -3,8 +3,10 @@
 package com.deskcubby.app.ui
 
 import android.animation.ValueAnimator
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.animation.EnterTransition
@@ -30,7 +32,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Lock
@@ -43,7 +47,6 @@ import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Language
-import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.RssFeed
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Psychology
@@ -72,6 +75,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -82,9 +86,11 @@ import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.model.MusicVisualizerStyle
 import com.deskcubby.app.ui.blog.BlogScreen
 import com.deskcubby.app.ui.blog.BlogViewModel
 import com.deskcubby.app.ui.components.AppLoadingIndicator
+import com.deskcubby.app.ui.components.MusicVisualizerLayer
 import com.deskcubby.app.ui.diary.DiaryEditorScreen
 import com.deskcubby.app.ui.diary.DiaryListScreen
 import com.deskcubby.app.ui.diary.DiaryViewModel
@@ -99,6 +105,8 @@ import com.deskcubby.app.ui.home.HomeViewModel
 import com.deskcubby.app.ui.more.MoreHubScreen
 import com.deskcubby.app.ui.poetry.PoetryBookScreen
 import com.deskcubby.app.ui.poetry.PoetryBookViewModel
+import com.deskcubby.app.ui.reader.ReaderScreen
+import com.deskcubby.app.ui.reader.ReaderViewModel
 import com.deskcubby.app.ui.settings.SettingsScreen
 import com.deskcubby.app.ui.settings.SettingsStartPage
 import com.deskcubby.app.ui.settings.SettingsViewModel
@@ -174,6 +182,8 @@ fun DeskCubbyRoot(
         }
         var introDismissedForSession by remember { mutableStateOf(false) }
         var settingsSubpageOpen by remember { mutableStateOf(false) }
+        var readerOpen by remember { mutableStateOf(false) }
+        var gameOpen by remember { mutableStateOf(false) }
         val initialStartDestination = remember { settings.defaultPage.route }
         val systemAnimationsEnabled = remember { ValueAnimator.areAnimatorsEnabled() }
         val organicMotionEnabled = settings.visualStyle == VisualStyle.ORGANIC_FUTURE &&
@@ -190,6 +200,8 @@ fun DeskCubbyRoot(
         }
         val showBottomBar = route in NavItemId.entries.map { it.route } &&
             !(route == NavItemId.SETTINGS.route && settingsSubpageOpen) &&
+            !(route == NavItemId.READER.route && readerOpen) &&
+            !(route == NavItemId.GAMES.route && gameOpen) &&
             !WindowInsets.isImeVisible
         val navigateMain: (String) -> Unit = { destination ->
             navController.navigate(destination) {
@@ -215,6 +227,8 @@ fun DeskCubbyRoot(
                         items = visibleTabs,
                         selectedRoute = bottomSelectedRoute,
                         showLabels = settings.bottomNavShowLabels,
+                        musicVisualizerEnabled = settings.musicVisualizerEnabled,
+                        musicVisualizerStyle = settings.musicVisualizerStyle,
                         onSelected = { item -> navigateMain(item.id.route) },
                     )
                 }
@@ -341,9 +355,21 @@ fun DeskCubbyRoot(
                         val vaultViewModel: VaultViewModel = hiltViewModel()
                         VaultScreen(padding = padding, viewModel = vaultViewModel, settings = settings)
                     }
+                    composable(NavItemId.READER.route) {
+                        val readerViewModel: ReaderViewModel = hiltViewModel()
+                        ReaderScreen(
+                            padding = padding,
+                            viewModel = readerViewModel,
+                            onReadingChanged = { readerOpen = it },
+                        )
+                    }
                     composable(NavItemId.GAMES.route) {
                         val gamesViewModel: GamesViewModel = hiltViewModel()
-                        GamesScreen(padding = padding, viewModel = gamesViewModel)
+                        GamesScreen(
+                            padding = padding,
+                            viewModel = gamesViewModel,
+                            onGameOpenChanged = { gameOpen = it },
+                        )
                     }
                     composable(NavItemId.USAGE.route) {
                         val usageStatisticsViewModel: UsageStatisticsViewModel = hiltViewModel()
@@ -609,53 +635,70 @@ private fun DeskBottomBar(
     items: List<NavItemConfig>,
     selectedRoute: String?,
     showLabels: Boolean,
+    musicVisualizerEnabled: Boolean,
+    musicVisualizerStyle: MusicVisualizerStyle,
     onSelected: (NavItemConfig) -> Unit,
 ) {
     val style = LocalVisualStyle.current
+    val context = LocalContext.current
+    val visualizerActive = musicVisualizerEnabled &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+        PackageManager.PERMISSION_GRANTED
     val glass = style == VisualStyle.LIQUID_GLASS
     val organic = style == VisualStyle.ORGANIC_FUTURE
     val floatingPanel = glass || organic
     val language = LocalAppLanguage.current
     val visuals = deskCubbyVisuals
     val content: @Composable () -> Unit = {
-        NavigationBar(
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(if (showLabels) Modifier else Modifier.height(56.dp)),
-            containerColor = if (floatingPanel) Color.Transparent else MaterialTheme.colorScheme.surfaceContainer,
-            tonalElevation = if (floatingPanel) 0.dp else 3.dp,
-            windowInsets = WindowInsets(0, 0, 0, 0),
-        ) {
-            items.forEach { item ->
-                val label = if (language == AppLanguage.ENGLISH && item.label.isDefaultLabelFor(item.id)) {
-                    item.id.englishLabel
+        Box(Modifier.fillMaxWidth()) {
+            MusicVisualizerLayer(
+                enabled = visualizerActive,
+                style = musicVisualizerStyle,
+                modifier = Modifier.fillMaxSize(),
+            )
+            NavigationBar(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (showLabels) Modifier else Modifier.height(56.dp)),
+                containerColor = if (floatingPanel || visualizerActive) {
+                    Color.Transparent
                 } else {
-                    item.label
-                }
-                NavigationBarItem(
-                    selected = selectedRoute == item.id.route,
-                    onClick = { onSelected(item) },
-                    icon = { Icon(iconFor(item.iconKey), label) },
-                    label = if (showLabels) {
-                        { Text(label, maxLines = 1) }
+                    MaterialTheme.colorScheme.surfaceContainer
+                },
+                tonalElevation = if (floatingPanel || visualizerActive) 0.dp else 3.dp,
+                windowInsets = WindowInsets(0, 0, 0, 0),
+            ) {
+                items.forEach { item ->
+                    val label = if (language == AppLanguage.ENGLISH && item.label.isDefaultLabelFor(item.id)) {
+                        item.id.englishLabel
                     } else {
-                        null
-                    },
-                    alwaysShowLabel = showLabels,
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = if (organic) MaterialTheme.colorScheme.onPrimaryContainer
-                        else MaterialTheme.colorScheme.onSecondaryContainer,
-                        selectedTextColor = if (organic) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurface,
-                        indicatorColor = when {
-                            glass -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
-                            organic -> MaterialTheme.colorScheme.primaryContainer
-                            else -> MaterialTheme.colorScheme.secondaryContainer
+                        item.label
+                    }
+                    NavigationBarItem(
+                        selected = selectedRoute == item.id.route,
+                        onClick = { onSelected(item) },
+                        icon = { Icon(iconFor(item.iconKey), label) },
+                        label = if (showLabels) {
+                            { Text(label, maxLines = 1) }
+                        } else {
+                            null
                         },
-                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    ),
-                )
+                        alwaysShowLabel = showLabels,
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = if (organic) MaterialTheme.colorScheme.onPrimaryContainer
+                            else MaterialTheme.colorScheme.onSecondaryContainer,
+                            selectedTextColor = if (organic) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface,
+                            indicatorColor = when {
+                                glass -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+                                organic -> MaterialTheme.colorScheme.primaryContainer
+                                else -> MaterialTheme.colorScheme.secondaryContainer
+                            },
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -706,7 +749,7 @@ fun iconFor(key: String): ImageVector = when (key) {
     "book" -> Icons.Outlined.Book
     "language" -> Icons.Outlined.Language
     "bolt" -> Icons.Outlined.Bolt
-    "poetry" -> Icons.Outlined.MenuBook
+    "poetry" -> Icons.AutoMirrored.Outlined.MenuBook
     "settings" -> Icons.Outlined.Settings
     "calendar" -> Icons.Outlined.CalendarMonth
     "event" -> Icons.Outlined.Event
@@ -719,8 +762,9 @@ fun iconFor(key: String): ImageVector = when (key) {
     "apps" -> Icons.Outlined.Apps
     "lock" -> Icons.Outlined.Lock
     "game" -> Icons.Outlined.SportsEsports
+    "reader" -> Icons.Outlined.AutoStories
     "usage" -> Icons.Outlined.AccessTime
     "steps" -> Icons.Outlined.MonitorHeart
     "widgets" -> Icons.Outlined.Widgets
-    else -> Icons.Outlined.MenuBook
+    else -> Icons.AutoMirrored.Outlined.MenuBook
 }

@@ -8,6 +8,10 @@ enum class BrowserTheme { SYSTEM, LIGHT, DARK }
 
 enum class AppLanguage { CHINESE, ENGLISH }
 
+enum class MusicVisualizerStyle { BARS, WAVEFORM, CURVE }
+
+enum class Game2048AnimationSpeed { SLOW, NORMAL, FAST }
+
 enum class LauncherIcon { CURRENT, MAGIC_BOOK, DESK_CUBBY }
 
 enum class ThoughtReopenMode { LAST_VISITED, ALL }
@@ -234,13 +238,23 @@ enum class NavItemId(
         defaultVisible = false,
         defaultShowInMore = true,
     ),
+    READER(
+        "reader",
+        "阅读",
+        "Reader",
+        "reader",
+        "导入并阅读 TXT/PDF 小说",
+        "Import and read TXT/PDF books",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
     GAMES(
         "games",
         "小游戏",
         "Games",
         "game",
-        "4×4 / 5×5 / 6×6 版 2048、贪吃蛇与俄罗斯方块",
-        "4×4 / 5×5 / 6×6 2048, Snake and Tetris",
+        "2048、贪吃蛇、俄罗斯方块、扫雷与蜘蛛纸牌",
+        "2048, Snake, Tetris, Minesweeper, and Spider Solitaire",
         defaultVisible = false,
         defaultShowInMore = true,
     ),
@@ -434,6 +448,9 @@ data class AppSettings(
     val morePageOrder: List<NavItemId> = normalizeMorePageOrder(emptyList(), navItems),
     val defaultPage: NavItemId = NavItemId.HOME,
     val bottomNavShowLabels: Boolean = true,
+    val musicVisualizerEnabled: Boolean = false,
+    val musicVisualizerStyle: MusicVisualizerStyle = MusicVisualizerStyle.BARS,
+    val game2048AnimationSpeed: Game2048AnimationSpeed = Game2048AnimationSpeed.NORMAL,
     val morePageShowDescriptions: Boolean = true,
     val homeWidgetBordersEnabled: Boolean = true,
     // First-launch preset: a deliberately small home page. Everything else stays

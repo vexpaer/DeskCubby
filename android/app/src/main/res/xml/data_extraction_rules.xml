@@ -3,6 +3,12 @@
     <cloud-backup>
         <exclude
             domain="file"
+            path="reader/" />
+        <exclude
+            domain="file"
+            path="engagement/" />
+        <exclude
+            domain="file"
             path="statistics/" />
         <exclude
             domain="file"
@@ -36,6 +42,12 @@
             path="cloud_sync_runtime.xml" />
     </cloud-backup>
     <device-transfer>
+        <exclude
+            domain="file"
+            path="reader/" />
+        <exclude
+            domain="file"
+            path="engagement/" />
         <exclude
             domain="file"
             path="statistics/" />
