@@ -1,7 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
     <!-- Android system backup must not clone a device identity or private statistics.
-         DeskCubby v23 JSON/cloud sync handles the explicit cross-device path. -->
+         Statistics now share the main Room database, and Android backup cannot exclude tables,
+         so the whole database is excluded. DeskCubby v23 JSON/cloud sync is the explicit backup
+         path for supported structured data. -->
+    <exclude
+        domain="database"
+        path="deskcubby.db" />
+    <exclude
+        domain="database"
+        path="deskcubby.db-wal" />
+    <exclude
+        domain="database"
+        path="deskcubby.db-shm" />
+    <exclude
+        domain="database"
+        path="deskcubby.db-journal" />
     <exclude
         domain="file"
         path="reader/" />

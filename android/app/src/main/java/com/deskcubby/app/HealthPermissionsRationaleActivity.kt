@@ -66,8 +66,8 @@ class HealthPermissionsRationaleActivity : ComponentActivity() {
                         )
                         Text(
                             tr(
-                                "统计结果保存在应用私有的独立 JSON 中，不进入应用 JSON 备份、云同步或 Android 自动备份。关闭统计会停止后续读取，但保留已经生成的本机历史。",
-                                "Results stay in a separate app-private JSON file. They are excluded from app JSON backups, cloud sync, and Android Auto Backup. Turning tracking off stops future reads while preserving existing local history.",
+                                "统计结果保存在应用私有 Room 数据库中，不进入应用 JSON 备份、云同步或 Android 自动备份。关闭统计会停止后续读取，但保留已经生成的本机历史。",
+                                "Results stay in the app-private Room database. They are excluded from app JSON backups, cloud sync, and Android Auto Backup. Turning tracking off stops future reads while preserving existing local history.",
                             ),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

@@ -9,9 +9,12 @@ import com.deskcubby.app.data.local.DiaryIndexDao
 import com.deskcubby.app.data.local.DateRecordDao
 import com.deskcubby.app.data.local.FlashThoughtDao
 import com.deskcubby.app.data.local.GameStateDao
+import com.deskcubby.app.data.local.LegacyStatisticsMigrationDao
 import com.deskcubby.app.data.local.PoetryCategoryDao
 import com.deskcubby.app.data.local.SavedPoemDao
+import com.deskcubby.app.data.local.StepStatisticsDao
 import com.deskcubby.app.data.local.ThoughtCategoryDao
+import com.deskcubby.app.data.local.UsageStatisticsDao
 import com.deskcubby.app.data.local.VaultItemDao
 import dagger.Module
 import dagger.Provides
@@ -37,6 +40,7 @@ object AppModule {
                 AppDatabase.MIGRATION_7_8,
                 AppDatabase.MIGRATION_8_9,
                 AppDatabase.MIGRATION_9_10,
+                AppDatabase.MIGRATION_10_11,
             )
             .build()
 
@@ -50,4 +54,14 @@ object AppModule {
     @Provides fun provideAiChatDao(db: AppDatabase): AiChatDao = db.aiChatDao()
     @Provides fun provideVaultItemDao(db: AppDatabase): VaultItemDao = db.vaultItemDao()
     @Provides fun provideGameStateDao(db: AppDatabase): GameStateDao = db.gameStateDao()
+    @Provides
+    fun provideUsageStatisticsDao(db: AppDatabase): UsageStatisticsDao = db.usageStatisticsDao()
+
+    @Provides
+    fun provideStepStatisticsDao(db: AppDatabase): StepStatisticsDao = db.stepStatisticsDao()
+
+    @Provides
+    fun provideLegacyStatisticsMigrationDao(
+        db: AppDatabase,
+    ): LegacyStatisticsMigrationDao = db.legacyStatisticsMigrationDao()
 }

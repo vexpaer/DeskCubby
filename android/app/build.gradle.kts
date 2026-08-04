@@ -75,8 +75,8 @@ android {
         applicationId = "com.deskcubby.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.6.0"
+        versionCode = 17
+        versionName = "0.6.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -182,6 +182,11 @@ dependencies {
     implementation("androidx.health.connect:connect-client:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.11.2")
     implementation("androidx.webkit:webkit:1.16.0")
+
+    // HttpURLConnection rejects WebDAV's PROPFIND method on Android. Keep the existing
+    // HttpURLConnection transport for ordinary GET/PUT requests and scope OkHttp to the
+    // bounded PROPFIND metadata request only.
+    implementation("com.squareup.okhttp3:okhttp:5.3.0")
 
     implementation("io.coil-kt.coil3:coil-compose:3.3.0")
     implementation("org.commonmark:commonmark:0.27.0")

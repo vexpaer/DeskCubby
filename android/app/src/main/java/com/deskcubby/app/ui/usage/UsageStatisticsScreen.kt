@@ -453,8 +453,8 @@ private fun UsageCollectionMessage(
         !state.enabled -> StatisticsMessagePanel(
             title = tr("统计已关闭", "Tracking is off"),
             message = tr(
-                "开启后，统计只保存在应用私有的 usage-statistics.json 中；关闭不会删除已有历史。",
-                "When enabled, data stays in the private usage-statistics.json file. Turning it off keeps existing history.",
+                "开启后，统计只保存在应用私有数据库中；关闭不会删除已有历史。",
+                "When enabled, data stays in the app-private database. Turning it off keeps existing history.",
             ),
             actionLabel = tr("打开使用时间设置", "Open tracking settings"),
             onAction = onOpenTrackingSettings,

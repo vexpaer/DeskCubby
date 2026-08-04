@@ -158,9 +158,13 @@ class GamesViewModel @Inject constructor(
         }
     }
 
-    fun endPlayTime(gameId: String) = viewModelScope.launch {
-        persistEngagementTime {
-            engagementTimeRepository.end(EngagementKind.GAME, gameId)
+    fun endPlayTime(gameId: String) {
+        // Detach on the lifecycle-callback thread. If a configuration change immediately calls
+        // beginPlayTime again, a delayed persistence coroutine can no longer remove that session.
+        try {
+            engagementTimeRepository.endAndCommit(EngagementKind.GAME, gameId)
+        } catch (_: Exception) {
+            // Invalid/damaged local state must not make a lifecycle callback crash the game.
         }
     }
 

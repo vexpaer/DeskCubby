@@ -345,11 +345,12 @@ internal object GameJson {
             while (index < text.length && text[index].isWhitespace()) index++
         }
 
-        fun readValue(): Any? {
+        fun readValue(depth: Int = 0): Any? {
+            require(depth <= MAX_NESTING_DEPTH) { "JSON nesting is too deep" }
             skipWhitespace()
             return when (peek()) {
-                '{' -> readObject()
-                '[' -> readArray()
+                '{' -> readObject(depth + 1)
+                '[' -> readArray(depth + 1)
                 '"' -> readString()
                 't' -> readLiteral("true", true)
                 'f' -> readLiteral("false", false)
@@ -364,7 +365,7 @@ internal object GameJson {
             return value
         }
 
-        private fun readObject(): Map<String, Any?> {
+        private fun readObject(depth: Int): Map<String, Any?> {
             expect('{')
             val result = LinkedHashMap<String, Any?>()
             skipWhitespace()
@@ -377,7 +378,7 @@ internal object GameJson {
                 val key = readString()
                 skipWhitespace()
                 expect(':')
-                result[key] = readValue()
+                result[key] = readValue(depth)
                 skipWhitespace()
                 val terminator = next()
                 if (terminator == '}') return result
@@ -385,7 +386,7 @@ internal object GameJson {
             }
         }
 
-        private fun readArray(): List<Any?> {
+        private fun readArray(depth: Int): List<Any?> {
             expect('[')
             val result = ArrayList<Any?>()
             skipWhitespace()
@@ -394,7 +395,7 @@ internal object GameJson {
                 return result
             }
             while (true) {
-                result.add(readValue())
+                result.add(readValue(depth))
                 skipWhitespace()
                 val terminator = next()
                 if (terminator == ']') return result
@@ -449,6 +450,10 @@ internal object GameJson {
 
         private fun expect(expected: Char) {
             require(next() == expected)
+        }
+
+        companion object {
+            private const val MAX_NESTING_DEPTH = 64
         }
     }
 }

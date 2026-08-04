@@ -5,15 +5,21 @@ import android.os.SystemClock
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 enum class EngagementKind { GAME, READING }
@@ -27,6 +33,13 @@ data class EngagementTimeSnapshot(
         EngagementKind.READING -> readingTotalsMillis[id]
     } ?: 0L
 }
+
+/** A synchronously detached session interval waiting to be committed to the JSON store. */
+data class PendingEngagementDuration internal constructor(
+    internal val kind: EngagementKind,
+    internal val id: String,
+    internal val elapsedMillis: Long,
+)
 
 /**
  * Stores foreground reading/game durations in one bounded application-private JSON file.
@@ -43,6 +56,7 @@ class EngagementTimeRepository @Inject constructor(
     private val directory = File(context.filesDir, DIRECTORY_NAME)
     private val file = File(directory, FILE_NAME)
     private val mutex = Mutex()
+    private val persistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessionsLock = Any()
     private val sessions = mutableMapOf<SessionKey, Long>()
     private val _snapshot = MutableStateFlow(readSnapshotOrEmpty())
@@ -67,15 +81,41 @@ class EngagementTimeRepository @Inject constructor(
         if (elapsed > 0L) addDuration(key, elapsed)
     }
 
-    suspend fun end(kind: EngagementKind, id: String) {
+    /**
+     * Removes the active session synchronously, before any coroutine can be delayed by I/O.
+     * Callers that may immediately begin the same id use this to prevent a late end from deleting
+     * the new session after a pause/resume or configuration change.
+     */
+    fun endNow(kind: EngagementKind, id: String): PendingEngagementDuration? {
         val validId = requireValidId(id)
         val key = SessionKey(kind, validId)
         val now = SystemClock.elapsedRealtime()
         val elapsed = synchronized(sessionsLock) {
-            val started = sessions.remove(key) ?: return
+            val started = sessions.remove(key) ?: return null
             (now - started).coerceIn(0L, MAX_SINGLE_CHECKPOINT_MILLIS)
         }
-        if (elapsed > 0L) addDuration(key, elapsed)
+        return elapsed.takeIf { it > 0L }?.let {
+            PendingEngagementDuration(kind, validId, it)
+        }
+    }
+
+    suspend fun commit(pending: PendingEngagementDuration) {
+        addDuration(
+            SessionKey(pending.kind, pending.id),
+            pending.elapsedMillis,
+        )
+    }
+
+    /** Commits outside feature ViewModel scopes so an Activity finish cannot cancel final time. */
+    fun endAndCommit(kind: EngagementKind, id: String) {
+        val pending = endNow(kind, id) ?: return
+        persistenceScope.launch {
+            runCatching { commit(pending) }
+        }
+    }
+
+    suspend fun end(kind: EngagementKind, id: String) {
+        endNow(kind, id)?.let { commit(it) }
     }
 
     private suspend fun addDuration(key: SessionKey, elapsed: Long) = mutex.withLock {
@@ -99,10 +139,21 @@ class EngagementTimeRepository @Inject constructor(
             this[id] = ((this[id] ?: 0L) + elapsed).coerceAtMost(MAX_TOTAL_MILLIS)
         }.toSortedMap()
 
-    private fun readSnapshotOrEmpty(): EngagementTimeSnapshot = runCatching {
-        if (!file.isFile || file.length() !in 1..MAX_JSON_BYTES) return@runCatching EngagementTimeSnapshot()
-        decode(file.readText(Charsets.UTF_8))
-    }.getOrDefault(EngagementTimeSnapshot())
+    private fun readSnapshotOrEmpty(): EngagementTimeSnapshot {
+        val candidates = listOf(
+            File(directory, "$FILE_NAME.pending"),
+            file,
+            File(directory, "$FILE_NAME.bak"),
+        )
+        return candidates.firstNotNullOfOrNull { candidate ->
+            runCatching {
+                if (!candidate.isFile || candidate.length() !in 1..MAX_JSON_BYTES) {
+                    return@runCatching null
+                }
+                decode(candidate.readText(Charsets.UTF_8))
+            }.getOrNull()
+        } ?: EngagementTimeSnapshot()
+    }
 
     private fun writeVerified(value: EngagementTimeSnapshot) {
         directory.mkdirs()
@@ -116,15 +167,39 @@ class EngagementTimeRepository @Inject constructor(
         check(decode(pending.readText(Charsets.UTF_8)) == value) {
             "Engagement time verification failed"
         }
-        if (!pending.renameTo(file)) {
-            FileOutputStream(file).use { output ->
-                output.write(encoded.toByteArray(Charsets.UTF_8))
+        val backup = File(directory, "$FILE_NAME.bak")
+        val committed = runCatching {
+            if (file.isFile && file.length() in 1..MAX_JSON_BYTES) {
+                decode(file.readText(Charsets.UTF_8))
+            } else {
+                null
+            }
+        }.getOrNull()
+        if (committed != null) {
+            FileOutputStream(backup).use { output ->
+                file.inputStream().use { input -> input.copyTo(output) }
                 output.fd.sync()
             }
-            check(decode(file.readText(Charsets.UTF_8)) == value) {
-                "Engagement time commit verification failed"
+            check(decode(backup.readText(Charsets.UTF_8)) == committed) {
+                "Engagement time backup verification failed"
             }
-            pending.delete()
+        }
+        try {
+            Files.move(
+                pending.toPath(),
+                file.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(
+                pending.toPath(),
+                file.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+        check(decode(file.readText(Charsets.UTF_8)) == value) {
+            "Engagement time commit verification failed"
         }
     }
 

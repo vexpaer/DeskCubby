@@ -631,13 +631,14 @@ internal fun mergeVisibleMorePageOrder(
 }
 
 @Composable
-private fun DeskBottomBar(
+internal fun DeskBottomBar(
     items: List<NavItemConfig>,
     selectedRoute: String?,
     showLabels: Boolean,
     musicVisualizerEnabled: Boolean,
     musicVisualizerStyle: MusicVisualizerStyle,
     onSelected: (NavItemConfig) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val style = LocalVisualStyle.current
     val context = LocalContext.current
@@ -654,7 +655,10 @@ private fun DeskBottomBar(
             MusicVisualizerLayer(
                 enabled = visualizerActive,
                 style = musicVisualizerStyle,
-                modifier = Modifier.fillMaxSize(),
+                // A regular fillMaxSize child takes Scaffold's full bottom-bar constraint and
+                // makes this Box consume the whole screen. Match the NavigationBar only after
+                // the Box has derived its height from that non-match-parent child.
+                modifier = Modifier.matchParentSize(),
             )
             NavigationBar(
                 modifier = Modifier
@@ -705,7 +709,7 @@ private fun DeskBottomBar(
 
     if (floatingPanel) {
         Box(
-            Modifier
+            modifier
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
                 .padding(
@@ -726,7 +730,7 @@ private fun DeskBottomBar(
         }
     } else {
         Box(
-            Modifier
+            modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surfaceContainer)
                 .windowInsetsPadding(

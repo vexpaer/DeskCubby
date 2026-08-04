@@ -111,7 +111,8 @@ class SpiderSolitaireGame private constructor(
     }
 
     fun toJson(): String = buildString {
-        append("{\"columns\":[")
+        append("{\"schemaVersion\":").append(SAVE_SCHEMA_VERSION)
+        append(",\"columns\":[")
         columns.forEachIndexed { columnIndex, column ->
             if (columnIndex > 0) append(',')
             appendCards(column)
@@ -121,6 +122,26 @@ class SpiderSolitaireGame private constructor(
         append(",\"completed\":").append(completedRuns)
         append(",\"score\":").append(score)
         append(",\"moves\":").append(moves)
+        append(",\"history\":[")
+        history.forEachIndexed { index, snapshot ->
+            if (index > 0) append(',')
+            appendSnapshot(snapshot)
+        }
+        append(']')
+        append('}')
+    }
+
+    private fun StringBuilder.appendSnapshot(snapshot: Snapshot) {
+        append("{\"columns\":[")
+        snapshot.columns.forEachIndexed { columnIndex, column ->
+            if (columnIndex > 0) append(',')
+            appendCards(column)
+        }
+        append("],\"stock\":")
+        appendCards(snapshot.stock)
+        append(",\"completed\":").append(snapshot.completedRuns)
+        append(",\"score\":").append(snapshot.score)
+        append(",\"moves\":").append(snapshot.moves)
         append('}')
     }
 
@@ -173,6 +194,8 @@ class SpiderSolitaireGame private constructor(
         private const val MOVE_COST = 1
         private const val COMPLETED_RUN_SCORE = 100
         private const val MAX_UNDO = 100
+        private const val SAVE_SCHEMA_VERSION = 2
+        private const val MAX_SAVE_CHARS = 1_000_000
 
         private fun shuffledDeck(random: Random): List<Card> = buildList(TOTAL_RUNS * RUN_LENGTH) {
             repeat(TOTAL_RUNS) { deck ->
@@ -192,9 +215,10 @@ class SpiderSolitaireGame private constructor(
         }
 
         fun fromJson(json: String): SpiderSolitaireGame? {
+            if (json.length !in 2..MAX_SAVE_CHARS) return null
             val map = GameJson.objectOf(GameJson.parse(json)) ?: return null
-            val rawColumns = map["columns"] as? List<*> ?: return null
-            if (rawColumns.size != COLUMN_COUNT) return null
+            val schemaVersion = map["schemaVersion"]?.let(GameJson::intOf) ?: 1
+            if (schemaVersion !in 1..SAVE_SCHEMA_VERSION) return null
 
             fun decodeCards(raw: Any?): List<Card>? {
                 val list = raw as? List<*> ?: return null
@@ -218,19 +242,51 @@ class SpiderSolitaireGame private constructor(
                 }
             }
 
-            val columns = rawColumns.map { decodeCards(it) ?: return null }
-            val stock = decodeCards(map["stock"]) ?: return null
-            val completed = GameJson.intOf(map["completed"]) ?: return null
-            val score = GameJson.intOf(map["score"]) ?: return null
-            val moves = GameJson.intOf(map["moves"]) ?: return null
-            if (completed !in 0..TOTAL_RUNS || score < 0 || moves < 0 || stock.size % COLUMN_COUNT != 0) return null
-            val allCards = columns.flatten() + stock
-            if (allCards.map(Card::id).distinct().size != allCards.size) return null
-            if (allCards.size + completed * RUN_LENGTH != TOTAL_RUNS * RUN_LENGTH) return null
-            if (columns.any { column -> !column.dropWhile { !it.faceUp }.all { it.faceUp } }) {
-                return null
+            fun decodeSnapshot(raw: Any?): Snapshot? {
+                val state = GameJson.objectOf(raw) ?: return null
+                val rawColumns = state["columns"] as? List<*> ?: return null
+                if (rawColumns.size != COLUMN_COUNT) return null
+                val columns = rawColumns.map { decodeCards(it) ?: return null }
+                val stock = decodeCards(state["stock"]) ?: return null
+                val completed = GameJson.intOf(state["completed"]) ?: return null
+                val score = GameJson.intOf(state["score"]) ?: return null
+                val moves = GameJson.intOf(state["moves"]) ?: return null
+                if (
+                    completed !in 0..TOTAL_RUNS ||
+                    score < 0 ||
+                    moves < 0 ||
+                    stock.size % COLUMN_COUNT != 0 ||
+                    stock.any { it.faceUp }
+                ) return null
+                val allCards = columns.flatten() + stock
+                if (allCards.map(Card::id).distinct().size != allCards.size) return null
+                if (allCards.size + completed * RUN_LENGTH != TOTAL_RUNS * RUN_LENGTH) return null
+                if (
+                    columns.any { column ->
+                        (column.isNotEmpty() && !column.last().faceUp) ||
+                            !column.dropWhile { !it.faceUp }.all { it.faceUp }
+                    }
+                ) return null
+                return Snapshot(columns, stock, completed, score, moves)
             }
-            return SpiderSolitaireGame(columns, stock, completed, score, moves)
+
+            val current = decodeSnapshot(map) ?: return null
+            val rawHistory = when {
+                !map.containsKey("history") -> emptyList<Any?>()
+                schemaVersion < SAVE_SCHEMA_VERSION -> return null
+                else -> map["history"] as? List<*> ?: return null
+            }
+            if (rawHistory.size > MAX_UNDO) return null
+            val restoredHistory = rawHistory.map { decodeSnapshot(it) ?: return null }
+            val game = SpiderSolitaireGame(
+                current.columns,
+                current.stock,
+                current.completedRuns,
+                current.score,
+                current.moves,
+            )
+            restoredHistory.forEach(game.history::addLast)
+            return game
         }
     }
 }

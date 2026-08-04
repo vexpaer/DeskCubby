@@ -1,11 +1,11 @@
 package com.deskcubby.app.ui.components
 
 import android.Manifest
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.audiofx.Visualizer
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -20,16 +20,26 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.invisibleToUser
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.deskcubby.app.data.model.MusicVisualizerStyle
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 import kotlin.math.hypot
 import kotlinx.coroutines.flow.MutableStateFlow
 
-/** Draws live system-output waveform/FFT data behind the bottom-navigation actions. */
+/**
+ * Draws live system-output waveform/FFT data behind the bottom-navigation actions.
+ *
+ * This layer deliberately does not impose a size of its own. Its [modifier] must receive a finite
+ * size from the bottom-bar container (normally `BoxScope.matchParentSize()`), so this decorative
+ * child can never participate in making a Scaffold bottom bar as tall as the whole page.
+ */
 @Composable
 fun MusicVisualizerLayer(
     enabled: Boolean,
@@ -41,67 +51,53 @@ fun MusicVisualizerLayer(
     var foreground by remember(lifecycleOwner) {
         mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
     }
+    var permissionGranted by remember(context) {
+        mutableStateOf(context.hasAudioCapturePermission())
+    }
+    var systemAnimationsEnabled by remember { mutableStateOf(ValueAnimator.areAnimatorsEnabled()) }
     val samples = remember { MutableStateFlow(FloatArray(SAMPLE_COUNT)) }
     val values by samples.collectAsState()
     val primary = MaterialTheme.colorScheme.primary
     val secondary = MaterialTheme.colorScheme.secondary
 
     DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, _ ->
+        val observer = LifecycleEventObserver { _, event ->
             foreground = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            if (event == Lifecycle.Event.ON_RESUME) {
+                // Both can change while the app is in system settings or a permission dialog.
+                permissionGranted = context.hasAudioCapturePermission()
+                systemAnimationsEnabled = ValueAnimator.areAnimatorsEnabled()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    DisposableEffect(context, enabled, style, foreground) {
-        if (!enabled || !foreground || !context.hasAudioCapturePermission()) {
+    val captureAllowed = musicVisualizerCaptureAllowed(
+        enabled = enabled,
+        foreground = foreground,
+        permissionGranted = permissionGranted,
+        systemAnimationsEnabled = systemAnimationsEnabled,
+    )
+    DisposableEffect(context, style, captureAllowed) {
+        if (!captureAllowed) {
             samples.value = FloatArray(SAMPLE_COUNT)
             return@DisposableEffect onDispose {}
         }
-        val visualizer = runCatching {
-            Visualizer(0).apply {
-                captureSize = Visualizer.getCaptureSizeRange()[1].coerceAtMost(1_024)
-                scalingMode = Visualizer.SCALING_MODE_NORMALIZED
-                setDataCaptureListener(
-                    object : Visualizer.OnDataCaptureListener {
-                        override fun onWaveFormDataCapture(
-                            visualizer: Visualizer?,
-                            waveform: ByteArray?,
-                            samplingRate: Int,
-                        ) {
-                            if (style == MusicVisualizerStyle.WAVEFORM && waveform != null) {
-                                samples.value = normalizeWaveform(waveform)
-                            }
-                        }
-
-                        override fun onFftDataCapture(
-                            visualizer: Visualizer?,
-                            fft: ByteArray?,
-                            samplingRate: Int,
-                        ) {
-                            if (style != MusicVisualizerStyle.WAVEFORM && fft != null) {
-                                samples.value = normalizeFft(fft)
-                            }
-                        }
-                    },
-                    (Visualizer.getMaxCaptureRate() / 2).coerceAtLeast(1),
-                    style == MusicVisualizerStyle.WAVEFORM,
-                    style != MusicVisualizerStyle.WAVEFORM,
-                )
-                this.enabled = true
-            }
-        }.getOrNull()
+        val callbackActive = AtomicBoolean(true)
+        val visualizer = createOutputMixVisualizer(style) { captured ->
+            if (callbackActive.get()) samples.value = captured
+        }
         if (visualizer == null) samples.value = FloatArray(SAMPLE_COUNT)
         onDispose {
-            runCatching { visualizer?.enabled = false }
-            runCatching { visualizer?.release() }
+            callbackActive.set(false)
+            releaseVisualizer(visualizer)
             samples.value = FloatArray(SAMPLE_COUNT)
         }
     }
 
-    Canvas(modifier.fillMaxSize()) {
-        if (!enabled || !foreground || values.isEmpty()) return@Canvas
+    Canvas(modifier.semantics { invisibleToUser() }) {
+        if (!captureAllowed || !hasVisibleMusicSignal(values)) return@Canvas
         when (style) {
             MusicVisualizerStyle.BARS -> {
                 val gap = 2.dp.toPx()
@@ -131,11 +127,24 @@ fun MusicVisualizerLayer(
                 )
             }
             MusicVisualizerStyle.CURVE -> {
-                val path = Path()
-                values.forEachIndexed { index, amplitude ->
-                    val x = index * size.width / (values.lastIndex.coerceAtLeast(1))
-                    val y = size.height - amplitude.coerceIn(0.04f, 0.9f) * size.height
-                    if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                val points = values.mapIndexed { index, amplitude ->
+                    Offset(
+                        x = index * size.width / values.lastIndex.coerceAtLeast(1),
+                        y = size.height - amplitude.coerceIn(0.04f, 0.9f) * size.height,
+                    )
+                }
+                val path = Path().apply {
+                    moveTo(points.first().x, points.first().y)
+                    var previous = points.first()
+                    points.drop(1).forEach { current ->
+                        val midpoint = Offset(
+                            x = (previous.x + current.x) / 2f,
+                            y = (previous.y + current.y) / 2f,
+                        )
+                        quadraticBezierTo(previous.x, previous.y, midpoint.x, midpoint.y)
+                        previous = current
+                    }
+                    quadraticBezierTo(previous.x, previous.y, previous.x, previous.y)
                 }
                 drawPath(
                     path,
@@ -151,24 +160,128 @@ private fun Context.hasAudioCapturePermission(): Boolean =
     ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
 
-private fun normalizeWaveform(bytes: ByteArray): FloatArray {
-    if (bytes.isEmpty()) return FloatArray(SAMPLE_COUNT)
-    return FloatArray(SAMPLE_COUNT) { index ->
-        val source = index * bytes.size / SAMPLE_COUNT
-        (((bytes[source].toInt() and 0xff) - 128) / 128f).coerceIn(-1f, 1f)
+internal fun musicVisualizerCaptureAllowed(
+    enabled: Boolean,
+    foreground: Boolean,
+    permissionGranted: Boolean,
+    systemAnimationsEnabled: Boolean,
+): Boolean = enabled && foreground && permissionGranted && systemAnimationsEnabled
+
+private fun createOutputMixVisualizer(
+    style: MusicVisualizerStyle,
+    onSamples: (FloatArray) -> Unit,
+): Visualizer? {
+    var visualizer: Visualizer? = null
+    try {
+        val captureSize = preferredVisualizerCaptureSize(Visualizer.getCaptureSizeRange())
+            ?: return null
+        val captureRate = Visualizer.getMaxCaptureRate().coerceAtMost(MAX_CAPTURE_RATE)
+        if (captureRate <= 0) return null
+        visualizer = Visualizer(0)
+        if (visualizer.setCaptureSize(captureSize) != Visualizer.SUCCESS ||
+            visualizer.setScalingMode(Visualizer.SCALING_MODE_NORMALIZED) != Visualizer.SUCCESS
+        ) {
+            releaseVisualizer(visualizer)
+            return null
+        }
+        val waveform = style == MusicVisualizerStyle.WAVEFORM
+        val listenerResult = visualizer.setDataCaptureListener(
+            object : Visualizer.OnDataCaptureListener {
+                override fun onWaveFormDataCapture(
+                    visualizer: Visualizer?,
+                    waveformBytes: ByteArray?,
+                    samplingRate: Int,
+                ) {
+                    if (waveform && waveformBytes != null) {
+                        onSamples(normalizeWaveform(waveformBytes))
+                    }
+                }
+
+                override fun onFftDataCapture(
+                    visualizer: Visualizer?,
+                    fft: ByteArray?,
+                    samplingRate: Int,
+                ) {
+                    if (!waveform && fft != null) onSamples(normalizeFft(fft))
+                }
+            },
+            captureRate,
+            waveform,
+            !waveform,
+        )
+        if (listenerResult != Visualizer.SUCCESS ||
+            visualizer.setEnabled(true) != Visualizer.SUCCESS
+        ) {
+            releaseVisualizer(visualizer)
+            return null
+        }
+        return visualizer
+    } catch (_: RuntimeException) {
+        // Unsupported output-mix engines and permission races must leave navigation usable.
+        releaseVisualizer(visualizer)
+        return null
     }
 }
 
-private fun normalizeFft(bytes: ByteArray): FloatArray {
+private fun releaseVisualizer(visualizer: Visualizer?) {
+    if (visualizer == null) return
+    try {
+        visualizer.setDataCaptureListener(null, 0, false, false)
+    } catch (_: RuntimeException) {
+        // The platform effect can already be dead when audio output changes.
+    }
+    try {
+        visualizer.setEnabled(false)
+    } catch (_: RuntimeException) {
+        // The platform effect can already be dead when audio output changes.
+    }
+    try {
+        visualizer.release()
+    } catch (_: RuntimeException) {
+        // Native resources are already gone in this case.
+    }
+}
+
+internal fun preferredVisualizerCaptureSize(
+    range: IntArray,
+    preferred: Int = PREFERRED_CAPTURE_SIZE,
+): Int? {
+    if (range.size < 2 || range[0] <= 0 || range[0] > range[1] || preferred <= 0) return null
+    val upperBound = minOf(range[1], preferred)
+    val powerOfTwo = Integer.highestOneBit(upperBound)
+    return powerOfTwo.takeIf { it >= range[0] }
+}
+
+internal fun normalizeWaveform(bytes: ByteArray): FloatArray {
+    if (bytes.isEmpty()) return FloatArray(SAMPLE_COUNT)
+    val normalized = FloatArray(SAMPLE_COUNT) { index ->
+        val source = index * bytes.lastIndex / (SAMPLE_COUNT - 1)
+        (((bytes[source].toInt() and 0xff) - 128) / 128f).coerceIn(-1f, 1f)
+    }
+    return normalized.zeroedWhenSilent()
+}
+
+internal fun normalizeFft(bytes: ByteArray): FloatArray {
     if (bytes.size < 4) return FloatArray(SAMPLE_COUNT)
     val availableBins = (bytes.size / 2 - 1).coerceAtLeast(1)
-    return FloatArray(SAMPLE_COUNT) { index ->
+    val normalized = FloatArray(SAMPLE_COUNT) { index ->
         val normalized = index.toFloat() / (SAMPLE_COUNT - 1)
         val logarithmicBin = (normalized * normalized * (availableBins - 1)).toInt() + 1
         val real = bytes[(logarithmicBin * 2).coerceAtMost(bytes.lastIndex)].toInt().toDouble()
         val imaginary = bytes[(logarithmicBin * 2 + 1).coerceAtMost(bytes.lastIndex)].toInt().toDouble()
-        (hypot(real, imaginary) / 128.0).toFloat().coerceIn(0f, 1f)
+        (hypot(real, imaginary) / MAX_FFT_MAGNITUDE).toFloat().coerceIn(0f, 1f)
     }
+    return normalized.zeroedWhenSilent()
 }
 
-private const val SAMPLE_COUNT = 48
+internal fun hasVisibleMusicSignal(values: FloatArray): Boolean =
+    values.any { abs(it) >= SILENCE_FLOOR }
+
+private fun FloatArray.zeroedWhenSilent(): FloatArray =
+    if (hasVisibleMusicSignal(this)) this else FloatArray(size)
+
+internal const val SAMPLE_COUNT = 48
+private const val PREFERRED_CAPTURE_SIZE = 1_024
+private const val MAX_CAPTURE_RATE = 30_000
+private const val MAX_FFT_MAGNITUDE = 180.0
+private const val SILENCE_FLOOR = 0.012f

@@ -2,32 +2,42 @@ package com.deskcubby.app.data.statistics
 
 import android.content.Context
 import android.os.Build
-import android.util.AtomicFile
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.room.withTransaction
+import com.deskcubby.app.data.local.AppDatabase
+import com.deskcubby.app.data.local.LegacyStatisticsMigrationDao
+import com.deskcubby.app.data.local.LegacyStatisticsMigrationEntity
+import com.deskcubby.app.data.local.UsageDeviceEntity
+import com.deskcubby.app.data.local.UsageDeviceHistoryRoomRow
+import com.deskcubby.app.data.local.UsageHistoryRoomRow
+import com.deskcubby.app.data.local.UsageStatisticsDao
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.json.JSONException
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -110,15 +120,23 @@ object UsageDeviceJsonCodec {
 class UsageDeviceRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val usageStore: UsageStatisticsStore,
+    private val database: AppDatabase,
+    private val dao: UsageStatisticsDao,
+    private val migrationDao: LegacyStatisticsMigrationDao,
 ) {
     private val dataStore = context.usageDeviceIdentityDataStore
     private val cacheDirectory = File(context.filesDir, USAGE_DEVICE_CACHE_DIRECTORY)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val identityMutex = Mutex()
-    private val cacheMutex = Mutex()
-    private val cacheLoaded = CompletableDeferred<Unit>()
+    private val writerMutex = Mutex()
     private val mutableIdentity = MutableStateFlow<UsageDeviceIdentity?>(null)
     private val mutableForeignRecords = MutableStateFlow<Map<String, UsageDeviceRecord>>(emptyMap())
+    private val initialized = scope.async(start = CoroutineStart.LAZY) {
+        usageStore.awaitReady()
+        val identity = currentIdentity()
+        migrateLegacyCacheIfNeeded(identity)
+        readForeignRecords().also { mutableForeignRecords.value = it }
+    }
 
     val identity: Flow<UsageDeviceIdentity> = mutableIdentity.filterNotNull()
 
@@ -139,16 +157,19 @@ class UsageDeviceRepository @Inject constructor(
                     ),
             )
         }
-    }.distinctUntilChanged()
+    }.combine(
+        flow {
+            initialized.await()
+            emit(Unit)
+        },
+    ) { migratedRecords, _ -> migratedRecords }
+        .distinctUntilChanged()
 
     init {
         scope.launch {
-            try {
-                cacheMutex.withLock {
-                    mutableForeignRecords.value = readCachedRecords()
-                }
-            } finally {
-                cacheLoaded.complete(Unit)
+            initialized.await()
+            dao.observeForeignHistoryRows().collect { rows ->
+                mutableForeignRecords.value = usageDeviceRecordsFromRoomRows(rows)
             }
         }
         scope.launch {
@@ -170,7 +191,7 @@ class UsageDeviceRepository @Inject constructor(
         val name = normalizeUsageDeviceName(rawName)
         identityMutex.withLock {
             val current = currentIdentityUnlocked()
-            val newestHistoryTimestamp = usageStore.history.first()
+            val newestHistoryTimestamp = usageStore.current()
                 .days
                 .maxOfOrNull(UsageStatisticsDay::collectedAtEpochMillis)
                 ?: 0L
@@ -192,23 +213,19 @@ class UsageDeviceRepository @Inject constructor(
     }
 
     suspend fun snapshotAll(): List<UsageDeviceRecord> {
-        cacheLoaded.await()
+        initialized.await()
         val identity = currentIdentity()
         val ownSnapshot = usageStore.canonicalSnapshot().history
-        return cacheMutex.withLock {
-            buildList {
-                add(identity.toRecord(ownSnapshot))
-                addAll(
-                    mutableForeignRecords.value.values
-                        .filterNot { it.deviceId == identity.deviceId },
-                )
-            }.sortedBy(UsageDeviceRecord::deviceId)
-        }
+        val foreign = readForeignRecords()
+        return buildList {
+            add(identity.toRecord(ownSnapshot))
+            addAll(foreign.values.filterNot { it.deviceId == identity.deviceId })
+        }.sortedBy(UsageDeviceRecord::deviceId)
     }
 
     suspend fun mergeIncoming(record: UsageDeviceRecord): UsageDeviceRecord {
         val verified = UsageDeviceJsonCodec.decode(UsageDeviceJsonCodec.encode(record))
-        cacheLoaded.await()
+        initialized.await()
         val identity = currentIdentity()
         return if (verified.deviceId == identity.deviceId) {
             val merged = usageStore.update { current ->
@@ -216,17 +233,18 @@ class UsageDeviceRepository @Inject constructor(
             }
             identity.toRecord(merged)
         } else {
-            cacheMutex.withLock {
-                val current = mutableForeignRecords.value[verified.deviceId]
-                require(current != null || mutableForeignRecords.value.size < MAX_USAGE_DEVICES - 1) {
-                    "Too many usage devices."
-                }
-                val merged = current?.mergeWith(verified) ?: verified
-                writeCachedRecord(merged)
-                mutableForeignRecords.value = mutableForeignRecords.value + (
-                    merged.deviceId to merged
+            writerMutex.withLock {
+                database.withTransaction {
+                    val current = usageDeviceRecordFromRoomRows(
+                        dao.getForeignHistoryRows(verified.deviceId),
                     )
-                merged
+                    require(current != null || dao.foreignDeviceCount() < MAX_USAGE_DEVICES - 1) {
+                        "Too many usage devices."
+                    }
+                    (current?.mergeWith(verified) ?: verified).also { merged ->
+                        replaceUsageDeviceRecordInRoom(dao, merged)
+                    }
+                }
             }
         }
     }
@@ -236,35 +254,57 @@ class UsageDeviceRepository @Inject constructor(
         val verified = records.map { record ->
             UsageDeviceJsonCodec.decode(UsageDeviceJsonCodec.encode(record))
         }
-        val before = snapshotAll()
-        try {
-            verified.forEach { mergeIncoming(it) }
-        } catch (error: Throwable) {
-            runCatching { replaceAllForRollback(before) }
-            throw error
+        initialized.await()
+        val identity = currentIdentity()
+        writerMutex.withLock {
+            database.withTransaction {
+                var ownHistory = usageHistoryFromRoomRows(
+                    dao.getHistoryRows(LOCAL_USAGE_HISTORY_OWNER_ID),
+                )
+                val foreign = usageDeviceRecordsFromRoomRows(
+                    dao.getAllForeignHistoryRows(),
+                ).toMutableMap()
+                verified.forEach { record ->
+                    if (record.deviceId == identity.deviceId) {
+                        ownHistory = mergeUsageDeviceHistory(ownHistory, record.history)
+                    } else {
+                        foreign[record.deviceId] = foreign[record.deviceId]
+                            ?.mergeWith(record)
+                            ?: record
+                    }
+                }
+                require(foreign.size <= MAX_USAGE_DEVICES - 1) { "Too many usage devices." }
+                replaceUsageHistoryInRoom(dao, LOCAL_USAGE_HISTORY_OWNER_ID, ownHistory)
+                replaceAllForeignRecordsInRoom(dao, foreign.values)
+            }
         }
+        usageStore.reload()
     }
 
     internal suspend fun replaceAllForRollback(records: List<UsageDeviceRecord>) {
-        cacheLoaded.await()
-        val identity = currentIdentity()
-        val own = records.firstOrNull { it.deviceId == identity.deviceId }
-            ?: identity.toRecord(UsageStatisticsHistory())
-        usageStore.update { own.history }
-        cacheMutex.withLock {
-            val foreign = records
-                .asSequence()
-                .filterNot { it.deviceId == identity.deviceId }
-                .associateBy(UsageDeviceRecord::deviceId)
-            foreign.values.forEach(::writeCachedRecord)
-            cachedRecordFiles().forEach { file ->
-                val id = file.name.removeSuffix(USAGE_DEVICE_FILE_SUFFIX)
-                if (id !in foreign && file.parentFile?.canonicalFile == cacheDirectory.canonicalFile) {
-                    file.delete()
-                }
-            }
-            mutableForeignRecords.value = foreign
+        require(records.size <= MAX_USAGE_DEVICES) { "Too many usage devices." }
+        val verified = records.map { record ->
+            UsageDeviceJsonCodec.decode(UsageDeviceJsonCodec.encode(record))
         }
+        initialized.await()
+        val identity = currentIdentity()
+        val own = verified.firstOrNull { it.deviceId == identity.deviceId }
+            ?: identity.toRecord(UsageStatisticsHistory())
+        val foreign = verified.filterNot { it.deviceId == identity.deviceId }
+        require(foreign.map(UsageDeviceRecord::deviceId).distinct().size == foreign.size) {
+            "Duplicate usage device."
+        }
+        writerMutex.withLock {
+            database.withTransaction {
+                replaceUsageHistoryInRoom(dao, LOCAL_USAGE_HISTORY_OWNER_ID, own.history)
+                replaceAllForeignRecordsInRoom(dao, foreign)
+            }
+        }
+        usageStore.reload()
+    }
+
+    internal fun cancelForTest() {
+        scope.cancel()
     }
 
     private suspend fun ensureIdentity() {
@@ -319,52 +359,86 @@ class UsageDeviceRepository @Inject constructor(
         )
     }
 
-    private fun readCachedRecords(): Map<String, UsageDeviceRecord> {
-        if (!cacheDirectory.exists()) return emptyMap()
-        val records = LinkedHashMap<String, UsageDeviceRecord>()
-        cachedRecordFiles()
-            .take(MAX_USAGE_DEVICES - 1)
-            .forEach { file ->
-                val record = runCatching {
-                    val bytes = readBounded(file)
-                    UsageDeviceJsonCodec.decode(bytes.toString(StandardCharsets.UTF_8))
-                }.getOrNull() ?: return@forEach
-                if (file.name == "${record.deviceId}$USAGE_DEVICE_FILE_SUFFIX") {
-                    records[record.deviceId] = record
+    private suspend fun readForeignRecords(): Map<String, UsageDeviceRecord> =
+        database.withTransaction {
+            usageDeviceRecordsFromRoomRows(dao.getAllForeignHistoryRows())
+        }
+
+    private suspend fun migrateLegacyCacheIfNeeded(identity: UsageDeviceIdentity) {
+        if (migrationDao.isComplete(LEGACY_USAGE_DEVICE_CACHE_MIGRATION_ID)) return
+        val files = withContext(Dispatchers.IO) { cachedRecordFiles() }
+        // Scan one extra candidate beyond the maximum foreign-device count. A malformed or
+        // accidentally cached local-device file must not consume a foreign slot and hide the
+        // final valid legacy record. The persisted repository still enforces 63 foreign rows.
+        var everyFileMigrated = files.size <= MAX_USAGE_DEVICES
+        var importedAny = false
+        files.take(MAX_USAGE_DEVICES).forEach { file ->
+            val fileMarkerId = legacyUsageDeviceFileMigrationId(file)
+            if (migrationDao.isComplete(fileMarkerId)) return@forEach
+            val record = runCatching {
+                withContext(Dispatchers.IO) {
+                    UsageDeviceJsonCodec.decode(
+                        readBoundedStatisticsFile(
+                            file = file,
+                            maximumBytes = MAX_USAGE_DEVICE_JSON_BYTES,
+                        ).toString(StandardCharsets.UTF_8),
+                    ).also { decoded ->
+                        require(file.name == "${decoded.deviceId}$USAGE_DEVICE_FILE_SUFFIX") {
+                            "Usage device cache name does not match its record."
+                        }
+                    }
                 }
+            }.getOrElse {
+                rethrowStatisticsMigrationCancellation(it)
+                // A bad cache must not hide other devices. Leave it and its marker untouched,
+                // import the remaining valid files, and retry this one on a later process start.
+                everyFileMigrated = false
+                return@forEach
             }
-        return records
+            database.withTransaction {
+                if (migrationDao.isComplete(fileMarkerId)) return@withTransaction
+                if (record.deviceId == identity.deviceId) {
+                    val current = usageHistoryFromRoomRows(
+                        dao.getHistoryRows(LOCAL_USAGE_HISTORY_OWNER_ID),
+                    )
+                    replaceUsageHistoryInRoom(
+                        dao,
+                        LOCAL_USAGE_HISTORY_OWNER_ID,
+                        mergeUsageDeviceHistory(current, record.history),
+                    )
+                } else {
+                    val current = usageDeviceRecordFromRoomRows(
+                        dao.getForeignHistoryRows(record.deviceId),
+                    )
+                    require(current != null || dao.foreignDeviceCount() < MAX_USAGE_DEVICES - 1) {
+                        "Too many usage devices."
+                    }
+                    replaceUsageDeviceRecordInRoom(dao, current?.mergeWith(record) ?: record)
+                }
+                migrationDao.markComplete(
+                    LegacyStatisticsMigrationEntity(
+                        migrationId = fileMarkerId,
+                        importedAtEpochMillis = System.currentTimeMillis().coerceAtLeast(0L),
+                    ),
+                )
+                importedAny = true
+            }
+        }
+        if (everyFileMigrated) {
+            database.withTransaction {
+                migrationDao.markComplete(
+                    LegacyStatisticsMigrationEntity(
+                        migrationId = LEGACY_USAGE_DEVICE_CACHE_MIGRATION_ID,
+                        importedAtEpochMillis = System.currentTimeMillis().coerceAtLeast(0L),
+                    ),
+                )
+            }
+        }
+        if (importedAny) usageStore.reload()
     }
 
-    private fun writeCachedRecord(record: UsageDeviceRecord) {
-        ensureCacheDirectory()
-        val json = UsageDeviceJsonCodec.encode(record)
-        val file = File(cacheDirectory, "${record.deviceId}$USAGE_DEVICE_FILE_SUFFIX")
-        require(file.parentFile?.canonicalFile == cacheDirectory.canonicalFile) {
-            "Usage device cache path is invalid."
-        }
-        val atomicFile = AtomicFile(file)
-        var output = atomicFile.startWrite()
-        try {
-            output.write(json.toByteArray(StandardCharsets.UTF_8))
-            output.fd.sync()
-            atomicFile.finishWrite(output)
-        } catch (error: Throwable) {
-            atomicFile.failWrite(output)
-            throw error
-        }
-        val verified = UsageDeviceJsonCodec.decode(
-            readBounded(file).toString(StandardCharsets.UTF_8),
-        )
-        require(verified == record) { "Usage device cache verification failed." }
-    }
-
-    private fun ensureCacheDirectory() {
-        if (!cacheDirectory.exists() && !cacheDirectory.mkdirs()) {
-            throw IllegalStateException("Unable to create usage device cache.")
-        }
-        require(cacheDirectory.isDirectory) { "Usage device cache is not a directory." }
-    }
+    private fun legacyUsageDeviceFileMigrationId(file: File): String =
+        "$LEGACY_USAGE_DEVICE_CACHE_FILE_MIGRATION_PREFIX${file.name}"
 
     private fun cachedRecordFiles(): List<File> = cacheDirectory.listFiles()
         .orEmpty()
@@ -377,27 +451,70 @@ class UsageDeviceRepository @Inject constructor(
         }
         .sortedBy(File::getName)
 
-    private fun readBounded(file: File): ByteArray {
-        if (file.length() !in 1..MAX_USAGE_DEVICE_JSON_BYTES.toLong()) {
-            throw StatisticsJsonException("Usage device JSON has an invalid size.")
-        }
-        return file.inputStream().use { input ->
-            val output = ByteArrayOutputStream()
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            var total = 0
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                total += read
-                if (total > MAX_USAGE_DEVICE_JSON_BYTES) {
-                    throw StatisticsJsonException("Usage device JSON is too large.")
-                }
-                output.write(buffer, 0, read)
-            }
-            output.toByteArray()
-        }
+}
+
+internal suspend fun replaceUsageDeviceRecordInRoom(
+    dao: UsageStatisticsDao,
+    record: UsageDeviceRecord,
+) {
+    validateUsageDeviceRecord(record)
+    replaceUsageHistoryInRoom(dao, record.deviceId, record.history)
+    dao.upsertDevice(
+        UsageDeviceEntity(
+            deviceId = record.deviceId,
+            deviceName = record.deviceName,
+            platform = record.platform,
+            updatedAtEpochMillis = record.updatedAtEpochMillis,
+        ),
+    )
+}
+
+internal suspend fun replaceAllForeignRecordsInRoom(
+    dao: UsageStatisticsDao,
+    records: Collection<UsageDeviceRecord>,
+) {
+    require(records.size <= MAX_USAGE_DEVICES - 1) { "Too many usage devices." }
+    require(records.map(UsageDeviceRecord::deviceId).distinct().size == records.size) {
+        "Duplicate usage device."
+    }
+    dao.deleteAllForeignHistories(LOCAL_USAGE_HISTORY_OWNER_ID)
+    records.sortedBy(UsageDeviceRecord::deviceId).forEach { record ->
+        replaceUsageDeviceRecordInRoom(dao, record)
     }
 }
+
+internal fun usageDeviceRecordFromRoomRows(
+    rows: List<UsageDeviceHistoryRoomRow>,
+): UsageDeviceRecord? {
+    if (rows.isEmpty()) return null
+    val first = rows.first()
+    val historyRows = rows.map { row ->
+        UsageHistoryRoomRow(
+            ownerId = row.deviceId,
+            trackingStartedOn = row.trackingStartedOn,
+            backfillCompletedThrough = row.backfillCompletedThrough,
+            dayDateIso = row.dayDateIso,
+            dayZoneId = row.dayZoneId,
+            dayState = row.dayState,
+            dayCollectedAtEpochMillis = row.dayCollectedAtEpochMillis,
+            packageName = row.packageName,
+            foregroundMillis = row.foregroundMillis,
+        )
+    }
+    return UsageDeviceRecord(
+        deviceId = first.deviceId,
+        deviceName = first.deviceName,
+        platform = first.platform,
+        updatedAtEpochMillis = first.updatedAtEpochMillis,
+        history = usageHistoryFromRoomRows(historyRows),
+    ).also(::validateUsageDeviceRecord)
+}
+
+internal fun usageDeviceRecordsFromRoomRows(
+    rows: List<UsageDeviceHistoryRoomRow>,
+): Map<String, UsageDeviceRecord> = rows
+    .groupBy(UsageDeviceHistoryRoomRow::deviceId)
+    .mapValues { (_, deviceRows) -> checkNotNull(usageDeviceRecordFromRoomRows(deviceRows)) }
 
 fun mergeUsageDeviceHistory(
     current: UsageStatisticsHistory,

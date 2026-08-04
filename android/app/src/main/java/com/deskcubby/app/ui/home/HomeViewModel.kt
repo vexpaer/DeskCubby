@@ -164,13 +164,13 @@ class HomeViewModel @Inject constructor(
                         }
                         if (settings.calorieEstimationEnabled) {
                             try {
-                                val energy = calorieRepository.estimate(media.documentUri, settings)
-                                diaryFileRepository.setMealPhotoEnergy(
+                                val estimate = calorieRepository.estimate(media.documentUri, settings)
+                                diaryFileRepository.setMealPhotoEstimate(
                                     media.fileName,
-                                    energy,
+                                    estimate,
                                     settings,
                                 )
-                                _message.value = "${_message.value} · ${energy}kJ"
+                                _message.value = "${_message.value} · ${estimate.energyKj}kJ"
                             } catch (error: Exception) {
                                 _message.value = "${_message.value} · 热量估算失败：${error.message.orEmpty()}"
                             }

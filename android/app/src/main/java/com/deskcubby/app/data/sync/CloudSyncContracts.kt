@@ -23,6 +23,36 @@ data class CloudSyncLimits(
     }
 }
 
+/** Shared per-run network-body budget used by every remote request. */
+class TransferBudget(
+    private val maximum: Long,
+) {
+    private val lock = Any()
+    private var usedBytes = 0L
+
+    init {
+        require(maximum >= 0L)
+    }
+
+    val used: Long
+        get() = synchronized(lock) { usedBytes }
+
+    val remaining: Long
+        get() = synchronized(lock) { maximum - usedBytes }
+
+    fun reserve(bytes: Long) {
+        synchronized(lock) {
+            if (bytes < 0L || bytes > maximum - usedBytes) {
+                throw CloudSyncLimitException(
+                    "本次同步的网络传输量超过上限。 / " +
+                        "This sync run exceeded its network transfer limit.",
+                )
+            }
+            usedBytes += bytes
+        }
+    }
+}
+
 data class LocalSyncObject(
     val key: String,
     val content: CloudSyncContent,
@@ -107,6 +137,7 @@ fun interface CloudSyncRemoteStoreFactory {
     fun create(
         config: CloudSyncConfig,
         limits: CloudSyncLimits,
+        transferBudget: TransferBudget,
     ): CloudSyncRemoteStore
 }
 
@@ -117,7 +148,8 @@ open class CloudSyncException(
 ) : IOException(message, cause)
 
 class CloudSyncConflictException(
-    message: String = "云端内容在同步期间发生变化，请重新同步。",
+    message: String = "云端内容在同步期间发生变化，请重新同步。 / " +
+        "Remote content changed during sync; please sync again.",
 ) : CloudSyncException(message, errorCode = "SYNC_CONFLICT")
 
 class CloudSyncLimitException(

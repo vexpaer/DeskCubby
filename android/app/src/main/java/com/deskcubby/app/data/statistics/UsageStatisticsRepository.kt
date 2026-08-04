@@ -108,7 +108,7 @@ class UsageStatisticsRepository @Inject constructor(
             val zone = clock.zone
             val nowMillis = clock.millis()
             val today = Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
-            val current = store.history.value
+            val current = store.current()
             val queryStartDate = usageQueryStartDate(
                 history = current,
                 today = today,

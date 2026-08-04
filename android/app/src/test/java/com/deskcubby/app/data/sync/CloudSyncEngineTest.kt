@@ -309,6 +309,7 @@ class CloudSyncEngineTest {
     private class FakeRemoteStore : CloudSyncRemoteStore {
         private val entries = linkedMapOf<String, RemoteEntry>()
         private var nextVersion = 1
+        var transferBudget: TransferBudget? = null
         val readCalls = mutableListOf<String>()
         val writeCalls = mutableListOf<RemoteWriteCall>()
 
@@ -334,7 +335,9 @@ class CloudSyncEngineTest {
             maxBytes: Long,
         ): ByteArray {
             readCalls += objectInfo.key
-            return checkNotNull(entries[objectInfo.key]).bytes.copyOf()
+            return checkNotNull(entries[objectInfo.key]).bytes.copyOf().also { bytes ->
+                transferBudget?.reserve(bytes.size.toLong())
+            }
         }
 
         override suspend fun write(
@@ -345,6 +348,7 @@ class CloudSyncEngineTest {
             expectedRemoteVersion: String?,
         ): RemoteSyncObject {
             writeCalls += RemoteWriteCall(key, expectedRemoteVersion)
+            transferBudget?.reserve(bytes.size.toLong())
             val existing = entries[key]
             if (existing?.version != expectedRemoteVersion) {
                 throw CloudSyncConflictException("Fake conditional remote write failed")
@@ -390,8 +394,10 @@ class CloudSyncEngineTest {
         override fun create(
             config: CloudSyncConfig,
             limits: CloudSyncLimits,
+            transferBudget: TransferBudget,
         ): CloudSyncRemoteStore {
             createCalls += 1
+            (store as? FakeRemoteStore)?.transferBudget = transferBudget
             return store
         }
     }

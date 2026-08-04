@@ -35,6 +35,7 @@ class ReaderViewModel @Inject constructor(
     private val engagementTimeRepository: EngagementTimeRepository,
 ) : ViewModel() {
     val library = repository.state
+    val storageIssue = repository.storageIssue
     val engagementTimes: StateFlow<EngagementTimeSnapshot> = engagementTimeRepository.snapshot
 
     private val _content = MutableStateFlow<ReaderContentState>(ReaderContentState.Idle)
@@ -42,6 +43,12 @@ class ReaderViewModel @Inject constructor(
     private val _message = MutableStateFlow<ReaderMessage?>(null)
     val message: StateFlow<ReaderMessage?> = _message.asStateFlow()
     private var openJob: Job? = null
+
+    init {
+        // ReaderRepository deliberately avoids constructor-time disk I/O. Loading here keeps the
+        // first frame responsive while every later mutation is serialized behind the same mutex.
+        viewModelScope.launch { repository.initialize() }
+    }
 
     fun import(uri: Uri) = viewModelScope.launch {
         try {
@@ -119,9 +126,14 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
-    fun endReading(bookId: String) = viewModelScope.launch {
-        persistEngagementTime {
-            engagementTimeRepository.end(EngagementKind.READING, bookId)
+    fun endReading(bookId: String) {
+        // Detach synchronously so an immediate configuration-change resume cannot let a delayed
+        // end remove the newly-started session. Repository-owned persistence also survives this
+        // ViewModel being cleared while the reader is leaving the Activity.
+        try {
+            engagementTimeRepository.endAndCommit(EngagementKind.READING, bookId)
+        } catch (_: Exception) {
+            // Timing failure must not make an Activity lifecycle callback crash the reader.
         }
     }
 

@@ -35,6 +35,34 @@ internal class SyncHttpResponse(
         "SyncHttpResponse(status=$status, bodyBytes=${body.size})"
 }
 
+internal fun interface SyncHttpExecutor {
+    suspend fun execute(request: SyncHttpRequest): SyncHttpResponse
+}
+
+/** Counts each HTTP request/response body exactly once against the run-wide budget. */
+internal class BudgetedSyncHttpExecutor(
+    private val delegate: SyncHttpExecutor,
+    private val budget: TransferBudget,
+) : SyncHttpExecutor {
+    override suspend fun execute(request: SyncHttpRequest): SyncHttpResponse {
+        budget.reserve(request.body?.size?.toLong() ?: 0L)
+        val remaining = budget.remaining
+        if (request.maxResponseBytes > 0L && remaining == 0L) {
+            budget.reserve(1L)
+        }
+        val boundedRequest = SyncHttpRequest(
+            method = request.method,
+            uri = request.uri,
+            headers = request.headers,
+            body = request.body,
+            maxResponseBytes = minOf(request.maxResponseBytes, remaining),
+        )
+        val response = delegate.execute(boundedRequest)
+        budget.reserve(response.body.size.toLong())
+        return response
+    }
+}
+
 /**
  * Small, bounded HttpURLConnection bridge. Cancellation closes the live connection immediately;
  * connect/read timeouts remain a second line of defence for providers that ignore disconnect().
@@ -43,8 +71,8 @@ internal class BoundedHttpClient(
     private val connectTimeoutMillis: Int,
     private val readTimeoutMillis: Int,
     private val userAgent: String = "DeskCubby-Sync/1",
-) {
-    suspend fun execute(request: SyncHttpRequest): SyncHttpResponse =
+) : SyncHttpExecutor {
+    override suspend fun execute(request: SyncHttpRequest): SyncHttpResponse =
         suspendCancellableCoroutine { continuation ->
             val connectionRef = AtomicReference<HttpURLConnection?>()
             continuation.invokeOnCancellation {

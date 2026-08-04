@@ -39,6 +39,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -119,6 +120,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -135,6 +137,9 @@ import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.mealPhotoRowSizes
 import com.deskcubby.app.data.repository.MealCalendarPhoto
+import com.deskcubby.app.data.repository.MealCalendarDay
+import com.deskcubby.app.data.repository.MAX_MEAL_ENERGY_KJ
+import com.deskcubby.app.data.repository.MAX_MEAL_NOTE_CHARS
 import com.deskcubby.app.data.repository.DiaryPreviewMedia
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.AppLoadingIndicator
@@ -436,6 +441,7 @@ fun MealCalendarScreen(
     val visuals = deskCubbyVisuals
     var calculateAllDialog by remember { mutableStateOf(false) }
     var calculateDateDialog by remember { mutableStateOf<String?>(null) }
+    var energyDetailsDate by rememberSaveable { mutableStateOf<String?>(null) }
     var zoomedPhoto by remember { mutableStateOf<MealCalendarPhoto?>(null) }
     var showCategoryFilter by remember { mutableStateOf(false) }
     var showExportRange by remember { mutableStateOf(false) }
@@ -605,12 +611,27 @@ fun MealCalendarScreen(
                             }
                         }
                         items(filteredItems, key = { it.dateIso }) { day ->
+                            // Category filtering only changes the photo wall. The date-level
+                            // override, note, and details always belong to the complete day.
+                            val canonicalDay = state.items.firstOrNull { it.dateIso == day.dateIso }
+                                ?: day
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically) {
                                     Text(day.dateIso, style = MaterialTheme.typography.titleMedium,
                                         color = MaterialTheme.colorScheme.onSurface)
-                                    day.totalEnergyKj?.let { Text("  ·  $it kJ", color = MaterialTheme.colorScheme.primary) }
+                                    canonicalDay.totalEnergyKj?.let { energy ->
+                                        TextButton(
+                                            enabled = mealOperationsEnabled,
+                                            contentPadding = PaddingValues(horizontal = 6.dp),
+                                            onClick = { energyDetailsDate = canonicalDay.dateIso },
+                                        ) {
+                                            Text(
+                                                "·  $energy kJ",
+                                                color = MaterialTheme.colorScheme.primary,
+                                            )
+                                        }
+                                    }
                                     Spacer(Modifier.weight(1f))
                                     if (settings.calorieEstimationEnabled) {
                                         IconButton(
@@ -835,6 +856,31 @@ fun MealCalendarScreen(
         },
         dismissButton = { TextButton(onClick = { calculateDateDialog = null }) { Text(tr("取消", "Cancel")) } },
     ) }
+    energyDetailsDate?.let { dateIso ->
+        val completeDay = state.items.firstOrNull { it.dateIso == dateIso }
+        if (completeDay == null) {
+            LaunchedEffect(dateIso) { energyDetailsDate = null }
+        } else {
+            MealEnergyDetailsDialog(
+                day = completeDay,
+                calorieEstimationEnabled = settings.calorieEstimationEnabled,
+                actionsEnabled = mealOperationsEnabled,
+                onDismiss = { energyDetailsDate = null },
+                onSave = { totalOverride, note ->
+                    energyDetailsDate = null
+                    viewModel.saveMealDayDetails(dateIso, totalOverride, note)
+                },
+                onRecalculate = { note ->
+                    energyDetailsDate = null
+                    viewModel.calculateUncalculatedCalories(
+                        dateIso = dateIso,
+                        force = true,
+                        noteOverride = note,
+                    )
+                },
+            )
+        }
+    }
     zoomedPhoto?.let { photo ->
         val zoomCaption = photo.caption.ifBlank {
             tr(photo.category.chineseLabel, photo.category.englishLabel)
@@ -1029,6 +1075,252 @@ private fun MealPhotoCard(
             )
         }
     }
+}
+
+@Composable
+private fun MealEnergyDetailsDialog(
+    day: MealCalendarDay,
+    calorieEstimationEnabled: Boolean,
+    actionsEnabled: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (totalEnergyKjOverride: Int?, note: String) -> Unit,
+    onRecalculate: (note: String) -> Unit,
+) {
+    var editingTotal by remember(day.dateIso) { mutableStateOf(false) }
+    var totalEdited by remember(day.dateIso) { mutableStateOf(false) }
+    var totalDraft by remember(day.dateIso) {
+        mutableStateOf(
+            (day.details.totalEnergyKjOverride ?: day.calculatedEnergyKj)
+                ?.toString()
+                .orEmpty(),
+        )
+    }
+    var noteDraft by remember(day.dateIso) { mutableStateOf(day.details.note) }
+    val parsedTotal = totalDraft.toIntOrNull()
+    val totalValid = !totalEdited || totalDraft.isBlank() ||
+        parsedTotal != null && parsedTotal in 0..MAX_MEAL_ENERGY_KJ
+    val totalToSave = if (totalEdited) parsedTotal else day.details.totalEnergyKjOverride
+    val numberedPhotos = remember(day.photos) {
+        val counts = mutableMapOf<MealCategory, Int>()
+        day.photos.map { photo ->
+            val number = counts.getOrDefault(photo.category, 0) + 1
+            counts[photo.category] = number
+            photo to number
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("热量详情 · ${day.dateIso}", "Energy details · ${day.dateIso}")) },
+        text = {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item(key = "total") {
+                    if (editingTotal) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            OutlinedTextField(
+                                value = totalDraft,
+                                onValueChange = { value ->
+                                    totalDraft = value.filter(Char::isDigit).take(7)
+                                    totalEdited = true
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = actionsEnabled,
+                                singleLine = true,
+                                isError = !totalValid,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                label = { Text(tr("总热量", "Total energy")) },
+                                suffix = { Text("kJ") },
+                                supportingText = {
+                                    Text(
+                                        if (totalValid) {
+                                            tr(
+                                                "用于多人聚餐或同一餐多次拍摄；可恢复为估算小计。",
+                                                "Useful for shared meals or duplicate photos; you can restore the estimated subtotal.",
+                                            )
+                                        } else {
+                                            tr(
+                                                "请输入 0–$MAX_MEAL_ENERGY_KJ",
+                                                "Enter a value from 0 to $MAX_MEAL_ENERGY_KJ",
+                                            )
+                                        },
+                                    )
+                                },
+                            )
+                            TextButton(
+                                enabled = actionsEnabled,
+                                onClick = {
+                                    totalDraft = ""
+                                    totalEdited = true
+                                },
+                            ) {
+                                Text(tr("恢复估算小计", "Use estimated subtotal"))
+                            }
+                        }
+                    } else {
+                        Card(
+                            enabled = actionsEnabled,
+                            onClick = {
+                                editingTotal = true
+                                totalDraft = (day.details.totalEnergyKjOverride
+                                    ?: day.calculatedEnergyKj)?.toString().orEmpty()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        tr("总热量", "Total energy"),
+                                        style = MaterialTheme.typography.labelLarge,
+                                    )
+                                    day.details.totalEnergyKjOverride?.let {
+                                        Text(
+                                            tr(
+                                                "手动值 · 估算小计 ${day.calculatedEnergyKj ?: 0} kJ",
+                                                "Manual value · estimated subtotal ${day.calculatedEnergyKj ?: 0} kJ",
+                                            ),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                                Text(
+                                    "${day.totalEnergyKj ?: 0} kJ",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Icon(Icons.Outlined.Edit, tr("修改总热量", "Edit total energy"))
+                            }
+                        }
+                    }
+                }
+                item(key = "note") {
+                    OutlinedTextField(
+                        value = noteDraft,
+                        onValueChange = { noteDraft = it.take(MAX_MEAL_NOTE_CHARS) },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = actionsEnabled,
+                        label = { Text(tr("备注", "Note")) },
+                        placeholder = {
+                            Text(
+                                tr(
+                                    "例如：午餐是两人分享；午餐 1 和午餐 2 是同一份饭。",
+                                    "For example: lunch was shared by two people; Lunch 1 and Lunch 2 show the same meal.",
+                                ),
+                            )
+                        },
+                        supportingText = {
+                            Text(
+                                tr(
+                                    "备注只在此详情中显示；重新计算时会发送给文字模型。",
+                                    "This note is only shown here and is sent to the text model when recalculating.",
+                                ),
+                            )
+                        },
+                        minLines = 3,
+                        maxLines = 6,
+                    )
+                }
+                numberedPhotos.forEachIndexed { photoIndex, (photo, number) ->
+                    item(key = "photo-${photo.fileName}-$photoIndex") {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "${tr(photo.category.chineseLabel, photo.category.englishLabel)} $number",
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.titleSmall,
+                                    )
+                                    photo.energyKj?.let {
+                                        Text(
+                                            "$it kJ",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                                if (photo.foods.isEmpty()) {
+                                    Text(
+                                        tr(
+                                            "此旧估算只有总量；重新计算后可生成食物明细。",
+                                            "This older estimate only has a total; recalculate to create an itemized breakdown.",
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                } else {
+                                    photo.foods.forEachIndexed { index, food ->
+                                        if (index > 0) HorizontalDivider()
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Column(Modifier.weight(1f)) {
+                                                Text(food.name, style = MaterialTheme.typography.bodyMedium)
+                                                listOfNotNull(food.amount, food.unit)
+                                                    .joinToString(" ")
+                                                    .takeIf(String::isNotBlank)
+                                                    ?.let { portion ->
+                                                        Text(
+                                                            portion,
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        )
+                                                    }
+                                            }
+                                            Text(
+                                                food.energyKj?.let { "$it kJ" } ?: "— kJ",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (calorieEstimationEnabled) {
+                    item(key = "recalculate-note") {
+                        Text(
+                            tr(
+                                "重新计算会保留当前备注、更新全部食物明细，并清除手动总热量。",
+                                "Recalculating keeps this note, refreshes every food item, and clears the manual total.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = actionsEnabled && totalValid,
+                onClick = { onSave(totalToSave, noteDraft) },
+            ) { Text(tr("保存", "Save")) }
+        },
+        dismissButton = {
+            if (calorieEstimationEnabled) {
+                TextButton(
+                    enabled = actionsEnabled,
+                    onClick = { onRecalculate(noteDraft) },
+                ) { Text(tr("重新计算", "Recalculate")) }
+            }
+        },
+    )
 }
 
 @Composable

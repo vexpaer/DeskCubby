@@ -238,6 +238,96 @@ class AppDatabaseMigrationTest {
         database.close()
     }
 
+    @Test
+    fun migrate10To11AddsNormalizedStatisticsTablesAndPreservesExistingData() {
+        val databaseName = "statistics-room-migration-test"
+        helper.createDatabase(databaseName, 10).apply {
+            execSQL(
+                """
+                INSERT INTO game_states (gameId, highScore, saveJson, updatedAt)
+                VALUES ('2048', 4096, NULL, 30)
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            databaseName,
+            11,
+            true,
+            AppDatabase.MIGRATION_10_11,
+        )
+        database.query("SELECT highScore FROM game_states WHERE gameId = '2048'").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(4096, cursor.getInt(0))
+        }
+        database.execSQL(
+            """
+            INSERT INTO usage_histories (ownerId, trackingStartedOn, backfillCompletedThrough)
+            VALUES ('device-1', '2026-08-01', '2026-08-01')
+            """.trimIndent(),
+        )
+        database.execSQL(
+            """
+            INSERT INTO usage_days (ownerId, dateIso, zoneId, state, collectedAtEpochMillis)
+            VALUES ('device-1', '2026-08-01', 'Asia/Shanghai', 'FINAL', 100)
+            """.trimIndent(),
+        )
+        database.execSQL(
+            """
+            INSERT INTO usage_app_durations (ownerId, dateIso, packageName, foregroundMillis)
+            VALUES ('device-1', '2026-08-01', 'example.app', 5000)
+            """.trimIndent(),
+        )
+        database.execSQL(
+            """
+            INSERT INTO usage_devices (deviceId, deviceName, platform, updatedAtEpochMillis)
+            VALUES ('device-1', 'Phone', 'android', 100)
+            """.trimIndent(),
+        )
+        database.execSQL(
+            """
+            INSERT INTO step_history (
+                id, trackingStartedOn, baselineDateIso,
+                baselineCumulativeSteps, baselineCapturedAtEpochMillis
+            ) VALUES (1, '2026-08-01', NULL, NULL, NULL)
+            """.trimIndent(),
+        )
+        database.execSQL(
+            """
+            INSERT INTO step_days (
+                historyId, dateIso, zoneId, state, collectedAtEpochMillis,
+                steps, distanceMeters, activeCaloriesKilocalories
+            ) VALUES (1, '2026-08-01', 'Asia/Shanghai', 'FINAL', 100, 8000, 5000.5, 300.25)
+            """.trimIndent(),
+        )
+        database.execSQL(
+            """
+            INSERT INTO legacy_statistics_migrations (migrationId, importedAtEpochMillis)
+            VALUES ('usage-statistics-json-v1', 100)
+            """.trimIndent(),
+        )
+
+        database.query("SELECT foregroundMillis FROM usage_app_durations").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(5000L, cursor.getLong(0))
+        }
+        database.query("SELECT steps FROM step_days").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(8000L, cursor.getLong(0))
+        }
+        database.execSQL("DELETE FROM usage_histories WHERE ownerId = 'device-1'")
+        database.query("SELECT COUNT(*) FROM usage_app_durations").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(0, cursor.getInt(0))
+        }
+        database.query("SELECT COUNT(*) FROM usage_devices").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(0, cursor.getInt(0))
+        }
+        database.close()
+    }
+
     private companion object {
         const val TEST_DATABASE = "ai-chat-migration-test"
     }

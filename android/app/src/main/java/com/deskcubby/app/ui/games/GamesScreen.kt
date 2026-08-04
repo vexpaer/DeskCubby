@@ -125,23 +125,32 @@ fun GamesScreen(
         if (!resume) viewModel.clearSave(gameId)
         launch = GameLaunch(gameId, resume)
     }
-    LaunchedEffect(launch != null) { onGameOpenChanged(launch != null) }
+    val gameOpen = launch != null
+    LaunchedEffect(gameOpen) { onGameOpenChanged(gameOpen) }
     DisposableEffect(Unit) { onDispose { onGameOpenChanged(false) } }
     Box(
         Modifier
             .fillMaxSize()
-            .padding(bottom = padding.calculateBottomPadding())
+            .padding(bottom = if (gameOpen) 0.dp else padding.calculateBottomPadding())
             .windowInsetsPadding(
                 WindowInsets.safeDrawing.only(
                     WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
                 ),
+            )
+            .then(
+                if (gameOpen) {
+                    Modifier.windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom),
+                    )
+                } else {
+                    Modifier
+                },
             ),
     ) {
         val current = launch
         if (current == null) {
             GameListPage(viewModel, onLaunch)
         } else {
-            GamePlayTimeEffect(current.gameId, viewModel)
             when (current.gameId) {
                 GamesViewModel.GAME_2048 -> Game2048Page(
                     viewModel = viewModel,
@@ -427,19 +436,24 @@ private fun GameAutoPauseEffect(onPauseAndSave: () -> Unit) {
     }
 }
 
+/** Counts only live play, excluding pause, setup and result overlays. */
 @Composable
-private fun GamePlayTimeEffect(gameId: String, viewModel: GamesViewModel) {
+internal fun GamePlayTimeEffect(
+    gameId: String,
+    viewModel: GamesViewModel,
+    active: Boolean,
+) {
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, gameId) {
+    DisposableEffect(lifecycleOwner, gameId, active) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> viewModel.beginPlayTime(gameId)
+                Lifecycle.Event.ON_RESUME -> if (active) viewModel.beginPlayTime(gameId)
                 Lifecycle.Event.ON_PAUSE -> viewModel.endPlayTime(gameId)
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+        if (active && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             viewModel.beginPlayTime(gameId)
         }
         onDispose {
@@ -447,13 +461,21 @@ private fun GamePlayTimeEffect(gameId: String, viewModel: GamesViewModel) {
             viewModel.endPlayTime(gameId)
         }
     }
-    LaunchedEffect(gameId) {
+    LaunchedEffect(gameId, active) {
+        if (!active) return@LaunchedEffect
         while (isActive) {
             delay(30_000L)
             viewModel.checkpointPlayTime(gameId)
         }
     }
 }
+
+internal fun shouldCountGamePlay(
+    engineReady: Boolean,
+    paused: Boolean = false,
+    finished: Boolean = false,
+    setupVisible: Boolean = false,
+): Boolean = engineReady && !paused && !finished && !setupVisible
 
 @Composable
 private fun GameOverDialog(
@@ -593,9 +615,23 @@ private fun Game2048Page(
     resume: Boolean,
     onExit: () -> Unit,
 ) {
-    var engine by remember { mutableStateOf<Game2048?>(null) }
+    var engine by rememberSaveable(
+        gameId,
+        stateSaver = Saver(
+            save = { game ->
+                game?.toJson()
+                    ?.takeIf { it.length <= MAX_SAVED_INSTANCE_GAME_CHARS }
+                    .orEmpty()
+            },
+            restore = { encoded ->
+                encoded.takeIf(String::isNotBlank)?.let {
+                    Game2048.fromJson(it, expectedSize = boardSize)
+                }
+            },
+        ),
+    ) { mutableStateOf<Game2048?>(null) }
     var frame by remember { mutableIntStateOf(0) }
-    var scoreRecorded by remember { mutableStateOf(false) }
+    var scoreRecorded by rememberSaveable { mutableStateOf(false) }
     var transition by remember { mutableStateOf<Game2048.MoveResult?>(null) }
     var transitionSequence by remember { mutableIntStateOf(0) }
     var darkMode by rememberSaveable { mutableStateOf(false) }
@@ -621,6 +657,12 @@ private fun Game2048Page(
     val score = remember(engine, frame) { engine?.score ?: 0 }
     val gameOver = remember(engine, frame) { engine?.isGameOver == true }
     val canUndo = remember(engine, frame) { engine?.canUndo == true }
+
+    GamePlayTimeEffect(
+        gameId,
+        viewModel,
+        active = shouldCountGamePlay(engineReady = engine != null, finished = gameOver),
+    )
 
     LaunchedEffect(gameOver) {
         if (gameOver && !scoreRecorded) {
@@ -1220,10 +1262,17 @@ private fun tileFontSize(value: Int, boardSize: Int, tileWidthDp: Float): Int {
 @Composable
 private fun SnakePage(viewModel: GamesViewModel, resume: Boolean, onExit: () -> Unit) {
     val gameId = GamesViewModel.GAME_SNAKE
-    var engine by remember { mutableStateOf<SnakeGame?>(null) }
+    var engine by rememberSaveable(
+        stateSaver = Saver(
+            save = { game -> game?.toJson().orEmpty() },
+            restore = { encoded ->
+                encoded.takeIf(String::isNotBlank)?.let { SnakeGame.fromJson(it) }
+            },
+        ),
+    ) { mutableStateOf<SnakeGame?>(null) }
     var frame by remember { mutableIntStateOf(0) }
-    var paused by remember { mutableStateOf(false) }
-    var scoreRecorded by remember { mutableStateOf(false) }
+    var paused by rememberSaveable { mutableStateOf(false) }
+    var scoreRecorded by rememberSaveable { mutableStateOf(false) }
     val meta by viewModel.meta(gameId).collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
@@ -1235,6 +1284,16 @@ private fun SnakePage(viewModel: GamesViewModel, resume: Boolean, onExit: () -> 
 
     val score = remember(engine, frame) { engine?.score ?: 0 }
     val gameOver = remember(engine, frame) { engine?.isGameOver == true }
+
+    GamePlayTimeEffect(
+        gameId,
+        viewModel,
+        active = shouldCountGamePlay(
+            engineReady = engine != null,
+            paused = paused,
+            finished = gameOver,
+        ),
+    )
 
     LaunchedEffect(gameOver) {
         if (gameOver && !scoreRecorded) {
@@ -1405,10 +1464,17 @@ private fun DirectionPad(enabled: Boolean, onDirection: (SnakeGame.Direction) ->
 @Composable
 private fun TetrisPage(viewModel: GamesViewModel, resume: Boolean, onExit: () -> Unit) {
     val gameId = GamesViewModel.GAME_TETRIS
-    var engine by remember { mutableStateOf<TetrisGame?>(null) }
+    var engine by rememberSaveable(
+        stateSaver = Saver(
+            save = { game -> game?.toJson().orEmpty() },
+            restore = { encoded ->
+                encoded.takeIf(String::isNotBlank)?.let { TetrisGame.fromJson(it) }
+            },
+        ),
+    ) { mutableStateOf<TetrisGame?>(null) }
     var frame by remember { mutableIntStateOf(0) }
-    var paused by remember { mutableStateOf(false) }
-    var scoreRecorded by remember { mutableStateOf(false) }
+    var paused by rememberSaveable { mutableStateOf(false) }
+    var scoreRecorded by rememberSaveable { mutableStateOf(false) }
     val meta by viewModel.meta(gameId).collectAsStateWithLifecycle()
     val scheme = MaterialTheme.colorScheme
     // All piece colors are interpolated strictly between the configured primary and secondary.
@@ -1441,6 +1507,16 @@ private fun TetrisPage(viewModel: GamesViewModel, resume: Boolean, onExit: () ->
     val nextColor = remember(engine, frame, pieceColors) {
         pieceColors[(engine?.nextPieceType ?: 0) % pieceColors.size]
     }
+
+    GamePlayTimeEffect(
+        gameId,
+        viewModel,
+        active = shouldCountGamePlay(
+            engineReady = engine != null,
+            paused = paused,
+            finished = gameOver,
+        ),
+    )
 
     LaunchedEffect(gameOver) {
         if (gameOver && !scoreRecorded) {
@@ -1640,6 +1716,7 @@ private val GAME_2048_EASE = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
 private const val TETRIS_BASE_TICK_MILLIS = 600L
 private const val TETRIS_LEVEL_STEP_MILLIS = 40L
 private const val TETRIS_MIN_TICK_MILLIS = 120L
+private const val MAX_SAVED_INSTANCE_GAME_CHARS = 512 * 1024
 
 private val Game2048AnimationSpeed.durationMillis: Int
     get() = when (this) {

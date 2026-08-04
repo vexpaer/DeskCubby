@@ -2,19 +2,24 @@ package com.deskcubby.app.data.sync
 
 import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncServiceType
+import java.io.ByteArrayInputStream
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.time.ZonedDateTime
-import java.time.Instant
-import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.Locale
+import javax.xml.XMLConstants
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
+import org.w3c.dom.Node
+import org.xml.sax.SAXException
 
 class DefaultCloudSyncRemoteStoreFactory : CloudSyncRemoteStoreFactory {
     override fun create(
         config: CloudSyncConfig,
         limits: CloudSyncLimits,
+        transferBudget: TransferBudget,
     ): CloudSyncRemoteStore {
         val validated = config.validateForSync()
         val http = BoundedHttpClient(
@@ -23,16 +28,34 @@ class DefaultCloudSyncRemoteStoreFactory : CloudSyncRemoteStoreFactory {
             userAgent = validated.source.userAgent,
         )
         val transport: ConditionalBlobTransport = when (config.serviceType) {
-            CloudSyncServiceType.WEBDAV -> WebDavBlobTransport(validated, http)
-            CloudSyncServiceType.S3_COMPATIBLE -> S3BlobTransport(validated, http)
+            CloudSyncServiceType.WEBDAV -> WebDavBlobTransport(
+                config = validated,
+                http = BudgetedSyncHttpExecutor(
+                    delegate = WebDavSyncHttpExecutor(
+                        standard = http,
+                        propFind = BoundedPropFindHttpClient(
+                            connectTimeoutMillis = limits.connectTimeoutMillis,
+                            readTimeoutMillis = limits.readTimeoutMillis,
+                            writeTimeoutMillis = limits.readTimeoutMillis,
+                            callTimeoutMillis = limits.overallTimeoutMillis,
+                            userAgent = validated.source.userAgent,
+                        ),
+                    ),
+                    budget = transferBudget,
+                ),
+            )
+            CloudSyncServiceType.S3_COMPATIBLE -> S3BlobTransport(
+                validated,
+                BudgetedSyncHttpExecutor(http, transferBudget),
+            )
         }
         return ManifestRemoteStore(transport, limits)
     }
 }
 
-private class WebDavBlobTransport(
+internal class WebDavBlobTransport(
     config: ValidatedCloudSyncConfig,
-    private val http: BoundedHttpClient,
+    private val http: SyncHttpExecutor,
 ) : ConditionalBlobTransport {
     private val collectionUri = buildCollectionUri(
         endpoint = config.endpoint,
@@ -53,30 +76,45 @@ private class WebDavBlobTransport(
         maxBytes: Long,
         expectedVersion: String?,
     ): BlobRead? {
-        val headers = buildMap {
+        val uri = appendStorageName(collectionUri, storageName)
+        val initialHeaders = buildMap {
             authorization?.let { put("Authorization", it) }
-            expectedVersion?.takeUnless(::isLastModifiedVersion)?.let { put("If-Match", it) }
+            expectedVersion?.let { addReadConditionHeaders(it) }
         }
-        val response = http.execute(
-            SyncHttpRequest(
-                method = "GET",
-                uri = appendStorageName(collectionUri, storageName),
-                headers = headers,
-                maxResponseBytes = maxBytes,
-            ),
+        var response = executeGet(
+            uri = uri,
+            headers = initialHeaders,
+            maxBytes = maxBytes,
         )
-        when (response.status) {
-            404 -> return null
-            409, 412 -> throw CloudSyncConflictException()
-            200 -> Unit
-            else -> throw statusException("WebDAV 读取", response.status)
+        if (response.status == 404) return null
+
+        var actualHash = sha256(response.body)
+        var metadata = response.toBlobMetadata(allowMissingVersion = true)
+        if (metadata.version.isBlank()) {
+            val unvalidatedContentHash = actualHash
+            val properties = readProperties(uri)
+                ?: throw missingWebDavValidator(response)
+            val propertyVersion = properties.strongEtag
+                ?: throw missingWebDavValidator(response)
+            val confirmationHeaders = buildMap {
+                authorization?.let { put("Authorization", it) }
+                addReadConditionHeaders(propertyVersion)
+            }
+            response = executeGet(
+                uri = uri,
+                headers = confirmationHeaders,
+                maxBytes = maxBytes,
+            )
+            if (response.status == 404) throw remoteVersionConflict()
+            actualHash = sha256(response.body)
+            if (actualHash != unvalidatedContentHash) throw remoteVersionConflict()
+            metadata = response.withWebDavEtag(properties).toBlobMetadata()
+            if (metadata.version != propertyVersion) {
+                throw remoteVersionConflict()
+            }
         }
-        val metadata = response.toBlobMetadata(
-            allowLastModifiedFallback = true,
-            fallbackSha256 = sha256(response.body),
-        )
-        if (expectedVersion != null && metadata.version != expectedVersion) {
-            throw CloudSyncConflictException()
+        if (expectedVersion != null && metadata.version != requireStrongRemoteVersion(expectedVersion)) {
+            throw remoteVersionConflict()
         }
         if (metadata.size >= 0L && metadata.size != response.body.size.toLong()) {
             throw CloudSyncException("WebDAV 返回的文件长度不完整。")
@@ -87,6 +125,57 @@ private class WebDavBlobTransport(
         )
     }
 
+    private suspend fun executeGet(
+        uri: URI,
+        headers: Map<String, String>,
+        maxBytes: Long,
+    ): SyncHttpResponse {
+        val response = http.execute(
+            SyncHttpRequest(
+                method = "GET",
+                uri = uri,
+                headers = headers,
+                maxResponseBytes = maxBytes,
+            ),
+        )
+        when (response.status) {
+            200, 404 -> Unit
+            409, 412 -> throw CloudSyncConflictException()
+            else -> throw statusException("WebDAV 读取", response.status)
+        }
+        return response
+    }
+
+    private suspend fun readProperties(uri: URI): WebDavProperties? {
+        val headers = buildMap {
+            authorization?.let { put("Authorization", it) }
+            put("Depth", "0")
+            put("Content-Type", "application/xml; charset=utf-8")
+        }
+        val response = http.execute(
+            SyncHttpRequest(
+                method = "PROPFIND",
+                uri = uri,
+                headers = headers,
+                body = WEBDAV_PROPERTY_REQUEST,
+                maxResponseBytes = MAX_DAV_PROPERTIES_BYTES,
+            ),
+        )
+        when (response.status) {
+            200, 207 -> Unit
+            404, 409, 412 -> throw remoteVersionConflict()
+            405, 501 -> throw CloudSyncException(
+                "WebDAV 服务未返回文件验证头，也不支持读取强 ETag 属性，" +
+                    "为避免覆盖远端修改，已停止同步。 / The WebDAV service returned no " +
+                    "validator header and does not support the strong ETag property; " +
+                    "sync was stopped to avoid overwriting remote changes.",
+                errorCode = "SYNC_REMOTE_VALIDATION",
+            )
+            else -> throw statusException("WebDAV 属性读取", response.status)
+        }
+        return parseWebDavProperties(response.body, uri)
+    }
+
     override suspend fun put(
         storageName: String,
         bytes: ByteArray,
@@ -94,29 +183,16 @@ private class WebDavBlobTransport(
         condition: BlobWriteCondition,
     ): BlobMetadata {
         val uri = appendStorageName(collectionUri, storageName)
-        val fallbackCondition = (condition as? BlobWriteCondition.MustMatch)
-            ?.version
-            ?.let(::decodeLastModifiedVersion)
-        if (fallbackCondition != null) {
-            val current = get(storageName, MAX_ETAGLESS_PRECONDITION_BYTES)
-                ?: throw CloudSyncConflictException()
-            if (current.metadata.version != (condition as BlobWriteCondition.MustMatch).version) {
-                throw CloudSyncConflictException()
-            }
-        }
         val headers = buildMap {
             authorization?.let { put("Authorization", it) }
             put("Content-Type", "application/octet-stream")
             put("X-DeskCubby-Sha256", sha256)
             when (condition) {
                 BlobWriteCondition.MustNotExist -> put("If-None-Match", "*")
-                is BlobWriteCondition.MustMatch -> {
-                    if (fallbackCondition == null) {
-                        put("If-Match", condition.version)
-                    } else {
-                        put("If-Unmodified-Since", formatHttpDate(fallbackCondition.epochSecond))
-                    }
-                }
+                is BlobWriteCondition.MustMatch -> put(
+                    "If-Match",
+                    requireStrongRemoteVersion(condition.version),
+                )
             }
         }
         val response = http.execute(
@@ -137,20 +213,18 @@ private class WebDavBlobTransport(
         if (returned.version.isNotBlank()) {
             return returned.copy(size = bytes.size.toLong())
         }
-        // If PUT omitted ETag, read the exact committed bytes and obtain their ETag together.
-        // HEAD alone is insufficient: a competing writer could win between PUT and HEAD.
-        val verified = get(storageName, bytes.size.toLong())
-            ?: throw CloudSyncConflictException()
-        if (verified.bytes.size != bytes.size || sha256(verified.bytes) != sha256) {
-            throw CloudSyncConflictException()
-        }
-        return verified.metadata
+        return verifyFallbackWrite(
+            storageName = storageName,
+            bytes = bytes,
+            expectedSha256 = sha256,
+            read = ::get,
+        )
     }
 }
 
 private class S3BlobTransport(
     config: ValidatedCloudSyncConfig,
-    private val http: BoundedHttpClient,
+    private val http: SyncHttpExecutor,
 ) : ConditionalBlobTransport {
     private val config = config.source
     private val collectionUri = buildS3CollectionUri(
@@ -240,53 +314,198 @@ private class S3BlobTransport(
         if (metadata.version.isNotBlank()) {
             return metadata.copy(size = bytes.size.toLong())
         }
-        val verified = get(storageName, bytes.size.toLong())
-            ?: throw CloudSyncConflictException()
-        if (verified.bytes.size != bytes.size || sha256(verified.bytes) != sha256) {
-            throw CloudSyncConflictException()
-        }
-        return verified.metadata
+        return verifyFallbackWrite(
+            storageName = storageName,
+            bytes = bytes,
+            expectedSha256 = sha256,
+            read = ::get,
+        )
     }
+}
+
+internal data class WebDavProperties(
+    val strongEtag: String?,
+)
+
+internal fun parseWebDavProperties(
+    bytes: ByteArray,
+    targetUri: URI,
+): WebDavProperties? {
+    if (bytes.isEmpty() || bytes.size.toLong() > MAX_DAV_PROPERTIES_BYTES) {
+        throw invalidWebDavProperties()
+    }
+    if (containsForbiddenXmlDeclaration(bytes)) {
+        throw CloudSyncException(
+            "WebDAV 属性响应包含禁止的 DTD/实体声明，已停止同步。 / " +
+                "The WebDAV property response contains a forbidden DTD/entity declaration; " +
+                "sync was stopped.",
+            errorCode = "SYNC_REMOTE_VALIDATION",
+        )
+    }
+    try {
+        val factory = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            isValidating = false
+            isExpandEntityReferences = false
+            runCatching { isXIncludeAware = false }
+            runCatching { setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true) }
+            runCatching {
+                setFeature("http://xml.org/sax/features/external-general-entities", false)
+            }
+            runCatching {
+                setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+            }
+            runCatching {
+                setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+            }
+        }
+        val builder = factory.newDocumentBuilder().apply {
+            setEntityResolver { _, _ ->
+                throw SAXException("External XML entities are disabled")
+            }
+        }
+        val document = ByteArrayInputStream(bytes).use(builder::parse)
+        val root = document.documentElement ?: throw invalidWebDavProperties()
+        if (root.localNameLowercase() != "multistatus") throw invalidWebDavProperties()
+
+        var foundTarget = false
+        var strongEtag: String? = null
+        root.childElements("response").forEach { response ->
+            val href = response.firstChildText("href") ?: return@forEach
+            if (!webDavHrefMatchesTarget(href, targetUri)) return@forEach
+            foundTarget = true
+            response.childElements("propstat").forEach { propstat ->
+                val status = propstat.firstChildText("status").orEmpty()
+                if (!SUCCESSFUL_DAV_STATUS.containsMatchIn(status)) return@forEach
+                propstat.childElements("prop").forEach { prop ->
+                    prop.childElements().forEach { property ->
+                        when (property.localNameLowercase()) {
+                            "getetag" -> strongEtag = mergeDavProperty(
+                                current = strongEtag,
+                                candidate = parseStrongEntityTag(property.textContent.orEmpty()),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if (!foundTarget) return null
+        return WebDavProperties(strongEtag)
+    } catch (error: CloudSyncException) {
+        throw error
+    } catch (error: Exception) {
+        throw invalidWebDavProperties(error)
+    }
+}
+
+private fun SyncHttpResponse.withWebDavEtag(
+    properties: WebDavProperties,
+): SyncHttpResponse {
+    val merged = headers.toMutableMap()
+    if (strongEtagOrNull() == null) {
+        properties.strongEtag?.let { merged["etag"] = listOf(it) }
+    }
+    return SyncHttpResponse(status = status, headers = merged, body = body)
+}
+
+private fun <T> mergeDavProperty(current: T?, candidate: T?): T? {
+    if (candidate == null) return current
+    if (current != null && current != candidate) throw invalidWebDavProperties()
+    return candidate
+}
+
+private fun Element.childElements(localName: String? = null): List<Element> = buildList {
+    val children = childNodes
+    for (index in 0 until children.length) {
+        val child = children.item(index)
+        if (child is Element && (localName == null || child.localNameLowercase() == localName)) {
+            add(child)
+        }
+    }
+}
+
+private fun Element.firstChildText(localName: String): String? =
+    childElements(localName).firstOrNull()?.textContent?.trim()
+
+private fun Node.localNameLowercase(): String =
+    (localName ?: nodeName.substringAfter(':')).lowercase(Locale.ROOT)
+
+private fun webDavHrefMatchesTarget(rawHref: String, targetUri: URI): Boolean {
+    if (rawHref.isBlank() || rawHref.length > MAX_DAV_HREF_CHARS || rawHref.any(Char::isISOControl)) {
+        return false
+    }
+    val resolved = runCatching {
+        val href = URI(rawHref.trim())
+        if (href.isAbsolute) href else targetUri.resolve(href)
+    }.getOrNull() ?: return false
+    if (resolved.userInfo != null || resolved.query != null || resolved.fragment != null) return false
+    return resolved.scheme.equals(targetUri.scheme, ignoreCase = true) &&
+        resolved.host.equals(targetUri.host, ignoreCase = true) &&
+        effectivePort(resolved) == effectivePort(targetUri) &&
+        resolved.path == targetUri.path
+}
+
+private fun effectivePort(uri: URI): Int = when {
+    uri.port >= 0 -> uri.port
+    uri.scheme.equals("http", ignoreCase = true) -> 80
+    uri.scheme.equals("https", ignoreCase = true) -> 443
+    else -> -1
+}
+
+private fun containsForbiddenXmlDeclaration(bytes: ByteArray): Boolean {
+    // Removing NUL also catches the common UTF-16/UTF-32 encodings of XML declarations.
+    val ascii = buildString(bytes.size) {
+        bytes.forEach { byte ->
+            val value = byte.toInt() and 0xff
+            if (value != 0 && value < 128) append(value.toChar().lowercaseChar())
+        }
+    }
+    return "<!doctype" in ascii || "<!entity" in ascii
+}
+
+private fun invalidWebDavProperties(cause: Throwable? = null): CloudSyncException =
+    CloudSyncException(
+        "WebDAV 属性响应无效，已停止同步。 / " +
+            "The WebDAV property response is invalid; sync was stopped.",
+        cause = cause,
+        errorCode = "SYNC_REMOTE_VALIDATION",
+    )
+
+private fun missingWebDavValidator(response: SyncHttpResponse): CloudSyncException {
+    val weak = response.firstHeader("etag").orEmpty().trim()
+        .startsWith("W/", ignoreCase = true)
+    val message = if (weak) {
+        "WebDAV 服务仅提供弱 ETag，GET 与 PROPFIND 均未提供单个合法强 ETag，" +
+            "为避免覆盖远端修改，已停止同步。 / The WebDAV service exposes only a weak " +
+            "ETag, and neither GET nor PROPFIND supplies one valid strong ETag; " +
+            "sync was stopped to avoid overwriting remote changes."
+    } else {
+        "WebDAV 服务的 GET 与 PROPFIND 均未提供单个合法强 ETag，" +
+            "为避免覆盖远端修改，已停止同步。 / Neither GET nor PROPFIND supplies one " +
+            "valid strong ETag; sync was stopped to avoid overwriting remote changes."
+    }
+    return CloudSyncException(message, errorCode = "SYNC_REMOTE_VALIDATION")
 }
 
 internal fun SyncHttpResponse.toBlobMetadata(
     allowMissingVersion: Boolean = false,
-    allowLastModifiedFallback: Boolean = false,
-    fallbackSha256: String? = null,
 ): BlobMetadata {
     val returnedEtag = firstHeader("etag").orEmpty().trim()
-    if (returnedEtag.length > MAX_ETAG_CHARS || returnedEtag.any { it == '\r' || it == '\n' }) {
-        throw CloudSyncException("云端服务返回了无效的 ETag。")
-    }
-    val strongEtag = returnedEtag.takeUnless { it.startsWith("W/", ignoreCase = true) }.orEmpty()
+    val strongEtag = strongEtagOrNull().orEmpty()
     val size = firstHeader("content-length")?.toLongOrNull() ?: -1L
-    val lastModifiedHeader = firstHeader("last-modified")
-    val parsedLastModified = lastModifiedHeader?.let { raw ->
-        runCatching {
-            ZonedDateTime.parse(raw, DateTimeFormatter.RFC_1123_DATE_TIME)
-                .toInstant()
-                .toEpochMilli()
-        }.getOrNull()
-    }
-    val fallbackVersion = if (
-        strongEtag.isBlank() && allowLastModifiedFallback && parsedLastModified != null &&
-        parsedLastModified >= 0L &&
-        fallbackSha256 != null && SHA256.matches(fallbackSha256)
-    ) {
-        encodeLastModifiedVersion(parsedLastModified / 1_000L, fallbackSha256)
-    } else {
-        ""
-    }
-    val version = strongEtag.ifBlank { fallbackVersion }
+    val parsedLastModified = parseLastModifiedMillis(firstHeader("last-modified").orEmpty())
+    val version = strongEtag
     if (!allowMissingVersion && version.isBlank()) {
         val reason = if (returnedEtag.startsWith("W/", ignoreCase = true)) {
-            "云端服务仅提供弱 ETag，且没有可靠的 Last-Modified，无法执行条件同步。"
+            "云端服务仅提供弱 ETag，无法执行安全条件同步。 / " +
+                "The cloud service exposes only a weak ETag, so safe conditional sync is unavailable."
         } else {
-            "云端服务未提供 ETag 或可靠的 Last-Modified，无法执行条件同步。"
+            "云端服务未提供单个合法强 ETag，无法执行安全条件同步。 / " +
+                "The cloud service exposes no single valid strong ETag, so safe conditional sync is unavailable."
         }
-        throw CloudSyncException(reason)
+        throw CloudSyncException(reason, errorCode = "SYNC_REMOTE_VALIDATION")
     }
-    val lastModified = parsedLastModified ?: System.currentTimeMillis()
+    val lastModified = parsedLastModified ?: 0L
     return BlobMetadata(
         version = version,
         size = size,
@@ -294,27 +513,97 @@ internal fun SyncHttpResponse.toBlobMetadata(
     )
 }
 
-internal data class LastModifiedVersion(val epochSecond: Long, val sha256: String)
-
-internal fun encodeLastModifiedVersion(epochSecond: Long, sha256: String): String =
-    "$LAST_MODIFIED_VERSION_PREFIX$epochSecond:$sha256"
-
-internal fun decodeLastModifiedVersion(version: String): LastModifiedVersion? {
-    if (!version.startsWith(LAST_MODIFIED_VERSION_PREFIX)) return null
-    val fields = version.removePrefix(LAST_MODIFIED_VERSION_PREFIX).split(':')
-    if (fields.size != 2) return null
-    val epochSecond = fields[0].toLongOrNull()?.takeIf { it >= 0L } ?: return null
-    val hash = fields[1].takeIf(SHA256::matches) ?: return null
-    return LastModifiedVersion(epochSecond, hash)
+private fun SyncHttpResponse.strongEtagOrNull(): String? {
+    val values = headers["etag"].orEmpty()
+    if (values.size > 1) throw invalidEntityTag()
+    return values.singleOrNull()?.let(::parseStrongEntityTag)
 }
 
-private fun isLastModifiedVersion(version: String): Boolean =
-    decodeLastModifiedVersion(version) != null
+private fun parseStrongEntityTag(raw: String): String? {
+    val value = raw.orEmpty().trim()
+    if (value.isEmpty()) return null
+    if (value.length > MAX_ETAG_CHARS || value.any(Char::isISOControl)) {
+        throw invalidEntityTag()
+    }
+    val opaqueTag = if (value.startsWith("W/", ignoreCase = true)) {
+        value.substring(2)
+    } else {
+        value
+    }
+    if (opaqueTag.length < 2 || opaqueTag.first() != '"' || opaqueTag.last() != '"' ||
+        opaqueTag.substring(1, opaqueTag.lastIndex).any { character ->
+            // RFC 9110 entity-tag = DQUOTE *etagc DQUOTE. Be conservative about obs-text
+            // because header decoding differs across providers; visible ASCII is sufficient for
+            // real-world WebDAV validators and rejects lists such as `"one", "two"`.
+            character.code !in 0x21..0x7e || character == '"'
+        }
+    ) {
+        throw invalidEntityTag()
+    }
+    // Weak entity-tags are syntactically valid but cannot protect a conditional write.
+    return value.takeUnless { it.startsWith("W/", ignoreCase = true) }
+}
 
-internal fun formatHttpDate(epochSecond: Long): String =
-    DateTimeFormatter.RFC_1123_DATE_TIME.format(
-        Instant.ofEpochSecond(epochSecond).atZone(ZoneOffset.UTC),
-    )
+private fun invalidEntityTag(): CloudSyncException = CloudSyncException(
+    "云端服务返回了无效或不可安全使用的 ETag，已停止同步。 / " +
+        "The cloud service returned an invalid or unsafe ETag; sync was stopped.",
+    errorCode = "SYNC_REMOTE_VALIDATION",
+)
+
+private fun parseLastModifiedMillis(raw: String): Long? {
+    val value = raw.trim()
+    if (value.isEmpty()) return null
+    if (value.length > MAX_LAST_MODIFIED_CHARS || value.any { it == '\r' || it == '\n' }) {
+        throw CloudSyncException(
+            "云端服务返回了无效的 Last-Modified，已停止同步。 / " +
+                "The cloud service returned an invalid Last-Modified value; sync was stopped.",
+            errorCode = "SYNC_REMOTE_VALIDATION",
+        )
+    }
+    return runCatching {
+        ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME)
+            .toInstant()
+            .toEpochMilli()
+    }.getOrNull()?.takeIf { it >= 0L }
+}
+
+private fun requireStrongRemoteVersion(version: String): String {
+    val strong = parseStrongEntityTag(version)
+    if (strong == null) {
+        throw CloudSyncException(
+            "云端版本不是单个合法强 ETag，已停止写入。 / " +
+                "The remote version is not one valid strong ETag; the write was stopped.",
+            errorCode = "SYNC_REMOTE_VALIDATION",
+        )
+    }
+    return strong
+}
+
+private fun MutableMap<String, String>.addReadConditionHeaders(version: String) {
+    put("If-Match", requireStrongRemoteVersion(version))
+}
+
+private suspend fun verifyFallbackWrite(
+    storageName: String,
+    bytes: ByteArray,
+    expectedSha256: String,
+    read: suspend (String, Long, String?) -> BlobRead?,
+): BlobMetadata {
+    val maxBytes = verificationReadLimit(bytes)
+    val first = read(storageName, maxBytes, null) ?: throw remoteVersionConflict()
+    if (first.bytes.size != bytes.size || sha256(first.bytes) != expectedSha256) {
+        throw remoteVersionConflict()
+    }
+    return first.metadata
+}
+
+private fun verificationReadLimit(bytes: ByteArray): Long =
+    maxOf(1L, bytes.size.toLong())
+
+private fun remoteVersionConflict(): CloudSyncConflictException = CloudSyncConflictException(
+    "云端对象在安全校验期间发生变化，未继续覆盖；请重新同步。 / " +
+        "The remote object changed during safety verification and was not overwritten; sync again.",
+)
 
 private fun statusException(action: String, status: Int): CloudSyncException {
     val detail = when (status) {
@@ -451,12 +740,21 @@ private fun Map<String, String>.withoutSyntheticHost(): Map<String, String> =
     filterKeys { !it.equals("host", ignoreCase = true) }
 
 private val STORAGE_NAME = Regex("[.A-Za-z0-9_-]{1,200}")
+private val SUCCESSFUL_DAV_STATUS = Regex("(?:^|\\s)200(?:\\s|$)")
 private val S3_ERROR_XML =
     Regex("""<(?:[A-Za-z0-9_-]+:)?Code>\s*([A-Za-z0-9._-]{1,128})\s*</(?:[A-Za-z0-9_-]+:)?Code>""")
 private val S3_ERROR_CODE = Regex("[A-Za-z0-9._-]{1,128}")
 private val HEX = "0123456789ABCDEF".toCharArray()
+private val WEBDAV_PROPERTY_REQUEST = """
+    <?xml version="1.0" encoding="utf-8"?>
+    <D:propfind xmlns:D="DAV:">
+      <D:prop>
+        <D:getetag/>
+      </D:prop>
+    </D:propfind>
+""".trimIndent().toByteArray(StandardCharsets.UTF_8)
 private const val MAX_ETAG_CHARS = 4_096
+private const val MAX_LAST_MODIFIED_CHARS = 128
 private const val MAX_ERROR_BYTES = 64L * 1024
-private const val MAX_ETAGLESS_PRECONDITION_BYTES = 64L * 1024 * 1024
-private const val LAST_MODIFIED_VERSION_PREFIX = "deskcubby-lm-v1:"
-private val SHA256 = Regex("[0-9a-f]{64}")
+private const val MAX_DAV_PROPERTIES_BYTES = 64L * 1024
+private const val MAX_DAV_HREF_CHARS = 4_096

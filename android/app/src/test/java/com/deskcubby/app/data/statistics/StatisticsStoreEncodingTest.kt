@@ -2,11 +2,23 @@ package com.deskcubby.app.data.statistics
 
 import java.nio.charset.StandardCharsets
 import java.time.LocalDate
+import kotlinx.coroutines.CancellationException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class StatisticsStoreEncodingTest {
+    @Test
+    fun `legacy migration never converts cancellation into a recoverable parse failure`() {
+        val cancellation = CancellationException("test cancellation")
+
+        val thrown = assertThrows(CancellationException::class.java) {
+            rethrowStatisticsMigrationCancellation(cancellation)
+        }
+
+        assertEquals(cancellation, thrown)
+    }
+
     @Test
     fun `encoding is decoded and compared before it can be committed`() {
         var decodedText: String? = null

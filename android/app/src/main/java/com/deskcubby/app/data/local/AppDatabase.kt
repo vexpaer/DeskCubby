@@ -18,8 +18,15 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AiMessageEntity::class,
         VaultItemEntity::class,
         GameStateEntity::class,
+        UsageHistoryEntity::class,
+        UsageDayEntity::class,
+        UsageAppDurationEntity::class,
+        UsageDeviceEntity::class,
+        StepHistoryEntity::class,
+        StepDayEntity::class,
+        LegacyStatisticsMigrationEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -33,6 +40,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun aiChatDao(): AiChatDao
     abstract fun vaultItemDao(): VaultItemDao
     abstract fun gameStateDao(): GameStateDao
+    abstract fun usageStatisticsDao(): UsageStatisticsDao
+    abstract fun stepStatisticsDao(): StepStatisticsDao
+    abstract fun legacyStatisticsMigrationDao(): LegacyStatisticsMigrationDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -275,6 +285,112 @@ abstract class AppDatabase : RoomDatabase() {
                         arrayOf(index.toLong(), id),
                     )
                 }
+            }
+        }
+
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `usage_histories` (
+                        `ownerId` TEXT NOT NULL,
+                        `trackingStartedOn` TEXT,
+                        `backfillCompletedThrough` TEXT,
+                        PRIMARY KEY(`ownerId`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `usage_days` (
+                        `ownerId` TEXT NOT NULL,
+                        `dateIso` TEXT NOT NULL,
+                        `zoneId` TEXT NOT NULL,
+                        `state` TEXT NOT NULL,
+                        `collectedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`ownerId`, `dateIso`),
+                        FOREIGN KEY(`ownerId`) REFERENCES `usage_histories`(`ownerId`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_usage_days_ownerId` " +
+                        "ON `usage_days` (`ownerId`)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `usage_app_durations` (
+                        `ownerId` TEXT NOT NULL,
+                        `dateIso` TEXT NOT NULL,
+                        `packageName` TEXT NOT NULL,
+                        `foregroundMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`ownerId`, `dateIso`, `packageName`),
+                        FOREIGN KEY(`ownerId`, `dateIso`)
+                            REFERENCES `usage_days`(`ownerId`, `dateIso`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_usage_app_durations_ownerId_dateIso` " +
+                        "ON `usage_app_durations` (`ownerId`, `dateIso`)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `usage_devices` (
+                        `deviceId` TEXT NOT NULL,
+                        `deviceName` TEXT NOT NULL,
+                        `platform` TEXT NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`deviceId`),
+                        FOREIGN KEY(`deviceId`) REFERENCES `usage_histories`(`ownerId`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `step_history` (
+                        `id` INTEGER NOT NULL,
+                        `trackingStartedOn` TEXT,
+                        `baselineDateIso` TEXT,
+                        `baselineCumulativeSteps` INTEGER,
+                        `baselineCapturedAtEpochMillis` INTEGER,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `step_days` (
+                        `historyId` INTEGER NOT NULL,
+                        `dateIso` TEXT NOT NULL,
+                        `zoneId` TEXT NOT NULL,
+                        `state` TEXT NOT NULL,
+                        `collectedAtEpochMillis` INTEGER NOT NULL,
+                        `steps` INTEGER,
+                        `distanceMeters` REAL,
+                        `activeCaloriesKilocalories` REAL,
+                        PRIMARY KEY(`historyId`, `dateIso`),
+                        FOREIGN KEY(`historyId`) REFERENCES `step_history`(`id`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_step_days_historyId` " +
+                        "ON `step_days` (`historyId`)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `legacy_statistics_migrations` (
+                        `migrationId` TEXT NOT NULL,
+                        `importedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`migrationId`)
+                    )
+                    """.trimIndent(),
+                )
             }
         }
     }

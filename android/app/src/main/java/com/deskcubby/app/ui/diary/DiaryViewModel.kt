@@ -16,6 +16,10 @@ import com.deskcubby.app.data.repository.DiaryPreviewMedia
 import com.deskcubby.app.data.repository.DiaryTextUtils
 import com.deskcubby.app.data.repository.ExternalFileConflictException
 import com.deskcubby.app.data.repository.MealCalendarDay
+import com.deskcubby.app.data.repository.MealDayDetails
+import com.deskcubby.app.data.repository.MealEnergyEstimate
+import com.deskcubby.app.data.repository.MAX_MEAL_ENERGY_KJ
+import com.deskcubby.app.data.repository.MAX_MEAL_NOTE_CHARS
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import javax.inject.Inject
@@ -158,29 +162,70 @@ class DiaryViewModel @Inject constructor(
         }
     }
 
-    fun calculateUncalculatedCalories(dateIso: String? = null, force: Boolean = false) {
-        if (!settings.value.calorieEstimationEnabled || _mealCalendarState.value.loading) return
+    fun calculateUncalculatedCalories(
+        dateIso: String? = null,
+        force: Boolean = false,
+        noteOverride: String? = null,
+    ) {
+        val initialState = _mealCalendarState.value
+        if (!settings.value.calorieEstimationEnabled || initialState.loading) return
+        _mealCalendarState.value = initialState.copy(loading = true, error = null)
         viewModelScope.launch {
-            _mealCalendarState.value = _mealCalendarState.value.copy(loading = true, error = null)
             try {
-                val currentItems = _mealCalendarState.value.items.takeIf { it.isNotEmpty() }
-                    ?: repository.scanMealCalendar(settings.value)
+                val currentSettings = settings.value
+                val currentItems = initialState.items.takeIf { it.isNotEmpty() }
+                    ?: repository.scanMealCalendar(currentSettings)
                 val selected = currentItems
                     .filter { dateIso == null || it.dateIso == dateIso }
-                    .flatMap { it.photos }
-                    .filter { force || it.energyKj == null }
-                    .distinctBy { it.fileName.ifBlank { it.uri.toString() } }
-                val updatedEnergy = mutableMapOf<String, Int>()
-                selected.forEach { photo ->
-                    val energy = calorieRepository.estimate(photo.uri.toString(), settings.value)
-                    repository.setMealPhotoEnergy(photo, energy, settings.value)
-                    updatedEnergy[photo.fileName] = energy
+                    .flatMap { day ->
+                        val note = if (day.dateIso == dateIso && noteOverride != null) {
+                            noteOverride.trim().take(MAX_MEAL_NOTE_CHARS)
+                        } else {
+                            day.details.note
+                        }
+                        day.photos
+                            .filter { force || it.energyKj == null }
+                            .map { photo -> Triple(day.dateIso, note, photo) }
+                    }
+                    .distinctBy { (_, _, photo) ->
+                        photo.fileName.lowercase().ifBlank { photo.uri.toString() }
+                    }
+                val estimates = linkedMapOf<String, MealEnergyEstimate>()
+                selected.forEach { (_, note, photo) ->
+                    val fileName = photo.fileName.takeIf(String::isNotBlank)
+                        ?: error("无法确定图片文件名，热量未记录")
+                    estimates[fileName] = calorieRepository.estimate(
+                        imageUri = photo.uri.toString(),
+                        settings = currentSettings,
+                        note = note,
+                    )
                 }
+                val updatedDayDetails = if (force && dateIso != null && selected.isNotEmpty()) {
+                    val currentDetails = currentItems.firstOrNull { it.dateIso == dateIso }
+                        ?.details
+                        ?: MealDayDetails()
+                    mapOf(
+                        dateIso to currentDetails.copy(
+                            totalEnergyKjOverride = null,
+                            note = noteOverride?.trim()?.take(MAX_MEAL_NOTE_CHARS)
+                                ?: currentDetails.note,
+                        ),
+                    )
+                } else {
+                    emptyMap()
+                }
+                repository.setMealEnergyResults(estimates, updatedDayDetails, currentSettings)
                 val updatedItems = currentItems.map { day ->
                     day.copy(
                         photos = day.photos.map { photo ->
-                            updatedEnergy[photo.fileName]?.let { photo.copy(energyKj = it) } ?: photo
+                            estimates[photo.fileName]?.let { estimate ->
+                                photo.copy(
+                                    energyKj = estimate.energyKj,
+                                    foods = estimate.foods,
+                                )
+                            } ?: photo
                         },
+                        details = updatedDayDetails[day.dateIso] ?: day.details,
                     )
                 }
                 _mealCalendarState.value = MealCalendarState(items = updatedItems)
@@ -194,6 +239,41 @@ class DiaryViewModel @Inject constructor(
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { _mealCalendarState.value = _mealCalendarState.value.copy(loading = false, error = error.userMessage()) }
+        }
+    }
+
+    fun saveMealDayDetails(
+        dateIso: String,
+        totalEnergyKjOverride: Int?,
+        note: String,
+    ) {
+        val initialState = _mealCalendarState.value
+        if (initialState.loading) return
+        if (totalEnergyKjOverride != null && totalEnergyKjOverride !in 0..MAX_MEAL_ENERGY_KJ) {
+            _mealCalendarState.value = initialState.copy(
+                error = localized("总热量必须在 0–$MAX_MEAL_ENERGY_KJ kJ 之间", "Total energy is out of range"),
+            )
+            return
+        }
+        val normalizedDetails = MealDayDetails(
+            totalEnergyKjOverride = totalEnergyKjOverride,
+            note = note.trim().take(MAX_MEAL_NOTE_CHARS),
+        )
+        _mealCalendarState.value = initialState.copy(loading = true, error = null)
+        viewModelScope.launch {
+            try {
+                repository.setMealDayDetails(dateIso, normalizedDetails, settings.value)
+                _mealCalendarState.value = MealCalendarState(
+                    items = initialState.items.map { day ->
+                        if (day.dateIso == dateIso) day.copy(details = normalizedDetails) else day
+                    },
+                )
+                _message.value = localized("热量详情已保存", "Energy details saved")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _mealCalendarState.value = initialState.copy(error = error.userMessage())
+            }
         }
     }
 
@@ -378,7 +458,9 @@ class DiaryViewModel @Inject constructor(
                     onContentChanged(state.content + lineBreak + media.markdown)
                     if (category != null && settings.value.calorieEstimationEnabled) {
                         runCatching { calorieRepository.estimate(media.documentUri, settings.value) }
-                            .onSuccess { energy -> updateImageCaption(media.markdown, "$category-${energy}kJ") }
+                            .onSuccess { estimate ->
+                                repository.setMealPhotoEstimate(media.fileName, estimate, settings.value)
+                            }
                             .onFailure { _editorState.value = _editorState.value.copy(error = it.userMessage()) }
                     }
                 }

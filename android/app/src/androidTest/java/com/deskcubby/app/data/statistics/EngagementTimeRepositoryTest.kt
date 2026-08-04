@@ -53,4 +53,33 @@ class EngagementTimeRepositoryTest {
             isolatedFiles.deleteRecursively()
         }
     }
+
+    @Test
+    fun detachedEndCannotRemoveImmediatelyRestartedSession() = runBlocking {
+        val application = ApplicationProvider.getApplicationContext<Context>()
+        val isolatedFiles = File(application.cacheDir, "engagement-race-${UUID.randomUUID()}")
+        val isolatedContext = object : ContextWrapper(application) {
+            override fun getFilesDir(): File = isolatedFiles
+        }
+        try {
+            val repository = EngagementTimeRepository(isolatedContext)
+            repository.begin(EngagementKind.GAME, "spider")
+            delay(20)
+            val firstInterval = requireNotNull(
+                repository.endNow(EngagementKind.GAME, "spider"),
+            )
+
+            // Mirrors Activity recreation: the new UI begins before old duration I/O finishes.
+            repository.begin(EngagementKind.GAME, "spider")
+            repository.commit(firstInterval)
+            val afterFirstCommit = repository.snapshot.value.total(EngagementKind.GAME, "spider")
+            delay(20)
+            repository.end(EngagementKind.GAME, "spider")
+
+            val total = repository.snapshot.value.total(EngagementKind.GAME, "spider")
+            assertTrue(total > afterFirstCommit)
+        } finally {
+            isolatedFiles.deleteRecursively()
+        }
+    }
 }

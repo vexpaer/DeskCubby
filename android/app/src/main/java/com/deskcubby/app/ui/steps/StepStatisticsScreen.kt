@@ -221,8 +221,8 @@ private fun StepCollectionMessage(
         !state.enabled -> StatisticsMessagePanel(
             title = tr("统计已关闭", "Tracking is off"),
             message = tr(
-                "开启后，步数、距离和活动热量只保存在应用私有的 step-statistics.json 中；关闭不会删除已有历史。",
-                "When enabled, steps, distance, and active calories stay in the private step-statistics.json file. Turning it off keeps existing history.",
+                "开启后，步数、距离和活动热量只保存在应用私有数据库中；关闭不会删除已有历史。",
+                "When enabled, steps, distance, and active calories stay in the app-private database. Turning it off keeps existing history.",
             ),
             actionLabel = tr("打开健康设置", "Open health settings"),
             onAction = onOpenTrackingSettings,

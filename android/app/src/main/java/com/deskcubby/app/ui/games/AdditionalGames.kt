@@ -117,6 +117,15 @@ internal fun MinesweeperPage(
 
     val current = remember(engine, frame) { engine }
     val finished = current?.isGameOver == true || current?.isWon == true
+    GamePlayTimeEffect(
+        gameId = gameId,
+        viewModel = viewModel,
+        active = shouldCountGamePlay(
+            engineReady = current != null,
+            finished = finished,
+            setupVisible = showConfiguration,
+        ),
+    )
     LaunchedEffect(finished) {
         if (finished && !resultRecorded) {
             resultRecorded = true
@@ -340,6 +349,15 @@ internal fun SpiderSolitairePage(
     }
     val current = engine
 
+    GamePlayTimeEffect(
+        gameId = gameId,
+        viewModel = viewModel,
+        active = shouldCountGamePlay(
+            engineReady = current != null,
+            finished = current?.isWon == true,
+        ),
+    )
+
     fun saveOrFinish() {
         val game = engine ?: return
         if (game.isWon) viewModel.recordScore(gameId, game.score)
@@ -562,12 +580,26 @@ private fun LandscapeGameEffect(activity: Activity?) {
     DisposableEffect(activity) {
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         onDispose {
-            if (activity != null && !activity.isFinishing) {
+            // Keep the lock while Android recreates the Activity for the requested landscape
+            // configuration. Clearing it from the retiring Activity can immediately rotate back
+            // to portrait and repeatedly destroy the freshly restored game.
+            if (
+                activity != null &&
+                shouldRestoreGameOrientation(
+                    isFinishing = activity.isFinishing,
+                    isChangingConfigurations = activity.isChangingConfigurations,
+                )
+            ) {
                 activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
         }
     }
 }
+
+internal fun shouldRestoreGameOrientation(
+    isFinishing: Boolean,
+    isChangingConfigurations: Boolean,
+): Boolean = !isFinishing && !isChangingConfigurations
 
 private fun Context.findActivityForGame(): Activity? = when (this) {
     is Activity -> this

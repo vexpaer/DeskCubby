@@ -25,6 +25,8 @@ import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DEFAULT_MEAL_BUTTON_ICONS
 import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
+import com.deskcubby.app.data.model.DEFAULT_CALORIE_TEXT_PROMPT
+import com.deskcubby.app.data.model.DEFAULT_CALORIE_VISION_PROMPT
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.DEFAULT_DESKTOP_WIDGET_CONFIGS
@@ -312,8 +314,12 @@ class SettingsRepository @Inject constructor(
                 calorieTextId != null && calorieImageId != null,
             calorieTextConfigId = calorieTextId,
             calorieImageConfigId = calorieImageId,
-            calorieVisionPrompt = prefs[Keys.calorieVisionPrompt] ?: defaults.calorieVisionPrompt,
-            calorieTextPrompt = prefs[Keys.calorieTextPrompt] ?: defaults.calorieTextPrompt,
+            calorieVisionPrompt = normalizeCalorieVisionPrompt(
+                prefs[Keys.calorieVisionPrompt] ?: defaults.calorieVisionPrompt,
+            ),
+            calorieTextPrompt = normalizeCalorieTextPrompt(
+                prefs[Keys.calorieTextPrompt] ?: defaults.calorieTextPrompt,
+            ),
             usageTrackingEnabled = prefs[Keys.usageTrackingEnabled]
                 ?: defaults.usageTrackingEnabled,
             stepTrackingEnabled = prefs[Keys.stepTrackingEnabled]
@@ -536,8 +542,10 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.calorieEstimationEnabled] = enabled
             prefs.setOrRemove(Keys.calorieTextConfigId, textConfigId?.takeIf(String::isNotBlank))
             prefs.setOrRemove(Keys.calorieImageConfigId, imageConfigId?.takeIf(String::isNotBlank))
-            prefs[Keys.calorieVisionPrompt] = visionPrompt.take(MAX_AI_SYSTEM_PROMPT_CHARS)
-            prefs[Keys.calorieTextPrompt] = textPrompt.take(MAX_AI_SYSTEM_PROMPT_CHARS)
+            prefs[Keys.calorieVisionPrompt] = normalizeCalorieVisionPrompt(visionPrompt)
+                .take(MAX_AI_SYSTEM_PROMPT_CHARS)
+            prefs[Keys.calorieTextPrompt] = normalizeCalorieTextPrompt(textPrompt)
+                .take(MAX_AI_SYSTEM_PROMPT_CHARS)
         }
     }
     suspend fun setUsageTrackingEnabled(value: Boolean) = set(Keys.usageTrackingEnabled, value)
@@ -771,8 +779,10 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.calorieEstimationEnabled] = value.calorieEstimationEnabled
             prefs.setOrRemove(Keys.calorieTextConfigId, value.calorieTextConfigId)
             prefs.setOrRemove(Keys.calorieImageConfigId, value.calorieImageConfigId)
-            prefs[Keys.calorieVisionPrompt] = value.calorieVisionPrompt.take(MAX_AI_SYSTEM_PROMPT_CHARS)
-            prefs[Keys.calorieTextPrompt] = value.calorieTextPrompt.take(MAX_AI_SYSTEM_PROMPT_CHARS)
+            prefs[Keys.calorieVisionPrompt] = normalizeCalorieVisionPrompt(value.calorieVisionPrompt)
+                .take(MAX_AI_SYSTEM_PROMPT_CHARS)
+            prefs[Keys.calorieTextPrompt] = normalizeCalorieTextPrompt(value.calorieTextPrompt)
+                .take(MAX_AI_SYSTEM_PROMPT_CHARS)
             prefs[Keys.usageTrackingEnabled] = value.usageTrackingEnabled
             prefs[Keys.stepTrackingEnabled] = value.stepTrackingEnabled
             prefs[Keys.navItems] = encodeNav(normalizedNav)
@@ -1265,6 +1275,22 @@ class SettingsRepository @Inject constructor(
         }
     }
 }
+
+internal const val LEGACY_DEFAULT_CALORIE_VISION_PROMPT: String =
+    "识别图片中的所有食物和饮料。只返回 JSON，不要 Markdown：" +
+        "{\"foods\":[{\"name\":\"食物名称\",\"amount\":\"估计份量\",\"unit\":\"单位\"," +
+        "\"confidence\":0.0}],\"notes\":\"必要说明\"}。" +
+        "无法确定时给出合理估计并降低 confidence。"
+
+internal const val LEGACY_DEFAULT_CALORIE_TEXT_PROMPT: String =
+    "根据随后提供的食物识别 JSON，估算整张图片中食物的总能量。只返回 JSON，不要 Markdown：" +
+        "{\"energyKj\":整数}。energyKj 使用千焦(kJ)，综合份量并避免重复计算。"
+
+internal fun normalizeCalorieVisionPrompt(value: String): String =
+    if (value == LEGACY_DEFAULT_CALORIE_VISION_PROMPT) DEFAULT_CALORIE_VISION_PROMPT else value
+
+internal fun normalizeCalorieTextPrompt(value: String): String =
+    if (value == LEGACY_DEFAULT_CALORIE_TEXT_PROMPT) DEFAULT_CALORIE_TEXT_PROMPT else value
 
 internal fun normalizeUserName(value: String): String = value.trim().takeCodePoints(MAX_USER_NAME_CHARS)
 

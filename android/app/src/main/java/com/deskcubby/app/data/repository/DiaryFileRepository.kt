@@ -92,6 +92,7 @@ data class MealCalendarPhoto(
     /** Lower-cased media file name; the key into the media metadata JSON. */
     val fileName: String = "",
     val locationName: String? = null,
+    val foods: List<MealFoodEnergy> = emptyList(),
 )
 
 /** One entry of the `dc-media.json` sidecar kept in the media directory. */
@@ -100,12 +101,18 @@ data class MediaMetaEntry(
     val latitude: Double? = null,
     val longitude: Double? = null,
     val place: String? = null,
+    val foods: List<MealFoodEnergy> = emptyList(),
 )
 
 data class MealCalendarDay(
     val dateIso: String,
     val photos: List<MealCalendarPhoto>,
-) { val totalEnergyKj: Int? get() = photos.mapNotNull { it.energyKj }.takeIf(List<Int>::isNotEmpty)?.sum() }
+    val details: MealDayDetails = MealDayDetails(),
+) {
+    val calculatedEnergyKj: Int?
+        get() = calculatedMealEnergyKj(photos.map(MealCalendarPhoto::energyKj))
+    val totalEnergyKj: Int? get() = details.totalEnergyKjOverride ?: calculatedEnergyKj
+}
 
 data class DiaryPreviewMedia(
     val uri: Uri?,
@@ -218,6 +225,7 @@ class DiaryFileRepository @Inject constructor(
         } ?: MediaDirectorySnapshot()
         val mediaByName = mediaSnapshot.byName
         val mediaMetaEntries = mediaSnapshot.metaEntries
+        val mealDayDetails = mediaSnapshot.mealDays
 
         mealCalendarCacheMutex.withLock {
             val rootUri = settings.diaryTreeUri.orEmpty()
@@ -305,6 +313,7 @@ class DiaryFileRepository @Inject constructor(
                             energyKj = meta?.energyKj ?: energyFromCaption(reference.caption),
                             fileName = metaKey,
                             locationName = meta?.let(::mediaMetaDisplayLocation),
+                            foods = meta?.foods.orEmpty(),
                         ),
                     )
                 }
@@ -317,6 +326,7 @@ class DiaryFileRepository @Inject constructor(
                 MealCalendarDay(
                     dateIso = dateIso,
                     photos = photos.sortedBy { it.category.sortOrder },
+                    details = mealDayDetails[dateIso] ?: MealDayDetails(),
                 )
             }.sortedByDescending(MealCalendarDay::dateIso)
         }
@@ -493,7 +503,18 @@ class DiaryFileRepository @Inject constructor(
                 }
                 day.photos.filter { it.category in categories }
                     .takeIf(List<MealCalendarPhoto>::isNotEmpty)
-                    ?.let { day.copy(photos = it) }
+                    ?.let { selectedPhotos ->
+                        day.copy(
+                            photos = selectedPhotos,
+                            // A manual override is scoped to the complete date. A category-only
+                            // export must keep showing the selected-photo subtotal instead.
+                            details = if (categories.size == MealCategory.entries.size) {
+                                day.details
+                            } else {
+                                MealDayDetails()
+                            },
+                        )
+                    }
             }
             require(selectedDays.isNotEmpty()) {
                 "所选日期和餐别下没有可导出的饮食照片"
@@ -1026,25 +1047,75 @@ class DiaryFileRepository @Inject constructor(
         }
     }
 
-    private fun mediaMetaFile(root: DocumentFile): DocumentFile? {
-        val files = root.listFiles()
-        return files.firstOrNull {
-            it.isFile && it.name.equals(MEDIA_META_FILE_NAME, ignoreCase = true)
-        } ?: files.firstOrNull {
-            it.isFile && it.name.equals(LEGACY_MEDIA_META_FILE_NAME, ignoreCase = true)
+    suspend fun setMealPhotoEstimate(
+        photo: MealCalendarPhoto,
+        estimate: MealEnergyEstimate,
+        settings: AppSettings,
+    ) = setMealPhotoEstimate(photo.fileName, estimate, settings)
+
+    suspend fun setMealPhotoEstimate(
+        fileName: String,
+        estimate: MealEnergyEstimate,
+        settings: AppSettings,
+    ) = setMealEnergyResults(mapOf(fileName to estimate), emptyMap(), settings)
+
+    suspend fun setMealDayDetails(
+        dateIso: String,
+        details: MealDayDetails,
+        settings: AppSettings,
+    ) = setMealEnergyResults(emptyMap(), mapOf(dateIso to details), settings)
+
+    /**
+     * Commits a completed calculation batch with one sidecar write. Network/model work happens
+     * before this method, so a failed estimate never leaves a partially updated date on disk.
+     */
+    suspend fun setMealEnergyResults(
+        estimatesByFileName: Map<String, MealEnergyEstimate>,
+        dayDetailsByDate: Map<String, MealDayDetails>,
+        settings: AppSettings,
+    ) = mediaMutex.withLock {
+        withContext(Dispatchers.IO) {
+            if (estimatesByFileName.isEmpty() && dayDetailsByDate.isEmpty()) return@withContext
+            estimatesByFileName.values.forEach { estimate ->
+                require(estimate.energyKj in 1..MAX_MEAL_ENERGY_KJ) { "AI 返回的热量无效" }
+            }
+            dayDetailsByDate.values.forEach { details ->
+                require(
+                    details.totalEnergyKjOverride == null ||
+                        details.totalEnergyKjOverride in 0..MAX_MEAL_ENERGY_KJ,
+                ) { "总热量超出允许范围" }
+                require(details.note.length <= MAX_MEAL_NOTE_CHARS) { "备注过长" }
+            }
+            val root = settings.mediaTreeUri?.let(::tree) ?: error("请先在设置中选择媒体目录")
+            val original = readMediaMetaRawUnlocked(root)
+            var encoded = original
+            estimatesByFileName.toSortedMap(String.CASE_INSENSITIVE_ORDER).forEach {
+                    (fileName, estimate) ->
+                encoded = MediaMetaJsonCodec.updateEntry(encoded, fileName) { entry ->
+                    entry.copy(energyKj = estimate.energyKj, foods = estimate.foods)
+                }
+            }
+            dayDetailsByDate.toSortedMap().forEach { (dateIso, details) ->
+                encoded = MediaMetaJsonCodec.updateMealDay(encoded, dateIso, details)
+            }
+            writeMediaMetaRawUnlocked(root, encoded, expectedOriginal = original)
         }
     }
 
     private fun currentMediaMetaFile(root: DocumentFile): DocumentFile? = root.listFiles()
         .firstOrNull { it.isFile && it.name.equals(MEDIA_META_FILE_NAME, ignoreCase = true) }
 
+    private fun namedMediaMetaFile(root: DocumentFile, name: String): DocumentFile? = root.listFiles()
+        .firstOrNull { it.isFile && it.name.equals(name, ignoreCase = true) }
+
     private data class MediaDirectorySnapshot(
         val byName: Map<String, Uri> = emptyMap(),
         val metaEntries: Map<String, MediaMetaEntry> = emptyMap(),
+        val mealDays: Map<String, MealDayDetails> = emptyMap(),
     )
 
     /** Caller must hold [mediaMutex]. */
-    private fun snapshotMediaDirectoryUnlocked(root: DocumentFile): MediaDirectorySnapshot {
+    private suspend fun snapshotMediaDirectoryUnlocked(root: DocumentFile): MediaDirectorySnapshot {
         val files = root.listFiles()
         val byName = files.asSequence()
             .filter(DocumentFile::isFile)
@@ -1052,93 +1123,130 @@ class DiaryFileRepository @Inject constructor(
                 file.name?.let { name -> name.lowercase(Locale.ROOT) to file.uri }
             }
             .toMap()
-        val metaFile = files.firstOrNull {
-            it.isFile && it.name.equals(MEDIA_META_FILE_NAME, ignoreCase = true)
-        } ?: files.firstOrNull {
-            it.isFile && it.name.equals(LEGACY_MEDIA_META_FILE_NAME, ignoreCase = true)
+        val metadata = try {
+            MediaMetaJsonCodec.decode(readMediaMetaRawUnlocked(root))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            MediaMetaDocument()
         }
-        val metaEntries = metaFile?.let { file ->
+        return MediaDirectorySnapshot(
+            byName = byName,
+            metaEntries = metadata.entries,
+            mealDays = metadata.mealDays,
+        )
+    }
+
+    /** Caller must hold [mediaMutex]. Returns only a fully bounded and decoded sidecar. */
+    private suspend fun readMediaMetaRawUnlocked(root: DocumentFile): String {
+        val candidates = listOf(
+            MEDIA_META_FILE_NAME,
+            MEDIA_META_PREVIOUS_FILE_NAME,
+            LEGACY_MEDIA_META_FILE_NAME,
+            MEDIA_META_PENDING_FILE_NAME,
+        ).mapNotNull { name -> namedMediaMetaFile(root, name) }
+        if (candidates.isEmpty()) return "{}"
+        candidates.forEach { candidate ->
             try {
-                parseMediaMeta(readText(file.uri))
+                val raw = readMediaMetaTextBounded(candidate.uri)
+                MediaMetaJsonCodec.decode(raw)
+                return raw
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                emptyMap()
-            }
-        }.orEmpty()
-        return MediaDirectorySnapshot(byName = byName, metaEntries = metaEntries)
-    }
-
-    private fun readMediaMetaEntries(root: DocumentFile): Map<String, MediaMetaEntry> {
-        val file = mediaMetaFile(root) ?: return emptyMap()
-        val raw = runCatching { readText(file.uri) }.getOrNull() ?: return emptyMap()
-        return parseMediaMeta(raw)
-    }
-
-    private fun parseMediaMeta(raw: String): Map<String, MediaMetaEntry> = runCatching {
-        val entriesJson = JSONObject(raw).optJSONObject("entries") ?: return@runCatching emptyMap()
-        buildMap {
-            entriesJson.keys().forEach { key ->
-                val item = entriesJson.optJSONObject(key) ?: return@forEach
-                put(
-                    key.lowercase(Locale.ROOT),
-                    MediaMetaEntry(
-                        energyKj = if (item.has("energyKj")) item.optInt("energyKj") else null,
-                        latitude = if (item.has("lat")) item.optDouble("lat") else null,
-                        longitude = if (item.has("lng")) item.optDouble("lng") else null,
-                        place = if (item.has("place") && !item.isNull("place")) {
-                            item.optString("place").trim().takeIf(String::isNotBlank)
-                        } else {
-                            null
-                        },
-                    ),
-                )
+                // Try the last verified copy. A later update starts from that exact copy and
+                // never treats the damaged current file as an empty document.
             }
         }
-    }.getOrDefault(emptyMap())
+        throw IOException("媒体信息 JSON 已损坏或超过安全上限；原文件未被覆盖")
+    }
 
-    private fun encodeMediaMeta(entries: Map<String, MediaMetaEntry>): String {
-        val entriesJson = JSONObject()
-        entries.toSortedMap().forEach { (key, entry) ->
-            val item = JSONObject()
-            entry.energyKj?.let { item.put("energyKj", it) }
-            entry.latitude?.takeIf(Double::isFinite)?.let { item.put("lat", it) }
-            entry.longitude?.takeIf(Double::isFinite)?.let { item.put("lng", it) }
-            entry.place?.takeIf(String::isNotBlank)?.let { item.put("place", it) }
-            if (item.length() > 0) entriesJson.put(key, item)
-        }
-        return JSONObject().put("version", 1).put("entries", entriesJson).toString(2)
+    private suspend fun readMediaMetaTextBounded(uri: Uri): String {
+        val input = resolver.openInputStream(uri) ?: error("无法读取媒体信息 JSON")
+        return input.use { it.readUtf8Bounded(MEDIA_META_MAX_BYTES) }
     }
 
     /** Caller must hold [mediaMutex]. Read-modify-write with read-back verification. */
-    private fun updateMediaMetaEntryUnlocked(
+    private suspend fun updateMediaMetaEntryUnlocked(
         root: DocumentFile,
         key: String,
         transform: (MediaMetaEntry) -> MediaMetaEntry,
     ) {
-        val normalizedKey = key.lowercase(Locale.ROOT)
-        val current = readMediaMetaEntries(root).toMutableMap()
-        current[normalizedKey] = transform(current[normalizedKey] ?: MediaMetaEntry())
-        val encoded = encodeMediaMeta(current)
-        // Read the legacy long filename when present, but always write future updates to
-        // the shorter name. The legacy file is kept as a recoverable compatibility copy.
+        val original = readMediaMetaRawUnlocked(root)
+        val encoded = MediaMetaJsonCodec.updateEntry(
+            raw = original,
+            key = key,
+            transform = transform,
+        )
+        writeMediaMetaRawUnlocked(root, encoded, expectedOriginal = original)
+    }
+
+    /** Caller must hold [mediaMutex]. */
+    private suspend fun writeMediaMetaRawUnlocked(
+        root: DocumentFile,
+        encoded: String,
+        expectedOriginal: String,
+    ) {
+        require(encoded.toByteArray(Charsets.UTF_8).size <= MEDIA_META_MAX_BYTES) {
+            "媒体信息 JSON 超过 2 MiB 上限"
+        }
+        MediaMetaJsonCodec.decode(encoded)
+        val original = readMediaMetaRawUnlocked(root)
+        check(original == expectedOriginal) {
+            "媒体信息 JSON 已被其他应用修改，请刷新后重试"
+        }
+        if (original != "{}") {
+            val previous = namedMediaMetaFile(root, MEDIA_META_PREVIOUS_FILE_NAME)
+                ?: root.createFile("application/json", MEDIA_META_PREVIOUS_FILE_NAME)
+                ?: error("无法在媒体目录创建 $MEDIA_META_PREVIOUS_FILE_NAME")
+            writeText(previous.uri, original)
+            check(readMediaMetaTextBounded(previous.uri) == original) {
+                "媒体信息恢复副本写入后的校验失败"
+            }
+        }
+
+        val pending = namedMediaMetaFile(root, MEDIA_META_PENDING_FILE_NAME)
+            ?: root.createFile("application/json", MEDIA_META_PENDING_FILE_NAME)
+            ?: error("无法在媒体目录创建 $MEDIA_META_PENDING_FILE_NAME")
+        writeText(pending.uri, encoded)
+        check(readMediaMetaTextBounded(pending.uri) == encoded) {
+            "媒体信息 pending JSON 写入后的校验失败"
+        }
+
+        // Read the legacy long filename when present, but always commit future updates to
+        // the shorter name. The legacy file and verified previous copy remain recoverable.
         val target = currentMediaMetaFile(root)
             ?: root.createFile("application/json", MEDIA_META_FILE_NAME)
             ?: error("无法在媒体目录创建 $MEDIA_META_FILE_NAME")
-        writeText(target.uri, encoded)
-        check(readText(target.uri) == encoded) { "媒体信息 JSON 写入后的校验失败" }
+        try {
+            writeText(target.uri, encoded)
+            check(readMediaMetaTextBounded(target.uri) == encoded) {
+                "媒体信息 JSON 写入后的校验失败"
+            }
+            runCatching { pending.delete() }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            // Best-effort immediate restoration. Even if a provider rejects the restore, the
+            // verified previous/pending file remains available to the bounded read fallback.
+            if (original != "{}") {
+                runCatching {
+                    writeText(target.uri, original)
+                    check(readMediaMetaTextBounded(target.uri) == original)
+                }
+            }
+            throw error
+        }
     }
 
     /** Caller must hold [mediaMutex]. Removes a stale sidecar entry with read-back verification. */
-    private fun removeMediaMetaEntryUnlocked(root: DocumentFile, key: String) {
-        val current = readMediaMetaEntries(root).toMutableMap()
-        if (current.remove(key.lowercase(Locale.ROOT)) == null) return
-        val encoded = encodeMediaMeta(current)
-        val target = currentMediaMetaFile(root)
-            ?: root.createFile("application/json", MEDIA_META_FILE_NAME)
-            ?: error("无法在媒体目录创建 $MEDIA_META_FILE_NAME")
-        writeText(target.uri, encoded)
-        check(readText(target.uri) == encoded) { "媒体信息 JSON 写入后的校验失败" }
+    private suspend fun removeMediaMetaEntryUnlocked(root: DocumentFile, key: String) {
+        val original = readMediaMetaRawUnlocked(root)
+        val encoded = MediaMetaJsonCodec.removeEntry(
+            raw = original,
+            key = key,
+        ) ?: return
+        writeMediaMetaRawUnlocked(root, encoded, expectedOriginal = original)
     }
 
     private fun readPhotoLatLong(sourceUri: Uri): DoubleArray? {
@@ -2389,6 +2497,9 @@ class DiaryFileRepository @Inject constructor(
         private val ENERGY_SUFFIX_REGEX = Regex("[-–—]\\s*(\\d+)\\s*kJ\\s*$", RegexOption.IGNORE_CASE)
         private const val MEDIA_META_FILE_NAME = "dc-media.json"
         private const val LEGACY_MEDIA_META_FILE_NAME = "deskcubby-media.json"
+        private const val MEDIA_META_PENDING_FILE_NAME = "dc-media.pending.json"
+        private const val MEDIA_META_PREVIOUS_FILE_NAME = "dc-media.previous.json"
+        private const val MEDIA_META_MAX_BYTES = 2 * 1024 * 1024
         private const val MEAL_EXPORT_CACHE_PREFIX = "meal-calendar-"
         private const val MEAL_EXPORT_CACHE_SUFFIX = ".png"
         private const val MEAL_EXPORT_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L

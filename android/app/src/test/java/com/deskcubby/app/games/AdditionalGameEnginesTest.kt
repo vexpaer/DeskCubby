@@ -62,6 +62,49 @@ class AdditionalGameEnginesTest {
     }
 
     @Test
+    fun `Spider JSON round trip preserves undo history across recreation`() {
+        val game = SpiderSolitaireGame(Random(17))
+        val beforeDeal = game.toJson()
+        assertTrue(game.dealStock())
+
+        val saved = game.toJson()
+        val restored = SpiderSolitaireGame.fromJson(saved)
+
+        assertNotNull(restored)
+        assertEquals(saved, restored!!.toJson())
+        assertTrue(restored.canUndo)
+        assertTrue(restored.undo())
+        assertEquals(beforeDeal, restored.toJson())
+    }
+
+    @Test
+    fun `Spider still accepts legacy save without undo history`() {
+        val versioned = SpiderSolitaireGame(Random(19)).toJson()
+            .replaceFirst("\"schemaVersion\":2,", "")
+        val legacy = versioned.substringBefore(",\"history\":") + "}"
+
+        val restored = SpiderSolitaireGame.fromJson(legacy)
+
+        assertNotNull(restored)
+        assertFalse(restored!!.canUndo)
+    }
+
+    @Test
+    fun `Spider rejects oversized undo history and deeply nested JSON`() {
+        val valid = SpiderSolitaireGame(Random(23)).toJson()
+        val stateBody = valid
+            .substringAfter("\"schemaVersion\":2,")
+            .substringBefore(",\"history\":")
+        val snapshot = "{$stateBody}"
+        val excessiveHistory = valid.substringBefore("\"history\":[") +
+            "\"history\":[" + List(101) { snapshot }.joinToString(",") + "]}"
+
+        assertNull(SpiderSolitaireGame.fromJson(excessiveHistory))
+        assertNull(SpiderSolitaireGame.fromJson("[".repeat(80) + "0" + "]".repeat(80)))
+        assertNull(SpiderSolitaireGame.fromJson(valid + " ".repeat(1_100_000)))
+    }
+
+    @Test
     fun `Spider removes a completed run exposed in the source column`() {
         val columns = mutableListOf<List<Int>>()
         columns += (12 downTo 0).toList() + 13
@@ -91,18 +134,19 @@ class AdditionalGameEnginesTest {
         append("{\"columns\":[")
         columns.forEachIndexed { index, cards ->
             if (index > 0) append(',')
-            appendCards(cards)
+            appendCards(cards, faceUp = true)
         }
         append("],\"stock\":")
-        appendCards(stock)
+        appendCards(stock, faceUp = false)
         append(",\"completed\":0,\"score\":500,\"moves\":0}")
     }
 
-    private fun StringBuilder.appendCards(ids: List<Int>) {
+    private fun StringBuilder.appendCards(ids: List<Int>, faceUp: Boolean) {
         append('[')
         ids.forEachIndexed { index, id ->
             if (index > 0) append(',')
-            append('[').append(id).append(',').append(id % 13 + 1).append(",0,true]")
+            append('[').append(id).append(',').append(id % 13 + 1).append(",0,")
+                .append(faceUp).append(']')
         }
         append(']')
     }

@@ -199,7 +199,7 @@ import com.deskcubby.app.ui.theme.LocalCompactMode
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.tr
 import java.text.DateFormat
-import java.text.SimpleDateFormat
+import java.time.Clock
 import java.time.LocalDate
 import java.util.Date
 import java.util.Locale
@@ -436,6 +436,11 @@ fun SettingsScreen(
     LaunchedEffect(page) {
         saveCoordinator.clear()
         onSubpageOpenChanged(page != SettingsPage.MAIN)
+        if (page == SettingsPage.BACKUP && appDataUsage.snapshot == null &&
+            !appDataUsage.loading
+        ) {
+            viewModel.refreshAppDataUsage()
+        }
     }
     DisposableEffect(Unit) {
         onDispose { onSubpageOpenChanged(false) }
@@ -872,8 +877,8 @@ fun SettingsScreen(
             SettingsPage.USAGE -> DeviceTrackingSettingsPage(
                 title = tr("手机使用时间", "Screen time"),
                 explanation = tr(
-                    "读取系统提供的应用使用事件，按天写入本机独立 JSON。统计明细不会进入应用备份或云同步。",
-                    "Reads system app-usage events into a separate on-device JSON file. Statistics are excluded from app backups and cloud sync.",
+                    "读取系统提供的应用使用事件，按天写入本机 Room 数据库。统计明细不会进入 Android 系统备份；多设备历史只通过显式应用备份或云同步传递。",
+                    "Reads system app-usage events into the on-device Room database. Details are excluded from Android system backup; multi-device history moves only through explicit app backup or cloud sync.",
                 ),
                 enabled = settings.usageTrackingEnabled,
                 contentPadding = inner,
@@ -887,8 +892,8 @@ fun SettingsScreen(
             SettingsPage.STEPS -> DeviceTrackingSettingsPage(
                 title = tr("健康", "Health"),
                 explanation = tr(
-                    "只从已授权的 Health Connect 读取步数、距离和活动热量，不再改用手机计步传感器。结果写入本机独立 JSON，不进入应用备份或云同步。",
-                    "Reads steps, distance, and active calories only from authorized Health Connect and no longer falls back to the phone's step counter. Results stay in a separate on-device JSON excluded from backups and cloud sync.",
+                    "只从已授权的 Health Connect 读取步数、距离和活动热量，不再改用手机计步传感器。结果写入本机 Room 数据库，不进入应用备份、云同步或 Android 系统备份。",
+                    "Reads steps, distance, and active calories only from authorized Health Connect and no longer falls back to the phone's step counter. Results stay in the on-device Room database and are excluded from app backup, cloud sync, and Android system backup.",
                 ),
                 enabled = settings.stepTrackingEnabled,
                 contentPadding = inner,
@@ -2351,8 +2356,8 @@ private fun BackupSettingsPage(
                     }
                     Text(
                         tr(
-                            "日记和媒体是用户选择目录中的真实文件，不计入应用私有数据合计；“≥”表示提供方内容过多或统计超时，只显示已读取部分。",
-                            "Diary and media are real files in user-selected folders and are excluded from the private-data total. “≥” means the provider was too large or timed out, so only the measured portion is shown.",
+                            "手机使用时间和健康历史已计入结构化数据库；旧统计文件仅显示尚待清理的迁移源。日记和媒体是用户选择目录中的真实文件，不计入应用私有数据合计；“≥”表示内容不可访问、过多或统计超时，只显示已读取部分。",
+                            "Screen-time and health histories are included in the structured database; legacy statistics files are migration sources awaiting cleanup. Diary and media are real files in user-selected folders and are excluded from the private-data total. “≥” means content was inaccessible, too large, or timed out, so only the measured portion is shown.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2446,7 +2451,9 @@ private fun BackupSettingsPage(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Button(
-                    onClick = { exportPicker.launch(defaultBackupFileName()) },
+                    onClick = {
+                        exportPicker.launch(defaultBackupFileName(Clock.systemDefaultZone()))
+                    },
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text(tr("导出 JSON", "Export JSON")) }
@@ -5933,8 +5940,8 @@ private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
     -> SettingsPage.MAIN
 }
 
-private fun defaultBackupFileName(): String =
-    "dc-backup-${SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date())}.json"
+internal fun defaultBackupFileName(clock: Clock): String =
+    "DC-${LocalDate.now(clock)}.json"
 
 private fun formatBackupTime(timestamp: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(timestamp))
@@ -5946,7 +5953,7 @@ private fun dataUsageLabel(key: String): String = when (key) {
     "settings" -> tr("设置与偏好", "Settings and preferences")
     "reader" -> tr("书架、阅读设置与进度", "Library, reading settings, and progress")
     "engagement" -> tr("阅读/小游戏时间 JSON", "Reading/game time JSON")
-    "statistics" -> tr("手机使用时间等统计", "Screen-time statistics")
+    "statistics" -> tr("旧统计迁移文件", "Legacy statistics migration files")
     "other_files" -> tr("备份、云状态与其他文件", "Backups, cloud state, and other files")
     "cache" -> tr("缓存", "Cache")
     "external_app" -> tr("应用专属外部文件", "App-specific external files")

@@ -11,11 +11,27 @@ import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
+import com.deskcubby.app.data.model.DEFAULT_CALORIE_TEXT_PROMPT
+import com.deskcubby.app.data.model.DEFAULT_CALORIE_VISION_PROMPT
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SettingsRepositoryTest {
+    @Test
+    fun legacyDefaultCaloriePromptsUpgradeButCustomPromptsStayUntouched() {
+        assertEquals(
+            DEFAULT_CALORIE_VISION_PROMPT,
+            normalizeCalorieVisionPrompt(LEGACY_DEFAULT_CALORIE_VISION_PROMPT),
+        )
+        assertEquals(
+            DEFAULT_CALORIE_TEXT_PROMPT,
+            normalizeCalorieTextPrompt(LEGACY_DEFAULT_CALORIE_TEXT_PROMPT),
+        )
+        assertEquals("custom vision", normalizeCalorieVisionPrompt("custom vision"))
+        assertEquals("custom text", normalizeCalorieTextPrompt("custom text"))
+    }
+
     @Test
     fun resolveAiConfigIdHonorsRequestedTypeAndMigratesEnabledConfig() {
         val text = AiModelConfig("text", "文字", AiModelType.TEXT, "https://example.com", "t", enabled = false)

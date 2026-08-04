@@ -76,7 +76,8 @@ class CloudSyncEngine(
         onProgress: (CloudSyncProgress) -> Unit,
     ): CloudSyncRunResult {
         val config = validated.source
-        val remoteStore = remoteStoreFactory.create(config, limits)
+        val budget = TransferBudget(limits.maxTransferredBytes)
+        val remoteStore = remoteStoreFactory.create(config, limits, budget)
         val localObjects = localStore.list(config.selectedContents, limits)
         val prefixes = config.selectedContents.map { "${it.remoteDirectory}/" }.toSet()
         val remoteObjects = remoteStore.list(prefixes)
@@ -92,9 +93,7 @@ class CloudSyncEngine(
             prefixes.any(key::startsWith) && key !in allKeys
         }
         val reports = ArrayList<CloudSyncItemReport>(allKeys.size)
-        val budget = TransferBudget(limits.maxTransferredBytes)
-
-        onProgress(CloudSyncProgress(0, allKeys.size, 0L, null))
+        onProgress(CloudSyncProgress(0, allKeys.size, budget.used, null))
         allKeys.forEachIndexed { index, key ->
             val local = localByKey[key]
             val remote = remoteByKey[key]
@@ -106,7 +105,6 @@ class CloudSyncEngine(
                 baseHash = baseHash,
                 remoteStore = remoteStore,
                 limits = limits,
-                budget = budget,
             )
             reports += report
             when (report.outcome) {
@@ -154,7 +152,6 @@ class CloudSyncEngine(
         baseHash: String?,
         remoteStore: CloudSyncRemoteStore,
         limits: CloudSyncLimits,
-        budget: TransferBudget,
     ): CloudSyncItemReport {
         val key = local?.key ?: checkNotNull(remote).key
         if (local == null) {
@@ -162,7 +159,7 @@ class CloudSyncEngine(
                 return CloudSyncItemReport(key, CloudSyncItemOutcome.REMOTE_CHANGE_SKIPPED)
             }
             val remoteObject = checkNotNull(remote)
-            val bytes = readRemote(remoteStore, remoteObject, limits, budget)
+            val bytes = readRemote(remoteStore, remoteObject, limits)
             return when (
                 localStore.writeRemote(
                     key = key,
@@ -180,7 +177,7 @@ class CloudSyncEngine(
             }
         }
         if (remote == null) {
-            val bytes = readLocal(local, limits, budget)
+            val bytes = readLocal(local, limits)
             remoteStore.write(
                 key,
                 bytes,
@@ -197,7 +194,7 @@ class CloudSyncEngine(
         val localChanged = baseHash == null || local.sha256 != baseHash
         val remoteChanged = baseHash == null || remote.sha256 != baseHash
         if (localChanged && !remoteChanged) {
-            val bytes = readLocal(local, limits, budget)
+            val bytes = readLocal(local, limits)
             remoteStore.write(
                 key,
                 bytes,
@@ -211,7 +208,7 @@ class CloudSyncEngine(
             if (config.direction == CloudSyncDirection.UPLOAD_ONLY) {
                 return CloudSyncItemReport(key, CloudSyncItemOutcome.REMOTE_CHANGE_SKIPPED)
             }
-            val bytes = readRemote(remoteStore, remote, limits, budget)
+            val bytes = readRemote(remoteStore, remote, limits)
             return when (
                 localStore.writeRemote(
                     key,
@@ -232,7 +229,7 @@ class CloudSyncEngine(
         if (config.direction == CloudSyncDirection.UPLOAD_ONLY) {
             return CloudSyncItemReport(key, CloudSyncItemOutcome.REMOTE_CHANGE_SKIPPED)
         }
-        val bytes = readRemote(remoteStore, remote, limits, budget)
+        val bytes = readRemote(remoteStore, remote, limits)
         return when (
             localStore.writeRemote(
                 key,
@@ -255,10 +252,8 @@ class CloudSyncEngine(
     private suspend fun readLocal(
         objectInfo: LocalSyncObject,
         limits: CloudSyncLimits,
-        budget: TransferBudget,
     ): ByteArray {
         requireObjectWithinLimit(objectInfo.size, limits)
-        budget.reserve(objectInfo.size)
         return localStore.read(objectInfo, limits.maxObjectBytes).also { bytes ->
             if (bytes.size.toLong() != objectInfo.size || sha256(bytes) != objectInfo.sha256) {
                 throw CloudSyncConflictException("本地文件在同步读取期间发生变化，请重新同步。")
@@ -270,10 +265,8 @@ class CloudSyncEngine(
         store: CloudSyncRemoteStore,
         objectInfo: RemoteSyncObject,
         limits: CloudSyncLimits,
-        budget: TransferBudget,
     ): ByteArray {
         requireObjectWithinLimit(objectInfo.size, limits)
-        budget.reserve(objectInfo.size)
         return store.read(objectInfo, limits.maxObjectBytes).also { bytes ->
             if (bytes.size.toLong() != objectInfo.size || sha256(bytes) != objectInfo.sha256) {
                 throw CloudSyncConflictException("云端文件在同步读取期间发生变化，请重新同步。")
@@ -319,20 +312,6 @@ class CloudSyncEngine(
     private fun requireObjectWithinLimit(size: Long, limits: CloudSyncLimits) {
         if (size !in 0..limits.maxObjectBytes) {
             throw CloudSyncLimitException("文件超过单文件同步上限。")
-        }
-    }
-
-    private class TransferBudget(
-        private val maximum: Long,
-    ) {
-        var used: Long = 0L
-            private set
-
-        fun reserve(bytes: Long) {
-            if (bytes < 0 || bytes > maximum - used) {
-                throw CloudSyncLimitException("本次同步的数据量超过上限。")
-            }
-            used += bytes
         }
     }
 

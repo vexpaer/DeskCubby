@@ -165,7 +165,7 @@ class StepStatisticsRepository @Inject constructor(
     ): StepStatisticsHistory {
         val zone = clock.zone
         val today = LocalDate.now(clock)
-        val current = store.history.value
+        val current = store.current()
         val firstDate = current.trackingStartedOn ?: today
         val replacements = mutableMapOf<LocalDate, StepStatisticsDay>()
         var date = firstDate

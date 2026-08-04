@@ -13,7 +13,7 @@ class StatisticsJsonException(message: String, cause: Throwable? = null) :
 
 object UsageStatisticsJsonCodec {
     fun encode(history: UsageStatisticsHistory): String {
-        validateUsageHistory(history)
+        validateUsageStatisticsHistory(history)
         val root = JSONObject()
             .put(KEY_SCHEMA_VERSION, USAGE_STATISTICS_SCHEMA_VERSION)
             .put(KEY_TRACKING_STARTED_ON, history.trackingStartedOn?.toString() ?: JSONObject.NULL)
@@ -126,13 +126,13 @@ object UsageStatisticsJsonCodec {
             trackingStartedOn = trackingStartedOn,
             days = days,
             backfillCompletedThrough = backfillCompletedThrough,
-        ).also(::validateUsageHistory)
+        ).also(::validateUsageStatisticsHistory)
     }
 }
 
 object StepStatisticsJsonCodec {
     fun encode(history: StepStatisticsHistory): String {
-        validateStepHistory(history)
+        validateStepStatisticsHistory(history)
         val root = JSONObject()
             .put(KEY_SCHEMA_VERSION, STEP_STATISTICS_SCHEMA_VERSION)
             .put(KEY_TRACKING_STARTED_ON, history.trackingStartedOn?.toString() ?: JSONObject.NULL)
@@ -275,7 +275,7 @@ object StepStatisticsJsonCodec {
             trackingStartedOn = trackingStartedOn,
             days = days,
             deviceSensorBaseline = deviceSensorBaseline,
-        ).also(::validateStepHistory)
+        ).also(::validateStepStatisticsHistory)
     }
 }
 
@@ -303,7 +303,7 @@ private fun encodeBounded(root: JSONObject): String {
     return encoded
 }
 
-private fun validateUsageHistory(history: UsageStatisticsHistory) {
+internal fun validateUsageStatisticsHistory(history: UsageStatisticsHistory) {
     validateDates(history.trackingStartedOn, history.days.map(UsageStatisticsDay::date))
     history.days.forEach { day ->
         validateZoneId(day.zoneId)
@@ -320,7 +320,7 @@ private fun validateUsageHistory(history: UsageStatisticsHistory) {
     }
 }
 
-private fun validateStepHistory(history: StepStatisticsHistory) {
+internal fun validateStepStatisticsHistory(history: StepStatisticsHistory) {
     validateDates(history.trackingStartedOn, history.days.map(StepStatisticsDay::date))
     history.days.forEach { day ->
         validateZoneId(day.zoneId)

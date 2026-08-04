@@ -46,8 +46,9 @@ internal interface ConditionalBlobTransport {
  * Remote inventory shared by WebDAV and S3.
  *
  * Payloads are immutable, content-addressed blobs. The small manifest is the only mutable object
- * and is always written with If-Match/If-None-Match. A cancelled or racing upload can therefore
- * leave an unreferenced blob, but cannot overwrite published user content.
+ * and is published only with a single valid strong ETag (or If-None-Match for first creation).
+ * A cancelled or racing upload can therefore leave an unreferenced blob, but an unverifiable
+ * provider or detected race is never reported as a successful publish.
  */
 internal class ManifestRemoteStore(
     private val transport: ConditionalBlobTransport,
@@ -181,7 +182,11 @@ internal class ManifestRemoteStore(
             maxBytes = MAX_MANIFEST_BYTES,
         ) ?: return LoadedManifest(remoteVersion = null, entries = emptyMap())
         if (blob.metadata.version.isBlank()) {
-            throw CloudSyncException("云端服务未提供 ETag，无法执行安全的条件同步。")
+            throw CloudSyncException(
+                "云端服务未提供可验证的版本信息，已停止同步。 / " +
+                    "The cloud service supplied no verifiable version metadata; sync was stopped.",
+                errorCode = "SYNC_REMOTE_VALIDATION",
+            )
         }
         val entries = RemoteManifestCodec.decode(blob.bytes, limits.maxObjects)
         return LoadedManifest(

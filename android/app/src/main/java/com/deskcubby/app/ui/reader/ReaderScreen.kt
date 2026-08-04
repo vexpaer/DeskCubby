@@ -48,6 +48,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -96,6 +97,7 @@ import com.deskcubby.app.data.repository.ReaderBookType
 import com.deskcubby.app.data.repository.ReaderContent
 import com.deskcubby.app.data.repository.ReaderOrientation
 import com.deskcubby.app.data.repository.ReaderPreferences
+import com.deskcubby.app.data.repository.ReaderStorageIssue
 import com.deskcubby.app.data.statistics.EngagementKind
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.theme.GlassPanel
@@ -115,6 +117,7 @@ fun ReaderScreen(
     val library by viewModel.library.collectAsStateWithLifecycle()
     val content by viewModel.content.collectAsStateWithLifecycle()
     val times by viewModel.engagementTimes.collectAsStateWithLifecycle()
+    val storageIssue by viewModel.storageIssue.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val localizedMessage = message?.let { readerMessageText(it) }
     val snackbar = remember { SnackbarHostState() }
@@ -136,6 +139,7 @@ fun ReaderScreen(
         ReaderContentState.Idle -> ReaderLibrary(
             padding = padding,
             books = library.books,
+            storageIssue = storageIssue,
             totals = { id -> times.total(EngagementKind.READING, id) },
             onImport = { importLauncher.launch(arrayOf("text/plain", "application/pdf")) },
             onOpen = viewModel::open,
@@ -167,6 +171,7 @@ fun ReaderScreen(
 private fun ReaderLibrary(
     padding: PaddingValues,
     books: List<ReaderBook>,
+    storageIssue: ReaderStorageIssue?,
     totals: (String) -> Long,
     onImport: () -> Unit,
     onOpen: (ReaderBook) -> Unit,
@@ -179,13 +184,25 @@ private fun ReaderLibrary(
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
         topBar = { TopAppBar(title = { Text(tr("阅读", "Reader")) }) },
         floatingActionButton = {
-            FloatingActionButton(onClick = onImport) {
-                Icon(Icons.Outlined.Add, tr("导入 TXT 或 PDF", "Import TXT or PDF"))
+            if (storageIssue == null) {
+                FloatingActionButton(onClick = onImport) {
+                    Icon(Icons.Outlined.Add, tr("导入 TXT 或 PDF", "Import TXT or PDF"))
+                }
             }
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { inner ->
-        if (books.isEmpty()) {
+        if (storageIssue != null) {
+            AppEmptyState(
+                icon = Icons.Outlined.WarningAmber,
+                title = tr("书架状态需要修复", "Library state needs repair"),
+                description = tr(
+                    "书架 JSON 损坏、超限或无法安全提交。为保护已有记录，应用已停止修改该文件；TXT/PDF 原文件没有被更改。",
+                    "The library JSON is damaged, too large, or could not be committed safely. Changes are blocked to preserve it; the original TXT/PDF files were not modified.",
+                ),
+                modifier = Modifier.fillMaxSize().padding(inner),
+            )
+        } else if (books.isEmpty()) {
             AppEmptyState(
                 icon = Icons.AutoMirrored.Outlined.MenuBook,
                 title = tr("书架还是空的", "Your library is empty"),
@@ -621,11 +638,29 @@ private fun ReaderOrientationEffect(activity: Activity?, orientation: ReaderOrie
             }
         }
         onDispose {
-            if (activity != null && !activity.isFinishing) {
-                activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            val exitOrientation = activity?.let {
+                readerExitOrientation(
+                    isFinishing = activity.isFinishing,
+                    isChangingConfigurations = activity.isChangingConfigurations,
+                )
+            }
+            if (exitOrientation != null) {
+                // MainActivity's product baseline is system-controlled. Do not restore the new
+                // Activity's inherited SENSOR_* value after a reader-triggered configuration
+                // change, or the whole app would remain locked after leaving the reader.
+                activity.requestedOrientation = exitOrientation
             }
         }
     }
+}
+
+internal fun readerExitOrientation(
+    isFinishing: Boolean,
+    isChangingConfigurations: Boolean,
+): Int? = if (!isFinishing && !isChangingConfigurations) {
+    ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+} else {
+    null
 }
 
 private fun Context.findActivity(): Activity? = when (this) {

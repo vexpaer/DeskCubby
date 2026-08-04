@@ -66,7 +66,7 @@ class StatisticsWorker(
 
 /**
  * Keeps one six-hour compensation worker aligned with the two local tracking
- * switches. Cancelling work never removes either app-private JSON history.
+ * switches. Cancelling work never removes either app-private Room history.
  */
 @Singleton
 class StatisticsScheduler @Inject constructor(
