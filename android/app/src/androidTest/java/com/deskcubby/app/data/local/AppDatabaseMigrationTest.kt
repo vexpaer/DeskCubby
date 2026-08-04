@@ -328,6 +328,57 @@ class AppDatabaseMigrationTest {
         database.close()
     }
 
+    @Test
+    fun migrate11To12AddsAggregateGameStatisticsAndPreservesExistingData() {
+        val databaseName = "game-statistics-room-migration-test"
+        helper.createDatabase(databaseName, 11).apply {
+            execSQL(
+                """
+                INSERT INTO game_states (gameId, highScore, saveJson, updatedAt)
+                VALUES ('minesweeper', 8100, '{"w":9,"h":9}', 30)
+                """.trimIndent(),
+            )
+            execSQL(
+                """
+                INSERT INTO usage_histories (ownerId, trackingStartedOn, backfillCompletedThrough)
+                VALUES ('device-1', '2026-08-01', '2026-08-01')
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            databaseName,
+            12,
+            true,
+            AppDatabase.MIGRATION_11_12,
+        )
+
+        database.query("SELECT highScore FROM game_states WHERE gameId = 'minesweeper'").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(8100, cursor.getInt(0))
+        }
+        database.query("SELECT COUNT(*) FROM usage_histories").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(1, cursor.getInt(0))
+        }
+        database.execSQL(
+            """
+            INSERT INTO game_statistics (gameId, metricKey, value, updatedAt)
+            VALUES ('minesweeper', 'minesSwept', 40, 31)
+            """.trimIndent(),
+        )
+        database.query(
+            "SELECT value, updatedAt FROM game_statistics " +
+                "WHERE gameId = 'minesweeper' AND metricKey = 'minesSwept'",
+        ).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(40L, cursor.getLong(0))
+            assertEquals(31L, cursor.getLong(1))
+        }
+        database.close()
+    }
+
     private companion object {
         const val TEST_DATABASE = "ai-chat-migration-test"
     }

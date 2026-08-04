@@ -85,6 +85,7 @@ internal fun MinesweeperPage(
     viewModel: GamesViewModel,
     resume: Boolean,
     onExit: () -> Unit,
+    onStatisticsDelta: (MinesweeperGame.StatisticsDelta) -> Unit = {},
 ) {
     val gameId = GamesViewModel.GAME_MINESWEEPER
     val meta by viewModel.meta(gameId).collectAsStateWithLifecycle()
@@ -135,6 +136,17 @@ internal fun MinesweeperPage(
     AdditionalGameAutoSaveEffect(::saveOrFinish)
     BackHandler { saveOrFinish(); onExit() }
 
+    fun applyAction(result: MinesweeperGame.ActionResult) {
+        if (!result.changed) return
+        if (result.statisticsDelta != MinesweeperGame.StatisticsDelta()) {
+            onStatisticsDelta(result.statisticsDelta)
+        }
+        frame++
+        if (current?.isGameOver != true && current?.isWon != true) {
+            current?.let { viewModel.saveProgress(gameId, it.toJson(), 0) }
+        }
+    }
+
     Column(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { saveOrFinish(); onExit() }) {
@@ -167,18 +179,13 @@ internal fun MinesweeperPage(
                                     MinesweeperCell(
                                         cell = cell,
                                         onReveal = {
-                                            if (current.reveal(x, y)) {
-                                                frame++
-                                                if (!current.isGameOver && !current.isWon) {
-                                                    viewModel.saveProgress(gameId, current.toJson(), 0)
-                                                }
-                                            }
+                                            applyAction(current.revealWithResult(x, y))
+                                        },
+                                        onChord = {
+                                            applyAction(current.chordWithResult(x, y))
                                         },
                                         onFlag = {
-                                            if (current.toggleFlag(x, y)) {
-                                                frame++
-                                                viewModel.saveProgress(gameId, current.toJson(), 0)
-                                            }
+                                            applyAction(current.toggleFlagWithResult(x, y))
                                         },
                                     )
                                 }
@@ -188,7 +195,10 @@ internal fun MinesweeperPage(
                 }
             }
             Text(
-                tr("点按翻开，长按插旗", "Tap to reveal; long-press to flag"),
+                tr(
+                    "点按翻开，长按插旗；双击已翻开的数字可展开周围未标旗格",
+                    "Tap to reveal, long-press to flag; double-tap a revealed number to open its unflagged neighbors",
+                ),
                 modifier = Modifier.fillMaxWidth().padding(6.dp),
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodySmall,
@@ -235,6 +245,7 @@ internal fun MinesweeperPage(
 private fun MinesweeperCell(
     cell: MinesweeperGame.Cell,
     onReveal: () -> Unit,
+    onChord: () -> Unit,
     onFlag: () -> Unit,
 ) {
     val background = when {
@@ -246,7 +257,11 @@ private fun MinesweeperCell(
         modifier = Modifier
             .padding(1.dp)
             .size(34.dp)
-            .combinedClickable(onClick = onReveal, onLongClick = onFlag),
+            .combinedClickable(
+                onClick = onReveal,
+                onDoubleClick = if (cell.revealed && cell.adjacentMines > 0) onChord else null,
+                onLongClick = onFlag,
+            ),
         shape = RoundedCornerShape(4.dp),
         color = background,
         tonalElevation = if (cell.revealed) 0.dp else 2.dp,
@@ -326,6 +341,7 @@ internal fun SpiderSolitairePage(
     viewModel: GamesViewModel,
     resume: Boolean,
     onExit: () -> Unit,
+    onStatisticsDelta: (SpiderSolitaireGame.StatisticsDelta) -> Unit = {},
 ) {
     val gameId = GamesViewModel.GAME_SPIDER
     val activity = LocalContext.current.findActivityForGame()
@@ -363,6 +379,11 @@ internal fun SpiderSolitairePage(
         if (game.isWon) viewModel.recordScore(gameId, game.score)
         else viewModel.saveProgress(gameId, game.toJson(), 0)
     }
+    fun applyAction(result: SpiderSolitaireGame.ActionResult): Boolean {
+        if (!result.changed) return false
+        if (!result.statisticsDelta.isEmpty) onStatisticsDelta(result.statisticsDelta)
+        return true
+    }
     LaunchedEffect(current?.isWon) {
         if (current?.isWon == true && !scoreRecorded) {
             scoreRecorded = true
@@ -386,7 +407,8 @@ internal fun SpiderSolitairePage(
             IconButton(
                 enabled = current?.canUndo == true,
                 onClick = {
-                    if (current?.undo() == true) {
+                    val result = current?.undoWithResult()
+                    if (result != null && applyAction(result)) {
                         selected = null
                         frame++
                         saveOrFinish()
@@ -396,7 +418,8 @@ internal fun SpiderSolitairePage(
             FilledTonalButton(
                 enabled = current?.canDealStock == true,
                 onClick = {
-                    if (current?.dealStock() == true) {
+                    val result = current?.dealStockWithResult()
+                    if (result != null && applyAction(result)) {
                         selected = null
                         frame++
                         saveOrFinish()
@@ -409,6 +432,7 @@ internal fun SpiderSolitairePage(
                 Text(tr("发牌 ${current?.stockDealsRemaining ?: 0}", "Deal ${current?.stockDealsRemaining ?: 0}"))
             }
             IconButton(onClick = {
+                current?.abandonWithResult()?.let(::applyAction)
                 engine = SpiderSolitaireGame()
                 selected = null
                 scoreRecorded = false
@@ -436,7 +460,11 @@ internal fun SpiderSolitairePage(
                             val source = selected
                             if (source == null) {
                                 selected = if (current.canSelect(columnIndex, cardIndex)) columnIndex to cardIndex else null
-                            } else if (current.move(source.first, source.second, columnIndex)) {
+                            } else if (
+                                applyAction(
+                                    current.moveWithResult(source.first, source.second, columnIndex),
+                                )
+                            ) {
                                 selected = null
                                 frame++
                                 saveOrFinish()
@@ -446,7 +474,11 @@ internal fun SpiderSolitairePage(
                         },
                         onEmptyClick = {
                             val source = selected
-                            if (source != null && current.move(source.first, source.second, columnIndex)) {
+                            if (
+                                source != null && applyAction(
+                                    current.moveWithResult(source.first, source.second, columnIndex),
+                                )
+                            ) {
                                 selected = null
                                 frame++
                                 saveOrFinish()

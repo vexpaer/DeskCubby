@@ -171,3 +171,15 @@ data class GameStateEntity(
     val saveJson: String? = null,
     val updatedAt: Long,
 )
+
+/**
+ * One lifetime mini-game statistic. Metrics are deliberately separate from paused-game JSON so
+ * old saves remain readable and clearing a save can never erase a user's accumulated history.
+ */
+@Entity(tableName = "game_statistics", primaryKeys = ["gameId", "metricKey"])
+data class GameStatisticEntity(
+    val gameId: String,
+    val metricKey: String,
+    @ColumnInfo(defaultValue = "0") val value: Long = 0L,
+    val updatedAt: Long,
+)

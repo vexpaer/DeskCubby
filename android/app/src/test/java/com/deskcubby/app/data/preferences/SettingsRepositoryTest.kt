@@ -457,6 +457,14 @@ class SettingsRepositoryTest {
     }
 
     @Test
+    fun normalizeMusicVisualizerFrequencyBoundsKeepsAValidOrderedRange() {
+        assertEquals(60 to 16_000, normalizeMusicVisualizerFrequencyBounds(60, 16_000))
+        assertEquals(20 to 100, normalizeMusicVisualizerFrequencyBounds(-5, 100))
+        assertEquals(1_000 to 1_001, normalizeMusicVisualizerFrequencyBounds(1_000, 10))
+        assertEquals(19_999 to 20_000, normalizeMusicVisualizerFrequencyBounds(30_000, 40_000))
+    }
+
+    @Test
     fun normalizeDesktopWidgetConfigsBoundsAndSanitizesUntrustedFields() {
         val normalized = normalizeDesktopWidgetConfigs(
             listOf(

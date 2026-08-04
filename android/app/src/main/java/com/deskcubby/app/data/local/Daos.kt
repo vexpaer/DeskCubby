@@ -692,6 +692,28 @@ interface GameStateDao {
     @Upsert
     suspend fun upsert(item: GameStateEntity)
 
+    /**
+     * Updates a paused/finished round without allowing a backup-restore transaction to interleave
+     * between the high-score read and write.
+     */
+    @Transaction
+    suspend fun upsertPreservingHighScore(
+        gameId: String,
+        saveJson: String?,
+        score: Int,
+        now: Long,
+    ) {
+        val existing = get(gameId)
+        upsert(
+            GameStateEntity(
+                gameId = gameId,
+                highScore = maxOf(existing?.highScore ?: 0, score),
+                saveJson = saveJson,
+                updatedAt = now,
+            ),
+        )
+    }
+
     @Upsert
     suspend fun upsertAll(items: List<GameStateEntity>)
 
@@ -706,4 +728,70 @@ interface GameStateDao {
 
     @Query("UPDATE game_states SET saveJson = NULL, updatedAt = :now WHERE gameId = :gameId")
     suspend fun clearSave(gameId: String, now: Long)
+}
+
+@Dao
+interface GameStatisticDao {
+    @Query("SELECT * FROM game_statistics ORDER BY gameId ASC, metricKey ASC")
+    fun observeAll(): Flow<List<GameStatisticEntity>>
+
+    @Query("SELECT * FROM game_statistics ORDER BY gameId ASC, metricKey ASC")
+    suspend fun getAllForBackup(): List<GameStatisticEntity>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfMissing(item: GameStatisticEntity): Long
+
+    @Query(
+        "UPDATE game_statistics SET value = CASE " +
+            "WHEN value > 9223372036854775807 - :delta THEN 9223372036854775807 " +
+            "ELSE value + :delta END, updatedAt = :now " +
+            "WHERE gameId = :gameId AND metricKey = :metricKey",
+    )
+    suspend fun incrementExisting(
+        gameId: String,
+        metricKey: String,
+        delta: Long,
+        now: Long,
+    )
+
+    @Query(
+        "UPDATE game_statistics SET value = CASE WHEN value < :candidate THEN :candidate " +
+            "ELSE value END, updatedAt = :now " +
+            "WHERE gameId = :gameId AND metricKey = :metricKey",
+    )
+    suspend fun recordMaximumExisting(
+        gameId: String,
+        metricKey: String,
+        candidate: Long,
+        now: Long,
+    )
+
+    @Transaction
+    suspend fun applyMetrics(
+        gameId: String,
+        increments: Map<String, Long>,
+        maxima: Map<String, Long>,
+        now: Long,
+    ) {
+        increments.forEach { (metricKey, delta) ->
+            insertIfMissing(GameStatisticEntity(gameId, metricKey, 0L, now))
+            incrementExisting(gameId, metricKey, delta, now)
+        }
+        maxima.forEach { (metricKey, candidate) ->
+            insertIfMissing(GameStatisticEntity(gameId, metricKey, candidate, now))
+            recordMaximumExisting(gameId, metricKey, candidate, now)
+        }
+    }
+
+    @Upsert
+    suspend fun upsertAll(items: List<GameStatisticEntity>)
+
+    @Query("DELETE FROM game_statistics")
+    suspend fun clearAllForBackup()
+
+    @Transaction
+    suspend fun replaceAllForBackup(items: List<GameStatisticEntity>) {
+        clearAllForBackup()
+        if (items.isNotEmpty()) upsertAll(items)
+    }
 }

@@ -27,10 +27,10 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.MusicVisualizerStyle
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
-import kotlin.math.hypot
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
@@ -44,6 +44,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 fun MusicVisualizerLayer(
     enabled: Boolean,
     style: MusicVisualizerStyle,
+    frequencyMode: MusicVisualizerFrequencyMode = MusicVisualizerFrequencyMode.ADAPTIVE,
+    minFrequencyHz: Int = DEFAULT_MUSIC_VISUALIZER_MIN_FREQUENCY_HZ,
+    maxFrequencyHz: Int = DEFAULT_MUSIC_VISUALIZER_MAX_FREQUENCY_HZ,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -79,13 +82,25 @@ fun MusicVisualizerLayer(
         permissionGranted = permissionGranted,
         systemAnimationsEnabled = systemAnimationsEnabled,
     )
-    DisposableEffect(context, style, captureAllowed) {
+    DisposableEffect(
+        context,
+        style,
+        frequencyMode,
+        minFrequencyHz,
+        maxFrequencyHz,
+        captureAllowed,
+    ) {
         if (!captureAllowed) {
             samples.value = FloatArray(SAMPLE_COUNT)
             return@DisposableEffect onDispose {}
         }
         val callbackActive = AtomicBoolean(true)
-        val visualizer = createOutputMixVisualizer(style) { captured ->
+        val visualizer = createOutputMixVisualizer(
+            style = style,
+            frequencyMode = frequencyMode,
+            minFrequencyHz = minFrequencyHz,
+            maxFrequencyHz = maxFrequencyHz,
+        ) { captured ->
             if (callbackActive.get()) samples.value = captured
         }
         if (visualizer == null) samples.value = FloatArray(SAMPLE_COUNT)
@@ -169,6 +184,9 @@ internal fun musicVisualizerCaptureAllowed(
 
 private fun createOutputMixVisualizer(
     style: MusicVisualizerStyle,
+    frequencyMode: MusicVisualizerFrequencyMode,
+    minFrequencyHz: Int,
+    maxFrequencyHz: Int,
     onSamples: (FloatArray) -> Unit,
 ): Visualizer? {
     var visualizer: Visualizer? = null
@@ -185,6 +203,11 @@ private fun createOutputMixVisualizer(
             return null
         }
         val waveform = style == MusicVisualizerStyle.WAVEFORM
+        val spectrumProcessor = MusicSpectrumProcessor(
+            frequencyMode = frequencyMode,
+            minFrequencyHz = minFrequencyHz,
+            maxFrequencyHz = maxFrequencyHz,
+        )
         val listenerResult = visualizer.setDataCaptureListener(
             object : Visualizer.OnDataCaptureListener {
                 override fun onWaveFormDataCapture(
@@ -202,7 +225,9 @@ private fun createOutputMixVisualizer(
                     fft: ByteArray?,
                     samplingRate: Int,
                 ) {
-                    if (!waveform && fft != null) onSamples(normalizeFft(fft))
+                    if (!waveform && fft != null) {
+                        onSamples(spectrumProcessor.process(fft, samplingRate))
+                    }
                 }
             },
             captureRate,
@@ -262,26 +287,20 @@ internal fun normalizeWaveform(bytes: ByteArray): FloatArray {
 }
 
 internal fun normalizeFft(bytes: ByteArray): FloatArray {
-    if (bytes.size < 4) return FloatArray(SAMPLE_COUNT)
-    val availableBins = (bytes.size / 2 - 1).coerceAtLeast(1)
-    val normalized = FloatArray(SAMPLE_COUNT) { index ->
-        val normalized = index.toFloat() / (SAMPLE_COUNT - 1)
-        val logarithmicBin = (normalized * normalized * (availableBins - 1)).toInt() + 1
-        val real = bytes[(logarithmicBin * 2).coerceAtMost(bytes.lastIndex)].toInt().toDouble()
-        val imaginary = bytes[(logarithmicBin * 2 + 1).coerceAtMost(bytes.lastIndex)].toInt().toDouble()
-        (hypot(real, imaginary) / MAX_FFT_MAGNITUDE).toFloat().coerceIn(0f, 1f)
-    }
-    return normalized.zeroedWhenSilent()
+    return MusicSpectrumProcessor(
+        frequencyMode = MusicVisualizerFrequencyMode.ADAPTIVE,
+        minFrequencyHz = DEFAULT_MUSIC_VISUALIZER_MIN_FREQUENCY_HZ,
+        maxFrequencyHz = DEFAULT_MUSIC_VISUALIZER_MAX_FREQUENCY_HZ,
+    ).process(bytes, DEFAULT_TEST_SAMPLE_RATE_MILLI_HERTZ)
 }
 
 internal fun hasVisibleMusicSignal(values: FloatArray): Boolean =
     values.any { abs(it) >= SILENCE_FLOOR }
 
-private fun FloatArray.zeroedWhenSilent(): FloatArray =
+internal fun FloatArray.zeroedWhenSilent(): FloatArray =
     if (hasVisibleMusicSignal(this)) this else FloatArray(size)
 
 internal const val SAMPLE_COUNT = 48
 private const val PREFERRED_CAPTURE_SIZE = 1_024
 private const val MAX_CAPTURE_RATE = 30_000
-private const val MAX_FFT_MAGNITUDE = 180.0
-private const val SILENCE_FLOOR = 0.012f
+private const val DEFAULT_TEST_SAMPLE_RATE_MILLI_HERTZ = 44_100_000

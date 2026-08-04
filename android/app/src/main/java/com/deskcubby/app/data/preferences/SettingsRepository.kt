@@ -56,6 +56,7 @@ import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.MusicVisualizerStyle
+import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.ThoughtDisplayMode
@@ -166,6 +167,9 @@ class SettingsRepository @Inject constructor(
         val bottomNavShowLabels = booleanPreferencesKey("bottom_nav_show_labels")
         val musicVisualizerEnabled = booleanPreferencesKey("music_visualizer_enabled")
         val musicVisualizerStyle = stringPreferencesKey("music_visualizer_style")
+        val musicVisualizerFrequencyMode = stringPreferencesKey("music_visualizer_frequency_mode")
+        val musicVisualizerMinFrequencyHz = intPreferencesKey("music_visualizer_min_frequency_hz")
+        val musicVisualizerMaxFrequencyHz = intPreferencesKey("music_visualizer_max_frequency_hz")
         val game2048AnimationSpeed = stringPreferencesKey("game_2048_animation_speed")
         val morePageShowDescriptions = booleanPreferencesKey("more_page_show_descriptions")
         val homeWidgetBordersEnabled = booleanPreferencesKey("home_widget_borders_enabled")
@@ -203,6 +207,12 @@ class SettingsRepository @Inject constructor(
         val requestedCalorieImageId = prefs[Keys.calorieImageConfigId]
         val calorieImageId = resolveAiConfigId(decodedConfigs, requestedCalorieImageId, AiModelType.IMAGE)
         val normalizedConfigs = decodedConfigs.map { it.copy(enabled = true) }
+        val musicVisualizerFrequencyBounds = normalizeMusicVisualizerFrequencyBounds(
+            prefs[Keys.musicVisualizerMinFrequencyHz]
+                ?: defaults.musicVisualizerMinFrequencyHz,
+            prefs[Keys.musicVisualizerMaxFrequencyHz]
+                ?: defaults.musicVisualizerMaxFrequencyHz,
+        )
         return AppSettings(
             visualStyle = prefs[Keys.visualStyle].enumValueOr(defaults.visualStyle),
             darkMode = prefs[Keys.darkMode].enumValueOr(defaults.darkMode),
@@ -334,6 +344,10 @@ class SettingsRepository @Inject constructor(
                 ?: defaults.musicVisualizerEnabled,
             musicVisualizerStyle = prefs[Keys.musicVisualizerStyle]
                 .enumValueOr(defaults.musicVisualizerStyle),
+            musicVisualizerFrequencyMode = prefs[Keys.musicVisualizerFrequencyMode]
+                .enumValueOr(defaults.musicVisualizerFrequencyMode),
+            musicVisualizerMinFrequencyHz = musicVisualizerFrequencyBounds.first,
+            musicVisualizerMaxFrequencyHz = musicVisualizerFrequencyBounds.second,
             game2048AnimationSpeed = prefs[Keys.game2048AnimationSpeed]
                 .enumValueOr(defaults.game2048AnimationSpeed),
             morePageShowDescriptions = prefs[Keys.morePageShowDescriptions]
@@ -604,10 +618,17 @@ class SettingsRepository @Inject constructor(
         showLabels: Boolean,
         musicVisualizerEnabled: Boolean,
         musicVisualizerStyle: MusicVisualizerStyle,
+        musicVisualizerFrequencyMode: MusicVisualizerFrequencyMode,
+        musicVisualizerMinFrequencyHz: Int,
+        musicVisualizerMaxFrequencyHz: Int,
     ) {
         val normalized = normalizeNavItems(items)
         val visibleIds = normalized.filter { it.visible || it.id == NavItemId.SETTINGS }.map { it.id }.toSet()
         val safeDefault = defaultPage.takeIf { it in visibleIds } ?: visibleIds.firstOrNull() ?: NavItemId.SETTINGS
+        val frequencyBounds = normalizeMusicVisualizerFrequencyBounds(
+            musicVisualizerMinFrequencyHz,
+            musicVisualizerMaxFrequencyHz,
+        )
         context.settingsDataStore.edit { prefs ->
             migrateMorePageOrderIfNeeded(prefs)
             prefs[Keys.navItems] = encodeNav(normalized)
@@ -615,6 +636,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.bottomNavShowLabels] = showLabels
             prefs[Keys.musicVisualizerEnabled] = musicVisualizerEnabled
             prefs[Keys.musicVisualizerStyle] = musicVisualizerStyle.name
+            prefs[Keys.musicVisualizerFrequencyMode] = musicVisualizerFrequencyMode.name
+            prefs[Keys.musicVisualizerMinFrequencyHz] = frequencyBounds.first
+            prefs[Keys.musicVisualizerMaxFrequencyHz] = frequencyBounds.second
         }
     }
 
@@ -791,6 +815,13 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.bottomNavShowLabels] = value.bottomNavShowLabels
             prefs[Keys.musicVisualizerEnabled] = value.musicVisualizerEnabled
             prefs[Keys.musicVisualizerStyle] = value.musicVisualizerStyle.name
+            prefs[Keys.musicVisualizerFrequencyMode] = value.musicVisualizerFrequencyMode.name
+            val musicVisualizerFrequencyBounds = normalizeMusicVisualizerFrequencyBounds(
+                value.musicVisualizerMinFrequencyHz,
+                value.musicVisualizerMaxFrequencyHz,
+            )
+            prefs[Keys.musicVisualizerMinFrequencyHz] = musicVisualizerFrequencyBounds.first
+            prefs[Keys.musicVisualizerMaxFrequencyHz] = musicVisualizerFrequencyBounds.second
             prefs[Keys.game2048AnimationSpeed] = value.game2048AnimationSpeed.name
             prefs[Keys.morePageShowDescriptions] = value.morePageShowDescriptions
             prefs[Keys.homeWidgetBordersEnabled] = value.homeWidgetBordersEnabled
@@ -847,7 +878,7 @@ class SettingsRepository @Inject constructor(
 
     private fun decodeNav(raw: String?): List<NavItemConfig> = runCatching {
         val array = JSONArray(raw ?: return@runCatching AppSettings().navItems)
-        buildList {
+        val decoded = buildList {
             for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
                 val id = NavItemId.valueOf(item.getString("id"))
@@ -878,7 +909,17 @@ class SettingsRepository @Inject constructor(
                     ),
                 )
             }
-        }.let(::normalizeNavItems)
+        }
+        val statisticsWasMissing = decoded.none { it.id == NavItemId.STATISTICS }
+        normalizeNavItems(decoded).map { item ->
+            if (statisticsWasMissing &&
+                (item.id == NavItemId.USAGE || item.id == NavItemId.STEPS)
+            ) {
+                item.copy(showInMore = false)
+            } else {
+                item
+            }
+        }
     }.getOrElse { AppSettings().navItems }
 
     private fun decodeMorePageOrder(
@@ -1603,6 +1644,15 @@ private val DESKTOP_WIDGET_PACKAGE_REGEX =
     Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+")
 private val DESKTOP_WIDGET_ID_REGEX = Regex("[A-Za-z0-9._-]{1,80}")
 internal const val MAX_MORE_DESCRIPTION_CODE_POINTS = 160
+
+internal fun normalizeMusicVisualizerFrequencyBounds(
+    minimumHz: Int,
+    maximumHz: Int,
+): Pair<Int, Int> {
+    val minimum = minimumHz.coerceIn(20, 19_999)
+    val maximum = maximumHz.coerceIn(minimum + 1, 20_000)
+    return minimum to maximum
+}
 
 internal fun normalizeMoreDescription(value: String): String =
     value.trim()

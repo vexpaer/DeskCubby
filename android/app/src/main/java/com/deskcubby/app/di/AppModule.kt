@@ -9,6 +9,7 @@ import com.deskcubby.app.data.local.DiaryIndexDao
 import com.deskcubby.app.data.local.DateRecordDao
 import com.deskcubby.app.data.local.FlashThoughtDao
 import com.deskcubby.app.data.local.GameStateDao
+import com.deskcubby.app.data.local.GameStatisticDao
 import com.deskcubby.app.data.local.LegacyStatisticsMigrationDao
 import com.deskcubby.app.data.local.PoetryCategoryDao
 import com.deskcubby.app.data.local.SavedPoemDao
@@ -40,7 +41,8 @@ object AppModule {
                 AppDatabase.MIGRATION_7_8,
                 AppDatabase.MIGRATION_8_9,
                 AppDatabase.MIGRATION_9_10,
-                AppDatabase.MIGRATION_10_11,
+                    AppDatabase.MIGRATION_10_11,
+                    AppDatabase.MIGRATION_11_12,
             )
             .build()
 
@@ -54,6 +56,8 @@ object AppModule {
     @Provides fun provideAiChatDao(db: AppDatabase): AiChatDao = db.aiChatDao()
     @Provides fun provideVaultItemDao(db: AppDatabase): VaultItemDao = db.vaultItemDao()
     @Provides fun provideGameStateDao(db: AppDatabase): GameStateDao = db.gameStateDao()
+    @Provides
+    fun provideGameStatisticDao(db: AppDatabase): GameStatisticDao = db.gameStatisticDao()
     @Provides
     fun provideUsageStatisticsDao(db: AppDatabase): UsageStatisticsDao = db.usageStatisticsDao()
 

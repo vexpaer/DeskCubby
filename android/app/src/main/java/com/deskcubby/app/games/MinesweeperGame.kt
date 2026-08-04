@@ -42,6 +42,36 @@ class MinesweeperGame private constructor(
         val mine: Boolean,
     )
 
+    enum class Action {
+        REVEAL,
+        CHORD,
+        TOGGLE_FLAG,
+    }
+
+    /**
+     * Lifetime-statistics increments produced by exactly one accepted player action.
+     *
+     * These values deliberately do not live in the saved board. Callers can persist them once
+     * when the action happens without replaying old progress after restoring a game.
+     * [minesCellsRevealed] includes newly revealed safe cells and any mine exposed by the action.
+     * [minesSwept] means mines on a successfully cleared board, so a winning action contributes
+     * [mineCount] and every other action contributes zero. Removing a flag never subtracts from
+     * [flagsPlaced], and automatic flags added after a win are not player placements.
+     */
+    data class StatisticsDelta(
+        val minesCellsRevealed: Int = 0,
+        val minesSwept: Int = 0,
+        val flagsPlaced: Int = 0,
+        val wins: Int = 0,
+        val losses: Int = 0,
+    )
+
+    data class ActionResult(
+        val action: Action,
+        val changed: Boolean,
+        val statisticsDelta: StatisticsDelta = StatisticsDelta(),
+    )
+
     var initialized: Boolean = initialized
         private set
     var isGameOver: Boolean = gameOver
@@ -67,45 +97,107 @@ class MinesweeperGame private constructor(
         )
     }
 
-    fun reveal(x: Int, y: Int): Boolean {
-        if (isGameOver || isWon || x !in 0 until width || y !in 0 until height) return false
+    /** Compatibility wrapper for callers that only need to know whether the board changed. */
+    fun reveal(x: Int, y: Int): Boolean = revealWithResult(x, y).changed
+
+    fun revealWithResult(x: Int, y: Int): ActionResult {
+        if (isGameOver || isWon || x !in 0 until width || y !in 0 until height) {
+            return unchanged(Action.REVEAL)
+        }
         val start = index(x, y)
-        if (flagged[start] || revealed[start]) return false
+        if (flagged[start] || revealed[start]) return unchanged(Action.REVEAL)
         if (!initialized) placeMines(firstX = x, firstY = y)
         if (mines[start]) {
             revealed[start] = true
             isGameOver = true
-            return true
+            return ActionResult(
+                action = Action.REVEAL,
+                changed = true,
+                statisticsDelta = StatisticsDelta(
+                    minesCellsRevealed = 1,
+                    losses = 1,
+                ),
+            )
         }
 
-        val queue = ArrayDeque<Int>()
-        queue.add(start)
-        while (queue.isNotEmpty()) {
-            val current = queue.removeFirst()
-            if (revealed[current] || flagged[current] || mines[current]) continue
-            revealed[current] = true
-            val cx = current % width
-            val cy = current / width
-            if (adjacentMineCount(cx, cy) == 0) {
-                neighbors(cx, cy).forEach { neighbor ->
-                    if (!revealed[neighbor] && !flagged[neighbor] && !mines[neighbor]) queue.add(neighbor)
-                }
-            }
-        }
-        if (revealedSafeCount == width * height - mineCount) {
-            isWon = true
-            mines.indices.filter { mines[it] }.forEach { flagged[it] = true }
-        }
-        return true
+        val newlyRevealed = revealSafeRegion(start)
+        val wonThisAction = finishWinIfCleared()
+        return ActionResult(
+            action = Action.REVEAL,
+            changed = newlyRevealed > 0,
+            statisticsDelta = StatisticsDelta(
+                minesCellsRevealed = newlyRevealed,
+                minesSwept = if (wonThisAction) mineCount else 0,
+                wins = if (wonThisAction) 1 else 0,
+            ),
+        )
     }
 
-    fun toggleFlag(x: Int, y: Int): Boolean {
-        if (isGameOver || isWon || x !in 0 until width || y !in 0 until height) return false
+    /** Compatibility wrapper for the double-tap/chord action. */
+    fun chord(x: Int, y: Int): Boolean = chordWithResult(x, y).changed
+
+    /**
+     * Reveals every unrevealed, unflagged neighbor of an already revealed numbered cell.
+     *
+     * Unlike the classic flag-count shortcut, this interaction intentionally does not require
+     * the adjacent flag count to match the number. A wrong flag can therefore expose a mine and
+     * end the run. Flood reveal still applies to any zero-valued neighbor opened by the chord.
+     */
+    fun chordWithResult(x: Int, y: Int): ActionResult {
+        if (isGameOver || isWon || x !in 0 until width || y !in 0 until height) {
+            return unchanged(Action.CHORD)
+        }
+        val center = index(x, y)
+        if (!revealed[center] || mines[center] || adjacentMineCount(x, y) <= 0) {
+            return unchanged(Action.CHORD)
+        }
+        val targets = neighbors(x, y).filter { !revealed[it] && !flagged[it] }
+        if (targets.isEmpty()) return unchanged(Action.CHORD)
+
+        val revealedBefore = revealed.count { it }
+        var triggeredMine = false
+        targets.forEach { target ->
+            if (mines[target]) {
+                revealed[target] = true
+                triggeredMine = true
+            } else {
+                revealSafeRegion(target)
+            }
+        }
+        if (triggeredMine) isGameOver = true
+        val wonThisAction = !triggeredMine && finishWinIfCleared()
+        val newlyRevealed = revealed.count { it } - revealedBefore
+        return ActionResult(
+            action = Action.CHORD,
+            changed = newlyRevealed > 0,
+            statisticsDelta = StatisticsDelta(
+                minesCellsRevealed = newlyRevealed,
+                minesSwept = if (wonThisAction) mineCount else 0,
+                wins = if (wonThisAction) 1 else 0,
+                losses = if (triggeredMine) 1 else 0,
+            ),
+        )
+    }
+
+    /** Compatibility wrapper for callers that only need to know whether the board changed. */
+    fun toggleFlag(x: Int, y: Int): Boolean = toggleFlagWithResult(x, y).changed
+
+    fun toggleFlagWithResult(x: Int, y: Int): ActionResult {
+        if (isGameOver || isWon || x !in 0 until width || y !in 0 until height) {
+            return unchanged(Action.TOGGLE_FLAG)
+        }
         val index = index(x, y)
-        if (revealed[index]) return false
-        if (!flagged[index] && flagged.count { it } >= mineCount) return false
+        if (revealed[index]) return unchanged(Action.TOGGLE_FLAG)
+        if (!flagged[index] && flagged.count { it } >= mineCount) {
+            return unchanged(Action.TOGGLE_FLAG)
+        }
+        val placingFlag = !flagged[index]
         flagged[index] = !flagged[index]
-        return true
+        return ActionResult(
+            action = Action.TOGGLE_FLAG,
+            changed = true,
+            statisticsDelta = StatisticsDelta(flagsPlaced = if (placingFlag) 1 else 0),
+        )
     }
 
     fun toJson(): String = buildString {
@@ -136,6 +228,35 @@ class MinesweeperGame private constructor(
         initialized = true
     }
 
+    private fun revealSafeRegion(start: Int): Int {
+        var newlyRevealed = 0
+        val queue = ArrayDeque<Int>()
+        queue.add(start)
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            if (revealed[current] || flagged[current] || mines[current]) continue
+            revealed[current] = true
+            newlyRevealed++
+            val cx = current % width
+            val cy = current / width
+            if (adjacentMineCount(cx, cy) == 0) {
+                neighbors(cx, cy).forEach { neighbor ->
+                    if (!revealed[neighbor] && !flagged[neighbor] && !mines[neighbor]) {
+                        queue.add(neighbor)
+                    }
+                }
+            }
+        }
+        return newlyRevealed
+    }
+
+    private fun finishWinIfCleared(): Boolean {
+        if (isGameOver || isWon || revealedSafeCount != width * height - mineCount) return false
+        isWon = true
+        mines.indices.filter { mines[it] }.forEach { flagged[it] = true }
+        return true
+    }
+
     private fun adjacentMineCount(x: Int, y: Int): Int = neighbors(x, y).count { mines[it] }
 
     private fun neighbors(x: Int, y: Int): List<Int> = buildList(8) {
@@ -148,6 +269,8 @@ class MinesweeperGame private constructor(
     }
 
     private fun index(x: Int, y: Int): Int = y * width + x
+
+    private fun unchanged(action: Action): ActionResult = ActionResult(action, changed = false)
 
     companion object {
         const val MIN_WIDTH = 6
@@ -201,7 +324,9 @@ class MinesweeperGame private constructor(
             if (!over && revealed.indices.any { revealed[it] && mines[it] }) return null
             if (flagged.count { it } > count) return null
             if (won && revealed.indices.count { revealed[it] && !mines[it] } != size - count) return null
-            if (!won && revealed.indices.count { revealed[it] && !mines[it] } == size - count) return null
+            // A chord can expose a mine and the final safe cells in the same atomic action. That
+            // is a valid loss, whereas an unfinished board with every safe cell open is not.
+            if (!won && !over && revealed.indices.count { revealed[it] && !mines[it] } == size - count) return null
             return MinesweeperGame(
                 width, height, count, random, mines, revealed, flagged,
                 initialized, over, won,

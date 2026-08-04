@@ -122,8 +122,14 @@ fun GamesScreen(
         ),
     ) { mutableStateOf<GameLaunch?>(null) }
     val onLaunch: (String, Boolean) -> Unit = { gameId, resume ->
-        if (!resume) viewModel.clearSave(gameId)
-        launch = GameLaunch(gameId, resume)
+        if (!resume && gameId == GamesViewModel.GAME_SPIDER) {
+            viewModel.discardSavedSpiderAndThen {
+                launch = GameLaunch(gameId, resume = false)
+            }
+        } else {
+            if (!resume) viewModel.clearSave(gameId)
+            launch = GameLaunch(gameId, resume)
+        }
     }
     val gameOpen = launch != null
     LaunchedEffect(gameOpen) { onGameOpenChanged(gameOpen) }
@@ -179,11 +185,13 @@ fun GamesScreen(
                     viewModel = viewModel,
                     resume = current.resume,
                     onExit = { launch = null },
+                    onStatisticsDelta = viewModel::recordMinesweeperStatistics,
                 )
                 GamesViewModel.GAME_SPIDER -> SpiderSolitairePage(
                     viewModel = viewModel,
                     resume = current.resume,
                     onExit = { launch = null },
+                    onStatisticsDelta = viewModel::recordSpiderStatistics,
                 )
                 else -> GameListPage(viewModel, onLaunch)
             }
@@ -720,6 +728,7 @@ private fun Game2048Page(
                 val current = engine
                 if (current != null && !current.isGameOver) {
                     current.moveWithResult(swipe.to2048Direction())?.let { result ->
+                        viewModel.record2048Statistics(gameId, result.statisticsDelta)
                         transition = if (animationsEnabled) result else null
                         transitionSequence++
                         frame++
@@ -860,6 +869,7 @@ private fun Game2048Page(
                         val current = engine
                         if (current != null && !current.isGameOver) {
                             current.moveWithResult(direction)?.let { result ->
+                                viewModel.record2048Statistics(gameId, result.statisticsDelta)
                                 // State and undo history commit before the visual transition.
                                 transition = if (animationsEnabled) result else null
                                 transitionSequence++
@@ -1308,7 +1318,7 @@ private fun SnakePage(viewModel: GamesViewModel, resume: Boolean, onExit: () -> 
         while (isActive && !current.isGameOver) {
             delay(SNAKE_TICK_MILLIS)
             if (paused || current.isGameOver) break
-            current.tick()
+            viewModel.recordSnakeStatistics(current.tickWithResult().statisticsDelta)
             frame++
         }
     }
@@ -1534,7 +1544,7 @@ private fun TetrisPage(viewModel: GamesViewModel, resume: Boolean, onExit: () ->
                     .coerceAtLeast(TETRIS_MIN_TICK_MILLIS),
             )
             if (paused || current.isGameOver) break
-            current.tick()
+            viewModel.recordTetrisStatistics(current.tickWithResult().statisticsDelta)
             frame++
         }
     }
@@ -1554,10 +1564,10 @@ private fun TetrisPage(viewModel: GamesViewModel, resume: Boolean, onExit: () ->
         viewModel.saveProgress(gameId, current.toJson(), current.score)
     }
 
-    fun act(action: (TetrisGame) -> Unit) {
+    fun act(action: (TetrisGame) -> TetrisGame.StepResult?) {
         val current = engine ?: return
         if (paused || current.isGameOver) return
-        action(current)
+        action(current)?.let { viewModel.recordTetrisStatistics(it.statisticsDelta) }
         frame++
     }
 
@@ -1622,19 +1632,19 @@ private fun TetrisPage(viewModel: GamesViewModel, resume: Boolean, onExit: () ->
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
             val controlsEnabled = engine != null && !paused && !gameOver
-            FilledTonalIconButton(onClick = { act { it.moveLeft() } }, enabled = controlsEnabled) {
+            FilledTonalIconButton(onClick = { act { it.moveLeft(); null } }, enabled = controlsEnabled) {
                 Icon(Icons.AutoMirrored.Outlined.KeyboardArrowLeft, tr("左移", "Left"))
             }
-            FilledTonalIconButton(onClick = { act { it.rotate() } }, enabled = controlsEnabled) {
+            FilledTonalIconButton(onClick = { act { it.rotate(); null } }, enabled = controlsEnabled) {
                 Icon(Icons.Outlined.RotateRight, tr("旋转", "Rotate"))
             }
-            FilledTonalIconButton(onClick = { act { it.softDrop() } }, enabled = controlsEnabled) {
+            FilledTonalIconButton(onClick = { act(TetrisGame::softDropWithResult) }, enabled = controlsEnabled) {
                 Icon(Icons.Outlined.ArrowDownward, tr("加速下落", "Soft drop"))
             }
-            FilledTonalIconButton(onClick = { act { it.hardDrop() } }, enabled = controlsEnabled) {
+            FilledTonalIconButton(onClick = { act(TetrisGame::hardDropWithResult) }, enabled = controlsEnabled) {
                 Icon(Icons.Outlined.VerticalAlignBottom, tr("硬降", "Hard drop"))
             }
-            FilledTonalIconButton(onClick = { act { it.moveRight() } }, enabled = controlsEnabled) {
+            FilledTonalIconButton(onClick = { act { it.moveRight(); null } }, enabled = controlsEnabled) {
                 Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, tr("右移", "Right"))
             }
         }

@@ -53,6 +53,36 @@ class SnakeGame private constructor(
             }
     }
 
+    /** Why a tick ended the round. Filling the board is completion, not a collision loss. */
+    enum class EndReason {
+        WALL,
+        SELF_COLLISION,
+        BOARD_FILLED,
+    }
+
+    /** Aggregate-statistics increments caused by one tick. */
+    data class StatisticsDelta(
+        val foodEaten: Int,
+        /** Candidate for a lifetime maximum; 0 means this tick needs no maximum update. */
+        val maxLength: Int,
+        val losses: Int,
+    ) {
+        val isEmpty: Boolean get() = foodEaten == 0 && maxLength == 0 && losses == 0
+
+        companion object {
+            val NONE = StatisticsDelta(foodEaten = 0, maxLength = 0, losses = 0)
+        }
+    }
+
+    /** Exact outcome of one requested tick, including collision/completion information. */
+    data class TickResult(
+        val moved: Boolean,
+        val ateFood: Boolean,
+        val canContinue: Boolean,
+        val endReason: EndReason?,
+        val statisticsDelta: StatisticsDelta,
+    )
+
     private val body = ArrayDeque(initialBody)
 
     /** Direction that will be applied on the next [tick]. */
@@ -85,32 +115,74 @@ class SnakeGame private constructor(
      * Advances one step: hitting a wall or the snake's own body ends the game, eating food adds
      * [EAT_SCORE] points and grows the snake. Returns false when the game is (now) over.
      */
-    fun tick(): Boolean {
-        if (isGameOver) return false
+    fun tick(): Boolean = tickWithResult().canContinue
+
+    /**
+     * Advances one step and returns the event detail needed for durable aggregate statistics.
+     * Calling this after game-over is an idempotent no-op and never emits another loss.
+     */
+    fun tickWithResult(): TickResult {
+        if (isGameOver) return idleTickResult()
         movedDirection = direction
         val head = body.first()
         val next = Cell(head.x + direction.dx, head.y + direction.dy)
         if (next.x !in 0 until width || next.y !in 0 until height) {
             isGameOver = true
-            return false
+            return collisionResult(EndReason.WALL)
         }
         val growing = next == food
         val hitIndex = body.indexOf(next)
         // The tail cell vacates this tick unless the snake grows, so it does not block.
         if (hitIndex >= 0 && (growing || hitIndex < body.size - 1)) {
             isGameOver = true
-            return false
+            return collisionResult(EndReason.SELF_COLLISION)
         }
         body.addFirst(next)
+        var endReason: EndReason? = null
         if (growing) {
             score += EAT_SCORE
             val nextFood = randomEmptyCell()
-            if (nextFood == null) isGameOver = true else food = nextFood
+            if (nextFood == null) {
+                isGameOver = true
+                endReason = EndReason.BOARD_FILLED
+            } else {
+                food = nextFood
+            }
         } else {
             body.removeLast()
         }
-        return !isGameOver
+        return TickResult(
+            moved = true,
+            ateFood = growing,
+            canContinue = !isGameOver,
+            endReason = endReason,
+            statisticsDelta = if (growing) {
+                StatisticsDelta(foodEaten = 1, maxLength = body.size, losses = 0)
+            } else {
+                StatisticsDelta.NONE
+            },
+        )
     }
+
+    private fun idleTickResult(): TickResult = TickResult(
+        moved = false,
+        ateFood = false,
+        canContinue = false,
+        endReason = null,
+        statisticsDelta = StatisticsDelta.NONE,
+    )
+
+    private fun collisionResult(reason: EndReason): TickResult = TickResult(
+        moved = false,
+        ateFood = false,
+        canContinue = false,
+        endReason = reason,
+        statisticsDelta = StatisticsDelta(
+            foodEaten = 0,
+            maxLength = body.size,
+            losses = 1,
+        ),
+    )
 
     /** Serializes the complete restorable state as JSON. */
     fun toJson(): String = buildString {

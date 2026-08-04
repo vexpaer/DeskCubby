@@ -2,6 +2,7 @@
 
 package com.deskcubby.app.ui.steps
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -63,6 +65,7 @@ fun StepStatisticsScreen(
     viewModel: StepStatisticsViewModel,
     onOpenTrackingSettings: () -> Unit,
     onOpenHealthConnect: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedPoint by remember { mutableStateOf<StatisticsPoint?>(null) }
@@ -72,13 +75,27 @@ fun StepStatisticsScreen(
         viewModel.onPermissionResult()
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
+    onBack?.let { BackHandler(onBack = it) }
 
     Scaffold(
         modifier = Modifier.padding(bottom = padding.calculateBottomPadding()),
-        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
+        contentWindowInsets = WindowInsets.safeDrawing.only(
+            if (onBack == null) WindowInsetsSides.Horizontal
+            else WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+        ),
         topBar = {
             TopAppBar(
                 title = { Text(tr("健康", "Health")) },
+                navigationIcon = {
+                    onBack?.let { navigateBack ->
+                        IconButton(onClick = navigateBack) {
+                            Icon(
+                                Icons.AutoMirrored.Outlined.ArrowBack,
+                                contentDescription = tr("返回统计", "Back to statistics"),
+                            )
+                        }
+                    }
+                },
                 actions = {
                     IconButton(
                         enabled = state.enabled &&

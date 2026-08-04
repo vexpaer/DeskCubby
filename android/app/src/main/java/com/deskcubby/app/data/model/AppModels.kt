@@ -258,6 +258,16 @@ enum class NavItemId(
         defaultVisible = false,
         defaultShowInMore = true,
     ),
+    STATISTICS(
+        "statistics",
+        "统计",
+        "Statistics",
+        "statistics",
+        "汇总日记、使用时间、健康、阅读与小游戏数据",
+        "Explore diary, screen-time, health, reading, and game insights",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
     USAGE(
         "usage_statistics",
         "手机使用时间",
@@ -266,7 +276,7 @@ enum class NavItemId(
         "按天查看各应用的使用时长",
         "Daily usage time by app",
         defaultVisible = false,
-        defaultShowInMore = true,
+        defaultShowInMore = false,
     ),
     STEPS(
         "step_statistics",
@@ -276,7 +286,7 @@ enum class NavItemId(
         "读取并可视化每日步数、距离和活动热量",
         "Chart daily steps, distance, and active calories",
         defaultVisible = false,
-        defaultShowInMore = true,
+        defaultShowInMore = false,
     ),
     WIDGETS(
         "desktop_widgets",
@@ -450,6 +460,10 @@ data class AppSettings(
     val bottomNavShowLabels: Boolean = true,
     val musicVisualizerEnabled: Boolean = false,
     val musicVisualizerStyle: MusicVisualizerStyle = MusicVisualizerStyle.BARS,
+    val musicVisualizerFrequencyMode: MusicVisualizerFrequencyMode =
+        MusicVisualizerFrequencyMode.ADAPTIVE,
+    val musicVisualizerMinFrequencyHz: Int = 60,
+    val musicVisualizerMaxFrequencyHz: Int = 16_000,
     val game2048AnimationSpeed: Game2048AnimationSpeed = Game2048AnimationSpeed.NORMAL,
     val morePageShowDescriptions: Boolean = true,
     val homeWidgetBordersEnabled: Boolean = true,

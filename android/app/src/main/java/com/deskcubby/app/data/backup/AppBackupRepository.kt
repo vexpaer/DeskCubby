@@ -14,6 +14,8 @@ import com.deskcubby.app.data.local.FlashThoughtDao
 import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.GameStateDao
 import com.deskcubby.app.data.local.GameStateEntity
+import com.deskcubby.app.data.local.GameStatisticDao
+import com.deskcubby.app.data.local.GameStatisticEntity
 import com.deskcubby.app.data.local.PoetryCategoryDao
 import com.deskcubby.app.data.local.PoetryCategoryEntity
 import com.deskcubby.app.data.local.SavedPoemDao
@@ -57,6 +59,7 @@ data class AppBackupContent(
     val poems: List<SavedPoemEntity>,
     val vault: VaultEncryptedBackup = VaultEncryptedBackup(null, null, emptyList()),
     val gameStates: List<GameStateEntity> = emptyList(),
+    val gameStatistics: List<GameStatisticEntity> = emptyList(),
     val usageDevices: List<UsageDeviceRecord> = emptyList(),
 )
 
@@ -80,6 +83,7 @@ class AppBackupRepository @Inject constructor(
     private val poetryCategoryDao: PoetryCategoryDao,
     private val savedPoemDao: SavedPoemDao,
     private val gameStateDao: GameStateDao,
+    private val gameStatisticDao: GameStatisticDao,
     private val settingsRepository: SettingsRepository,
     private val vaultRepository: VaultRepository,
     private val usageDeviceRepository: UsageDeviceRepository,
@@ -111,10 +115,11 @@ class AppBackupRepository @Inject constructor(
         }
         val extraContent = combine(
             gameStateDao.observeAllForBackup(),
+            gameStatisticDao.observeAll(),
             vaultRepository.contentState,
             usageDeviceRepository.records,
-        ) { gameStates, _, usageDevices ->
-            gameStates to usageDevices
+        ) { gameStates, gameStatistics, _, usageDevices ->
+            BackupExtraContent(gameStates, gameStatistics, usageDevices)
         }
         return combine(
             settingsRepository.settings,
@@ -129,8 +134,9 @@ class AppBackupRepository @Inject constructor(
                 dateRecords = content.dateRecords,
                 poetryCategories = content.poetryCategories,
                 poems = content.poems,
-                gameStates = extras.first,
-                usageDevices = extras.second,
+                gameStates = extras.gameStates,
+                gameStatistics = extras.gameStatistics,
+                usageDevices = extras.usageDevices,
             )
         }.flowOn(Dispatchers.IO)
     }
@@ -264,9 +270,23 @@ class AppBackupRepository @Inject constructor(
             usageTrackingEnabled = false,
             stepTrackingEnabled = false,
         )
+        var databaseMayNeedRollback = false
         try {
             settingsRepository.restoreFromBackup(restoredSettings)
+            // Restore the fallible private stores before replacing the transactional core data.
+            // This leaves the Room transaction as the final commit point, so a later failure
+            // cannot roll a freshly recorded game-statistics increment back to an old snapshot.
+            if (backup.formatVersion >= 20) {
+                vaultRepository.restoreEncryptedBackup(backup.vault)
+                usageDeviceRepository.mergeBackup(backup.usageDevices)
+            }
             database.withTransaction {
+                // Game actions can save both their board and statistics while the import
+                // confirmation is open. Read both inside this transaction so every write committed
+                // before the replace is preserved; writes committed afterwards are serialized
+                // after the replace.
+                val liveGameStates = gameStateDao.getAllForBackup()
+                val liveGameStatistics = gameStatisticDao.getAllForBackup()
                 replaceDatabaseContent(
                     thoughts = backup.thoughts,
                     categories = backup.categories,
@@ -275,21 +295,41 @@ class AppBackupRepository @Inject constructor(
                     poetryCategories = backup.poetryCategories,
                     poems = backup.poems,
                     gameStates = if (backup.formatVersion >= 20) {
-                        mergeGameStateBackups(previous.gameStates, backup.gameStates)
+                        mergeGameStateBackups(liveGameStates, backup.gameStates)
                     } else {
-                        previous.gameStates
+                        liveGameStates
+                    },
+                    gameStatistics = if (backup.formatVersion >= 24) {
+                        mergeGameStatisticBackups(
+                            liveGameStatistics,
+                            backup.gameStatistics,
+                        )
+                    } else {
+                        liveGameStatistics
                     },
                 )
-            }
-            if (backup.formatVersion >= 20) {
-                vaultRepository.restoreEncryptedBackup(backup.vault)
-                usageDeviceRepository.mergeBackup(backup.usageDevices)
+                // Mark the database as requiring rollback before Room starts its commit. If the
+                // caller is cancelled while withTransaction resumes after a successful commit,
+                // the cancellation handler must restore Room together with Settings/private data.
+                // If the transaction itself rolls back, restoring the previous snapshot again is
+                // harmless and keeps every cancellation boundary consistent.
+                databaseMayNeedRollback = true
             }
         } catch (error: CancellationException) {
-            rollbackImport(previous, error, restoreV20Private = backup.formatVersion >= 20)
+            rollbackImport(
+                previous = previous,
+                originalError = error,
+                restoreV20Private = backup.formatVersion >= 20,
+                restoreDatabase = databaseMayNeedRollback,
+            )
             throw error
         } catch (error: Exception) {
-            rollbackImport(previous, error, restoreV20Private = backup.formatVersion >= 20)
+            rollbackImport(
+                previous = previous,
+                originalError = error,
+                restoreV20Private = backup.formatVersion >= 20,
+                restoreDatabase = databaseMayNeedRollback,
+            )
             val message = if (error.suppressed.isNotEmpty()) {
                 "导入失败：原数据回滚未完全成功，请保留当前备份文件。"
             } else {
@@ -309,6 +349,7 @@ class AppBackupRepository @Inject constructor(
         poetryCategories: List<PoetryCategoryEntity>,
         poems: List<SavedPoemEntity>,
         gameStates: List<GameStateEntity>,
+        gameStatistics: List<GameStatisticEntity>,
     ) {
         // Thoughts must be removed before their referenced categories, then restored only after
         // every category exists, so foreign-key checks stay valid.
@@ -325,30 +366,35 @@ class AppBackupRepository @Inject constructor(
         }
         if (poems.isNotEmpty()) savedPoemDao.insertAllForBackup(poems)
         gameStateDao.replaceAllForBackup(gameStates)
+        gameStatisticDao.replaceAllForBackup(gameStatistics)
     }
 
     private suspend fun rollbackImport(
         previous: AppBackupContent,
         originalError: Throwable,
         restoreV20Private: Boolean,
+        restoreDatabase: Boolean,
     ) {
         withContext(NonCancellable + Dispatchers.IO) {
             runCatching {
                 settingsRepository.restoreFromBackup(previous.settings)
             }.exceptionOrNull()?.let(originalError::addSuppressed)
-            runCatching {
-                database.withTransaction {
-                    replaceDatabaseContent(
-                        thoughts = previous.thoughts,
-                        categories = previous.categories,
-                        favorites = previous.favorites,
-                        dateRecords = previous.dateRecords,
-                        poetryCategories = previous.poetryCategories,
-                        poems = previous.poems,
-                        gameStates = previous.gameStates,
-                    )
-                }
-            }.exceptionOrNull()?.let(originalError::addSuppressed)
+            if (restoreDatabase) {
+                runCatching {
+                    database.withTransaction {
+                        replaceDatabaseContent(
+                            thoughts = previous.thoughts,
+                            categories = previous.categories,
+                            favorites = previous.favorites,
+                            dateRecords = previous.dateRecords,
+                            poetryCategories = previous.poetryCategories,
+                            poems = previous.poems,
+                            gameStates = previous.gameStates,
+                            gameStatistics = previous.gameStatistics,
+                        )
+                    }
+                }.exceptionOrNull()?.let(originalError::addSuppressed)
+            }
             if (restoreV20Private) {
                 runCatching {
                     vaultRepository.restoreEncryptedBackup(previous.vault)
@@ -656,6 +702,7 @@ class AppBackupRepository @Inject constructor(
                 poetryCategories = poetryCategoryDao.getAllForBackup(),
                 poems = savedPoemDao.getAllForBackup(),
                 gameStates = gameStateDao.getAllForBackup(),
+                gameStatistics = gameStatisticDao.getAllForBackup(),
             )
         }
         val vault = if (includeV20Private) {
@@ -678,6 +725,7 @@ class AppBackupRepository @Inject constructor(
             poems = databaseContent.poems,
             vault = vault,
             gameStates = databaseContent.gameStates,
+            gameStatistics = databaseContent.gameStatistics,
             usageDevices = usageDevices,
         )
     }
@@ -751,6 +799,7 @@ class AppBackupRepository @Inject constructor(
         poems = poems,
         vault = vault,
         gameStates = gameStates,
+        gameStatistics = gameStatistics,
         usageDevices = usageDevices,
     )
 
@@ -764,6 +813,7 @@ class AppBackupRepository @Inject constructor(
         poemCount = poems.size,
         vaultItemCount = vault.items.count { it.id > 0L },
         gameStateCount = gameStates.size,
+        gameStatisticCount = gameStatistics.size,
         usageDeviceCount = usageDevices.size,
         usageDayCount = usageDevices.sumOf { it.history.days.size },
     )
@@ -776,6 +826,13 @@ class AppBackupRepository @Inject constructor(
         val poetryCategories: List<PoetryCategoryEntity>,
         val poems: List<SavedPoemEntity>,
         val gameStates: List<GameStateEntity> = emptyList(),
+        val gameStatistics: List<GameStatisticEntity> = emptyList(),
+    )
+
+    private data class BackupExtraContent(
+        val gameStates: List<GameStateEntity>,
+        val gameStatistics: List<GameStatisticEntity>,
+        val usageDevices: List<UsageDeviceRecord>,
     )
 
     private companion object {
@@ -849,6 +906,29 @@ internal fun mergeGameStateBackups(
                         updatedAt = maxOf(local.updatedAt, remote.updatedAt),
                     )
                 }
+            }
+        }
+}
+
+internal fun mergeGameStatisticBackups(
+    current: List<GameStatisticEntity>,
+    imported: List<GameStatisticEntity>,
+): List<GameStatisticEntity> {
+    fun keyOf(item: GameStatisticEntity) = item.gameId to item.metricKey
+    val currentByKey = current.associateBy(::keyOf)
+    val importedByKey = imported.associateBy(::keyOf)
+    return (currentByKey.keys + importedByKey.keys)
+        .sortedWith(compareBy<Pair<String, String>> { it.first }.thenBy { it.second })
+        .map { key ->
+            val local = currentByKey[key]
+            val remote = importedByKey[key]
+            when {
+                local == null -> checkNotNull(remote)
+                remote == null -> local
+                else -> local.copy(
+                    value = maxOf(local.value, remote.value),
+                    updatedAt = maxOf(local.updatedAt, remote.updatedAt),
+                )
             }
         }
 }

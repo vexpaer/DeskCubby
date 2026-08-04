@@ -2,6 +2,7 @@
 
 package com.deskcubby.app.ui.usage
 
+import androidx.activity.compose.BackHandler
 import android.content.Intent
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
@@ -33,6 +34,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.Check
@@ -95,6 +97,7 @@ fun UsageStatisticsScreen(
     viewModel: UsageStatisticsViewModel,
     onRequestUsageAccess: () -> Unit,
     onOpenTrackingSettings: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedPoint by remember { mutableStateOf<StatisticsPoint?>(null) }
@@ -112,13 +115,27 @@ fun UsageStatisticsScreen(
     ) {
         selectedPoint = null
     }
+    onBack?.let { BackHandler(onBack = it) }
 
     Scaffold(
         modifier = Modifier.padding(bottom = padding.calculateBottomPadding()),
-        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
+        contentWindowInsets = WindowInsets.safeDrawing.only(
+            if (onBack == null) WindowInsetsSides.Horizontal
+            else WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+        ),
         topBar = {
             TopAppBar(
                 title = { Text(tr("手机使用时间", "Screen time")) },
+                navigationIcon = {
+                    onBack?.let { navigateBack ->
+                        IconButton(onClick = navigateBack) {
+                            Icon(
+                                Icons.AutoMirrored.Outlined.ArrowBack,
+                                contentDescription = tr("返回统计", "Back to statistics"),
+                            )
+                        }
+                    }
+                },
                 actions = {
                     IconButton(
                         enabled = !state.initializing &&

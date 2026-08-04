@@ -89,6 +89,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -140,6 +141,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -164,6 +166,7 @@ import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.MusicVisualizerStyle
+import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.MAX_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
@@ -205,6 +208,8 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.roundToInt
+import kotlin.math.exp
+import kotlin.math.ln
 
 private enum class SettingsPage {
     MAIN,
@@ -848,13 +853,17 @@ fun SettingsScreen(
                 settings = settings,
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
-                onSave = { defaultPage, navItems, showLabels, visualizerEnabled, visualizerStyle, onDone ->
+                onSave = { defaultPage, navItems, showLabels, visualizerEnabled, visualizerStyle,
+                        frequencyMode, minimumFrequencyHz, maximumFrequencyHz, onDone ->
                     viewModel.setNavigationSettings(
                         defaultPage,
                         navItems,
                         showLabels,
                         visualizerEnabled,
                         visualizerStyle,
+                        frequencyMode,
+                        minimumFrequencyHz,
+                        maximumFrequencyHz,
                     ) { success ->
                         onDone(success)
                         if (success) completeSave(SettingsPage.MAIN)
@@ -1039,7 +1048,7 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry(
         tr("底部导航", "Bottom navigation"),
         tr("显示方式、默认页、排序、名称与图标", "Display, default page, order, labels and icons"),
-        "navigation bottom bar 导航 底栏 图标 默认页",
+        "navigation bottom bar music visualizer spectrum frequency 导航 底栏 图标 默认页 音乐 可视化 频谱 频率",
         SettingsPage.NAVIGATION,
     ),
     SettingsSearchEntry(
@@ -1649,8 +1658,8 @@ private fun CloudSyncSettingsPage(
             text = {
                 Text(
                     tr(
-                        "这会按 v23 备份导入应用设置和结构化数据，恢复桌面小卡片设计、Vault 密文/校验元数据，合并小游戏最高分与存档，并按设备和日期合并使用时间；Vault 随后保持锁定。日记与媒体真实文件不会被替换。",
-                        "This imports v23 app settings and structured data, restores desktop-widget designs and Vault ciphertext/verifier metadata, merges game scores and saves, and merges screen time by device and date. The Vault remains locked, and diary/media files are not replaced.",
+                        "这会按 v24 备份导入应用设置和结构化数据，恢复桌面小卡片设计、Vault 密文/校验元数据，合并小游戏最高分、存档与特色累计统计，并按设备和日期合并使用时间；Vault 随后保持锁定。日记与媒体真实文件不会被替换。",
+                        "This imports v24 app settings and structured data, restores desktop-widget designs and Vault ciphertext/verifier metadata, merges game scores, saves, and lifetime records, and merges screen time by device and date. The Vault remains locked, and diary/media files are not replaced.",
                     ),
                 )
             },
@@ -1951,8 +1960,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.JSON_BACKUP in selectedContents) {
                     Text(
                         tr(
-                            "v23 应用 JSON 包含桌面小卡片设计、结构化记录、Vault 密文、小游戏存档、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "The v23 app JSON contains desktop-widget designs, structured records, Vault ciphertext, game saves, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                            "v24 应用 JSON 包含桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "The v24 app JSON contains desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2259,8 +2268,8 @@ private fun BackupSettingsPage(
                     )
                     Text(
                         tr(
-                            "${conflict.summary.thoughtCount} 条小巧思，${conflict.summary.categoryCount} 个小巧思分类，${conflict.summary.favoriteCount} 个浏览器收藏，${conflict.summary.dateRecordCount} 个日期记录，${conflict.summary.poetryCategoryCount} 个诗词分类，${conflict.summary.poemCount} 首诗词，${conflict.summary.vaultItemCount} 条收藏夹密文，${conflict.summary.gameStateCount} 个游戏存档，${conflict.summary.usageDeviceCount} 台设备的 ${conflict.summary.usageDayCount} 天使用时间",
-                            "${conflict.summary.thoughtCount} thoughts, ${conflict.summary.categoryCount} thought categories, ${conflict.summary.favoriteCount} browser bookmarks, ${conflict.summary.dateRecordCount} date records, ${conflict.summary.poetryCategoryCount} poetry categories, ${conflict.summary.poemCount} poems, ${conflict.summary.vaultItemCount} encrypted Vault items, ${conflict.summary.gameStateCount} game saves, and ${conflict.summary.usageDayCount} screen-time days from ${conflict.summary.usageDeviceCount} devices",
+                            "${conflict.summary.thoughtCount} 条小巧思，${conflict.summary.categoryCount} 个小巧思分类，${conflict.summary.favoriteCount} 个浏览器收藏，${conflict.summary.dateRecordCount} 个日期记录，${conflict.summary.poetryCategoryCount} 个诗词分类，${conflict.summary.poemCount} 首诗词，${conflict.summary.vaultItemCount} 条收藏夹密文，${conflict.summary.gameStateCount} 个游戏存档，${conflict.summary.gameStatisticCount} 项游戏累计统计，${conflict.summary.usageDeviceCount} 台设备的 ${conflict.summary.usageDayCount} 天使用时间",
+                            "${conflict.summary.thoughtCount} thoughts, ${conflict.summary.categoryCount} thought categories, ${conflict.summary.favoriteCount} browser bookmarks, ${conflict.summary.dateRecordCount} date records, ${conflict.summary.poetryCategoryCount} poetry categories, ${conflict.summary.poemCount} poems, ${conflict.summary.vaultItemCount} encrypted Vault items, ${conflict.summary.gameStateCount} game saves, ${conflict.summary.gameStatisticCount} lifetime game metrics, and ${conflict.summary.usageDayCount} screen-time days from ${conflict.summary.usageDeviceCount} devices",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -2297,8 +2306,8 @@ private fun BackupSettingsPage(
             text = {
                 Text(
                     tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v23 还会恢复桌面小卡片设计与 Vault 密文/密码校验元数据，合并小游戏存档/最高分和各设备使用时间；Vault 导入后保持锁定。日记正文和媒体文件不会被修改。确定继续吗？",
-                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. v23 also restores desktop-widget designs and Vault ciphertext/password-verifier metadata, merges game saves/high scores and per-device screen time, and leaves the Vault locked. Diary and media files are unchanged. Continue?",
+                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v24 还会恢复桌面小卡片设计与 Vault 密文/密码校验元数据，合并小游戏存档、最高分、特色累计统计和各设备使用时间；Vault 导入后保持锁定。日记正文和媒体文件不会被修改。确定继续吗？",
+                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. v24 also restores desktop-widget designs and Vault ciphertext/password-verifier metadata, merges game saves, high scores, lifetime metrics, and per-device screen time, and leaves the Vault locked. Diary and media files are unchanged. Continue?",
                     ),
                 )
             },
@@ -2473,8 +2482,8 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "v23 包含应用设置（含音乐可视化样式、2048 动画速度、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、2048/贪吃蛇/俄罗斯方块/扫雷/蜘蛛纸牌存档与最高分，以及按设备区分的手机使用时间。",
-                        "v23 includes app settings (including music-visualizer style, 2048 animation speed, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, saves and high scores for 2048/Snake/Tetris/Minesweeper/Spider, and screen-time history grouped by device.",
+                        "v24 包含应用设置（含音乐可视化样式、自适应/手动频率范围、2048 动画速度、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、2048/贪吃蛇/俄罗斯方块/扫雷/蜘蛛纸牌存档、最高分与特色累计统计，以及按设备区分的手机使用时间。",
+                        "v24 includes app settings (including music-visualizer style, adaptive/manual frequency range, 2048 animation speed, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, saves, high scores, and lifetime metrics for 2048/Snake/Tetris/Minesweeper/Spider, and screen-time history grouped by device.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -4961,10 +4970,14 @@ private fun NavigationSettingsPage(
         Boolean,
         Boolean,
         MusicVisualizerStyle,
+        MusicVisualizerFrequencyMode,
+        Int,
+        Int,
         (Boolean) -> Unit,
     ) -> Unit,
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var defaultPage by remember(settings.defaultPage) { mutableStateOf(settings.defaultPage) }
     var navItems by remember(settings.navItems) { mutableStateOf(settings.navItems.map { it.copy() }) }
     var showLabels by remember(settings.bottomNavShowLabels) { mutableStateOf(settings.bottomNavShowLabels) }
@@ -4973,6 +4986,15 @@ private fun NavigationSettingsPage(
     }
     var visualizerStyle by remember(settings.musicVisualizerStyle) {
         mutableStateOf(settings.musicVisualizerStyle)
+    }
+    var visualizerFrequencyMode by remember(settings.musicVisualizerFrequencyMode) {
+        mutableStateOf(settings.musicVisualizerFrequencyMode)
+    }
+    var visualizerMinFrequencyHz by remember(settings.musicVisualizerMinFrequencyHz) {
+        mutableIntStateOf(settings.musicVisualizerMinFrequencyHz)
+    }
+    var visualizerMaxFrequencyHz by remember(settings.musicVisualizerMaxFrequencyHz) {
+        mutableIntStateOf(settings.musicVisualizerMaxFrequencyHz)
     }
     var audioPermissionGranted by remember {
         mutableStateOf(
@@ -4987,6 +5009,19 @@ private fun NavigationSettingsPage(
         audioPermissionGranted = granted
         visualizerEnabled = granted
         visualizerPermissionDenied = !granted
+    }
+    DisposableEffect(context, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                audioPermissionGranted =
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECORD_AUDIO,
+                    ) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     val navCenters = remember { mutableStateMapOf<NavItemId, Float>() }
     var draggingNavId by remember { mutableStateOf<NavItemId?>(null) }
@@ -5018,6 +5053,27 @@ private fun NavigationSettingsPage(
         navDragTargetIndex = null
     }
 
+    fun frequencySliderValue(frequencyHz: Int): Float {
+        val minimum = 20.0
+        val maximum = 20_000.0
+        return ((ln(frequencyHz.coerceIn(20, 20_000).toDouble()) - ln(minimum)) /
+            (ln(maximum) - ln(minimum))).toFloat().coerceIn(0f, 1f)
+    }
+
+    fun frequencyFromSlider(value: Float): Int {
+        val minimum = 20.0
+        val maximum = 20_000.0
+        return exp(ln(minimum) + (ln(maximum) - ln(minimum)) * value.coerceIn(0f, 1f))
+            .roundToInt()
+            .coerceIn(20, 20_000)
+    }
+
+    fun frequencyLabel(frequencyHz: Int): String = if (frequencyHz >= 1_000) {
+        String.format(Locale.ROOT, "%.1f kHz", frequencyHz / 1_000f)
+    } else {
+        "$frequencyHz Hz"
+    }
+
     fun moveNavItem(fromIndex: Int, toIndex: Int): Boolean {
         if (fromIndex !in navItems.indices || toIndex !in navItems.indices || fromIndex == toIndex) {
             return false
@@ -5033,7 +5089,10 @@ private fun NavigationSettingsPage(
         dirty = defaultPage != settings.defaultPage || navItems != settings.navItems ||
             showLabels != settings.bottomNavShowLabels ||
             visualizerEnabled != settings.musicVisualizerEnabled ||
-            visualizerStyle != settings.musicVisualizerStyle,
+            visualizerStyle != settings.musicVisualizerStyle ||
+            visualizerFrequencyMode != settings.musicVisualizerFrequencyMode ||
+            visualizerMinFrequencyHz != settings.musicVisualizerMinFrequencyHz ||
+            visualizerMaxFrequencyHz != settings.musicVisualizerMaxFrequencyHz,
         enabled = !saving,
         onReset = {
             val defaults = AppSettings()
@@ -5042,6 +5101,9 @@ private fun NavigationSettingsPage(
             showLabels = defaults.bottomNavShowLabels
             visualizerEnabled = defaults.musicVisualizerEnabled
             visualizerStyle = defaults.musicVisualizerStyle
+            visualizerFrequencyMode = defaults.musicVisualizerFrequencyMode
+            visualizerMinFrequencyHz = defaults.musicVisualizerMinFrequencyHz
+            visualizerMaxFrequencyHz = defaults.musicVisualizerMaxFrequencyHz
             visualizerPermissionDenied = false
             clearNavDrag()
         },
@@ -5053,6 +5115,9 @@ private fun NavigationSettingsPage(
             showLabels,
             visualizerEnabled,
             visualizerStyle,
+            visualizerFrequencyMode,
+            visualizerMinFrequencyHz,
+            visualizerMaxFrequencyHz,
         ) { saving = false }
     }
 
@@ -5137,6 +5202,81 @@ private fun NavigationSettingsPage(
                                     MusicVisualizerStyle.BARS -> tr("频谱直方图", "Spectrum bars")
                                     MusicVisualizerStyle.WAVEFORM -> tr("实时波形", "Waveform")
                                     MusicVisualizerStyle.CURVE -> tr("频谱曲线", "Spectrum curve")
+                                },
+                            )
+                        }
+                    }
+                    if (visualizerStyle != MusicVisualizerStyle.WAVEFORM) {
+                        HorizontalDivider()
+                        Text(tr("频率范围", "Frequency range"), fontWeight = FontWeight.SemiBold)
+                        MusicVisualizerFrequencyMode.entries.forEach { mode ->
+                            Row(
+                                Modifier.fillMaxWidth().clickable {
+                                    visualizerFrequencyMode = mode
+                                },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = visualizerFrequencyMode == mode,
+                                    onClick = { visualizerFrequencyMode = mode },
+                                )
+                                Column {
+                                    Text(
+                                        when (mode) {
+                                            MusicVisualizerFrequencyMode.ADAPTIVE ->
+                                                tr("自适应频率", "Adaptive frequencies")
+                                            MusicVisualizerFrequencyMode.MANUAL ->
+                                                tr("手动范围", "Manual range")
+                                        },
+                                    )
+                                    if (mode == MusicVisualizerFrequencyMode.ADAPTIVE) {
+                                        Text(
+                                            tr(
+                                                "跟随当前音乐的有效频段并平滑调整，让能量铺满底栏。",
+                                                "Smoothly follows the useful band in the current audio so energy fills the bar.",
+                                            ),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        if (visualizerFrequencyMode == MusicVisualizerFrequencyMode.MANUAL) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(frequencyLabel(visualizerMinFrequencyHz))
+                                Text(
+                                    frequencyLabel(visualizerMaxFrequencyHz),
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            val frequencyRangeDescription = tr(
+                                "音乐可视化频率范围",
+                                "Music visualization frequency range",
+                            )
+                            val frequencyRangeState = tr(
+                                "${frequencyLabel(visualizerMinFrequencyHz)} 到 ${frequencyLabel(visualizerMaxFrequencyHz)}",
+                                "${frequencyLabel(visualizerMinFrequencyHz)} to ${frequencyLabel(visualizerMaxFrequencyHz)}",
+                            )
+                            RangeSlider(
+                                value = frequencySliderValue(visualizerMinFrequencyHz)..
+                                    frequencySliderValue(visualizerMaxFrequencyHz),
+                                onValueChange = { range ->
+                                    val minimum = frequencyFromSlider(range.start)
+                                        .coerceAtMost(19_999)
+                                    val maximum = frequencyFromSlider(range.endInclusive)
+                                        .coerceAtLeast(minimum + 1)
+                                        .coerceAtMost(20_000)
+                                    visualizerMinFrequencyHz = minimum
+                                    visualizerMaxFrequencyHz = maximum
+                                },
+                                valueRange = 0f..1f,
+                                modifier = Modifier.semantics {
+                                    contentDescription = frequencyRangeDescription
+                                    stateDescription = frequencyRangeState
                                 },
                             )
                         }
@@ -5811,7 +5951,7 @@ private fun NavConfigRow(
     val icons = listOf(
         "home", "book", "poetry", "language", "bolt", "settings", "calendar",
         "event", "rss", "ai", "apps", "star", "write", "sparkle", "day",
-        "lock", "reader", "game", "usage", "steps", "widgets",
+        "lock", "reader", "game", "usage", "steps", "statistics", "widgets",
     )
     val visibilityDescription = tr(
         "${item.id.defaultLabel}是否显示在底栏",

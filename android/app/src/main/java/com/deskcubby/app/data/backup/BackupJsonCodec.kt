@@ -5,6 +5,7 @@ import com.deskcubby.app.codePointLength
 import com.deskcubby.app.data.local.DateRecordEntity
 import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.GameStateEntity
+import com.deskcubby.app.data.local.GameStatisticEntity
 import com.deskcubby.app.data.local.PoetryCategoryEntity
 import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
@@ -28,6 +29,7 @@ import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.MusicVisualizerStyle
+import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.VisualStyle
@@ -50,10 +52,12 @@ import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.preferences.migrateMealPhotosWidget
 import com.deskcubby.app.data.preferences.migrateDailyRecordsWidget
 import com.deskcubby.app.data.preferences.normalizeThemeSecondaryColors
+import com.deskcubby.app.data.preferences.normalizeNavItems
 import com.deskcubby.app.data.repository.VAULT_KEY_MARKER_ENTITY_ID
 import com.deskcubby.app.data.repository.VaultEncryptedBackup
 import com.deskcubby.app.data.repository.VaultEncryptedKeyBackup
 import com.deskcubby.app.data.statistics.MAX_USAGE_DEVICES
+import com.deskcubby.app.data.statistics.GameStatisticCatalog
 import com.deskcubby.app.data.statistics.UsageDeviceJsonCodec
 import com.deskcubby.app.data.statistics.UsageDeviceRecord
 import java.math.BigDecimal
@@ -67,7 +71,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 23,
+    val formatVersion: Int = 24,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -82,6 +86,7 @@ data class AppBackup(
         items = emptyList(),
     ),
     val gameStates: List<GameStateEntity> = emptyList(),
+    val gameStatistics: List<GameStatisticEntity> = emptyList(),
     val usageDevices: List<UsageDeviceRecord> = emptyList(),
 )
 
@@ -95,12 +100,13 @@ data class BackupSummary(
     val poemCount: Int = 0,
     val vaultItemCount: Int = 0,
     val gameStateCount: Int = 0,
+    val gameStatisticCount: Int = 0,
     val usageDeviceCount: Int = 0,
     val usageDayCount: Int = 0,
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 23
+    const val FORMAT_VERSION: Int = 24
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -140,6 +146,7 @@ object BackupJsonCodec {
     private const val MAX_VAULT_SALT_CHARS = 2_048
     private const val MAX_VAULT_GENERATION_CHARS = 64
     private const val MAX_GAME_STATES = 16
+    private const val MAX_GAME_STATISTICS = 64
     private const val MAX_GAME_ID_CHARS = 64
     private const val MAX_GAME_SAVE_CHARS = 16 * 1024 * 1024
     private val SUPPORTED_GAME_IDS = setOf(
@@ -171,6 +178,7 @@ object BackupJsonCodec {
         )
         validateVaultBackup(backup.vault)
         validateGameStates(backup.gameStates)
+        validateGameStatistics(backup.gameStatistics)
         validateUsageDevices(backup.usageDevices)
 
         val root = JSONObject()
@@ -186,6 +194,7 @@ object BackupJsonCodec {
             .put("poems", encodePoems(backup.poems))
             .put("vault", encodeVault(backup.vault))
             .put("gameStates", encodeGameStates(backup.gameStates))
+            .put("gameStatistics", encodeGameStatistics(backup.gameStatistics))
             .put("usageDevices", encodeUsageDevices(backup.usageDevices))
         return root.toString(2).also { encoded ->
             requireWithinSizeLimit(encoded)
@@ -267,6 +276,11 @@ object BackupJsonCodec {
         } else {
             emptyList()
         }
+        val gameStatistics = if (version >= 24) {
+            decodeGameStatistics(root.requiredArray("gameStatistics"))
+        } else {
+            emptyList()
+        }
         val usageDevices = if (version >= 20) {
             decodeUsageDevices(root.requiredArray("usageDevices"))
         } else {
@@ -284,6 +298,7 @@ object BackupJsonCodec {
             poems = poems,
             vault = vault,
             gameStates = gameStates,
+            gameStatistics = gameStatistics,
             usageDevices = usageDevices,
         ).also {
             validatePoetryCategoryReferences(it.poems, it.poetryCategories)
@@ -419,6 +434,9 @@ object BackupJsonCodec {
         .put("bottomNavShowLabels", settings.bottomNavShowLabels)
         .put("musicVisualizerEnabled", settings.musicVisualizerEnabled)
         .put("musicVisualizerStyle", settings.musicVisualizerStyle.name)
+        .put("musicVisualizerFrequencyMode", settings.musicVisualizerFrequencyMode.name)
+        .put("musicVisualizerMinFrequencyHz", settings.musicVisualizerMinFrequencyHz)
+        .put("musicVisualizerMaxFrequencyHz", settings.musicVisualizerMaxFrequencyHz)
         .put("game2048AnimationSpeed", settings.game2048AnimationSpeed.name)
         .put("morePageShowDescriptions", settings.morePageShowDescriptions)
         .put("homeWidgets", settings.homeWidgets.toJsonArray())
@@ -715,6 +733,24 @@ object BackupJsonCodec {
             migrated = version >= 9,
         )
         val navItems = decodeNavItems(json.requiredArray("navItems"), version)
+        val musicVisualizerMinFrequencyHz = if (version >= 24) {
+            json.requiredInt("musicVisualizerMinFrequencyHz").also { value ->
+                require(value in 20..19_999) {
+                    "musicVisualizerMinFrequencyHz is out of range"
+                }
+            }
+        } else {
+            defaults.musicVisualizerMinFrequencyHz
+        }
+        val musicVisualizerMaxFrequencyHz = if (version >= 24) {
+            json.requiredInt("musicVisualizerMaxFrequencyHz").also { value ->
+                require(value in (musicVisualizerMinFrequencyHz + 1)..20_000) {
+                    "musicVisualizerMaxFrequencyHz is out of range"
+                }
+            }
+        } else {
+            defaults.musicVisualizerMaxFrequencyHz
+        }
         return AppSettings(
             visualStyle = decodeVisualStyle(json, version),
             darkMode = json.requiredEnum("darkMode"),
@@ -1012,6 +1048,13 @@ object BackupJsonCodec {
             } else {
                 defaults.musicVisualizerStyle
             },
+            musicVisualizerFrequencyMode = if (version >= 24) {
+                json.requiredEnum<MusicVisualizerFrequencyMode>("musicVisualizerFrequencyMode")
+            } else {
+                defaults.musicVisualizerFrequencyMode
+            },
+            musicVisualizerMinFrequencyHz = musicVisualizerMinFrequencyHz,
+            musicVisualizerMaxFrequencyHz = musicVisualizerMaxFrequencyHz,
             game2048AnimationSpeed = if (version >= 23) {
                 json.requiredEnum<Game2048AnimationSpeed>("game2048AnimationSpeed")
             } else {
@@ -1171,38 +1214,51 @@ object BackupJsonCodec {
         return normalizeThemeSecondaryColors(decoded)
     }
 
-    private fun decodeNavItems(json: JSONArray, version: Int): List<NavItemConfig> = buildList {
+    private fun decodeNavItems(json: JSONArray, version: Int): List<NavItemConfig> {
         require(json.length() <= NavItemId.entries.size) { "navItems contains too many items" }
         val ids = HashSet<NavItemId>(json.length())
-        for (index in 0 until json.length()) {
-            val item = json.requiredObject(index, "navItems")
-            val id = item.requiredEnum<NavItemId>("id")
-            require(ids.add(id)) { "Duplicate navigation item: $id" }
-            val visible = item.requiredBoolean("visible")
-            add(
-                NavItemConfig(
-                    id = id,
-                    label = item.requiredString("label").requireMaxLength("navItems[$index].label", 128),
-                    iconKey = item.requiredString("iconKey").requireMaxLength("navItems[$index].iconKey", 128),
-                    visible = visible,
-                    showInMore = when {
-                        id == NavItemId.HOME ||
-                            id == NavItemId.MORE ||
-                            id == NavItemId.SETTINGS -> false
-                        version >= 13 -> item.requiredBoolean("showInMore")
-                        else -> id.defaultShowInMore && !visible
-                    },
-                    moreDescription = if (version >= 15) {
-                        item.requiredString("moreDescription")
-                            .requireMaxCodePoints(
-                                "navItems[$index].moreDescription",
-                                MAX_MORE_DESCRIPTION_CODE_POINTS,
-                            )
-                    } else {
-                        id.defaultDescription
-                    },
-                ),
-            )
+        val decoded = buildList {
+            for (index in 0 until json.length()) {
+                val item = json.requiredObject(index, "navItems")
+                val id = item.requiredEnum<NavItemId>("id")
+                require(ids.add(id)) { "Duplicate navigation item: $id" }
+                val visible = item.requiredBoolean("visible")
+                add(
+                    NavItemConfig(
+                        id = id,
+                        label = item.requiredString("label")
+                            .requireMaxLength("navItems[$index].label", 128),
+                        iconKey = item.requiredString("iconKey")
+                            .requireMaxLength("navItems[$index].iconKey", 128),
+                        visible = visible,
+                        showInMore = when {
+                            id == NavItemId.HOME ||
+                                id == NavItemId.MORE ||
+                                id == NavItemId.SETTINGS -> false
+                            version >= 13 -> item.requiredBoolean("showInMore")
+                            else -> id.defaultShowInMore && !visible
+                        },
+                        moreDescription = if (version >= 15) {
+                            item.requiredString("moreDescription")
+                                .requireMaxCodePoints(
+                                    "navItems[$index].moreDescription",
+                                    MAX_MORE_DESCRIPTION_CODE_POINTS,
+                                )
+                        } else {
+                            id.defaultDescription
+                        },
+                    ),
+                )
+            }
+        }
+        return normalizeNavItems(decoded).map { item ->
+            if (version < 24 &&
+                (item.id == NavItemId.USAGE || item.id == NavItemId.STEPS)
+            ) {
+                item.copy(showInMore = false)
+            } else {
+                item
+            }
         }
     }
 
@@ -1782,6 +1838,65 @@ object BackupJsonCodec {
             require(tokener.nextValue() is JSONObject && tokener.nextClean() == '\u0000') {
                 "gameStates[$index].saveJson must contain one JSON object"
             }
+        }
+    }
+
+    private fun encodeGameStatistics(items: List<GameStatisticEntity>): JSONArray =
+        JSONArray().apply {
+            items.sortedWith(
+                compareBy(GameStatisticEntity::gameId).thenBy(GameStatisticEntity::metricKey),
+            ).forEach { item ->
+                put(
+                    JSONObject()
+                        .put("gameId", item.gameId)
+                        .put("metricKey", item.metricKey)
+                        .put("value", item.value)
+                        .put("updatedAt", item.updatedAt),
+                )
+            }
+        }
+
+    private fun decodeGameStatistics(json: JSONArray): List<GameStatisticEntity> {
+        require(json.length() <= MAX_GAME_STATISTICS) {
+            "Backup contains too many game statistics"
+        }
+        val keys = HashSet<String>(json.length())
+        return buildList {
+            repeat(json.length()) { index ->
+                val item = json.requiredObject(index, "gameStatistics")
+                val statistic = GameStatisticEntity(
+                    gameId = item.requiredString("gameId")
+                        .requireMaxLength("gameStatistics[$index].gameId", MAX_GAME_ID_CHARS),
+                    metricKey = item.requiredString("metricKey")
+                        .requireMaxLength("gameStatistics[$index].metricKey", MAX_GAME_ID_CHARS),
+                    value = item.requiredLong("value"),
+                    updatedAt = item.requiredLong("updatedAt"),
+                )
+                require(keys.add("${statistic.gameId}\u0000${statistic.metricKey}")) {
+                    "Duplicate game statistic key"
+                }
+                validateGameStatistic(statistic, index)
+                add(statistic)
+            }
+        }
+    }
+
+    private fun validateGameStatistics(items: List<GameStatisticEntity>) {
+        require(items.size <= MAX_GAME_STATISTICS) {
+            "Backup contains too many game statistics"
+        }
+        require(items.map { "${it.gameId}\u0000${it.metricKey}" }.distinct().size == items.size) {
+            "Backup contains duplicate game statistic keys"
+        }
+        items.forEachIndexed { index, item -> validateGameStatistic(item, index) }
+    }
+
+    private fun validateGameStatistic(item: GameStatisticEntity, index: Int) {
+        require(GameStatisticCatalog.supports(item.gameId, item.metricKey)) {
+            "gameStatistics[$index] contains an unsupported key"
+        }
+        require(item.value >= 0L && item.updatedAt >= 0L) {
+            "gameStatistics[$index] contains a negative value"
         }
     }
 

@@ -18,6 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AiMessageEntity::class,
         VaultItemEntity::class,
         GameStateEntity::class,
+        GameStatisticEntity::class,
         UsageHistoryEntity::class,
         UsageDayEntity::class,
         UsageAppDurationEntity::class,
@@ -26,7 +27,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         StepDayEntity::class,
         LegacyStatisticsMigrationEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -40,6 +41,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun aiChatDao(): AiChatDao
     abstract fun vaultItemDao(): VaultItemDao
     abstract fun gameStateDao(): GameStateDao
+    abstract fun gameStatisticDao(): GameStatisticDao
     abstract fun usageStatisticsDao(): UsageStatisticsDao
     abstract fun stepStatisticsDao(): StepStatisticsDao
     abstract fun legacyStatisticsMigrationDao(): LegacyStatisticsMigrationDao
@@ -388,6 +390,22 @@ abstract class AppDatabase : RoomDatabase() {
                         `migrationId` TEXT NOT NULL,
                         `importedAtEpochMillis` INTEGER NOT NULL,
                         PRIMARY KEY(`migrationId`)
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `game_statistics` (
+                        `gameId` TEXT NOT NULL,
+                        `metricKey` TEXT NOT NULL,
+                        `value` INTEGER NOT NULL DEFAULT 0,
+                        `updatedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`gameId`, `metricKey`)
                     )
                     """.trimIndent(),
                 )

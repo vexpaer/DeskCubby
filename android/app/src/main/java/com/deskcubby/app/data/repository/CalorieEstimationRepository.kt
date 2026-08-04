@@ -8,9 +8,18 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import org.json.JSONArray
 import org.json.JSONObject
+
+enum class MealCalorieEstimationStage {
+    IMAGE_RECOGNITION,
+    TEXT_ESTIMATION,
+}
 
 @Singleton
 class CalorieEstimationRepository @Inject constructor(
@@ -25,6 +34,7 @@ class CalorieEstimationRepository @Inject constructor(
         imageUri: String,
         settings: AppSettings,
         note: String? = null,
+        onStageChanged: (MealCalorieEstimationStage) -> Unit = {},
     ): MealEnergyEstimate {
         val vision = settings.aiConfigs.firstOrNull {
             it.id == settings.calorieImageConfigId && it.type == AiModelType.IMAGE
@@ -33,27 +43,33 @@ class CalorieEstimationRepository @Inject constructor(
             it.id == settings.calorieTextConfigId && it.type == AiModelType.TEXT
         } ?: error("请先在日记设置中选择文字模型")
         val uri = Uri.parse(imageUri)
-        val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
-            val output = ByteArrayOutputStream()
-            val buffer = ByteArray(32 * 1024)
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                require(output.size() + count <= MAX_IMAGE_BYTES) {
-                    "图片超过 8 MiB，无法估算热量；请开启饮食图片压缩"
+        onStageChanged(MealCalorieEstimationStage.IMAGE_RECOGNITION)
+        val (bytes, mime) = withContext(Dispatchers.IO) {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(32 * 1024)
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    require(output.size() + count <= MAX_IMAGE_BYTES) {
+                        "图片超过 8 MiB，无法估算热量；请开启饮食图片压缩"
+                    }
+                    output.write(buffer, 0, count)
                 }
-                output.write(buffer, 0, count)
-            }
-            output.toByteArray()
-        } ?: error("无法读取饮食图片")
-        val mime = context.contentResolver.getType(uri)
-            ?.takeIf { it.startsWith("image/") }
-            ?: "image/jpeg"
+                output.toByteArray()
+            } ?: error("无法读取饮食图片")
+            val mime = context.contentResolver.getType(uri)
+                ?.takeIf { it.startsWith("image/") }
+                ?: "image/jpeg"
+            bytes to mime
+        }
         val rawVision = ai.analyzeImage(vision, settings.calorieVisionPrompt, mime, bytes)
         val visionJson = extractJsonObject(rawVision)
         // Parse before crossing the second network boundary so malformed or excessively large
         // model output is not relayed verbatim to another service.
         val textInput = buildCalorieTextInput(visionJson, note)
+        onStageChanged(MealCalorieEstimationStage.TEXT_ESTIMATION)
         val answer = ai.complete(
             settings.copy(
                 aiConfigs = listOf(text.copy(systemPrompt = "")),

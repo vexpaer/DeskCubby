@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.MusicVisualizerStyle
+import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.VisualStyle
@@ -42,6 +43,9 @@ class NavigationBottomBarTest {
                         showLabels = true,
                         musicVisualizerEnabled = false,
                         musicVisualizerStyle = MusicVisualizerStyle.BARS,
+                        musicVisualizerFrequencyMode = MusicVisualizerFrequencyMode.ADAPTIVE,
+                        musicVisualizerMinFrequencyHz = 60,
+                        musicVisualizerMaxFrequencyHz = 16_000,
                         onSelected = {},
                         modifier = Modifier.testTag(BOTTOM_BAR_TAG),
                     )

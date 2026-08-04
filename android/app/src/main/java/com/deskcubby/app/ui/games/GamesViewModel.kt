@@ -3,16 +3,21 @@ package com.deskcubby.app.ui.games
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.deskcubby.app.data.local.GameStateDao
-import com.deskcubby.app.data.local.GameStateEntity
 import com.deskcubby.app.data.model.Game2048AnimationSpeed
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.statistics.EngagementKind
 import com.deskcubby.app.data.statistics.EngagementTimeRepository
+import com.deskcubby.app.data.statistics.GamePersistenceCoordinator
+import com.deskcubby.app.data.statistics.GameStatisticMetric
+import com.deskcubby.app.games.Game2048
+import com.deskcubby.app.games.MinesweeperGame
+import com.deskcubby.app.games.SnakeGame
+import com.deskcubby.app.games.SpiderSolitaireGame
+import com.deskcubby.app.games.TetrisGame
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -25,6 +30,7 @@ class GamesViewModel @Inject constructor(
     private val gameStateDao: GameStateDao,
     private val engagementTimeRepository: EngagementTimeRepository,
     private val settingsRepository: SettingsRepository,
+    private val gamePersistenceCoordinator: GamePersistenceCoordinator,
 ) : ViewModel() {
 
     data class GameMeta(
@@ -41,34 +47,7 @@ class GamesViewModel @Inject constructor(
             initialValue = Game2048AnimationSpeed.NORMAL,
         )
 
-    private sealed interface PersistenceCommand {
-        val gameId: String
-
-        data class Load(
-            override val gameId: String,
-            val result: CompletableDeferred<String?>,
-        ) : PersistenceCommand
-
-        data class Save(
-            override val gameId: String,
-            val saveJson: String,
-            val score: Int,
-        ) : PersistenceCommand
-
-        data class Finish(
-            override val gameId: String,
-            val score: Int,
-        ) : PersistenceCommand
-
-        data class Clear(override val gameId: String) : PersistenceCommand
-    }
-
-    /**
-     * A single consumer preserves the exact order of pause, finish, clear and subsequent load
-     * operations. In particular, immediately reopening a game cannot read past a queued pause
-     * snapshot, and an older pause write cannot overtake a newer game-over write.
-     */
-    private val persistenceCommands = Channel<PersistenceCommand>(Channel.UNLIMITED)
+    private var spiderReplacementJob: Job? = null
 
     private val metas: Map<String, StateFlow<GameMeta>> = GAME_IDS.associateWith { gameId ->
         combine(
@@ -88,39 +67,6 @@ class GamesViewModel @Inject constructor(
             )
     }
 
-    init {
-        viewModelScope.launch {
-            for (command in persistenceCommands) {
-                try {
-                    when (command) {
-                        is PersistenceCommand.Load -> {
-                            command.result.complete(gameStateDao.get(command.gameId)?.saveJson)
-                        }
-
-                        is PersistenceCommand.Save -> {
-                            upsert(command.gameId, command.saveJson, command.score)
-                        }
-
-                        is PersistenceCommand.Finish -> {
-                            upsert(command.gameId, saveJson = null, score = command.score)
-                        }
-
-                        is PersistenceCommand.Clear -> {
-                            gameStateDao.clearSave(command.gameId, System.currentTimeMillis())
-                        }
-                    }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (_: Exception) {
-                    if (command is PersistenceCommand.Load) {
-                        command.result.complete(null)
-                    }
-                    // Persistence remains best-effort; gameplay must never crash on a DB failure.
-                }
-            }
-        }
-    }
-
     /** High score and saved-game availability for one of [GAME_IDS]. */
     fun meta(gameId: String): StateFlow<GameMeta> = metas.getValue(gameId)
 
@@ -129,23 +75,96 @@ class GamesViewModel @Inject constructor(
      * operation has completed, or null when there is no usable snapshot.
      */
     suspend fun loadSave(gameId: String): String? {
-        val result = CompletableDeferred<String?>()
-        persistenceCommands.send(PersistenceCommand.Load(gameId, result))
-        return result.await()
+        return gamePersistenceCoordinator.loadSave(gameId)
     }
 
     /** Stores an in-progress snapshot and raises the high score when [score] exceeds it. */
     fun saveProgress(gameId: String, saveJson: String, score: Int) {
-        persistenceCommands.trySend(PersistenceCommand.Save(gameId, saveJson, score))
+        gamePersistenceCoordinator.saveProgress(gameId, saveJson, score)
     }
 
     /** Called when a run ends: updates the high score and clears the saved snapshot. */
     fun recordScore(gameId: String, score: Int) {
-        persistenceCommands.trySend(PersistenceCommand.Finish(gameId, score))
+        gamePersistenceCoordinator.recordScore(gameId, score)
     }
 
     fun clearSave(gameId: String) {
-        persistenceCommands.trySend(PersistenceCommand.Clear(gameId))
+        gamePersistenceCoordinator.clearSave(gameId)
+    }
+
+    /**
+     * Replaces a saved Spider round with a fresh deal. Only this explicit replacement is a loss;
+     * leaving the page keeps the resumable save and never changes the outcome counters.
+     */
+    fun discardSavedSpiderAndThen(onReady: () -> Unit) {
+        if (spiderReplacementJob?.isActive == true) return
+        spiderReplacementJob = viewModelScope.launch {
+            try {
+                val saved = loadSave(GAME_SPIDER)
+                val delta = saved
+                    ?.let(SpiderSolitaireGame::fromJson)
+                    ?.abandonWithResult()
+                    ?.statisticsDelta
+                if (delta != null) enqueueSpiderStatistics(delta)
+                gamePersistenceCoordinator.clearSave(GAME_SPIDER)
+                onReady()
+            } finally {
+                spiderReplacementJob = null
+            }
+        }
+    }
+
+    fun record2048Statistics(gameId: String, delta: Game2048.StatisticsDelta) {
+        recordStatistics(
+            gameId = gameId,
+            increments = mapOf(
+                GameStatisticMetric.EFFECTIVE_MOVES to delta.effectiveMoves.toLong(),
+                GameStatisticMetric.MERGES to delta.merges.toLong(),
+                GameStatisticMetric.WINS to delta.wins.toLong(),
+                GameStatisticMetric.LOSSES to delta.losses.toLong(),
+            ),
+            maxima = mapOf(GameStatisticMetric.HIGHEST_TILE to delta.highestTile.toLong()),
+        )
+    }
+
+    fun recordSnakeStatistics(delta: SnakeGame.StatisticsDelta) {
+        recordStatistics(
+            gameId = GAME_SNAKE,
+            increments = mapOf(
+                GameStatisticMetric.FOOD_EATEN to delta.foodEaten.toLong(),
+                GameStatisticMetric.LOSSES to delta.losses.toLong(),
+            ),
+            maxima = mapOf(GameStatisticMetric.MAX_LENGTH to delta.maxLength.toLong()),
+        )
+    }
+
+    fun recordTetrisStatistics(delta: TetrisGame.StatisticsDelta) {
+        recordStatistics(
+            gameId = GAME_TETRIS,
+            increments = mapOf(
+                GameStatisticMetric.PIECES_LOCKED to delta.piecesLocked.toLong(),
+                GameStatisticMetric.LINES_CLEARED to delta.linesCleared.toLong(),
+                GameStatisticMetric.TETRISES to delta.tetrises.toLong(),
+                GameStatisticMetric.LOSSES to delta.losses.toLong(),
+            ),
+        )
+    }
+
+    fun recordMinesweeperStatistics(delta: MinesweeperGame.StatisticsDelta) {
+        recordStatistics(
+            gameId = GAME_MINESWEEPER,
+            increments = mapOf(
+                GameStatisticMetric.MINES_CELLS_REVEALED to delta.minesCellsRevealed.toLong(),
+                GameStatisticMetric.MINES_SWEPT to delta.minesSwept.toLong(),
+                GameStatisticMetric.FLAGS_PLACED to delta.flagsPlaced.toLong(),
+                GameStatisticMetric.WINS to delta.wins.toLong(),
+                GameStatisticMetric.LOSSES to delta.losses.toLong(),
+            ),
+        )
+    }
+
+    fun recordSpiderStatistics(delta: SpiderSolitaireGame.StatisticsDelta) {
+        enqueueSpiderStatistics(delta)
     }
 
     fun beginPlayTime(gameId: String) {
@@ -172,16 +191,31 @@ class GamesViewModel @Inject constructor(
         settingsRepository.setGame2048AnimationSpeed(value)
     }
 
-    private suspend fun upsert(gameId: String, saveJson: String?, score: Int) {
-        val existing = gameStateDao.get(gameId)
-        gameStateDao.upsert(
-            GameStateEntity(
-                gameId = gameId,
-                highScore = maxOf(existing?.highScore ?: 0, score),
-                saveJson = saveJson,
-                updatedAt = System.currentTimeMillis(),
-            ),
+    private fun recordStatistics(
+        gameId: String,
+        increments: Map<String, Long>,
+        maxima: Map<String, Long> = emptyMap(),
+    ) {
+        val filteredIncrements = increments.filterValues { it > 0L }
+        val filteredMaxima = maxima.filterValues { it > 0L }
+        if (filteredIncrements.isEmpty() && filteredMaxima.isEmpty()) return
+        gamePersistenceCoordinator.recordStatistics(
+            gameId,
+            filteredIncrements,
+            filteredMaxima,
         )
+    }
+
+    private fun enqueueSpiderStatistics(delta: SpiderSolitaireGame.StatisticsDelta) {
+        val increments = mapOf(
+            GameStatisticMetric.SPIDER_CARD_MOVES to delta.cardMoves.toLong(),
+            GameStatisticMetric.SPIDER_DEALS to delta.deals.toLong(),
+            GameStatisticMetric.SPIDER_UNDOS to delta.undos.toLong(),
+            GameStatisticMetric.WINS to delta.wins.toLong(),
+            GameStatisticMetric.LOSSES to delta.losses.toLong(),
+        ).filterValues { it > 0L }
+        if (increments.isEmpty()) return
+        gamePersistenceCoordinator.recordStatistics(GAME_SPIDER, increments)
     }
 
     private suspend fun persistEngagementTime(block: suspend () -> Unit) {

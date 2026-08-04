@@ -26,6 +26,7 @@ import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.MusicVisualizerStyle
+import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.PoetryTextAlignment
@@ -629,6 +630,9 @@ class SettingsViewModel @Inject constructor(
         showLabels: Boolean,
         musicVisualizerEnabled: Boolean,
         musicVisualizerStyle: MusicVisualizerStyle,
+        musicVisualizerFrequencyMode: MusicVisualizerFrequencyMode,
+        musicVisualizerMinFrequencyHz: Int,
+        musicVisualizerMaxFrequencyHz: Int,
         onDone: (Boolean) -> Unit = {},
     ) = launchSave(onDone) {
         repository.setNavigationSettings(
@@ -637,6 +641,9 @@ class SettingsViewModel @Inject constructor(
             showLabels,
             musicVisualizerEnabled,
             musicVisualizerStyle,
+            musicVisualizerFrequencyMode,
+            musicVisualizerMinFrequencyHz,
+            musicVisualizerMaxFrequencyHz,
         )
     }
     fun setMorePageSettings(
@@ -971,14 +978,16 @@ class SettingsViewModel @Inject constructor(
             "${summary.favoriteCount} 个浏览器收藏、" +
             "${summary.dateRecordCount} 个日期记录、${summary.poetryCategoryCount} 个诗词分类、" +
             "${summary.poemCount} 首诗词、${summary.vaultItemCount} 条收藏夹密文、" +
-            "${summary.gameStateCount} 个游戏存档、${summary.usageDeviceCount} 台设备的 " +
+            "${summary.gameStateCount} 个游戏存档、${summary.gameStatisticCount} 项游戏统计、" +
+            "${summary.usageDeviceCount} 台设备的 " +
             "${summary.usageDayCount} 天使用时间；" +
             "$actionEn: ${summary.thoughtCount} thoughts, " +
             "${summary.categoryCount} thought categories, ${summary.favoriteCount} bookmarks, " +
             "${summary.dateRecordCount} date records, " +
             "${summary.poetryCategoryCount} poetry categories, ${summary.poemCount} poems, " +
             "${summary.vaultItemCount} encrypted Vault items, " +
-            "${summary.gameStateCount} game saves, and ${summary.usageDayCount} screen-time days " +
+            "${summary.gameStateCount} game saves, ${summary.gameStatisticCount} game metrics, " +
+            "and ${summary.usageDayCount} screen-time days " +
             "from ${summary.usageDeviceCount} devices"
 
     private fun launch(block: suspend () -> Unit) = viewModelScope.launch {

@@ -53,6 +53,7 @@ import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.ViewDay
 import androidx.compose.material.icons.outlined.Widgets
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -63,6 +64,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -77,6 +79,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -87,6 +92,7 @@ import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.MusicVisualizerStyle
+import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.ui.blog.BlogScreen
 import com.deskcubby.app.ui.blog.BlogViewModel
 import com.deskcubby.app.ui.components.AppLoadingIndicator
@@ -95,6 +101,7 @@ import com.deskcubby.app.ui.diary.DiaryEditorScreen
 import com.deskcubby.app.ui.diary.DiaryListScreen
 import com.deskcubby.app.ui.diary.DiaryViewModel
 import com.deskcubby.app.ui.diary.MealCalendarScreen
+import com.deskcubby.app.ui.diary.CalorieEstimationProgressScreen
 import com.deskcubby.app.ui.diary.filter.MealPhotoFilterSettingsScreen
 import com.deskcubby.app.ui.daily.DailyRecordScreen
 import com.deskcubby.app.ui.daily.DailyRecordViewModel
@@ -114,6 +121,8 @@ import com.deskcubby.app.ui.rss.RssScreen
 import com.deskcubby.app.ui.rss.RssViewModel
 import com.deskcubby.app.ui.steps.StepStatisticsScreen
 import com.deskcubby.app.ui.steps.StepStatisticsViewModel
+import com.deskcubby.app.ui.statshub.StatisticsHubScreen
+import com.deskcubby.app.ui.statshub.StatisticsHubViewModel
 import com.deskcubby.app.ui.usage.UsageStatisticsScreen
 import com.deskcubby.app.ui.usage.UsageStatisticsViewModel
 import com.deskcubby.app.ui.ai.AiChatScreen
@@ -138,6 +147,7 @@ import com.deskcubby.app.data.statistics.StepHealthConnectAccess
 object Routes {
     const val EDITOR = "diary_editor"
     const val MEAL_CALENDAR = "meal_calendar"
+    const val CALORIE_ESTIMATION_PROGRESS = "meal_calendar/calorie_progress"
     const val MEAL_FILTER_SETTINGS = "meal_filter_settings"
     const val THOUGHT_TRASH = "thought_trash"
     const val DAILY_RECORDS = "daily_records"
@@ -146,6 +156,8 @@ object Routes {
     const val MORE_PAGE_SETTINGS = "settings/more-page"
     const val USAGE_SETTINGS = "settings/usage-statistics"
     const val STEPS_SETTINGS = "settings/step-statistics"
+    const val STATISTICS_USAGE = "statistics/screen-time"
+    const val STATISTICS_HEALTH = "statistics/health"
     const val AI_SETTINGS = "settings/ai"
     const val POETRY_SETTINGS = "settings/poetry"
 }
@@ -229,6 +241,9 @@ fun DeskCubbyRoot(
                         showLabels = settings.bottomNavShowLabels,
                         musicVisualizerEnabled = settings.musicVisualizerEnabled,
                         musicVisualizerStyle = settings.musicVisualizerStyle,
+                        musicVisualizerFrequencyMode = settings.musicVisualizerFrequencyMode,
+                        musicVisualizerMinFrequencyHz = settings.musicVisualizerMinFrequencyHz,
+                        musicVisualizerMaxFrequencyHz = settings.musicVisualizerMaxFrequencyHz,
                         onSelected = { item -> navigateMain(item.id.route) },
                     )
                 }
@@ -371,6 +386,15 @@ fun DeskCubbyRoot(
                             onGameOpenChanged = { gameOpen = it },
                         )
                     }
+                    composable(NavItemId.STATISTICS.route) {
+                        val statisticsHubViewModel: StatisticsHubViewModel = hiltViewModel()
+                        StatisticsHubScreen(
+                            padding = padding,
+                            viewModel = statisticsHubViewModel,
+                            onOpenUsage = { navController.navigate(Routes.STATISTICS_USAGE) },
+                            onOpenHealth = { navController.navigate(Routes.STATISTICS_HEALTH) },
+                        )
+                    }
                     composable(NavItemId.USAGE.route) {
                         val usageStatisticsViewModel: UsageStatisticsViewModel = hiltViewModel()
                         UsageStatisticsScreen(
@@ -474,6 +498,43 @@ fun DeskCubbyRoot(
                             onOpenFilterSettings = {
                                 navController.navigate(Routes.MEAL_FILTER_SETTINGS)
                             },
+                            onOpenCalorieProgress = {
+                                navController.navigate(Routes.CALORIE_ESTIMATION_PROGRESS)
+                            },
+                        )
+                    }
+                    composable(Routes.STATISTICS_USAGE) {
+                        val usageStatisticsViewModel: UsageStatisticsViewModel = hiltViewModel()
+                        UsageStatisticsScreen(
+                            padding = PaddingValues(0.dp),
+                            viewModel = usageStatisticsViewModel,
+                            onRequestUsageAccess = { openUsageAccessSettings(aliasContext) },
+                            onOpenTrackingSettings = {
+                                navController.navigate(Routes.USAGE_SETTINGS)
+                            },
+                            onBack = { navController.popBackStack() },
+                        )
+                    }
+                    composable(Routes.STATISTICS_HEALTH) {
+                        val stepStatisticsViewModel: StepStatisticsViewModel = hiltViewModel()
+                        StepStatisticsScreen(
+                            padding = PaddingValues(0.dp),
+                            viewModel = stepStatisticsViewModel,
+                            onOpenTrackingSettings = {
+                                navController.navigate(Routes.STEPS_SETTINGS)
+                            },
+                            onOpenHealthConnect = {
+                                if (StepHealthConnectAccess.open(aliasContext).isFailure) {
+                                    stepStatisticsViewModel.onHealthConnectOpenFailed()
+                                }
+                            },
+                            onBack = { navController.popBackStack() },
+                        )
+                    }
+                    composable(Routes.CALORIE_ESTIMATION_PROGRESS) {
+                        CalorieEstimationProgressScreen(
+                            viewModel = diaryViewModel,
+                            onBack = { navController.popBackStack() },
                         )
                     }
                     composable(Routes.MEAL_FILTER_SETTINGS) {
@@ -637,14 +698,36 @@ internal fun DeskBottomBar(
     showLabels: Boolean,
     musicVisualizerEnabled: Boolean,
     musicVisualizerStyle: MusicVisualizerStyle,
+    musicVisualizerFrequencyMode: MusicVisualizerFrequencyMode,
+    musicVisualizerMinFrequencyHz: Int,
+    musicVisualizerMaxFrequencyHz: Int,
     onSelected: (NavItemConfig) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val style = LocalVisualStyle.current
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var audioPermissionGranted by remember(context) {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    DisposableEffect(context, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                audioPermissionGranted =
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECORD_AUDIO,
+                    ) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val visualizerActive = musicVisualizerEnabled &&
-        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-        PackageManager.PERMISSION_GRANTED
+        audioPermissionGranted
     val glass = style == VisualStyle.LIQUID_GLASS
     val organic = style == VisualStyle.ORGANIC_FUTURE
     val floatingPanel = glass || organic
@@ -655,6 +738,9 @@ internal fun DeskBottomBar(
             MusicVisualizerLayer(
                 enabled = visualizerActive,
                 style = musicVisualizerStyle,
+                frequencyMode = musicVisualizerFrequencyMode,
+                minFrequencyHz = musicVisualizerMinFrequencyHz,
+                maxFrequencyHz = musicVisualizerMaxFrequencyHz,
                 // A regular fillMaxSize child takes Scaffold's full bottom-bar constraint and
                 // makes this Box consume the whole screen. Match the NavigationBar only after
                 // the Box has derived its height from that non-match-parent child.
@@ -689,15 +775,9 @@ internal fun DeskBottomBar(
                         },
                         alwaysShowLabel = showLabels,
                         colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = if (organic) MaterialTheme.colorScheme.onPrimaryContainer
-                            else MaterialTheme.colorScheme.onSecondaryContainer,
-                            selectedTextColor = if (organic) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurface,
-                            indicatorColor = when {
-                                glass -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
-                                organic -> MaterialTheme.colorScheme.primaryContainer
-                                else -> MaterialTheme.colorScheme.secondaryContainer
-                            },
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = Color.Transparent,
                             unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         ),
@@ -769,6 +849,7 @@ fun iconFor(key: String): ImageVector = when (key) {
     "reader" -> Icons.Outlined.AutoStories
     "usage" -> Icons.Outlined.AccessTime
     "steps" -> Icons.Outlined.MonitorHeart
+    "statistics" -> Icons.Outlined.BarChart
     "widgets" -> Icons.Outlined.Widgets
     else -> Icons.AutoMirrored.Outlined.MenuBook
 }

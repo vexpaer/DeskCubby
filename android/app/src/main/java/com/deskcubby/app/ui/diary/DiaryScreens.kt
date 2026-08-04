@@ -426,9 +426,11 @@ fun MealCalendarScreen(
     filterSettings: MealPhotoFilterSettings = MealPhotoFilterSettings(),
     onFilterEnabledChange: (Boolean) -> Unit = {},
     onOpenFilterSettings: () -> Unit = {},
+    onOpenCalorieProgress: () -> Unit = {},
 ) {
     val state by viewModel.mealCalendarState.collectAsStateWithLifecycle()
     val exporting by viewModel.mealCalendarExporting.collectAsStateWithLifecycle()
+    val calorieQueueState by viewModel.calorieEstimationQueueState.collectAsStateWithLifecycle()
     val operationMessage by viewModel.message.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val mealOperationsEnabled = !exporting && !state.loading
@@ -512,13 +514,14 @@ fun MealCalendarScreen(
                     }
                 },
                 actions = {
-                    if (settings.calorieEstimationEnabled) {
-                        IconButton(
-                            enabled = mealOperationsEnabled,
-                            onClick = { calculateAllDialog = true },
-                        ) {
-                            Icon(Icons.Outlined.Calculate, tr("计算未计算的热量", "Calculate missing calories"))
-                        }
+                    if (settings.calorieEstimationEnabled || calorieQueueState.items.isNotEmpty()) {
+                        CalorieEstimateToolbarButton(
+                            calculationEnabled = mealOperationsEnabled &&
+                                settings.calorieEstimationEnabled,
+                            queueState = calorieQueueState,
+                            onCalculate = { calculateAllDialog = true },
+                            onOpenProgress = onOpenCalorieProgress,
+                        )
                     }
                     IconButton(
                         enabled = mealOperationsEnabled && filteredItems.isNotEmpty(),
@@ -864,7 +867,9 @@ fun MealCalendarScreen(
             MealEnergyDetailsDialog(
                 day = completeDay,
                 calorieEstimationEnabled = settings.calorieEstimationEnabled,
-                actionsEnabled = mealOperationsEnabled,
+                actionsEnabled = mealOperationsEnabled && calorieQueueState.items.none {
+                    it.dateIso == dateIso && !it.isTerminal
+                },
                 onDismiss = { energyDetailsDate = null },
                 onSave = { totalOverride, note ->
                     energyDetailsDate = null
@@ -1321,6 +1326,55 @@ private fun MealEnergyDetailsDialog(
             }
         },
     )
+}
+
+@Composable
+private fun CalorieEstimateToolbarButton(
+    calculationEnabled: Boolean,
+    queueState: CalorieEstimationQueueState,
+    onCalculate: () -> Unit,
+    onOpenProgress: () -> Unit,
+) {
+    val queueLabel = when {
+        queueState.active != null -> tr("热量估算正在进行", "Calorie estimation in progress")
+        queueState.queued.isNotEmpty() -> tr("热量估算正在排队", "Calorie estimation queued")
+        else -> tr("热量估算空闲", "Calorie estimation idle")
+    }
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(
+                if (queueState.isRunning) MaterialTheme.colorScheme.primaryContainer
+                else Color.Transparent,
+            )
+            .combinedClickable(
+                enabled = calculationEnabled || queueState.items.isNotEmpty(),
+                role = Role.Button,
+                onClickLabel = if (calculationEnabled) {
+                    tr("计算未计算的热量", "Calculate missing calories")
+                } else {
+                    tr("查看热量估算进度", "View calorie estimation progress")
+                },
+                onLongClickLabel = tr("查看热量估算进度", "View calorie estimation progress"),
+                onLongClick = onOpenProgress,
+                onClick = {
+                    if (calculationEnabled) onCalculate() else onOpenProgress()
+                },
+            )
+            .semantics { stateDescription = queueLabel },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Calculate,
+            contentDescription = tr("计算未计算的热量", "Calculate missing calories"),
+            tint = when {
+                queueState.isRunning -> MaterialTheme.colorScheme.onPrimaryContainer
+                calculationEnabled -> LocalContentColor.current
+                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            },
+        )
+    }
 }
 
 @Composable

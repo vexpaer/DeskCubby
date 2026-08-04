@@ -41,6 +41,35 @@ class TetrisGame private constructor(
 
     data class Cell(val x: Int, val y: Int)
 
+    /** Aggregate-statistics increments caused by one gravity/drop action. */
+    data class StatisticsDelta(
+        val piecesLocked: Int,
+        val linesCleared: Int,
+        val tetrises: Int,
+        val losses: Int,
+    ) {
+        val isEmpty: Boolean
+            get() = piecesLocked == 0 && linesCleared == 0 && tetrises == 0 && losses == 0
+
+        companion object {
+            val NONE = StatisticsDelta(
+                piecesLocked = 0,
+                linesCleared = 0,
+                tetrises = 0,
+                losses = 0,
+            )
+        }
+    }
+
+    /** Exact result of one gravity, soft-drop, or hard-drop request. */
+    data class StepResult(
+        val moved: Boolean,
+        val lockedPiece: Boolean,
+        val linesCleared: Int,
+        val gameEnded: Boolean,
+        val statisticsDelta: StatisticsDelta,
+    )
+
     var score: Int = initialScore
         private set
 
@@ -93,20 +122,30 @@ class TetrisGame private constructor(
     fun rotate(): Boolean = applyMove(0, 0, (pieceRotation + 1) % ROTATION_COUNT)
 
     /** Moves down one row; locks the piece when it cannot fall. Returns true when it moved. */
-    fun softDrop(): Boolean = descend()
+    fun softDrop(): Boolean = softDropWithResult().moved
+
+    fun softDropWithResult(): StepResult = descendWithResult()
 
     /** Gravity step driven by the UI loop. */
     fun tick() {
-        descend()
+        tickWithResult()
     }
+
+    fun tickWithResult(): StepResult = descendWithResult()
 
     /** Drops the piece to the bottom and locks it immediately. */
     fun hardDrop() {
-        if (isGameOver) return
+        hardDropWithResult()
+    }
+
+    fun hardDropWithResult(): StepResult {
+        if (isGameOver) return idleStepResult()
+        var moved = false
         while (applyMove(0, 1, pieceRotation)) {
+            moved = true
             // keep falling
         }
-        lockPiece()
+        return lockPiece(moved = moved)
     }
 
     /** Serializes the complete restorable state as JSON. */
@@ -127,11 +166,18 @@ class TetrisGame private constructor(
         append('}')
     }
 
-    private fun descend(): Boolean {
-        if (isGameOver) return false
-        if (applyMove(0, 1, pieceRotation)) return true
-        lockPiece()
-        return false
+    private fun descendWithResult(): StepResult {
+        if (isGameOver) return idleStepResult()
+        if (applyMove(0, 1, pieceRotation)) {
+            return StepResult(
+                moved = true,
+                lockedPiece = false,
+                linesCleared = 0,
+                gameEnded = false,
+                statisticsDelta = StatisticsDelta.NONE,
+            )
+        }
+        return lockPiece(moved = false)
     }
 
     private fun applyMove(dx: Int, dy: Int, rotation: Int): Boolean {
@@ -155,7 +201,7 @@ class TetrisGame private constructor(
         return false
     }
 
-    private fun lockPiece() {
+    private fun lockPiece(moved: Boolean): StepResult {
         for (cell in currentPieceCells()) {
             board[cell.y * WIDTH + cell.x] = pieceType + 1
         }
@@ -166,7 +212,27 @@ class TetrisGame private constructor(
         }
         spawnPiece(nextPieceType)
         nextPieceType = random.nextInt(PIECE_COUNT)
+        return StepResult(
+            moved = moved,
+            lockedPiece = true,
+            linesCleared = cleared,
+            gameEnded = isGameOver,
+            statisticsDelta = StatisticsDelta(
+                piecesLocked = 1,
+                linesCleared = cleared,
+                tetrises = if (cleared == 4) 1 else 0,
+                losses = if (isGameOver) 1 else 0,
+            ),
+        )
     }
+
+    private fun idleStepResult(): StepResult = StepResult(
+        moved = false,
+        lockedPiece = false,
+        linesCleared = 0,
+        gameEnded = isGameOver,
+        statisticsDelta = StatisticsDelta.NONE,
+    )
 
     private fun clearFullRows(): Int {
         var cleared = 0

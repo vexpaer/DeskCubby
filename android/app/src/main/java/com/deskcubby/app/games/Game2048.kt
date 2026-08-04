@@ -12,6 +12,8 @@ class Game2048 private constructor(
     initialScore: Int,
     private val random: Random,
     initialUndoHistory: List<Pair<IntArray, Int>> = emptyList(),
+    initialWinRecorded: Boolean = false,
+    initialLossRecorded: Boolean = false,
 ) {
 
     /** Starts a fresh game with two spawned tiles. */
@@ -25,6 +27,11 @@ class Game2048 private constructor(
 
     var score: Int = initialScore
         private set
+
+    // These are per-round event guards, not lifetime statistics. They stay true across undo and
+    // save/restore so replaying the same terminal move cannot increment aggregate statistics twice.
+    private var winRecorded: Boolean = initialWinRecorded
+    private var lossRecorded: Boolean = initialLossRecorded
 
     private data class UndoState(
         val cells: IntArray,
@@ -75,6 +82,16 @@ class Game2048 private constructor(
         val value: Int,
     )
 
+    /** Aggregate-statistics increments caused by one successful move. */
+    data class StatisticsDelta(
+        val effectiveMoves: Int,
+        val merges: Int,
+        /** Candidate for a lifetime maximum; consumers should combine it with max(). */
+        val highestTile: Int,
+        val wins: Int,
+        val losses: Int,
+    )
+
     /**
      * Immutable transition data for one successful move.
      *
@@ -88,6 +105,7 @@ class Game2048 private constructor(
         val merges: List<Merge>,
         val spawn: Spawn,
         val scoreGained: Int,
+        val statisticsDelta: StatisticsDelta,
     )
 
     /**
@@ -161,6 +179,19 @@ class Game2048 private constructor(
         score += scoreGained
         val spawn = spawnTile()
             ?: error("A successful 2048 move must leave room for exactly one spawned tile")
+        val highestTile = cells.maxOrNull() ?: 0
+        val wins = if (!winRecorded && highestTile >= WIN_TILE) {
+            winRecorded = true
+            1
+        } else {
+            0
+        }
+        val losses = if (!lossRecorded && isGameOver) {
+            lossRecorded = true
+            1
+        } else {
+            0
+        }
         return MoveResult(
             before = before,
             after = cells.toList(),
@@ -168,6 +199,13 @@ class Game2048 private constructor(
             merges = merges,
             spawn = spawn,
             scoreGained = scoreGained,
+            statisticsDelta = StatisticsDelta(
+                effectiveMoves = 1,
+                merges = merges.size,
+                highestTile = highestTile,
+                wins = wins,
+                losses = losses,
+            ),
         )
     }
 
@@ -196,7 +234,9 @@ class Game2048 private constructor(
             }
             append("],\"score\":").append(previous.score).append('}')
         }
-        append("]}")
+        append("],\"winRecorded\":").append(winRecorded)
+        append(",\"lossRecorded\":").append(lossRecorded)
+        append('}')
     }
 
     /** Cell indices of one line, ordered from the edge the tiles slide towards. */
@@ -231,6 +271,7 @@ class Game2048 private constructor(
         const val SIZE = 4
         const val MIN_SIZE = 4
         const val MAX_SIZE = 6
+        const val WIN_TILE = 2048
 
         /** Restores a game from [toJson] output. Returns null (never throws) on invalid input. */
         fun fromJson(
@@ -281,13 +322,39 @@ class Game2048 private constructor(
                     undoHistory += restoredUndoCells.toIntArray() to restoredUndoScore
                 }
             }
+            val winRecorded = if (map.containsKey("winRecorded")) {
+                GameJson.boolOf(map["winRecorded"]) ?: return null
+            } else {
+                (cells.maxOrNull() ?: 0) >= WIN_TILE ||
+                    undoHistory.any { (historyCells, _) ->
+                        (historyCells.maxOrNull() ?: 0) >= WIN_TILE
+                    }
+            }
+            val lossRecorded = if (map.containsKey("lossRecorded")) {
+                GameJson.boolOf(map["lossRecorded"]) ?: return null
+            } else {
+                !hasAnyMove(cells, size)
+            }
             return Game2048(
                 cells = cells.toIntArray(),
                 size = size,
                 initialScore = score,
                 random = random,
                 initialUndoHistory = undoHistory,
+                initialWinRecorded = winRecorded,
+                initialLossRecorded = lossRecorded,
             )
+        }
+
+        private fun hasAnyMove(cells: List<Int>, size: Int): Boolean {
+            for (index in cells.indices) {
+                if (cells[index] == 0) return true
+                val row = index / size
+                val column = index % size
+                if (column + 1 < size && cells[index] == cells[index + 1]) return true
+                if (row + 1 < size && cells[index] == cells[index + size]) return true
+            }
+            return false
         }
 
         private fun validatedCellCount(size: Int): Int {

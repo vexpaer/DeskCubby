@@ -5,6 +5,7 @@ import com.deskcubby.app.data.local.BrowserRecordEntity
 import com.deskcubby.app.data.local.DateRecordEntity
 import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.GameStateEntity
+import com.deskcubby.app.data.local.GameStatisticEntity
 import com.deskcubby.app.data.local.PoetryCategoryEntity
 import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
@@ -25,6 +26,7 @@ import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.MusicVisualizerStyle
+import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.ThoughtDisplayMode
@@ -51,7 +53,7 @@ import org.json.JSONObject
 @RunWith(AndroidJUnit4::class)
 class BackupJsonCodecTest {
     @Test
-    fun versionTwentyThreeRoundTripPreservesEncryptedVaultGamesUsageWidgetsAndNewSettings() {
+    fun versionTwentyFourRoundTripPreservesEncryptedVaultGamesUsageWidgetsAndNewSettings() {
         val iv = Base64.getEncoder().encodeToString(ByteArray(12) { 2 })
         val cipher = Base64.getEncoder().encodeToString(ByteArray(32) { 3 })
         val vault = VaultEncryptedBackup(
@@ -121,6 +123,11 @@ class BackupJsonCodecTest {
                 ),
             ),
         )
+        val gameStatistics = listOf(
+            GameStatisticEntity("2048", "effectiveMoves", 123, 18),
+            GameStatisticEntity("2048", "highestTile", 8_192, 19),
+            GameStatisticEntity("minesweeper", "minesSwept", 42, 20),
+        )
         val source = AppBackup(
             exportedAt = 21,
             settings = AppSettings(
@@ -140,25 +147,141 @@ class BackupJsonCodecTest {
                 ),
                 musicVisualizerEnabled = true,
                 musicVisualizerStyle = MusicVisualizerStyle.CURVE,
+                musicVisualizerFrequencyMode = MusicVisualizerFrequencyMode.MANUAL,
+                musicVisualizerMinFrequencyHz = 180,
+                musicVisualizerMaxFrequencyHz = 9_500,
                 game2048AnimationSpeed = Game2048AnimationSpeed.FAST,
             ),
             thoughts = emptyList(),
             favorites = emptyList(),
             vault = vault,
             gameStates = gameStates,
+            gameStatistics = gameStatistics,
             usageDevices = usageDevices,
         )
 
         val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
 
-        assertEquals(23, decoded.formatVersion)
+        assertEquals(24, decoded.formatVersion)
         assertEquals(vault, decoded.vault)
         assertEquals(gameStates, decoded.gameStates)
+        assertEquals(gameStatistics, decoded.gameStatistics)
         assertEquals(usageDevices, decoded.usageDevices)
         assertEquals(source.settings.desktopWidgetConfigs, decoded.settings.desktopWidgetConfigs)
         assertEquals(true, decoded.settings.musicVisualizerEnabled)
         assertEquals(MusicVisualizerStyle.CURVE, decoded.settings.musicVisualizerStyle)
+        assertEquals(
+            MusicVisualizerFrequencyMode.MANUAL,
+            decoded.settings.musicVisualizerFrequencyMode,
+        )
+        assertEquals(180, decoded.settings.musicVisualizerMinFrequencyHz)
+        assertEquals(9_500, decoded.settings.musicVisualizerMaxFrequencyHz)
         assertEquals(Game2048AnimationSpeed.FAST, decoded.settings.game2048AnimationSpeed)
+    }
+
+    @Test
+    fun versionTwentyThreeDefaultsFrequencyRangeAndHasNoAggregateGameStatistics() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 23,
+                    settings = AppSettings(
+                        musicVisualizerFrequencyMode = MusicVisualizerFrequencyMode.MANUAL,
+                        musicVisualizerMinFrequencyHz = 200,
+                        musicVisualizerMaxFrequencyHz = 8_000,
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                    gameStatistics = listOf(
+                        GameStatisticEntity("snake", "foodEaten", 5, 23),
+                    ),
+                ),
+            ),
+        )
+        root.put("version", 23)
+        root.remove("gameStatistics")
+        root.getJSONObject("settings").apply {
+            remove("musicVisualizerFrequencyMode")
+            remove("musicVisualizerMinFrequencyHz")
+            remove("musicVisualizerMaxFrequencyHz")
+        }
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+        val defaults = AppSettings()
+
+        assertEquals(23, decoded.formatVersion)
+        assertEquals(emptyList<GameStatisticEntity>(), decoded.gameStatistics)
+        assertEquals(
+            defaults.musicVisualizerFrequencyMode,
+            decoded.settings.musicVisualizerFrequencyMode,
+        )
+        assertEquals(
+            defaults.musicVisualizerMinFrequencyHz,
+            decoded.settings.musicVisualizerMinFrequencyHz,
+        )
+        assertEquals(
+            defaults.musicVisualizerMaxFrequencyHz,
+            decoded.settings.musicVisualizerMaxFrequencyHz,
+        )
+    }
+
+    @Test
+    fun versionTwentyFourRejectsInvalidFrequencyRangeAndGameStatistics() {
+        fun currentRoot() = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 24,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put("musicVisualizerFrequencyMode", "FIXED")
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put("musicVisualizerMinFrequencyHz", 19)
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").apply {
+                put("musicVisualizerMinFrequencyHz", 1_000)
+                put("musicVisualizerMaxFrequencyHz", 1_000)
+            }
+        })
+        assertDecodeRejected(currentRoot().apply {
+            put(
+                "gameStatistics",
+                JSONArray().put(
+                    JSONObject()
+                        .put("gameId", "unknown")
+                        .put("metricKey", "wins")
+                        .put("value", 1)
+                        .put("updatedAt", 1),
+                ),
+            )
+        })
+        assertDecodeRejected(currentRoot().apply {
+            val duplicate = JSONObject()
+                .put("gameId", "spider")
+                .put("metricKey", "wins")
+                .put("value", 1)
+                .put("updatedAt", 1)
+            put("gameStatistics", JSONArray().put(duplicate).put(JSONObject(duplicate.toString())))
+        })
+        assertDecodeRejected(currentRoot().apply {
+            put(
+                "gameStatistics",
+                JSONArray().put(
+                    JSONObject()
+                        .put("gameId", "snake")
+                        .put("metricKey", "foodEaten")
+                        .put("value", -1)
+                        .put("updatedAt", 1),
+                ),
+            )
+        })
     }
 
     @Test

@@ -9,6 +9,8 @@ class SpiderSolitaireGame private constructor(
     initialCompletedRuns: Int,
     initialScore: Int,
     initialMoves: Int,
+    initialHasPlayedAction: Boolean,
+    initialOutcomeRecorded: Boolean,
 ) {
     private data class Deal(val columns: List<List<Card>>, val stock: List<Card>)
 
@@ -18,6 +20,8 @@ class SpiderSolitaireGame private constructor(
         initialCompletedRuns = 0,
         initialScore = START_SCORE,
         initialMoves = 0,
+        initialHasPlayedAction = false,
+        initialOutcomeRecorded = false,
     )
 
     constructor(random: Random = Random.Default) : this(deal(random))
@@ -27,6 +31,31 @@ class SpiderSolitaireGame private constructor(
         val rank: Int,
         val suit: Int,
         var faceUp: Boolean,
+    )
+
+    enum class Action {
+        MOVE,
+        DEAL_STOCK,
+        UNDO,
+        ABANDON,
+    }
+
+    /** Lifetime-statistics increments caused by exactly one accepted player action. */
+    data class StatisticsDelta(
+        val cardMoves: Int = 0,
+        val deals: Int = 0,
+        val undos: Int = 0,
+        val wins: Int = 0,
+        val losses: Int = 0,
+    ) {
+        val isEmpty: Boolean
+            get() = cardMoves == 0 && deals == 0 && undos == 0 && wins == 0 && losses == 0
+    }
+
+    data class ActionResult(
+        val action: Action,
+        val changed: Boolean,
+        val statisticsDelta: StatisticsDelta = StatisticsDelta(),
     )
 
     private data class Snapshot(
@@ -49,6 +78,20 @@ class SpiderSolitaireGame private constructor(
     var moves: Int = initialMoves
         private set
 
+    /**
+     * Whether this round has ever accepted a card move or stock deal.
+     *
+     * Unlike [moves], this is intentionally not rewound by [undo]. It lets the caller distinguish
+     * abandoning a played round from replacing an untouched deal without treating a normal page
+     * exit as a loss. The flag is round state, not a lifetime-statistics counter.
+     */
+    var hasPlayedAction: Boolean = initialHasPlayedAction
+        private set
+
+    /** Single-round idempotency marker; it prevents win/loss replay after undo or restore. */
+    var outcomeRecorded: Boolean = initialOutcomeRecorded
+        private set
+
     val isWon: Boolean get() = completedRuns == TOTAL_RUNS
     val canUndo: Boolean get() = history.isNotEmpty()
     val stockDealsRemaining: Int get() = stock.size / COLUMN_COUNT
@@ -68,12 +111,20 @@ class SpiderSolitaireGame private constructor(
         return true
     }
 
-    fun move(fromColumn: Int, cardIndex: Int, toColumn: Int): Boolean {
-        if (isWon || fromColumn == toColumn || !canSelect(fromColumn, cardIndex)) return false
-        val source = columns.getOrNull(fromColumn) ?: return false
-        val target = columns.getOrNull(toColumn) ?: return false
+    /** Compatibility wrapper for callers that only need to know whether a card move succeeded. */
+    fun move(fromColumn: Int, cardIndex: Int, toColumn: Int): Boolean =
+        moveWithResult(fromColumn, cardIndex, toColumn).changed
+
+    fun moveWithResult(fromColumn: Int, cardIndex: Int, toColumn: Int): ActionResult {
+        if (isWon || fromColumn == toColumn || !canSelect(fromColumn, cardIndex)) {
+            return unchanged(Action.MOVE)
+        }
+        val source = columns.getOrNull(fromColumn) ?: return unchanged(Action.MOVE)
+        val target = columns.getOrNull(toColumn) ?: return unchanged(Action.MOVE)
         val movingFirst = source[cardIndex]
-        if (target.isNotEmpty() && target.last().rank != movingFirst.rank + 1) return false
+        if (target.isNotEmpty() && target.last().rank != movingFirst.rank + 1) {
+            return unchanged(Action.MOVE)
+        }
         rememberSnapshot()
         val moving = source.subList(cardIndex, source.size).map(Card::copy)
         repeat(source.size - cardIndex) { source.removeAt(source.size - 1) }
@@ -81,25 +132,51 @@ class SpiderSolitaireGame private constructor(
         revealTop(source)
         score = (score - MOVE_COST).coerceAtLeast(0)
         moves++
+        hasPlayedAction = true
         removeCompletedRuns(fromColumn)
         removeCompletedRuns(toColumn)
-        return true
+        val wonThisAction = isWon && !outcomeRecorded
+        if (wonThisAction) outcomeRecorded = true
+        return ActionResult(
+            action = Action.MOVE,
+            changed = true,
+            statisticsDelta = StatisticsDelta(
+                cardMoves = 1,
+                wins = if (wonThisAction) 1 else 0,
+            ),
+        )
     }
 
-    fun dealStock(): Boolean {
-        if (!canDealStock) return false
+    /** Compatibility wrapper for callers that only need to know whether stock was dealt. */
+    fun dealStock(): Boolean = dealStockWithResult().changed
+
+    fun dealStockWithResult(): ActionResult {
+        if (!canDealStock) return unchanged(Action.DEAL_STOCK)
         rememberSnapshot()
         repeat(COLUMN_COUNT) { column ->
             columns[column].add(stock.removeAt(0).copy(faceUp = true))
         }
         score = (score - MOVE_COST).coerceAtLeast(0)
         moves++
+        hasPlayedAction = true
         repeat(COLUMN_COUNT, ::removeCompletedRuns)
-        return true
+        val wonThisAction = isWon && !outcomeRecorded
+        if (wonThisAction) outcomeRecorded = true
+        return ActionResult(
+            action = Action.DEAL_STOCK,
+            changed = true,
+            statisticsDelta = StatisticsDelta(
+                deals = 1,
+                wins = if (wonThisAction) 1 else 0,
+            ),
+        )
     }
 
-    fun undo(): Boolean {
-        val previous = history.removeLastOrNull() ?: return false
+    /** Compatibility wrapper for callers that only need to know whether an undo succeeded. */
+    fun undo(): Boolean = undoWithResult().changed
+
+    fun undoWithResult(): ActionResult {
+        val previous = history.removeLastOrNull() ?: return unchanged(Action.UNDO)
         columns.clear()
         columns.addAll(previous.columns.map { it.map(Card::copy).toMutableList() })
         stock.clear()
@@ -107,7 +184,27 @@ class SpiderSolitaireGame private constructor(
         completedRuns = previous.completedRuns
         score = previous.score
         moves = previous.moves
-        return true
+        return ActionResult(
+            action = Action.UNDO,
+            changed = true,
+            statisticsDelta = StatisticsDelta(undos = 1),
+        )
+    }
+
+    /**
+     * Explicitly abandons this round before the caller replaces it with a new deal.
+     *
+     * Merely leaving the page must not call this method: an in-progress save is not a loss.
+     * Untouched deals and already-recorded outcomes also produce no increment.
+     */
+    fun abandonWithResult(): ActionResult {
+        if (!hasPlayedAction || isWon || outcomeRecorded) return unchanged(Action.ABANDON)
+        outcomeRecorded = true
+        return ActionResult(
+            action = Action.ABANDON,
+            changed = true,
+            statisticsDelta = StatisticsDelta(losses = 1),
+        )
     }
 
     fun toJson(): String = buildString {
@@ -122,6 +219,8 @@ class SpiderSolitaireGame private constructor(
         append(",\"completed\":").append(completedRuns)
         append(",\"score\":").append(score)
         append(",\"moves\":").append(moves)
+        append(",\"hasPlayedAction\":").append(hasPlayedAction)
+        append(",\"outcomeRecorded\":").append(outcomeRecorded)
         append(",\"history\":[")
         history.forEachIndexed { index, snapshot ->
             if (index > 0) append(',')
@@ -185,6 +284,9 @@ class SpiderSolitaireGame private constructor(
             ),
         )
     }
+
+    private fun unchanged(action: Action): ActionResult =
+        ActionResult(action = action, changed = false)
 
     companion object {
         const val COLUMN_COUNT = 10
@@ -271,6 +373,19 @@ class SpiderSolitaireGame private constructor(
             }
 
             val current = decodeSnapshot(map) ?: return null
+            val hasPlayedAction = if (map.containsKey("hasPlayedAction")) {
+                GameJson.boolOf(map["hasPlayedAction"]) ?: return null
+            } else {
+                // Older saves did not retain this non-rewindable flag. A positive effective move
+                // count is the strongest safe indication that the existing round was played.
+                current.moves > 0
+            }
+            val outcomeRecorded = if (map.containsKey("outcomeRecorded")) {
+                GameJson.boolOf(map["outcomeRecorded"]) ?: return null
+            } else {
+                // A restored completed legacy round must not emit another win.
+                current.completedRuns == TOTAL_RUNS
+            }
             val rawHistory = when {
                 !map.containsKey("history") -> emptyList<Any?>()
                 schemaVersion < SAVE_SCHEMA_VERSION -> return null
@@ -284,6 +399,8 @@ class SpiderSolitaireGame private constructor(
                 current.completedRuns,
                 current.score,
                 current.moves,
+                hasPlayedAction,
+                outcomeRecorded,
             )
             restoredHistory.forEach(game.history::addLast)
             return game
