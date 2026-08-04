@@ -2,9 +2,11 @@ package com.deskcubby.app.ui.settings
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
 import android.provider.Settings
 import com.deskcubby.app.data.backup.AppBackupException
 import androidx.lifecycle.ViewModel
@@ -59,6 +61,8 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -333,6 +337,112 @@ class SettingsViewModel @Inject constructor(
         launch { repository.setThemeSecondaryColors(value) }
     fun setFontScale(value: Float) = launch { repository.setFontScale(value) }
     fun setCompactMode(value: Boolean) = launch { repository.setCompactMode(value) }
+    fun setAppearanceSettings(
+        visualStyle: VisualStyle,
+        darkMode: DarkMode,
+        appLanguage: AppLanguage,
+        themeColorArgb: Int,
+        themeSecondaryColorsArgb: List<Int>,
+        fontScale: Float,
+        compactMode: Boolean,
+        backgroundImageUri: String?,
+        backgroundImageOpacity: Float,
+        backgroundImageBlurDp: Float,
+        onComplete: (Boolean) -> Unit,
+    ) = viewModelScope.launch {
+        try {
+            repository.setAppearanceSettings(
+                visualStyle = visualStyle,
+                darkMode = darkMode,
+                appLanguage = appLanguage,
+                themeColorArgb = themeColorArgb,
+                themeSecondaryColorsArgb = themeSecondaryColorsArgb,
+                fontScale = fontScale,
+                compactMode = compactMode,
+                backgroundImageUri = backgroundImageUri,
+                backgroundImageOpacity = backgroundImageOpacity,
+                backgroundImageBlurDp = backgroundImageBlurDp,
+            )
+            onComplete(true)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            _settingsError.value = "外观设置保存失败 / Could not save appearance settings"
+            onComplete(false)
+        }
+    }
+
+    fun persistAppBackground(uri: Uri, onComplete: (Boolean) -> Unit) =
+        viewModelScope.launch {
+            var permissionTaken = false
+            try {
+                val alreadyPersisted = context.contentResolver.persistedUriPermissions.any {
+                    it.uri == uri && it.isReadPermission
+                }
+                if (!alreadyPersisted) {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                    )
+                    permissionTaken = true
+                }
+                val readable = withContext(Dispatchers.IO) {
+                    val declaredSize = context.contentResolver.query(
+                        uri,
+                        arrayOf(OpenableColumns.SIZE),
+                        null,
+                        null,
+                        null,
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
+                    }
+                    require(declaredSize == null || declaredSize in 1..MAX_APP_BACKGROUND_IMAGE_BYTES) {
+                        "背景图片超过 128 MiB 安全上限 / Background image exceeds the 128 MiB limit"
+                    }
+                    val actualSize = context.contentResolver.openInputStream(uri)?.use { input ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        var total = 0L
+                        while (true) {
+                            currentCoroutineContext().ensureActive()
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            if (count == 0) continue
+                            total += count
+                            require(total <= MAX_APP_BACKGROUND_IMAGE_BYTES) {
+                                "背景图片超过 128 MiB 安全上限 / Background image exceeds the 128 MiB limit"
+                            }
+                        }
+                        total
+                    } ?: 0L
+                    require(actualSize > 0L) {
+                        "所选文件不是可读取的图片 / The selected file is not a readable image"
+                    }
+                    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        BitmapFactory.decodeStream(input, null, options)
+                    }
+                    options.outWidth in 1..32_768 && options.outHeight in 1..32_768
+                }
+                require(readable) {
+                    "所选文件不是可读取的图片 / The selected file is not a readable image"
+                }
+                onComplete(true)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (permissionTaken) {
+                    runCatching {
+                        context.contentResolver.releasePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                        )
+                    }
+                }
+                _settingsError.value = error.message?.takeIf(String::isNotBlank)
+                    ?: "背景图片导入失败 / Could not import background image"
+                onComplete(false)
+            }
+        }
     fun setUseChineseLauncherName(value: Boolean) =
         launch { repository.setUseChineseLauncherName(value) }
     fun setLauncherIcon(value: LauncherIcon) = launch { repository.setLauncherIcon(value) }
@@ -758,6 +868,13 @@ class SettingsViewModel @Inject constructor(
         repository.setCalorieEstimationSettings(enabled, textConfigId, imageConfigId, visionPrompt, textPrompt)
     }
     fun acknowledgeNavigationIntro() = launch { repository.acknowledgeNavigationIntro() }
+    fun setTutorialModeEnabled(value: Boolean) = launch {
+        repository.setTutorialModeEnabled(value)
+    }
+    fun acknowledgeTutorialPage(pageId: String) = launch {
+        repository.acknowledgeTutorialPage(pageId)
+    }
+    fun resetTutorialPages() = launch { repository.resetTutorialPages() }
     fun setHomeWidgets(value: List<String>) = launch { repository.setHomeWidgets(value) }
     fun setHomeWidgetTitles(value: List<String>) = launch { repository.setHomeWidgetTitles(value) }
     fun setBottomNavShowLabels(value: Boolean) = launch { repository.setBottomNavShowLabels(value) }
@@ -1017,3 +1134,5 @@ class SettingsViewModel @Inject constructor(
         }
     }
 }
+
+private const val MAX_APP_BACKGROUND_IMAGE_BYTES = 128L * 1024L * 1024L

@@ -146,6 +146,10 @@ const val MIN_THEME_SECONDARY_COLOR_COUNT: Int = 2
 const val MAX_THEME_SECONDARY_COLOR_COUNT: Int = 5
 const val MIN_APP_FONT_SCALE: Float = 0.8f
 const val MAX_APP_FONT_SCALE: Float = 1.3f
+const val MIN_APP_BACKGROUND_OPACITY: Float = 0f
+const val MAX_APP_BACKGROUND_OPACITY: Float = 1f
+const val MIN_APP_BACKGROUND_BLUR_DP: Float = 0f
+const val MAX_APP_BACKGROUND_BLUR_DP: Float = 40f
 const val DEFAULT_THOUGHT_HIGHLIGHT_COLOR_ARGB: Int = 0xFFF6E3A1.toInt()
 const val MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP: Int = 96
 const val MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP: Int = 400
@@ -391,6 +395,12 @@ data class AppSettings(
     val themeSecondaryColorsArgb: List<Int> = DEFAULT_THEME_SECONDARY_COLORS_ARGB,
     val fontScale: Float = 1f,
     val compactMode: Boolean = false,
+    val backgroundImageUri: String? = null,
+    val backgroundImageOpacity: Float = 0.45f,
+    val backgroundImageBlurDp: Float = 0f,
+    val tutorialModeEnabled: Boolean = true,
+    /** Device-local walkthrough state. It is intentionally excluded from JSON backups. */
+    val tutorialAcknowledgedPages: Set<String> = emptySet(),
     val useChineseLauncherName: Boolean = false,
     val launcherIcon: LauncherIcon = LauncherIcon.CURRENT,
     val backupTreeUri: String? = null,

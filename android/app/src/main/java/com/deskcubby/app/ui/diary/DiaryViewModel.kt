@@ -723,17 +723,18 @@ class DiaryViewModel @Inject constructor(
     }
 
     fun appendDailyRecordToCurrent(text: String, onDone: (Boolean) -> Unit = {}) {
-        val line = text.trim().replace('\r', ' ').replace('\n', ' ')
         val state = _editorState.value
-        if (line.isBlank() || state.document == null || state.loading || state.conflict != null) {
+        val lineEnding = DiaryTextUtils.preferredLineEnding(state.content)
+        val block = DiaryTextUtils.normalizeTextBlock(text, lineEnding)
+        if (block.isBlank() || state.document == null || state.loading || state.conflict != null) {
             onDone(false)
             return
         }
         val separator = when {
             state.content.isEmpty() || state.content.endsWith('\n') || state.content.endsWith('\r') -> ""
-            else -> DiaryTextUtils.preferredLineEnding(state.content)
+            else -> lineEnding
         }
-        onContentChanged(state.content + separator + line)
+        onContentChanged(state.content + separator + block)
         viewModelScope.launch { onDone(saveCurrent()) }
     }
 

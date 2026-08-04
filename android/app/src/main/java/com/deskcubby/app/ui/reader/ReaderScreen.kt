@@ -46,6 +46,8 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.FormatListNumbered
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.WarningAmber
@@ -58,6 +60,10 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
@@ -66,25 +72,34 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -95,11 +110,15 @@ import com.deskcubby.app.data.repository.ReaderBackground
 import com.deskcubby.app.data.repository.ReaderBook
 import com.deskcubby.app.data.repository.ReaderBookType
 import com.deskcubby.app.data.repository.ReaderContent
+import com.deskcubby.app.data.repository.ReaderChapter
+import com.deskcubby.app.data.repository.ReaderTextPage
 import com.deskcubby.app.data.repository.ReaderOrientation
 import com.deskcubby.app.data.repository.ReaderPreferences
 import com.deskcubby.app.data.repository.ReaderStorageIssue
 import com.deskcubby.app.data.statistics.EngagementKind
 import com.deskcubby.app.ui.components.AppEmptyState
+import com.deskcubby.app.ui.components.ColorPickerDialog
+import com.deskcubby.app.ui.components.PageTutorialTarget
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.tr
 import java.util.Locale
@@ -107,12 +126,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @Composable
 fun ReaderScreen(
     padding: PaddingValues,
     viewModel: ReaderViewModel,
     onReadingChanged: (Boolean) -> Unit = {},
+    onTutorialTargetChanged: (PageTutorialTarget?) -> Unit = {},
 ) {
     val library by viewModel.library.collectAsStateWithLifecycle()
     val content by viewModel.content.collectAsStateWithLifecycle()
@@ -125,9 +147,16 @@ fun ReaderScreen(
         uri?.let(viewModel::import)
     }
     val reading = content !is ReaderContentState.Idle
+    val tutorialTarget = readerTutorialTarget(content)
 
     LaunchedEffect(reading) { onReadingChanged(reading) }
-    DisposableEffect(Unit) { onDispose { onReadingChanged(false) } }
+    LaunchedEffect(tutorialTarget) { onTutorialTargetChanged(tutorialTarget) }
+    DisposableEffect(Unit) {
+        onDispose {
+            onReadingChanged(false)
+            onTutorialTargetChanged(null)
+        }
+    }
     LaunchedEffect(localizedMessage) {
         localizedMessage?.let {
             snackbar.showSnackbar(it)
@@ -325,56 +354,118 @@ private fun ReaderBookPage(
     viewModel: ReaderViewModel,
     onBack: () -> Unit,
 ) {
-    val (background, foreground) = readerColors(preferences.background)
+    val (background, foreground) = readerColors(
+        preferences.background,
+        preferences.customBackgroundArgb,
+    )
     var showSettings by remember { mutableStateOf(false) }
+    var showJump by remember { mutableStateOf(false) }
+    var requestedPage by remember(book.id) { mutableStateOf<Int?>(null) }
+    var currentPage by rememberSaveable(book.id) { mutableIntStateOf(0) }
+    val textContent = content as? ReaderContent.TextBook
+    val totalPages = when (content) {
+        is ReaderContent.TextBook -> content.pages.size
+        is ReaderContent.PdfBook -> content.pageCount
+    }.coerceAtLeast(1)
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
     val activity = LocalContext.current.findActivity()
-    BackHandler(onBack = onBack)
+    BackHandler {
+        if (drawerState.isOpen) scope.launch { drawerState.close() } else onBack()
+    }
     ReaderOrientationEffect(activity, preferences.orientation)
     ReaderTimingEffect(book.id, viewModel)
 
-    Scaffold(
-        containerColor = background,
-        contentColor = foreground,
-        contentWindowInsets = WindowInsets.safeDrawing,
-        topBar = {
-            TopAppBar(
-                title = { Text(book.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, tr("返回书架", "Back to library"))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showSettings = true }) {
-                        Icon(Icons.Outlined.Settings, tr("阅读设置", "Reading settings"))
-                    }
-                },
-                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
-                    containerColor = background,
-                    titleContentColor = foreground,
-                    navigationIconContentColor = foreground,
-                    actionIconContentColor = foreground,
-                ),
-            )
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = textContent != null,
+        drawerContent = {
+            textContent?.let { text ->
+                ReaderChapterDrawer(
+                    chapters = text.chapters,
+                    currentPage = currentPage,
+                    totalPages = text.pages.size,
+                    foreground = foreground,
+                    background = background,
+                    onChapterSelected = { chapter ->
+                        requestedPage = chapter.pageIndex
+                        scope.launch { drawerState.close() }
+                    },
+                    onJump = {
+                        scope.launch { drawerState.close() }
+                        showJump = true
+                    },
+                )
+            }
         },
-    ) { inner ->
-        when (content) {
-            is ReaderContent.TextBook -> TextReader(
-                book = book,
-                paragraphs = content.paragraphs,
-                preferences = preferences,
-                foreground = foreground,
-                contentPadding = inner,
-                onProgress = { viewModel.saveTextProgress(book.id, it) },
-            )
-            is ReaderContent.PdfBook -> PdfReader(
-                book = book,
-                pageCount = content.pageCount,
-                background = background,
-                foreground = foreground,
-                contentPadding = inner,
-                viewModel = viewModel,
-            )
+    ) {
+        Scaffold(
+            containerColor = background,
+            contentColor = foreground,
+            contentWindowInsets = WindowInsets.safeDrawing,
+            topBar = {
+                TopAppBar(
+                    title = { Text(book.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, tr("返回书架", "Back to library"))
+                        }
+                    },
+                    actions = {
+                        if (textContent != null) {
+                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                Icon(
+                                    Icons.AutoMirrored.Outlined.MenuBook,
+                                    tr("打开目录", "Open contents"),
+                                )
+                            }
+                        }
+                        IconButton(onClick = { showJump = true }) {
+                            Icon(
+                                Icons.Outlined.FormatListNumbered,
+                                tr("跳转页数或进度", "Jump to page or progress"),
+                            )
+                        }
+                        IconButton(onClick = { showSettings = true }) {
+                            Icon(Icons.Outlined.Settings, tr("阅读设置", "Reading settings"))
+                        }
+                    },
+                    colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                        containerColor = background,
+                        titleContentColor = foreground,
+                        navigationIconContentColor = foreground,
+                        actionIconContentColor = foreground,
+                    ),
+                )
+            },
+        ) { inner ->
+            when (content) {
+                is ReaderContent.TextBook -> TextReader(
+                    book = book,
+                    pages = content.pages,
+                    preferences = preferences,
+                    background = background,
+                    foreground = foreground,
+                    contentPadding = inner,
+                    requestedPage = requestedPage,
+                    onRequestedPageConsumed = { requestedPage = null },
+                    onCurrentPageChanged = { currentPage = it },
+                    onProgress = { pageIndex, paragraphIndex ->
+                        viewModel.saveTextProgress(book.id, pageIndex, paragraphIndex)
+                    },
+                )
+                is ReaderContent.PdfBook -> PdfReader(
+                    book = book,
+                    pageCount = content.pageCount,
+                    background = background,
+                    foreground = foreground,
+                    contentPadding = inner,
+                    requestedPage = requestedPage,
+                    onRequestedPageConsumed = { requestedPage = null },
+                    onCurrentPageChanged = { currentPage = it },
+                    viewModel = viewModel,
+                )
+            }
         }
     }
 
@@ -389,45 +480,173 @@ private fun ReaderBookPage(
             },
         )
     }
+    if (showJump) {
+        ReaderJumpDialog(
+            currentPage = currentPage,
+            totalPages = totalPages,
+            isText = textContent != null,
+            onDismiss = { showJump = false },
+            onJump = { page ->
+                requestedPage = page
+                showJump = false
+            },
+        )
+    }
 }
 
 @Composable
 private fun TextReader(
     book: ReaderBook,
-    paragraphs: List<String>,
+    pages: List<ReaderTextPage>,
     preferences: ReaderPreferences,
+    background: Color,
     foreground: Color,
     contentPadding: PaddingValues,
-    onProgress: (Int) -> Unit,
+    requestedPage: Int?,
+    onRequestedPageConsumed: () -> Unit,
+    onCurrentPageChanged: (Int) -> Unit,
+    onProgress: (Int, Int) -> Unit,
 ) {
-    val initial = book.textParagraphIndex.coerceIn(0, paragraphs.lastIndex.coerceAtLeast(0))
+    val initial = if (book.textPageIndex >= 0) {
+        book.textPageIndex.coerceIn(0, pages.lastIndex.coerceAtLeast(0))
+    } else {
+        com.deskcubby.app.data.repository.textPageForParagraph(
+            pages,
+            book.textParagraphIndex,
+        )
+    }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initial)
+    val visiblePage by remember(listState) {
+        derivedStateOf { listState.firstVisibleItemIndex }
+    }
     val currentOnProgress by rememberUpdatedState(onProgress)
+    val currentOnPageChanged by rememberUpdatedState(onCurrentPageChanged)
+    LaunchedEffect(requestedPage) {
+        requestedPage?.let { page ->
+            listState.scrollToItem(page.coerceIn(0, pages.lastIndex.coerceAtLeast(0)))
+            onRequestedPageConsumed()
+        }
+    }
     LaunchedEffect(listState) {
         snapshotFlow { listState.firstVisibleItemIndex }
             .distinctUntilChanged()
             .collectLatest { index ->
+                currentOnPageChanged(index)
                 delay(600L)
-                currentOnProgress(index)
+                currentOnProgress(index, pages[index].firstParagraphIndex)
             }
     }
     DisposableEffect(listState) {
-        onDispose { currentOnProgress(listState.firstVisibleItemIndex) }
+        onDispose {
+            val index = listState.firstVisibleItemIndex.coerceIn(0, pages.lastIndex)
+            currentOnProgress(index, pages[index].firstParagraphIndex)
+        }
     }
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize().padding(contentPadding),
-        contentPadding = PaddingValues(horizontal = 22.dp, vertical = 18.dp),
+    Box(Modifier.fillMaxSize().padding(contentPadding).background(background)) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 18.dp, bottom = 58.dp),
+        ) {
+            items(pages.size, key = { it }) { index ->
+                Column {
+                    val pageParagraphs = remember(pages[index].text) {
+                        pages[index].text.split("\n\n")
+                    }
+                    pageParagraphs.forEach { paragraph ->
+                        Text(
+                            text = paragraph,
+                            color = foreground,
+                            fontSize = preferences.fontSizeSp.sp,
+                            lineHeight = (preferences.fontSizeSp * preferences.lineHeightMultiplier).sp,
+                            fontFamily = FontFamily.Serif,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = preferences.paragraphSpacingDp.dp),
+                        )
+                    }
+                    Text(
+                        tr("— 第 ${index + 1} 页 —", "— Page ${index + 1} —"),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        color = foreground.copy(alpha = 0.55f),
+                        style = MaterialTheme.typography.labelSmall,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                }
+            }
+        }
+        ReaderPageIndicator(
+            currentPage = visiblePage,
+            totalPages = pages.size,
+            background = background,
+            foreground = foreground,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
+    }
+}
+
+@Composable
+private fun ReaderChapterDrawer(
+    chapters: List<ReaderChapter>,
+    currentPage: Int,
+    totalPages: Int,
+    foreground: Color,
+    background: Color,
+    onChapterSelected: (ReaderChapter) -> Unit,
+    onJump: () -> Unit,
+) {
+    val currentChapter = chapters.lastOrNull { it.pageIndex <= currentPage }
+    ModalDrawerSheet(
+        drawerContainerColor = background,
+        drawerContentColor = foreground,
     ) {
-        items(paragraphs.size, key = { it }) { index ->
+        Text(
+            tr("目录", "Contents"),
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 8.dp),
+        )
+        Text(
+            tr(
+                "当前位置 ${currentPage + 1} / $totalPages 页",
+                "Current page ${currentPage + 1} / $totalPages",
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = foreground.copy(alpha = 0.7f),
+            modifier = Modifier.padding(horizontal = 20.dp),
+        )
+        TextButton(onClick = onJump, modifier = Modifier.padding(horizontal = 8.dp)) {
+            Icon(Icons.Outlined.FormatListNumbered, contentDescription = null)
+            Spacer(Modifier.width(6.dp))
+            Text(tr("按页数或进度跳转", "Jump by page or progress"))
+        }
+        if (chapters.isEmpty()) {
             Text(
-                text = paragraphs[index],
-                color = foreground,
-                fontSize = preferences.fontSizeSp.sp,
-                lineHeight = (preferences.fontSizeSp * preferences.lineHeightMultiplier).sp,
-                fontFamily = FontFamily.Serif,
-                modifier = Modifier.padding(bottom = preferences.paragraphSpacingDp.dp),
+                tr(
+                    "没有识别到“第…章”、Chapter 等章节标题；仍可使用逻辑页跳转。",
+                    "No headings such as 第…章 or Chapter were detected; logical-page jumping is still available.",
+                ),
+                modifier = Modifier.padding(20.dp),
+                color = foreground.copy(alpha = 0.72f),
             )
+        } else {
+            LazyColumn(Modifier.weight(1f)) {
+                items(chapters, key = { "${it.pageIndex}:${it.paragraphIndex}:${it.title}" }) { chapter ->
+                    NavigationDrawerItem(
+                        label = {
+                            Column {
+                                Text(chapter.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    tr("第 ${chapter.pageIndex + 1} 页", "Page ${chapter.pageIndex + 1}"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        },
+                        selected = currentChapter == chapter,
+                        onClick = { onChapterSelected(chapter) },
+                        modifier = Modifier.padding(horizontal = 10.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -439,6 +658,9 @@ private fun PdfReader(
     background: Color,
     foreground: Color,
     contentPadding: PaddingValues,
+    requestedPage: Int?,
+    onRequestedPageConsumed: () -> Unit,
+    onCurrentPageChanged: (Int) -> Unit,
     viewModel: ReaderViewModel,
 ) {
     val pagerState = rememberPagerState(
@@ -448,7 +670,16 @@ private fun PdfReader(
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }
             .distinctUntilChanged()
-            .collect { viewModel.savePdfProgress(book.id, it) }
+            .collect {
+                onCurrentPageChanged(it)
+                viewModel.savePdfProgress(book.id, it)
+            }
+    }
+    LaunchedEffect(requestedPage) {
+        requestedPage?.let { page ->
+            pagerState.scrollToPage(page.coerceIn(0, pageCount - 1))
+            onRequestedPageConsumed()
+        }
     }
     DisposableEffect(pagerState) {
         onDispose { viewModel.savePdfProgress(book.id, pagerState.currentPage) }
@@ -462,15 +693,108 @@ private fun PdfReader(
         ) { page ->
             PdfPage(book, page, viewModel)
         }
-        Surface(
-            modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
-            shape = RoundedCornerShape(50),
-            color = background.copy(alpha = 0.9f),
-            contentColor = foreground,
-        ) {
-            Text("${pagerState.currentPage + 1} / $pageCount", Modifier.padding(horizontal = 12.dp, vertical = 5.dp))
-        }
+        ReaderPageIndicator(
+            currentPage = pagerState.currentPage,
+            totalPages = pageCount,
+            background = background,
+            foreground = foreground,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
+}
+
+@Composable
+private fun ReaderPageIndicator(
+    currentPage: Int,
+    totalPages: Int,
+    background: Color,
+    foreground: Color,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.padding(12.dp),
+        shape = RoundedCornerShape(50),
+        color = background.copy(alpha = 0.9f),
+        contentColor = foreground,
+    ) {
+        Text(
+            "${currentPage.coerceAtLeast(0) + 1} / ${totalPages.coerceAtLeast(1)}",
+            Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+        )
+    }
+}
+
+@Composable
+private fun ReaderJumpDialog(
+    currentPage: Int,
+    totalPages: Int,
+    isText: Boolean,
+    onDismiss: () -> Unit,
+    onJump: (Int) -> Unit,
+) {
+    val safeTotal = totalPages.coerceAtLeast(1)
+    var selectedPage by rememberSaveable(currentPage, safeTotal) {
+        mutableIntStateOf(currentPage.coerceIn(0, safeTotal - 1))
+    }
+    var pageText by rememberSaveable(currentPage, safeTotal) {
+        mutableStateOf((selectedPage + 1).toString())
+    }
+    val parsedPage = pageText.toIntOrNull()?.minus(1)?.takeIf { it in 0 until safeTotal }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("跳转页数 / 进度", "Jump to page / progress")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = pageText,
+                    onValueChange = { changed ->
+                        pageText = changed.filter(Char::isDigit).take(8)
+                        pageText.toIntOrNull()?.minus(1)?.takeIf { it in 0 until safeTotal }
+                            ?.let { selectedPage = it }
+                    },
+                    label = { Text(tr("页码（1–$safeTotal）", "Page (1–$safeTotal)")) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    isError = pageText.isNotEmpty() && parsedPage == null,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(tr("阅读进度", "Progress"))
+                    Text(
+                        "${(((selectedPage + 1).toFloat() / safeTotal) * 100).roundToInt()}%",
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Slider(
+                    value = selectedPage.toFloat(),
+                    onValueChange = {
+                        selectedPage = it.roundToInt().coerceIn(0, safeTotal - 1)
+                        pageText = (selectedPage + 1).toString()
+                    },
+                    valueRange = 0f..(safeTotal - 1).coerceAtLeast(1).toFloat(),
+                    steps = (safeTotal - 2).coerceIn(0, 200),
+                    enabled = safeTotal > 1,
+                )
+                if (isText) {
+                    Text(
+                        tr(
+                            "TXT 每约 1,800 个字符划为一个逻辑页，页数不受设备尺寸或字体变化影响。",
+                            "TXT uses one stable logical page per roughly 1,800 characters, independent of screen size or font changes.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = parsedPage != null,
+                onClick = { parsedPage?.let(onJump) },
+            ) { Text(tr("跳转", "Jump")) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) } },
+    )
 }
 
 @Composable
@@ -504,6 +828,7 @@ private fun ReaderSettingsDialog(
     onSave: (ReaderPreferences) -> Unit,
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
+    var showCustomColorPicker by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(tr("阅读设置", "Reading settings")) },
@@ -516,16 +841,33 @@ private fun ReaderSettingsDialog(
                     Text(tr("背景颜色", "Background"), fontWeight = FontWeight.SemiBold)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ReaderBackground.entries.forEach { background ->
-                            val colors = readerColors(background)
+                            val colors = readerColors(background, draft.customBackgroundArgb)
                             Surface(
-                                modifier = Modifier.size(42.dp).clickable { draft = draft.copy(background = background) },
+                                modifier = Modifier.size(42.dp).clickable {
+                                    if (background == ReaderBackground.CUSTOM) {
+                                        showCustomColorPicker = true
+                                    } else {
+                                        draft = draft.copy(background = background)
+                                    }
+                                },
                                 shape = CircleShape,
                                 color = colors.first,
                                 border = androidx.compose.foundation.BorderStroke(
                                     if (draft.background == background) 3.dp else 1.dp,
                                     if (draft.background == background) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                                 ),
-                            ) {}
+                            ) {
+                                if (background == ReaderBackground.CUSTOM) {
+                                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            Icons.Outlined.Palette,
+                                            contentDescription = tr("自定义背景颜色", "Custom background color"),
+                                            tint = colors.second,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -579,6 +921,20 @@ private fun ReaderSettingsDialog(
         confirmButton = { TextButton(onClick = { onSave(draft) }) { Text(tr("保存", "Save")) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) } },
     )
+    if (showCustomColorPicker) {
+        ColorPickerDialog(
+            initialColorArgb = draft.customBackgroundArgb,
+            title = tr("自定义阅读背景", "Custom reading background"),
+            onDismiss = { showCustomColorPicker = false },
+            onConfirm = { color ->
+                draft = draft.copy(
+                    background = ReaderBackground.CUSTOM,
+                    customBackgroundArgb = color,
+                )
+                showCustomColorPicker = false
+            },
+        )
+    }
 }
 
 @Composable
@@ -669,12 +1025,65 @@ private fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
-private fun readerColors(background: ReaderBackground): Pair<Color, Color> = when (background) {
+private fun readerColors(
+    background: ReaderBackground,
+    customBackgroundArgb: Int,
+): Pair<Color, Color> = when (background) {
     ReaderBackground.WHITE -> Color(0xFFFFFFFF) to Color(0xFF202124)
     ReaderBackground.PAPER -> Color(0xFFF4F0E6) to Color(0xFF332E28)
     ReaderBackground.SEPIA -> Color(0xFFE8D6B0) to Color(0xFF3B2C1E)
     ReaderBackground.GREEN -> Color(0xFFDDE8D7) to Color(0xFF203126)
     ReaderBackground.NIGHT -> Color(0xFF171A1C) to Color(0xFFE2E0DA)
+    ReaderBackground.CUSTOM -> Color(customBackgroundArgb).let { custom ->
+        custom to if (custom.luminance() > 0.5f) Color(0xFF181818) else Color(0xFFF4F4F4)
+    }
+}
+
+@Composable
+private fun readerTutorialTarget(content: ReaderContentState): PageTutorialTarget? = when (content) {
+    ReaderContentState.Idle -> PageTutorialTarget(
+        pageId = "reader/library",
+        title = tr("阅读书架", "Reading library"),
+        description = tr(
+            "右下角可导入 TXT 或 PDF；书籍正文仍保存在你选择的原文件中。",
+            "Import TXT or PDF from the lower-right button; the original selected file remains the source of the book.",
+        ),
+        hints = listOf(
+            tr("点书籍继续上次进度，长按或使用移除按钮可从书架移除。", "Open a book to resume; use remove to take it off this library."),
+            tr("阅读时长与进度会在本机自动保存。", "Reading time and progress are saved locally."),
+        ),
+    )
+    is ReaderContentState.Ready -> when (content.content) {
+        is ReaderContent.TextBook -> PageTutorialTarget(
+            pageId = "reader/txt",
+            title = tr("TXT 阅读", "TXT reader"),
+            description = tr(
+                "TXT 会自动识别“第…章”、Chapter 等标题，并按约 1,800 字符生成稳定的逻辑页。",
+                "TXT detects headings such as 第…章 and Chapter, then creates stable logical pages of roughly 1,800 characters.",
+            ),
+            hints = listOf(
+                tr("顶部目录按钮可打开章节侧栏并直接跳转。", "Use the contents button to open the chapter drawer and jump directly."),
+                tr("页码按钮可输入页数，或拖动进度滑块跳转。", "Use the page button to enter a page or drag the progress slider."),
+                tr("阅读设置可调字号、间距、方向和自定义背景颜色。", "Reading settings include type size, spacing, orientation, and a custom background color."),
+            ),
+        )
+        is ReaderContent.PdfBook -> PageTutorialTarget(
+            pageId = "reader/pdf",
+            title = tr("PDF 阅读", "PDF reader"),
+            description = tr("左右翻页阅读 PDF，顶部页码按钮可按页数或进度跳转。", "Swipe between PDF pages, or use the page button to jump by page or progress."),
+            hints = listOf(
+                tr("齿轮中可调整阅读背景与屏幕方向。", "Use the gear to adjust the reading background and screen orientation."),
+                tr("离开书籍时会保存当前位置。", "Your current position is saved when you leave the book."),
+            ),
+        )
+    }
+    ReaderContentState.Loading -> null
+    is ReaderContentState.Failed -> PageTutorialTarget(
+        pageId = "reader/error",
+        title = tr("书籍无法打开", "Book could not be opened"),
+        description = tr("可先重试；如果原文件被移动、删除或权限失效，请回到书架重新导入。", "Retry first. If the source was moved, deleted, or its permission expired, return to the library and import it again."),
+        hints = emptyList(),
+    )
 }
 
 @Composable

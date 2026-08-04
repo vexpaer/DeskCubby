@@ -22,8 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
@@ -62,7 +60,6 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -330,10 +327,8 @@ fun DailyEventRecorder(
                     modifier = Modifier.weight(1f),
                     enabled = !isSending,
                     visualTransformation = xxTransformation,
-                    minLines = 1,
-                    maxLines = 3,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { submit() }, onDone = { submit() }),
+                    minLines = 2,
+                    maxLines = 6,
                 )
                 Spacer(Modifier.width(8.dp))
                 FilledIconButton(
@@ -423,8 +418,8 @@ private fun DailyEventEditorDialog(
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text(tr("事件文字", "Event text")) },
                     placeholder = { Text(tr("例如：喝水 xx 杯", "e.g. Drink xx glasses")) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    minLines = 3,
+                    maxLines = 8,
                 )
                 Text(
                     tr(

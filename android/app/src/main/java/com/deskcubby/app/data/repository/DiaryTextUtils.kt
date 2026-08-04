@@ -43,6 +43,15 @@ internal object DiaryTextUtils {
         else -> "\n"
     }
 
+    /** Normalizes a user-entered multi-line block to the target Markdown document's line ending. */
+    fun normalizeTextBlock(value: String, lineEnding: String): String {
+        require(lineEnding == "\n" || lineEnding == "\r" || lineEnding == "\r\n")
+        return value.trim()
+            .replace("\r\n", "\n")
+            .replace('\r', '\n')
+            .replace("\n", lineEnding)
+    }
+
     fun moveSourceLine(source: String, fromIndex: Int, toIndex: Int): String {
         val lineEnding = preferredLineEnding(source)
         val normalized = source.replace("\r\n", "\n").replace('\r', '\n')

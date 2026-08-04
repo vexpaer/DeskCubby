@@ -55,14 +55,12 @@ import androidx.compose.material.icons.outlined.ViewDay
 import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material3.Icon
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -90,12 +88,16 @@ import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.AppLanguage
+import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.MusicVisualizerStyle
 import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.ui.blog.BlogScreen
 import com.deskcubby.app.ui.blog.BlogViewModel
 import com.deskcubby.app.ui.components.AppLoadingIndicator
+import com.deskcubby.app.ui.components.AppBackground
+import com.deskcubby.app.ui.components.PageTutorialOverlay
+import com.deskcubby.app.ui.components.PageTutorialTarget
 import com.deskcubby.app.ui.components.MusicVisualizerLayer
 import com.deskcubby.app.ui.diary.DiaryEditorScreen
 import com.deskcubby.app.ui.diary.DiaryListScreen
@@ -133,6 +135,7 @@ import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.PanelRole
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
+import com.deskcubby.app.ui.theme.tr
 import com.deskcubby.app.ui.games.GamesScreen
 import com.deskcubby.app.ui.games.GamesViewModel
 import com.deskcubby.app.ui.thought.ThoughtScreen
@@ -177,11 +180,12 @@ fun DeskCubbyRoot(
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val ready by settingsViewModel.ready.collectAsStateWithLifecycle()
     DeskCubbyTheme(settings) {
+        AppBackground(settings) {
         if (!ready) {
             Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
                 AppLoadingIndicator()
             }
-            return@DeskCubbyTheme
+            return@AppBackground
         }
         val navController = rememberNavController()
         val aliasContext = LocalContext.current
@@ -192,10 +196,11 @@ fun DeskCubbyRoot(
                 settings.launcherIcon,
             )
         }
-        var introDismissedForSession by remember { mutableStateOf(false) }
         var settingsSubpageOpen by remember { mutableStateOf(false) }
         var readerOpen by remember { mutableStateOf(false) }
         var gameOpen by remember { mutableStateOf(false) }
+        var childTutorialTarget by remember { mutableStateOf<PageTutorialTarget?>(null) }
+        var tutorialConfirmedThisSession by remember { mutableStateOf(emptySet<String>()) }
         val initialStartDestination = remember { settings.defaultPage.route }
         val systemAnimationsEnabled = remember { ValueAnimator.areAnimatorsEnabled() }
         val organicMotionEnabled = settings.visualStyle == VisualStyle.ORGANIC_FUTURE &&
@@ -232,6 +237,7 @@ fun DeskCubbyRoot(
 
         Scaffold(
             modifier = Modifier.fillMaxSize(),
+            containerColor = Color.Transparent,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
                 if (showBottomBar) {
@@ -376,6 +382,7 @@ fun DeskCubbyRoot(
                             padding = padding,
                             viewModel = readerViewModel,
                             onReadingChanged = { readerOpen = it },
+                            onTutorialTargetChanged = { childTutorialTarget = it },
                         )
                     }
                     composable(NavItemId.GAMES.route) {
@@ -384,6 +391,7 @@ fun DeskCubbyRoot(
                             padding = padding,
                             viewModel = gamesViewModel,
                             onGameOpenChanged = { gameOpen = it },
+                            onTutorialTargetChanged = { childTutorialTarget = it },
                         )
                     }
                     composable(NavItemId.STATISTICS.route) {
@@ -461,6 +469,7 @@ fun DeskCubbyRoot(
                             padding = padding,
                             viewModel = settingsViewModel,
                             onSubpageOpenChanged = { settingsSubpageOpen = it },
+                            onTutorialTargetChanged = { childTutorialTarget = it },
                         )
                     }
                     composable(Routes.EDITOR) {
@@ -557,6 +566,7 @@ fun DeskCubbyRoot(
                             viewModel = settingsViewModel,
                             startPage = SettingsStartPage.NAVIGATION,
                             onExit = { navController.popBackStack() },
+                            onTutorialTargetChanged = { childTutorialTarget = it },
                         )
                     }
                     composable(Routes.MORE_PAGE_SETTINGS) {
@@ -565,6 +575,7 @@ fun DeskCubbyRoot(
                             viewModel = settingsViewModel,
                             startPage = SettingsStartPage.MORE_PAGE,
                             onExit = { navController.popBackStack() },
+                            onTutorialTargetChanged = { childTutorialTarget = it },
                         )
                     }
                     composable(Routes.USAGE_SETTINGS) {
@@ -573,6 +584,7 @@ fun DeskCubbyRoot(
                             viewModel = settingsViewModel,
                             startPage = SettingsStartPage.USAGE,
                             onExit = { navController.popBackStack() },
+                            onTutorialTargetChanged = { childTutorialTarget = it },
                         )
                     }
                     composable(Routes.STEPS_SETTINGS) {
@@ -581,6 +593,7 @@ fun DeskCubbyRoot(
                             viewModel = settingsViewModel,
                             startPage = SettingsStartPage.STEPS,
                             onExit = { navController.popBackStack() },
+                            onTutorialTargetChanged = { childTutorialTarget = it },
                         )
                     }
                     composable(Routes.AI_SETTINGS) {
@@ -589,6 +602,7 @@ fun DeskCubbyRoot(
                             viewModel = settingsViewModel,
                             startPage = SettingsStartPage.AI,
                             onExit = { navController.popBackStack() },
+                            onTutorialTargetChanged = { childTutorialTarget = it },
                         )
                     }
                     composable(Routes.POETRY_SETTINGS) {
@@ -597,44 +611,175 @@ fun DeskCubbyRoot(
                             viewModel = settingsViewModel,
                             startPage = SettingsStartPage.POETRY,
                             onExit = { navController.popBackStack() },
+                            onTutorialTargetChanged = { childTutorialTarget = it },
                         )
                     }
                 }
             }
         }
 
-        if (!settings.navigationIntroAcknowledged && !introDismissedForSession) {
-            AlertDialog(
-                onDismissRequest = {},
-                title = { Text(if (settings.appLanguage == AppLanguage.ENGLISH) "Choose your pages" else "选择你需要的页面") },
-                text = {
-                    Text(
-                        if (settings.appLanguage == AppLanguage.ENGLISH) {
-                            "DeskCubby has several pages. Bottom navigation settings control the bottom bar; Navigation page settings under Subpage settings control the More page."
-                        } else {
-                            "DeskCubby 包含多个页面。“底部导航”设置管理底栏；“子页面设置 → 导航页”管理导航页中的入口。"
-                        },
-                    )
+        val tutorialTarget = childTutorialTarget ?: routeTutorialTarget(route, settings)
+        if (
+            settings.tutorialModeEnabled && tutorialTarget != null &&
+            tutorialTarget.pageId !in settings.tutorialAcknowledgedPages &&
+            tutorialTarget.pageId !in tutorialConfirmedThisSession
+        ) {
+            PageTutorialOverlay(
+                target = tutorialTarget,
+                onConfirm = {
+                    tutorialConfirmedThisSession += tutorialTarget.pageId
+                    settingsViewModel.acknowledgeTutorialPage(tutorialTarget.pageId)
                 },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            introDismissedForSession = true
-                            settingsViewModel.acknowledgeNavigationIntro()
-                            navController.navigate(Routes.NAVIGATION_SETTINGS)
-                        },
-                    ) {
-                        Text(if (settings.appLanguage == AppLanguage.ENGLISH) "Navigation settings" else "跳转至底部导航设置")
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = {
-                            introDismissedForSession = true
-                            settingsViewModel.acknowledgeNavigationIntro()
-                        },
-                    ) { Text(if (settings.appLanguage == AppLanguage.ENGLISH) "OK" else "确认") }
-                },
+            )
+        }
+        }
+    }
+}
+
+@Composable
+private fun routeTutorialTarget(route: String?, settings: AppSettings): PageTutorialTarget? {
+    @Composable
+    fun target(
+        id: String,
+        titleChinese: String,
+        titleEnglish: String,
+        descriptionChinese: String,
+        descriptionEnglish: String,
+        vararg hints: Pair<String, String>,
+    ) = PageTutorialTarget(
+        pageId = id,
+        title = tr(titleChinese, titleEnglish),
+        description = tr(descriptionChinese, descriptionEnglish),
+        hints = hints.map { (chinese, english) -> tr(chinese, english) },
+    )
+
+    return when (route) {
+        // These destinations report their finer-grained internal page directly.
+        NavItemId.READER.route,
+        NavItemId.GAMES.route,
+        NavItemId.SETTINGS.route,
+        Routes.NAVIGATION_SETTINGS,
+        Routes.MORE_PAGE_SETTINGS,
+        Routes.USAGE_SETTINGS,
+        Routes.STEPS_SETTINGS,
+        Routes.AI_SETTINGS,
+        Routes.POETRY_SETTINGS,
+        -> null
+
+        Routes.EDITOR -> target(
+            "page/diary-editor",
+            "日记编辑器",
+            "Diary editor",
+            "在这里编辑 Markdown 正文、切换阅读预览，并安全保存真实日记文件。",
+            "Edit Markdown, switch to reading preview, and safely save the real diary file here.",
+            "标题栏会显示已保存或未保存；外部修改冲突时应用不会静默覆盖。" to
+                "The title bar shows save state; external-edit conflicts are never overwritten silently.",
+            "“日常记录”可把常用多行内容追加到当前日记。" to
+                "Daily records can append reusable multi-line text to this diary.",
+        )
+        Routes.MEAL_CALENDAR -> target(
+            "page/meal-calendar",
+            "吃历",
+            "Meal calendar",
+            "按日期与餐别浏览饮食照片、热量明细、地点和非破坏滤镜。",
+            "Browse meal photos, energy details, locations, and non-destructive filters by day and meal.",
+            "点照片可放大；计算器用于排队估算，长按可进入进度页。" to
+                "Tap a photo to zoom; use the calculator to queue estimates and long-press it for progress.",
+        )
+        Routes.CALORIE_ESTIMATION_PROGRESS -> target(
+            "page/calorie-progress",
+            "热量估算进度",
+            "Calorie estimation progress",
+            "查看按日期串行处理的图片识别、文字估算与保存状态。",
+            "Follow image recognition, text estimation, and save status in the per-date queue.",
+            "离开本页不会取消队列；失败项会保留具体阶段。" to
+                "Leaving does not cancel the queue; failed items retain their exact stage.",
+        )
+        Routes.MEAL_FILTER_SETTINGS -> target(
+            "page/meal-filter-settings",
+            "吃历滤镜设置",
+            "Meal filter settings",
+            "调整亮度、对比度、饱和度、色温与色调，预览不会改写原图。",
+            "Adjust brightness, contrast, saturation, warmth, and tint without rewriting originals.",
+            "右上角保存前，返回会提示是否放弃草稿。" to
+                "Going back before using Save asks whether to discard the draft.",
+        )
+        Routes.THOUGHT_TRASH -> target(
+            "page/thought-trash",
+            "小巧思回收站",
+            "Thought trash",
+            "恢复误删的小巧思，或确认永久删除。",
+            "Restore accidentally deleted thoughts or confirm permanent deletion.",
+        )
+        Routes.DAILY_RECORDS,
+        Routes.DAILY_RECORDS_TODAY,
+        -> target(
+            "page/daily-records",
+            "日常记录",
+            "Daily records",
+            "建立可复用的多行事件模板，填写后写入当前或今日日记。",
+            "Create reusable multi-line event templates, fill them in, then write to the current or today's diary.",
+            "模板中的 xx 会加下划线，点按即可直接选中替换。" to
+                "Any xx placeholder is underlined and can be tapped to select it for replacement.",
+            "只有真实文件写入成功后，输入才会重置并显示成功。" to
+                "Input resets and success appears only after the real file write succeeds.",
+        )
+        Routes.STATISTICS_USAGE -> target(
+            "page/statistics-screen-time",
+            "使用时间统计",
+            "Screen-time statistics",
+            "查看按设备、日期范围和应用汇总的手机使用时间。",
+            "Review phone usage grouped by device, date range, and app.",
+        )
+        Routes.STATISTICS_HEALTH -> target(
+            "page/statistics-health",
+            "健康统计",
+            "Health statistics",
+            "查看 Health Connect 提供的步数、距离与活动热量。",
+            "View steps, distance, and active calories supplied by Health Connect.",
+        )
+        else -> {
+            val id = NavItemId.entries.firstOrNull { it.route == route } ?: return null
+            val config = settings.navItems.firstOrNull { it.id == id }
+            val title = if (
+                settings.appLanguage == AppLanguage.ENGLISH &&
+                (config == null || config.label == id.defaultLabel)
+            ) id.englishLabel else config?.label ?: id.defaultLabel
+            val description = if (settings.appLanguage == AppLanguage.ENGLISH) {
+                id.englishDescription
+            } else {
+                id.defaultDescription
+            }
+            val pageHints = when (id) {
+                NavItemId.HOME -> listOf(
+                    tr("卡片内容与顺序可在“设置 → 子页面设置 → 主页”调整。", "Configure cards and order in Settings → Subpage settings → Home."),
+                    tr("快速输入、饮食图片和日常记录会在真正保存后再提示成功。", "Quick input, meal photos, and daily records report success only after saving."),
+                )
+                NavItemId.DIARY -> listOf(
+                    tr("点日记进入编辑；顶部按钮可新建、打开今日日记或进入吃历。", "Tap a diary to edit it; top actions create, open today, or enter the meal calendar."),
+                )
+                NavItemId.MORE -> listOf(
+                    tr("拖动四点手柄调整卡片顺序；收纳内容在导航页设置中管理。", "Drag four-dot handles to reorder cards; manage included pages in Navigation page settings."),
+                )
+                NavItemId.THOUGHT -> listOf(
+                    tr("长按条目可编辑、分类、标重点或删除；四点手柄可排序。", "Long-press to edit, categorize, highlight, or delete; use the four-dot handle to reorder."),
+                )
+                NavItemId.AI_CHAT -> listOf(
+                    tr("发送前可从输入框左侧选择图片、日记或小巧思作为上下文。", "Before sending, use the left input menu to attach an image, diary, or thought context."),
+                )
+                NavItemId.VAULT -> listOf(
+                    tr("密码与明文只在本机解锁会话中使用；忘记密码无法恢复。", "The password and plaintext are used only in the local unlock session; a forgotten password cannot be recovered."),
+                )
+                NavItemId.STATISTICS -> listOf(
+                    tr("点任一概览卡可进入趋势与明细；未知数据保持“—”。", "Tap an overview card for trends and details; unavailable data remains “—”."),
+                )
+                else -> emptyList()
+            }
+            PageTutorialTarget(
+                pageId = "page/${id.route}",
+                title = title,
+                description = description,
+                hints = pageHints,
             )
         }
     }

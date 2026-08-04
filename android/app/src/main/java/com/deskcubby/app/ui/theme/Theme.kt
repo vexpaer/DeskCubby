@@ -111,12 +111,20 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
         DarkMode.LIGHT -> false
         DarkMode.DARK -> true
     }
-    val scheme = resolveColorScheme(
+    val baseScheme = resolveColorScheme(
         visualStyle = settings.visualStyle,
         dark = dark,
         themeColorArgb = settings.themeColorArgb,
         themeSecondaryColorsArgb = settings.themeSecondaryColorsArgb,
     )
+    // The app background layer lives below every navigation destination. Making only the
+    // page-background role transparent keeps cards, dialogs, and controls readable while allowing
+    // Scaffold canvases to reveal the user-selected image.
+    val scheme = if (settings.backgroundImageUri != null) {
+        baseScheme.copy(background = Color.Transparent)
+    } else {
+        baseScheme
+    }
     val baseTypography = if (settings.visualStyle == VisualStyle.ORGANIC_FUTURE) {
         OrganicFutureTypography
     } else {

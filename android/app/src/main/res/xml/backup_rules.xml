@@ -2,7 +2,7 @@
 <full-backup-content>
     <!-- Android system backup must not clone a device identity or private statistics.
          Statistics now share the main Room database, and Android backup cannot exclude tables,
-         so the whole database is excluded. DeskCubby v24 JSON/cloud sync is the explicit backup
+         so the whole database is excluded. DeskCubby v25 JSON/cloud sync is the explicit backup
          path for supported structured data. -->
     <exclude
         domain="database"

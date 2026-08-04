@@ -1820,22 +1820,23 @@ class DiaryFileRepository @Inject constructor(
         }
     }
 
-    /** Appends one exact, standalone text line to today's Markdown diary. */
+    /** Appends one exact, standalone text block to today's Markdown diary. */
     suspend fun appendTextToToday(
         text: String,
         settings: AppSettings,
         date: LocalDate = LocalDate.now(),
     ): DiaryEditorDocument = writeMutex.withLock {
         withContext(Dispatchers.IO) {
-            val line = text.trim().replace('\r', ' ').replace('\n', ' ')
-            require(line.isNotBlank()) { "日常记录不能为空" }
             val document = enterTodayUnlocked(settings, date)
             val uri = Uri.parse(document.uri)
+            val lineEnding = DiaryTextUtils.preferredLineEnding(document.content)
+            val block = DiaryTextUtils.normalizeTextBlock(text, lineEnding)
+            require(block.isNotBlank()) { "日常记录不能为空" }
             val separator = when {
                 document.content.isEmpty() || document.content.endsWith('\n') || document.content.endsWith('\r') -> ""
-                else -> DiaryTextUtils.preferredLineEnding(document.content)
+                else -> lineEnding
             }
-            val updated = document.content + separator + line
+            val updated = document.content + separator + block
             val immediatelyBeforeWrite = load(uri)
             if (immediatelyBeforeWrite.sha256 != document.sha256) {
                 throw ExternalFileConflictException(immediatelyBeforeWrite)

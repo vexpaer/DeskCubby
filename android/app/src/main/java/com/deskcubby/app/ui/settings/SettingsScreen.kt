@@ -109,6 +109,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
@@ -119,9 +120,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -145,6 +148,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import coil3.compose.AsyncImage
 import androidx.core.content.ContextCompat
 import com.deskcubby.app.BuildConfig
 import com.deskcubby.app.R
@@ -192,6 +196,7 @@ import com.deskcubby.app.ui.components.ColorPickerDialog
 import com.deskcubby.app.ui.iconFor
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
+import com.deskcubby.app.ui.components.PageTutorialTarget
 import com.deskcubby.app.ui.home.HomeGreeting
 import com.deskcubby.app.ui.poetry.rememberPoetryFontFamily
 import com.deskcubby.app.ui.poetry.isSevenCharacterPoem
@@ -421,6 +426,7 @@ fun SettingsScreen(
     startPage: SettingsStartPage = SettingsStartPage.MAIN,
     onExit: (() -> Unit)? = null,
     onSubpageOpenChanged: (Boolean) -> Unit = {},
+    onTutorialTargetChanged: (PageTutorialTarget?) -> Unit = {},
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val backupOperation by viewModel.backupOperation.collectAsStateWithLifecycle()
@@ -437,6 +443,7 @@ fun SettingsScreen(
     var pendingNavigationAfterUnsaved by remember { mutableStateOf<(() -> Unit)?>(null) }
     var editingAiConfig by remember { mutableStateOf<AiModelConfig?>(null) }
     var editingCloudSyncConfig by remember { mutableStateOf<CloudSyncConfig?>(null) }
+    val tutorialTarget = settingsPageTutorialTarget(page)
 
     LaunchedEffect(page) {
         saveCoordinator.clear()
@@ -447,8 +454,14 @@ fun SettingsScreen(
             viewModel.refreshAppDataUsage()
         }
     }
+    LaunchedEffect(tutorialTarget) {
+        onTutorialTargetChanged(tutorialTarget)
+    }
     DisposableEffect(Unit) {
-        onDispose { onSubpageOpenChanged(false) }
+        onDispose {
+            onSubpageOpenChanged(false)
+            onTutorialTargetChanged(null)
+        }
     }
 
     fun exitOrOpenParent() {
@@ -556,15 +569,25 @@ fun SettingsScreen(
                 settings = settings,
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
-                onSave = { visualStyle, darkMode, language, themeColor, secondaryColors, fontScale, compactMode ->
-                    viewModel.setVisualStyle(visualStyle)
-                    viewModel.setDarkMode(darkMode)
-                    viewModel.setAppLanguage(language)
-                    viewModel.setThemeColor(themeColor)
-                    viewModel.setThemeSecondaryColors(secondaryColors)
-                    viewModel.setFontScale(fontScale)
-                    viewModel.setCompactMode(compactMode)
-                    completeSave(SettingsPage.MAIN)
+                onPersistBackground = viewModel::persistAppBackground,
+                onSave = { visualStyle, darkMode, language, themeColor, secondaryColors,
+                        fontScale, compactMode, backgroundUri, backgroundOpacity,
+                        backgroundBlur, onDone ->
+                    viewModel.setAppearanceSettings(
+                        visualStyle = visualStyle,
+                        darkMode = darkMode,
+                        appLanguage = language,
+                        themeColorArgb = themeColor,
+                        themeSecondaryColorsArgb = secondaryColors,
+                        fontScale = fontScale,
+                        compactMode = compactMode,
+                        backgroundImageUri = backgroundUri,
+                        backgroundImageOpacity = backgroundOpacity,
+                        backgroundImageBlurDp = backgroundBlur,
+                    ) { saved ->
+                        onDone(saved)
+                        if (saved) completeSave(SettingsPage.MAIN)
+                    }
                 },
             )
 
@@ -1658,8 +1681,8 @@ private fun CloudSyncSettingsPage(
             text = {
                 Text(
                     tr(
-                        "这会按 v24 备份导入应用设置和结构化数据，恢复桌面小卡片设计、Vault 密文/校验元数据，合并小游戏最高分、存档与特色累计统计，并按设备和日期合并使用时间；Vault 随后保持锁定。日记与媒体真实文件不会被替换。",
-                        "This imports v24 app settings and structured data, restores desktop-widget designs and Vault ciphertext/verifier metadata, merges game scores, saves, and lifetime records, and merges screen time by device and date. The Vault remains locked, and diary/media files are not replaced.",
+                        "这会按 v25 备份导入应用设置和结构化数据，恢复背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Vault 随后保持锁定。日记、媒体与背景图片文件不会被替换。",
+                        "This imports v25 app settings and structured data, restores background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. The Vault remains locked, and diary, media, and background-image files are not replaced.",
                     ),
                 )
             },
@@ -1960,8 +1983,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.JSON_BACKUP in selectedContents) {
                     Text(
                         tr(
-                            "v24 应用 JSON 包含桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "The v24 app JSON contains desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                            "v25 应用 JSON 包含全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "The v25 app JSON contains global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2306,8 +2329,8 @@ private fun BackupSettingsPage(
             text = {
                 Text(
                     tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v24 还会恢复桌面小卡片设计与 Vault 密文/密码校验元数据，合并小游戏存档、最高分、特色累计统计和各设备使用时间；Vault 导入后保持锁定。日记正文和媒体文件不会被修改。确定继续吗？",
-                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. v24 also restores desktop-widget designs and Vault ciphertext/password-verifier metadata, merges game saves, high scores, lifetime metrics, and per-device screen time, and leaves the Vault locked. Diary and media files are unchanged. Continue?",
+                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v25 还会恢复全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。日记、媒体和背景图片文件不会被修改。确定继续吗？",
+                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. v25 also restores global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merges games and per-device screen time while leaving the Vault locked. Diary, media, and background-image files are unchanged. Continue?",
                     ),
                 )
             },
@@ -2482,15 +2505,15 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "v24 包含应用设置（含音乐可视化样式、自适应/手动频率范围、2048 动画速度、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、2048/贪吃蛇/俄罗斯方块/扫雷/蜘蛛纸牌存档、最高分与特色累计统计，以及按设备区分的手机使用时间。",
-                        "v24 includes app settings (including music-visualizer style, adaptive/manual frequency range, 2048 animation speed, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, saves, high scores, and lifetime metrics for 2048/Snake/Tetris/Minesweeper/Spider, and screen-time history grouped by device.",
+                        "v25 包含应用设置（含全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。逐页教学确认和背景图片文件不包含在内。",
+                        "v25 includes app settings (including global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time. Per-page confirmations and background-image files are excluded.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
                     tr(
-                        "不包含日记正文、媒体文件、阅读书架/进度、阅读与小游戏累计时长 JSON、AI 对话历史、卡片背景图片、Vault 密码/派生密钥、云端凭据、健康历史、系统权限或本机随机设备 ID。跨设备导入后需重新选择目录、导入书籍、填写云端凭据并重新授权。",
-                        "Diary/media files, reader library/progress, reading and game-time JSON, AI chats, widget images, Vault passwords/derived keys, cloud credentials, health history, system permissions, and this device's random ID are excluded. After cross-device import, reselect folders, re-import books, re-enter cloud credentials, and grant permissions again.",
+                        "不包含日记正文、媒体文件、阅读书架/进度、阅读与小游戏累计时长 JSON、AI 对话历史、全局/卡片背景图片文件、逐页教学确认、Vault 密码/派生密钥、云端凭据、健康历史、系统权限或本机随机设备 ID。跨设备导入后需重新选择目录、图片，导入书籍，填写云端凭据并重新授权。",
+                        "Diary/media files, reader library/progress, reading and game-time JSON, AI chats, global/widget background-image files, per-page tutorial confirmations, Vault passwords/derived keys, cloud credentials, health history, system permissions, and this device's random ID are excluded. After cross-device import, reselect folders and images, re-import books, re-enter cloud credentials, and grant permissions again.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -2549,7 +2572,20 @@ private fun AppearanceSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
     saveCoordinator: SettingsSaveCoordinator,
-    onSave: (VisualStyle, DarkMode, AppLanguage, Int, List<Int>, Float, Boolean) -> Unit,
+    onPersistBackground: (Uri, (Boolean) -> Unit) -> Unit,
+    onSave: (
+        VisualStyle,
+        DarkMode,
+        AppLanguage,
+        Int,
+        List<Int>,
+        Float,
+        Boolean,
+        String?,
+        Float,
+        Float,
+        (Boolean) -> Unit,
+    ) -> Unit,
 ) {
     val presets = listOf(
         0xFF42664D.toInt(),
@@ -2583,6 +2619,28 @@ private fun AppearanceSettingsPage(
     var compactMode by rememberSaveable(settings.compactMode) {
         mutableStateOf(settings.compactMode)
     }
+    var backgroundImageUri by rememberSaveable(settings.backgroundImageUri) {
+        mutableStateOf(settings.backgroundImageUri)
+    }
+    var backgroundImageOpacity by rememberSaveable(settings.backgroundImageOpacity) {
+        mutableFloatStateOf(settings.backgroundImageOpacity.coerceIn(0f, 1f))
+    }
+    var backgroundImageBlurDp by rememberSaveable(settings.backgroundImageBlurDp) {
+        mutableFloatStateOf(settings.backgroundImageBlurDp.coerceIn(0f, 40f))
+    }
+    var backgroundImporting by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    val backgroundLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri?.let { selected ->
+            backgroundImporting = true
+            onPersistBackground(selected) { success ->
+                backgroundImporting = false
+                if (success) backgroundImageUri = selected.toString()
+            }
+        }
+    }
     val parsedThemeColor = parseThemeColor(themeHex)
     val parsedSecondaryColors = secondaryHexes.map(::parseThemeColor)
     val validSecondaryValues = parsedSecondaryColors.filterNotNull()
@@ -2594,11 +2652,14 @@ private fun AppearanceSettingsPage(
         parsedThemeColor != settings.themeColorArgb ||
         validSecondaryValues != settings.themeSecondaryColorsArgb ||
         fontScale != settings.fontScale ||
-        compactMode != settings.compactMode
+        compactMode != settings.compactMode ||
+        backgroundImageUri != settings.backgroundImageUri ||
+        backgroundImageOpacity != settings.backgroundImageOpacity ||
+        backgroundImageBlurDp != settings.backgroundImageBlurDp
     RegisterSettingsSave(
         coordinator = saveCoordinator,
         dirty = appearanceDirty,
-        enabled = parsedThemeColor != null && secondaryColorsValid,
+        enabled = parsedThemeColor != null && secondaryColorsValid && !saving && !backgroundImporting,
         onReset = {
             val defaults = AppSettings()
             visualStyle = defaults.visualStyle
@@ -2608,8 +2669,12 @@ private fun AppearanceSettingsPage(
             secondaryHexes = defaults.themeSecondaryColorsArgb.map(::colorToHex)
             fontScale = defaults.fontScale
             compactMode = defaults.compactMode
+            backgroundImageUri = defaults.backgroundImageUri
+            backgroundImageOpacity = defaults.backgroundImageOpacity
+            backgroundImageBlurDp = defaults.backgroundImageBlurDp
         },
     ) {
+        saving = true
         onSave(
             visualStyle,
             darkMode,
@@ -2618,7 +2683,12 @@ private fun AppearanceSettingsPage(
             parsedSecondaryColors.filterNotNull(),
             fontScale,
             compactMode,
-        )
+            backgroundImageUri,
+            backgroundImageOpacity,
+            backgroundImageBlurDp,
+        ) { saved ->
+            if (!saved) saving = false
+        }
     }
 
     colorPickerTarget?.let { target ->
@@ -2846,6 +2916,115 @@ private fun AppearanceSettingsPage(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
+            }
+        }
+        item {
+            SettingsSection(tr("背景图片", "Background image")) {
+                Text(
+                    tr(
+                        "图片只从你选择的位置读取，不会复制进应用备份。可调整可见度和模糊，让文字与卡片保持清晰。",
+                        "The image is read only from the location you choose and is not copied into app backups. Adjust visibility and blur to keep text and cards readable.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(176.dp)
+                        .clip(MaterialTheme.shapes.large)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (backgroundImageUri == null) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Outlined.Image,
+                                contentDescription = null,
+                                modifier = Modifier.size(36.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                tr("尚未选择背景", "No background selected"),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    } else {
+                        AsyncImage(
+                            model = backgroundImageUri,
+                            contentDescription = tr("背景图片预览", "Background preview"),
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .blur(backgroundImageBlurDp.dp)
+                                .graphicsLayer {
+                                    alpha = backgroundImageOpacity
+                                    val overscan = 1f + backgroundImageBlurDp / 160f
+                                    scaleX = overscan
+                                    scaleY = overscan
+                                },
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { backgroundLauncher.launch(arrayOf("image/*")) },
+                        enabled = !backgroundImporting && !saving,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Outlined.FolderOpen, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (backgroundImporting) tr("正在读取…", "Reading…")
+                            else if (backgroundImageUri == null) tr("选择图片", "Choose image")
+                            else tr("更换图片", "Change image"),
+                        )
+                    }
+                    if (backgroundImageUri != null) {
+                        OutlinedButton(
+                            onClick = { backgroundImageUri = null },
+                            enabled = !backgroundImporting && !saving,
+                        ) {
+                            Icon(Icons.Outlined.Delete, contentDescription = null)
+                            Spacer(Modifier.width(6.dp))
+                            Text(tr("移除", "Remove"))
+                        }
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(tr("图片可见度", "Image visibility"))
+                    Text(
+                        "${(backgroundImageOpacity * 100).roundToInt()}%",
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Slider(
+                    value = backgroundImageOpacity,
+                    onValueChange = {
+                        backgroundImageOpacity = (it * 20f).roundToInt() / 20f
+                    },
+                    valueRange = 0f..1f,
+                    steps = 19,
+                    enabled = backgroundImageUri != null,
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(tr("背景模糊", "Background blur"))
+                    Text(
+                        "${backgroundImageBlurDp.roundToInt()} dp",
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Slider(
+                    value = backgroundImageBlurDp,
+                    onValueChange = { backgroundImageBlurDp = it.roundToInt().toFloat() },
+                    valueRange = 0f..40f,
+                    steps = 39,
+                    enabled = backgroundImageUri != null,
+                )
             }
         }
         item {
@@ -5615,6 +5794,39 @@ private fun AboutSettingsPage(
             }
         }
         item {
+            SettingsSection(tr("页面教学", "Page tutorials")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("软件教学模式", "Tutorial mode"))
+                        Text(
+                            tr(
+                                "默认开启。第一次进入每个页面时显示一次蒙版说明；确认记录只保存在当前设备。",
+                                "On by default. A walkthrough overlay appears once the first time you open each page; confirmations stay on this device.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = settings.tutorialModeEnabled,
+                        onCheckedChange = viewModel::setTutorialModeEnabled,
+                    )
+                }
+                OutlinedButton(
+                    onClick = viewModel::resetTutorialPages,
+                    enabled = settings.tutorialAcknowledgedPages.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Outlined.Restore, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("重新显示全部页面教学", "Show all page tutorials again"))
+                }
+            }
+        }
+        item {
             SettingsSection(tr("检查更新", "Check for updates")) {
                 Text(
                     tr(
@@ -6024,6 +6236,118 @@ private fun NavConfigRow(
             )
         }
     }
+}
+
+@Composable
+private fun settingsPageTutorialTarget(page: SettingsPage): PageTutorialTarget {
+    val description = when (page) {
+        SettingsPage.MAIN -> tr(
+            "从搜索或分组入口进入各项设置。可编辑子页统一使用右上角保存。",
+            "Use search or grouped entries to open settings. Editable subpages use Save in the top-right.",
+        )
+        SettingsPage.APPEARANCE -> tr(
+            "切换语言、主题、字号与全局背景图片，并调整背景可见度和模糊。",
+            "Change language, theme, type size, and the global background image, including visibility and blur.",
+        )
+        SettingsPage.SUBPAGES -> tr(
+            "这里集中管理主页、日记、阅读相关入口和各功能页面的行为。",
+            "Manage Home, diary, reading-related entries, and the behavior of feature pages here.",
+        )
+        SettingsPage.HOME -> tr(
+            "选择主页模块、标题、顺序、边框与饮食按钮显示方式。",
+            "Choose Home modules, titles, order, borders, and meal-button appearance.",
+        )
+        SettingsPage.HOME_GREETING -> tr(
+            "编辑用户名和中英文问候模板；{name} 会替换为用户名。",
+            "Edit the user name and bilingual greetings; {name} is replaced with the user name.",
+        )
+        SettingsPage.BACKUP -> tr(
+            "选择自动备份目录、手动导入导出 JSON，并查看应用数据占用。",
+            "Choose an auto-backup folder, import or export JSON, and inspect app storage use.",
+        )
+        SettingsPage.SYNC -> tr(
+            "管理 WebDAV/S3 服务、同步内容与方向；下载的应用 JSON 必须手动确认恢复。",
+            "Manage WebDAV/S3 services, content, and direction; downloaded app JSON requires manual restore confirmation.",
+        )
+        SettingsPage.SYNC_DETAIL -> tr(
+            "填写单个云服务的非秘密元数据与凭据，保存前会执行边界校验。",
+            "Enter one cloud service's metadata and credentials; validation runs before saving.",
+        )
+        SettingsPage.DIARY -> tr(
+            "配置 SAF 日记/媒体目录、命名、图片、吃历和热量估算。",
+            "Configure SAF diary/media folders, naming, images, the meal calendar, and energy estimation.",
+        )
+        SettingsPage.BLOG -> tr(
+            "设置应用内浏览器主页、明暗主题和电脑网页模式。",
+            "Set the in-app browser home page, theme, and desktop-site mode.",
+        )
+        SettingsPage.THOUGHT -> tr(
+            "设置小巧思重开位置、显示密度、重点颜色与输入框高度。",
+            "Set Thoughts reopen behavior, density, highlight color, and editor height.",
+        )
+        SettingsPage.VAULT -> tr(
+            "调整收藏夹条目的最小高度；加密密码仍在收藏夹页面管理。",
+            "Adjust Vault entry height; encryption passwords remain managed on the Vault page.",
+        )
+        SettingsPage.POETRY -> tr(
+            "导入字体并调整诗词字号、行距、对齐、出处与七言换行。",
+            "Import a font and adjust poetry size, spacing, alignment, source, and seven-character wrapping.",
+        )
+        SettingsPage.RSS -> tr(
+            "调整每个订阅的文章上限和摘要显示。订阅地址在 RSS 页面维护。",
+            "Adjust the item limit and summaries per feed. Feed URLs are managed on the RSS page.",
+        )
+        SettingsPage.AI -> tr(
+            "管理文字/图片模型配置；点按编辑，长按可复制或删除。",
+            "Manage text/image model configurations; tap to edit, or long-press to copy or delete.",
+        )
+        SettingsPage.AI_DETAIL -> tr(
+            "编辑兼容接口、模型、提示词和完整 API Key；请求预览不会包含密钥。",
+            "Edit the compatible endpoint, model, prompt, and full API key; request previews omit the key.",
+        )
+        SettingsPage.NAVIGATION -> tr(
+            "选择底栏页面、默认页、名称图标和音乐可视化；拖动四点手柄排序。",
+            "Choose bottom-bar pages, default page, names, icons, and music visualization; drag four-dot handles to reorder.",
+        )
+        SettingsPage.MORE_PAGE -> tr(
+            "选择收纳到“导航”页的入口、描述和卡片顺序。",
+            "Choose entries, descriptions, and card order for the Navigation page.",
+        )
+        SettingsPage.USAGE -> tr(
+            "启用后仍需系统授予使用情况访问权限；关闭不会删除已有历史。",
+            "System usage access is still required after enabling; disabling does not delete history.",
+        )
+        SettingsPage.STEPS -> tr(
+            "启用后从 Health Connect 只读步数、距离与活动热量。",
+            "After enabling, read steps, distance, and active calories from Health Connect only.",
+        )
+        SettingsPage.ABOUT -> tr(
+            "查看版本、教学模式、更新、桌面名称与图标。页面教学可在这里关闭或重置。",
+            "View version, tutorials, updates, launcher name, and icon. Page tutorials can be disabled or reset here.",
+        )
+    }
+    return PageTutorialTarget(
+        pageId = "settings/${page.name.lowercase(Locale.ROOT)}",
+        title = pageTitle(page),
+        description = description,
+        hints = if (page != SettingsPage.MAIN && page !in setOf(
+                SettingsPage.SUBPAGES,
+                SettingsPage.BACKUP,
+                SettingsPage.SYNC,
+                SettingsPage.AI,
+                SettingsPage.ABOUT,
+            )
+        ) {
+            listOf(
+                tr(
+                    "“恢复本页默认值”只修改草稿，仍需点右上角保存。",
+                    "Reset page defaults changes only the draft; use Save in the top-right to commit it.",
+                ),
+            )
+        } else {
+            emptyList()
+        },
+    )
 }
 
 @Composable

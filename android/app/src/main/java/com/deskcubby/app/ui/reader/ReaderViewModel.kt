@@ -105,8 +105,9 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
-    fun saveTextProgress(bookId: String, paragraphIndex: Int) = viewModelScope.launch {
-        runCatching { repository.saveTextProgress(bookId, paragraphIndex) }
+    fun saveTextProgress(bookId: String, pageIndex: Int, paragraphIndex: Int) =
+        viewModelScope.launch {
+        runCatching { repository.saveTextProgress(bookId, pageIndex, paragraphIndex) }
     }
 
     fun savePdfProgress(bookId: String, pageIndex: Int) = viewModelScope.launch {

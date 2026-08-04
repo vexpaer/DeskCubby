@@ -6,6 +6,14 @@ import org.junit.Test
 
 class DiaryTextUtilsTest {
     @Test
+    fun `normalizes a multi-line daily record to the diary line ending`() {
+        assertEquals(
+            "第一行\r\n第二行\r\n第三行",
+            DiaryTextUtils.normalizeTextBlock("  第一行\r\n第二行\r第三行  ", "\r\n"),
+        )
+    }
+
+    @Test
     fun categorizedImagesIncrementWithoutOverwriting() {
         val existing = (1..9).map { "2026-07-18_早餐_${it.toString().padStart(2, '0')}.jpg" }
         val result = DiaryTextUtils.nextMediaFileName(

@@ -34,10 +34,11 @@ enum class ReaderBookType { TXT, PDF }
 
 enum class ReaderOrientation { FOLLOW_SYSTEM, PORTRAIT, LANDSCAPE }
 
-enum class ReaderBackground { WHITE, PAPER, SEPIA, GREEN, NIGHT }
+enum class ReaderBackground { WHITE, PAPER, SEPIA, GREEN, NIGHT, CUSTOM }
 
 data class ReaderPreferences(
     val background: ReaderBackground = ReaderBackground.PAPER,
+    val customBackgroundArgb: Int = 0xFFF4F0E6.toInt(),
     val fontSizeSp: Float = 19f,
     val lineHeightMultiplier: Float = 1.6f,
     val paragraphSpacingDp: Float = 10f,
@@ -52,6 +53,8 @@ data class ReaderBook(
     val addedAt: Long,
     val lastOpenedAt: Long,
     val textParagraphIndex: Int = 0,
+    /** -1 is used only while migrating a schema-v1 paragraph-only progress record. */
+    val textPageIndex: Int = 0,
     val pdfPageIndex: Int = 0,
 )
 
@@ -63,9 +66,28 @@ data class ReaderLibraryState(
 enum class ReaderStorageIssue { STATE_FILE_DAMAGED, COMMIT_FAILED }
 
 sealed interface ReaderContent {
-    data class TextBook(val paragraphs: List<String>) : ReaderContent
+    data class TextBook(
+        val pages: List<ReaderTextPage>,
+        val chapters: List<ReaderChapter>,
+    ) : ReaderContent
     data class PdfBook(val pageCount: Int) : ReaderContent
 }
+
+data class ReaderTextPage(
+    val text: String,
+    val firstParagraphIndex: Int,
+)
+
+data class ReaderChapter(
+    val title: String,
+    val pageIndex: Int,
+    val paragraphIndex: Int,
+)
+
+internal data class ReaderTextLayout(
+    val pages: List<ReaderTextPage>,
+    val chapters: List<ReaderChapter>,
+)
 
 @Singleton
 class ReaderRepository @Inject constructor(
@@ -146,7 +168,9 @@ class ReaderRepository @Inject constructor(
     suspend fun load(book: ReaderBook): ReaderContent = withContext(Dispatchers.IO) {
         val uri = Uri.parse(book.uri)
         when (book.type) {
-            ReaderBookType.TXT -> ReaderContent.TextBook(readText(uri))
+            ReaderBookType.TXT -> readText(uri).let { layout ->
+                ReaderContent.TextBook(layout.pages, layout.chapters)
+            }
             ReaderBookType.PDF -> ReaderContent.PdfBook(readPdfPageCount(uri))
         }
     }
@@ -179,8 +203,12 @@ class ReaderRepository @Inject constructor(
         book.copy(lastOpenedAt = System.currentTimeMillis())
     }
 
-    suspend fun saveTextProgress(bookId: String, paragraphIndex: Int) = updateBook(bookId) { book ->
-        book.copy(textParagraphIndex = paragraphIndex.coerceIn(0, MAX_PARAGRAPHS - 1))
+    suspend fun saveTextProgress(bookId: String, pageIndex: Int, paragraphIndex: Int) =
+        updateBook(bookId) { book ->
+        book.copy(
+            textPageIndex = pageIndex.coerceIn(0, MAX_TEXT_PAGES - 1),
+            textParagraphIndex = paragraphIndex.coerceIn(0, MAX_PARAGRAPHS - 1),
+        )
     }
 
     suspend fun savePdfProgress(bookId: String, pageIndex: Int) = updateBook(bookId) { book ->
@@ -228,7 +256,7 @@ class ReaderRepository @Inject constructor(
             }
         }
 
-    private fun readText(uri: Uri): List<String> {
+    private fun readText(uri: Uri): ReaderTextLayout {
         val bytes = resolver.openInputStream(uri)?.use { input ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             var total = 0
@@ -249,7 +277,7 @@ class ReaderRepository @Inject constructor(
             .take(MAX_PARAGRAPHS + 1)
             .toList()
         require(paragraphs.size <= MAX_PARAGRAPHS) { "TXT 段落数量过多" }
-        return paragraphs.ifEmpty { listOf("") }
+        return paginateReaderText(paragraphs.ifEmpty { listOf("") })
     }
 
     private fun readPdfPageCount(uri: Uri): Int {
@@ -372,6 +400,7 @@ class ReaderRepository @Inject constructor(
         internal const val MAX_STATE_BYTES = 2 * 1024 * 1024
         private const val MAX_TEXT_BYTES = 32 * 1024 * 1024
         private const val MAX_PARAGRAPHS = 250_000
+        internal const val MAX_TEXT_PAGES = 50_000
         private const val MAX_PDF_PAGES = 20_000
         private const val MAX_PDF_WIDTH_PX = 2_048
         private const val MAX_PDF_PIXELS = 8_000_000L
@@ -379,11 +408,130 @@ class ReaderRepository @Inject constructor(
 }
 
 internal fun normalizeReaderPreferences(value: ReaderPreferences): ReaderPreferences = value.copy(
+    customBackgroundArgb = value.customBackgroundArgb or 0xFF000000.toInt(),
     fontSizeSp = value.fontSizeSp.takeIf(Float::isFinite)?.coerceIn(12f, 38f) ?: 19f,
     lineHeightMultiplier = value.lineHeightMultiplier.takeIf(Float::isFinite)
         ?.coerceIn(1f, 2.4f) ?: 1.6f,
     paragraphSpacingDp = value.paragraphSpacingDp.takeIf(Float::isFinite)
         ?.coerceIn(0f, 36f) ?: 10f,
+)
+
+internal const val READER_TEXT_PAGE_TARGET_CHARS = 1_800
+
+/**
+ * Builds deterministic logical TXT pages and a best-effort chapter index without changing the
+ * original file. Chapter headings start a fresh logical page so drawer jumps are stable even when
+ * font size or device width changes.
+ */
+internal fun paginateReaderText(
+    paragraphs: List<String>,
+    targetChars: Int = READER_TEXT_PAGE_TARGET_CHARS,
+): ReaderTextLayout {
+    require(targetChars in 200..20_000)
+    val source = paragraphs.ifEmpty { listOf("") }
+    val pages = ArrayList<ReaderTextPage>()
+    val chapters = ArrayList<ReaderChapter>()
+    val buffer = StringBuilder(targetChars + 128)
+    var firstParagraphIndex = 0
+
+    fun flush() {
+        if (buffer.isEmpty()) return
+        check(pages.size < ReaderRepository.MAX_TEXT_PAGES) { "TXT logical page count is too large" }
+        pages += ReaderTextPage(buffer.toString(), firstParagraphIndex)
+        buffer.setLength(0)
+    }
+
+    source.forEachIndexed { paragraphIndex, rawParagraph ->
+        val paragraph = rawParagraph.trimEnd()
+        val chapterTitle = paragraph.trim().takeIf(::isReaderChapterHeading)
+        if (chapterTitle != null) {
+            flush()
+            if (chapters.size < MAX_READER_CHAPTERS) {
+                chapters += ReaderChapter(
+                    title = chapterTitle.take(MAX_READER_CHAPTER_TITLE_CHARS),
+                    pageIndex = pages.size,
+                    paragraphIndex = paragraphIndex,
+                )
+            }
+        }
+
+        var remaining = paragraph
+        var firstChunk = true
+        do {
+            if (buffer.isEmpty()) firstParagraphIndex = paragraphIndex
+            val separatorLength = if (buffer.isEmpty()) 0 else 2
+            val available = targetChars - buffer.length - separatorLength
+            if (available <= 0 || remaining.length > available && buffer.isNotEmpty()) {
+                flush()
+                continue
+            }
+            if (buffer.isNotEmpty()) buffer.append("\n\n")
+            if (remaining.length <= targetChars) {
+                buffer.append(remaining)
+                remaining = ""
+            } else {
+                val splitAt = safeReaderTextBoundary(remaining, targetChars)
+                buffer.append(remaining.substring(0, splitAt))
+                remaining = remaining.substring(splitAt).trimStart()
+                flush()
+            }
+            firstChunk = false
+        } while (remaining.isNotEmpty() || firstChunk)
+    }
+    flush()
+    if (pages.isEmpty()) pages += ReaderTextPage("", 0)
+    return ReaderTextLayout(pages, chapters)
+}
+
+internal fun textPageForParagraph(
+    pages: List<ReaderTextPage>,
+    paragraphIndex: Int,
+): Int {
+    if (pages.isEmpty()) return 0
+    val target = paragraphIndex.coerceAtLeast(0)
+    val match = pages.binarySearchBy(target) { it.firstParagraphIndex }
+    return if (match >= 0) {
+        // A single long paragraph can span several logical pages; resume at its first page when
+        // migrating schema-v1 progress because the old state had no finer offset.
+        pages.indexOfFirst { it.firstParagraphIndex == target }.coerceAtLeast(0)
+    } else {
+        (-match - 2).coerceIn(0, pages.lastIndex)
+    }
+}
+
+internal fun isReaderChapterHeading(raw: String): Boolean {
+    val value = raw.trim()
+    if (value.isEmpty() || value.length > MAX_READER_CHAPTER_TITLE_CHARS) return false
+    return CHINESE_READER_CHAPTER_REGEX.matches(value) ||
+        ENGLISH_READER_CHAPTER_REGEX.matches(value) ||
+        NUMBERED_READER_CHAPTER_REGEX.matches(value) ||
+        SPECIAL_READER_CHAPTER_REGEX.matches(value)
+}
+
+private fun safeReaderTextBoundary(value: String, requested: Int): Int {
+    var boundary = requested.coerceIn(1, value.length)
+    if (boundary < value.length && Character.isLowSurrogate(value[boundary]) &&
+        Character.isHighSurrogate(value[boundary - 1])
+    ) {
+        boundary -= 1
+    }
+    return boundary.coerceAtLeast(1)
+}
+
+private const val MAX_READER_CHAPTERS = 20_000
+private const val MAX_READER_CHAPTER_TITLE_CHARS = 240
+private val CHINESE_READER_CHAPTER_REGEX = Regex(
+    "^(?:正文\\s*)?第[0-9０-９零〇○一二三四五六七八九十百千万两]+[章节卷回部篇集](?:\\s+|[:：、.-]?)[^\\n]*$",
+)
+private val ENGLISH_READER_CHAPTER_REGEX = Regex(
+    "^(?:chapter|part|book)\\s+(?:[0-9０-９]+|[ivxlcdm]+)(?:\\s*[:：.\\-]?\\s*.*)?$",
+    RegexOption.IGNORE_CASE,
+)
+private val NUMBERED_READER_CHAPTER_REGEX = Regex(
+    "^[0-9０-９]{1,5}[.、]\\s*\\S.{0,200}$",
+)
+private val SPECIAL_READER_CHAPTER_REGEX = Regex(
+    "^(?:序章|序言|前言|楔子|引子|终章|尾声|后记|番外(?:篇)?)(?:\\s*[:：.、\\-]?\\s*.*)?$",
 )
 
 internal fun decodeReaderText(bytes: ByteArray): String {
@@ -408,7 +556,7 @@ internal fun decodeReaderText(bytes: ByteArray): String {
 }
 
 internal object ReaderStateCodec {
-    private const val SCHEMA_VERSION = 1
+    private const val SCHEMA_VERSION = 2
     private const val MAX_BOOKS = 500
     private val idPattern = Regex("[A-Za-z0-9._:-]{1,256}")
 
@@ -418,6 +566,7 @@ internal object ReaderStateCodec {
             "preferences",
             JSONObject()
                 .put("background", value.preferences.background.name)
+                .put("customBackgroundArgb", value.preferences.customBackgroundArgb)
                 .put("fontSizeSp", value.preferences.fontSizeSp.toDouble())
                 .put("lineHeightMultiplier", value.preferences.lineHeightMultiplier.toDouble())
                 .put("paragraphSpacingDp", value.preferences.paragraphSpacingDp.toDouble())
@@ -436,6 +585,7 @@ internal object ReaderStateCodec {
                             .put("addedAt", book.addedAt)
                             .put("lastOpenedAt", book.lastOpenedAt)
                             .put("textParagraphIndex", book.textParagraphIndex)
+                            .put("textPageIndex", book.textPageIndex)
                             .put("pdfPageIndex", book.pdfPageIndex),
                     )
                 }
@@ -446,7 +596,8 @@ internal object ReaderStateCodec {
     fun decode(raw: String): ReaderLibraryState {
         require(raw.toByteArray(Charsets.UTF_8).size <= ReaderRepository.MAX_STATE_BYTES)
         val root = JSONObject(raw)
-        require(root.getInt("schemaVersion") == SCHEMA_VERSION)
+        val schemaVersion = root.getInt("schemaVersion")
+        require(schemaVersion in 1..SCHEMA_VERSION)
         val preferencesJson = root.getJSONObject("preferences")
         val preferences = normalizeReaderPreferences(
             ReaderPreferences(
@@ -454,6 +605,11 @@ internal object ReaderStateCodec {
                     preferencesJson.getString("background"),
                     ReaderBackground.PAPER,
                 ),
+                customBackgroundArgb = if (schemaVersion >= 2) {
+                    preferencesJson.getInt("customBackgroundArgb")
+                } else {
+                    ReaderPreferences().customBackgroundArgb
+                },
                 fontSizeSp = preferencesJson.getDouble("fontSizeSp").toFloat(),
                 lineHeightMultiplier = preferencesJson.getDouble("lineHeightMultiplier").toFloat(),
                 paragraphSpacingDp = preferencesJson.getDouble("paragraphSpacingDp").toFloat(),
@@ -485,6 +641,12 @@ internal object ReaderStateCodec {
                         addedAt = item.getLong("addedAt").coerceAtLeast(0L),
                         lastOpenedAt = item.getLong("lastOpenedAt").coerceAtLeast(0L),
                         textParagraphIndex = item.optInt("textParagraphIndex", 0).coerceAtLeast(0),
+                        textPageIndex = if (schemaVersion >= 2) {
+                            item.getInt("textPageIndex")
+                                .coerceIn(-1, ReaderRepository.MAX_TEXT_PAGES - 1)
+                        } else {
+                            -1
+                        },
                         pdfPageIndex = item.optInt("pdfPageIndex", 0).coerceAtLeast(0),
                     ),
                 )

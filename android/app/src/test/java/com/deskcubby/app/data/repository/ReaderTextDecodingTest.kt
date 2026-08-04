@@ -2,6 +2,8 @@ package com.deskcubby.app.data.repository
 
 import java.nio.charset.Charset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReaderTextDecodingTest {
@@ -36,5 +38,53 @@ class ReaderTextDecodingTest {
         assertEquals(19f, normalized.fontSizeSp)
         assertEquals(1.6f, normalized.lineHeightMultiplier)
         assertEquals(36f, normalized.paragraphSpacingDp)
+        assertEquals(0xFF345678.toInt(), normalizeReaderPreferences(
+            ReaderPreferences(customBackgroundArgb = 0x00345678),
+        ).customBackgroundArgb)
+    }
+
+    @Test
+    fun `TXT pagination detects chapters and gives headings stable page starts`() {
+        val layout = paginateReaderText(
+            paragraphs = listOf(
+                "前言",
+                "简短介绍",
+                "第一章 出发",
+                "正文".repeat(260),
+                "Chapter 2: Return",
+                "结尾".repeat(80),
+            ),
+            targetChars = 500,
+        )
+
+        assertEquals(listOf("前言", "第一章 出发", "Chapter 2: Return"), layout.chapters.map { it.title })
+        layout.chapters.forEach { chapter ->
+            assertTrue(layout.pages[chapter.pageIndex].text.startsWith(chapter.title))
+        }
+        assertTrue(layout.pages.size > layout.chapters.size)
+        assertEquals(layout, paginateReaderText(
+            listOf("前言", "简短介绍", "第一章 出发", "正文".repeat(260), "Chapter 2: Return", "结尾".repeat(80)),
+            targetChars = 500,
+        ))
+    }
+
+    @Test
+    fun `logical pages never split a surrogate pair and legacy progress maps to paragraph start`() {
+        val emojiParagraph = "😀".repeat(240)
+        val layout = paginateReaderText(
+            paragraphs = listOf("第1章", emojiParagraph, "第二段"),
+            targetChars = 200,
+        )
+
+        layout.pages.forEach { page ->
+            assertFalse(page.text.firstOrNull()?.let(Character::isLowSurrogate) ?: false)
+            assertFalse(page.text.lastOrNull()?.let(Character::isHighSurrogate) ?: false)
+        }
+        val emojiPages = layout.pages.indices.filter {
+            layout.pages[it].firstParagraphIndex == 1
+        }
+        assertTrue(emojiPages.size > 1)
+        assertEquals(emojiPages.first(), textPageForParagraph(layout.pages, 1))
+        assertEquals(layout.pages.lastIndex, textPageForParagraph(layout.pages, 999))
     }
 }

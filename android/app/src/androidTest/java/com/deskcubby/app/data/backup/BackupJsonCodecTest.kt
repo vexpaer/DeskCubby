@@ -53,7 +53,7 @@ import org.json.JSONObject
 @RunWith(AndroidJUnit4::class)
 class BackupJsonCodecTest {
     @Test
-    fun versionTwentyFourRoundTripPreservesEncryptedVaultGamesUsageWidgetsAndNewSettings() {
+    fun versionTwentyFiveRoundTripPreservesEncryptedVaultGamesUsageWidgetsAndNewSettings() {
         val iv = Base64.getEncoder().encodeToString(ByteArray(12) { 2 })
         val cipher = Base64.getEncoder().encodeToString(ByteArray(32) { 3 })
         val vault = VaultEncryptedBackup(
@@ -151,6 +151,11 @@ class BackupJsonCodecTest {
                 musicVisualizerMinFrequencyHz = 180,
                 musicVisualizerMaxFrequencyHz = 9_500,
                 game2048AnimationSpeed = Game2048AnimationSpeed.FAST,
+                backgroundImageUri = "content://images/app-background",
+                backgroundImageOpacity = 0.7f,
+                backgroundImageBlurDp = 18f,
+                tutorialModeEnabled = false,
+                tutorialAcknowledgedPages = setOf("page/home", "reader/txt"),
             ),
             thoughts = emptyList(),
             favorites = emptyList(),
@@ -162,7 +167,7 @@ class BackupJsonCodecTest {
 
         val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
 
-        assertEquals(24, decoded.formatVersion)
+        assertEquals(25, decoded.formatVersion)
         assertEquals(vault, decoded.vault)
         assertEquals(gameStates, decoded.gameStates)
         assertEquals(gameStatistics, decoded.gameStatistics)
@@ -177,6 +182,74 @@ class BackupJsonCodecTest {
         assertEquals(180, decoded.settings.musicVisualizerMinFrequencyHz)
         assertEquals(9_500, decoded.settings.musicVisualizerMaxFrequencyHz)
         assertEquals(Game2048AnimationSpeed.FAST, decoded.settings.game2048AnimationSpeed)
+        assertEquals("content://images/app-background", decoded.settings.backgroundImageUri)
+        assertEquals(0.7f, decoded.settings.backgroundImageOpacity)
+        assertEquals(18f, decoded.settings.backgroundImageBlurDp)
+        assertFalse(decoded.settings.tutorialModeEnabled)
+        // Per-page acknowledgements are device-local and deliberately excluded from backups.
+        assertEquals(emptySet<String>(), decoded.settings.tutorialAcknowledgedPages)
+    }
+
+    @Test
+    fun versionTwentyFourDefaultsBackgroundAndTutorialFields() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 24,
+                    settings = AppSettings(
+                        backgroundImageUri = "content://images/app-background",
+                        backgroundImageOpacity = 0.8f,
+                        backgroundImageBlurDp = 22f,
+                        tutorialModeEnabled = false,
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        ).apply {
+            put("version", 24)
+            getJSONObject("settings").apply {
+                remove("backgroundImageUri")
+                remove("backgroundImageOpacity")
+                remove("backgroundImageBlurDp")
+                remove("tutorialModeEnabled")
+            }
+        }
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+
+        assertEquals(24, decoded.formatVersion)
+        assertNull(decoded.settings.backgroundImageUri)
+        assertEquals(AppSettings().backgroundImageOpacity, decoded.settings.backgroundImageOpacity)
+        assertEquals(AppSettings().backgroundImageBlurDp, decoded.settings.backgroundImageBlurDp)
+        assertEquals(AppSettings().tutorialModeEnabled, decoded.settings.tutorialModeEnabled)
+    }
+
+    @Test
+    fun versionTwentyFiveRejectsInvalidBackgroundFields() {
+        fun currentRoot() = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 25,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put("backgroundImageUri", "file:///private/image.jpg")
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put("backgroundImageOpacity", 1.01)
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put("backgroundImageBlurDp", -0.01)
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").remove("tutorialModeEnabled")
+        })
     }
 
     @Test
@@ -236,7 +309,15 @@ class BackupJsonCodecTest {
                     favorites = emptyList(),
                 ),
             ),
-        )
+        ).apply {
+            put("version", 24)
+            getJSONObject("settings").apply {
+                remove("backgroundImageUri")
+                remove("backgroundImageOpacity")
+                remove("backgroundImageBlurDp")
+                remove("tutorialModeEnabled")
+            }
+        }
 
         assertDecodeRejected(currentRoot().apply {
             getJSONObject("settings").put("musicVisualizerFrequencyMode", "FIXED")

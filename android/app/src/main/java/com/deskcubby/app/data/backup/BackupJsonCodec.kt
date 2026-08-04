@@ -35,6 +35,8 @@ import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MAX_APP_BACKGROUND_BLUR_DP
+import com.deskcubby.app.data.model.MAX_APP_BACKGROUND_OPACITY
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_CELLS
 import com.deskcubby.app.data.model.MAX_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
@@ -42,6 +44,8 @@ import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MAX_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MIN_APP_BACKGROUND_BLUR_DP
+import com.deskcubby.app.data.model.MIN_APP_BACKGROUND_OPACITY
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_CELLS
 import com.deskcubby.app.data.model.MIN_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
@@ -71,7 +75,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 24,
+    val formatVersion: Int = 25,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -106,7 +110,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 24
+    const val FORMAT_VERSION: Int = 25
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -313,6 +317,10 @@ object BackupJsonCodec {
         .put("themeSecondaryColorsArgb", settings.themeSecondaryColorsArgb.toJsonIntArray())
         .put("fontScale", settings.fontScale)
         .put("compactMode", settings.compactMode)
+        .putNullable("backgroundImageUri", settings.backgroundImageUri)
+        .put("backgroundImageOpacity", settings.backgroundImageOpacity)
+        .put("backgroundImageBlurDp", settings.backgroundImageBlurDp)
+        .put("tutorialModeEnabled", settings.tutorialModeEnabled)
         .put("useChineseLauncherName", settings.useChineseLauncherName)
         .put("launcherIcon", settings.launcherIcon.name)
         // Credentials are device-local. Imports must be explicitly re-enabled after review.
@@ -774,6 +782,40 @@ object BackupJsonCodec {
                 json.requiredBoolean("compactMode")
             } else {
                 defaults.compactMode
+            },
+            backgroundImageUri = if (version >= 25) {
+                json.requiredNullableString("backgroundImageUri")
+                    ?.requireMaxLength("backgroundImageUri", MAX_URL_CHARS)
+                    ?.also { uri -> require(uri.startsWith("content://")) {
+                        "backgroundImageUri must be a content URI"
+                    } }
+            } else {
+                defaults.backgroundImageUri
+            },
+            backgroundImageOpacity = if (version >= 25) {
+                json.requiredFiniteNumber("backgroundImageOpacity").also { value ->
+                    require(
+                        value in MIN_APP_BACKGROUND_OPACITY.toDouble()..
+                            MAX_APP_BACKGROUND_OPACITY.toDouble(),
+                    ) { "backgroundImageOpacity is out of range" }
+                }.toFloat()
+            } else {
+                defaults.backgroundImageOpacity
+            },
+            backgroundImageBlurDp = if (version >= 25) {
+                json.requiredFiniteNumber("backgroundImageBlurDp").also { value ->
+                    require(
+                        value in MIN_APP_BACKGROUND_BLUR_DP.toDouble()..
+                            MAX_APP_BACKGROUND_BLUR_DP.toDouble(),
+                    ) { "backgroundImageBlurDp is out of range" }
+                }.toFloat()
+            } else {
+                defaults.backgroundImageBlurDp
+            },
+            tutorialModeEnabled = if (version >= 25) {
+                json.requiredBoolean("tutorialModeEnabled")
+            } else {
+                defaults.tutorialModeEnabled
             },
             useChineseLauncherName = if (version >= 14) {
                 json.requiredBoolean("useChineseLauncherName")

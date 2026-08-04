@@ -7,6 +7,7 @@ import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
@@ -444,6 +445,29 @@ class SettingsRepositoryTest {
         assertEquals(1f, normalizeFontScale(Float.NaN), 0f)
         assertEquals(1f, normalizeFontScale(Float.POSITIVE_INFINITY), 0f)
         assertEquals(1f, normalizeFontScale(Float.NEGATIVE_INFINITY), 0f)
+    }
+
+    @Test
+    fun backgroundAndTutorialValuesAreBoundedAndNormalized() {
+        assertEquals(0f, normalizeAppBackgroundOpacity(-1f), 0f)
+        assertEquals(1f, normalizeAppBackgroundOpacity(2f), 0f)
+        assertEquals(0.45f, normalizeAppBackgroundOpacity(Float.NaN), 0f)
+        assertEquals(0f, normalizeAppBackgroundBlur(-1f), 0f)
+        assertEquals(40f, normalizeAppBackgroundBlur(99f), 0f)
+        assertEquals(0f, normalizeAppBackgroundBlur(Float.POSITIVE_INFINITY), 0f)
+        assertEquals(
+            setOf("page/home", "reader/txt"),
+            normalizeTutorialPageIds(listOf(" page/home ", "reader/txt", "bad id", "page/home")),
+        )
+    }
+
+    @Test
+    fun dailyEventTemplatesPreserveNormalizedLineBreaks() {
+        val normalized = normalizeDailyEventTemplates(
+            listOf(DailyEventTemplate(id = "multi", text = "第一行\r\n第二行\r第三行")),
+        ).single()
+
+        assertEquals("第一行\n第二行\n第三行", normalized.text)
     }
 
     @Test

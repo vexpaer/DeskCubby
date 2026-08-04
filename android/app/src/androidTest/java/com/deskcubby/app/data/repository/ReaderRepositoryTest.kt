@@ -25,7 +25,8 @@ class ReaderRepositoryTest {
         }
         try {
             val expected = ReaderPreferences(
-                background = ReaderBackground.NIGHT,
+                background = ReaderBackground.CUSTOM,
+                customBackgroundArgb = 0xFF314159.toInt(),
                 fontSizeSp = 26f,
                 lineHeightMultiplier = 1.8f,
                 paragraphSpacingDp = 16f,
@@ -43,7 +44,7 @@ class ReaderRepositoryTest {
             )
             assertTrue(stored.isFile)
             assertTrue(stored.length() in 1..ReaderRepository.MAX_STATE_BYTES.toLong())
-            assertEquals(1, JSONObject(stored.readText(Charsets.UTF_8)).getInt("schemaVersion"))
+            assertEquals(2, JSONObject(stored.readText(Charsets.UTF_8)).getInt("schemaVersion"))
 
             val reloaded = ReaderRepository(isolatedContext)
             assertEquals(ReaderPreferences(), reloaded.state.value.preferences)
@@ -79,6 +80,36 @@ class ReaderRepositoryTest {
         }
         val failed = runCatching { ReaderStateCodec.decode(duplicate.toString()) }.isFailure
         assertTrue(failed)
+    }
+
+    @Test
+    fun schemaOneReaderStateMigratesParagraphProgressAndDefaultCustomColor() {
+        val current = ReaderLibraryState(
+            books = listOf(
+                ReaderBook(
+                    id = "legacy-book",
+                    uri = "content://library/legacy.txt",
+                    title = "Legacy",
+                    type = ReaderBookType.TXT,
+                    addedAt = 1L,
+                    lastOpenedAt = 2L,
+                    textParagraphIndex = 37,
+                    textPageIndex = 9,
+                ),
+            ),
+            preferences = ReaderPreferences(background = ReaderBackground.SEPIA),
+        )
+        val legacy = JSONObject(ReaderStateCodec.encode(current)).apply {
+            put("schemaVersion", 1)
+            getJSONObject("preferences").remove("customBackgroundArgb")
+            getJSONArray("books").getJSONObject(0).remove("textPageIndex")
+        }
+
+        val decoded = ReaderStateCodec.decode(legacy.toString())
+
+        assertEquals(-1, decoded.books.single().textPageIndex)
+        assertEquals(37, decoded.books.single().textParagraphIndex)
+        assertEquals(ReaderPreferences().customBackgroundArgb, decoded.preferences.customBackgroundArgb)
     }
 
     @Test

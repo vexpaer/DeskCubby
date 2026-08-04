@@ -98,6 +98,7 @@ import com.deskcubby.app.games.Game2048
 import com.deskcubby.app.games.SnakeGame
 import com.deskcubby.app.games.TetrisGame
 import com.deskcubby.app.data.model.Game2048AnimationSpeed
+import com.deskcubby.app.ui.components.PageTutorialTarget
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.tr
 import kotlin.math.abs
@@ -111,6 +112,7 @@ fun GamesScreen(
     padding: PaddingValues,
     viewModel: GamesViewModel,
     onGameOpenChanged: (Boolean) -> Unit = {},
+    onTutorialTargetChanged: (PageTutorialTarget?) -> Unit = {},
 ) {
     var launch by rememberSaveable(
         stateSaver = Saver(
@@ -132,8 +134,15 @@ fun GamesScreen(
         }
     }
     val gameOpen = launch != null
+    val tutorialTarget = gameTutorialTarget(launch)
     LaunchedEffect(gameOpen) { onGameOpenChanged(gameOpen) }
-    DisposableEffect(Unit) { onDispose { onGameOpenChanged(false) } }
+    LaunchedEffect(tutorialTarget) { onTutorialTargetChanged(tutorialTarget) }
+    DisposableEffect(Unit) {
+        onDispose {
+            onGameOpenChanged(false)
+            onTutorialTargetChanged(null)
+        }
+    }
     Box(
         Modifier
             .fillMaxSize()
@@ -200,6 +209,61 @@ fun GamesScreen(
 }
 
 private data class GameLaunch(val gameId: String, val resume: Boolean)
+
+@Composable
+private fun gameTutorialTarget(launch: GameLaunch?): PageTutorialTarget {
+    if (launch == null) {
+        return PageTutorialTarget(
+            pageId = "games/list",
+            title = tr("小游戏", "Mini games"),
+            description = tr("选择游戏开始新局；存在存档时也可继续上次进度。", "Choose a game to start a new run, or resume when a save is available."),
+            hints = listOf(
+                tr("新游戏会替换对应游戏的旧存档。", "Starting fresh replaces that game's previous save."),
+                tr("游戏内返回会保存支持续玩的当前局。", "Leaving a resumable game saves the current run."),
+            ),
+        )
+    }
+    val (title, description, hints) = when (launch.gameId) {
+        GamesViewModel.GAME_2048,
+        GamesViewModel.GAME_2048_5,
+        GamesViewModel.GAME_2048_6,
+        -> Triple(
+            "2048",
+            tr("向四个方向滑动，让相同数字合并；无法移动时游戏结束。", "Swipe in four directions to merge matching tiles; the run ends when no move remains."),
+            listOf(tr("顶部可撤销一步，也可调节动画节奏。", "Use the top controls to undo one move or adjust animation speed.")),
+        )
+        GamesViewModel.GAME_SNAKE -> Triple(
+            tr("贪吃蛇", "Snake"),
+            tr("用方向按钮或手势控制蛇，吃到食物会变长；避免撞墙和自己。", "Use direction controls or gestures, eat food to grow, and avoid walls and your own body."),
+            listOf(tr("暂停后可安全离开，继续游戏会恢复当前局。", "Pause before leaving; Resume restores the current run.")),
+        )
+        GamesViewModel.GAME_TETRIS -> Triple(
+            tr("俄罗斯方块", "Tetris"),
+            tr("移动、旋转并落下方块，填满一整行即可消除。", "Move, rotate, and drop pieces; complete a row to clear it."),
+            listOf(tr("使用快速下落提高节奏，暂停可暂存当前局面。", "Use fast drop for pace; pausing preserves the current board.")),
+        )
+        GamesViewModel.GAME_MINESWEEPER -> Triple(
+            tr("扫雷", "Minesweeper"),
+            tr("点按翻开方格，长按标记地雷；数字表示周围地雷数量。", "Tap to reveal, long-press to flag mines; each number counts nearby mines."),
+            listOf(tr("先从空白区域扩展，避免直接猜测。", "Expand from clear areas before resorting to guesses.")),
+        )
+        GamesViewModel.GAME_SPIDER -> Triple(
+            tr("蜘蛛纸牌", "Spider Solitaire"),
+            tr("按降序移动牌列；同花色从 K 到 A 的完整序列会自动收走。", "Build descending stacks; a same-suit K-to-A sequence is removed automatically."),
+            listOf(
+                tr("点牌堆向每列发牌；所有列都必须至少有一张牌。", "Tap the stock to deal to every column; no column may be empty."),
+                tr("重开按钮会先确认，确认后当前进度不可恢复。", "Restart asks for confirmation because the current run cannot be restored afterward."),
+            ),
+        )
+        else -> Triple(tr("小游戏", "Mini game"), tr("按照页面中的控制开始游戏。", "Use the controls on this page to play."), emptyList())
+    }
+    return PageTutorialTarget(
+        pageId = "games/${launch.gameId}",
+        title = title,
+        description = description,
+        hints = hints,
+    )
+}
 
 // ---------------------------------------------------------------------------------------------
 // Game list

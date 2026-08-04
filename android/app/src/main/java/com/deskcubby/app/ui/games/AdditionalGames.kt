@@ -356,6 +356,7 @@ internal fun SpiderSolitairePage(
     var frame by remember { mutableIntStateOf(0) }
     var selected by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var scoreRecorded by remember { mutableStateOf(false) }
+    var showNewGameConfirmation by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (engine == null) {
@@ -431,14 +432,9 @@ internal fun SpiderSolitairePage(
                 Spacer(Modifier.width(4.dp))
                 Text(tr("发牌 ${current?.stockDealsRemaining ?: 0}", "Deal ${current?.stockDealsRemaining ?: 0}"))
             }
-            IconButton(onClick = {
-                current?.abandonWithResult()?.let(::applyAction)
-                engine = SpiderSolitaireGame()
-                selected = null
-                scoreRecorded = false
-                frame++
-                viewModel.clearSave(gameId)
-            }) { Icon(Icons.Outlined.Refresh, tr("新游戏", "New game")) }
+            IconButton(onClick = { showNewGameConfirmation = true }) {
+                Icon(Icons.Outlined.Refresh, tr("新游戏", "New game"))
+            }
         }
 
         if (current == null) {
@@ -488,6 +484,41 @@ internal fun SpiderSolitairePage(
                 }
             }
         }
+    }
+
+    if (showNewGameConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showNewGameConfirmation = false },
+            title = { Text(tr("重开蜘蛛纸牌？", "Restart Spider?")) },
+            text = {
+                Text(
+                    tr(
+                        "当前牌局进度会被放弃，并立即重新发牌。此操作无法撤回。",
+                        "The current deal will be abandoned and a new one dealt immediately. This cannot be undone.",
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        current?.abandonWithResult()?.let(::applyAction)
+                        engine = SpiderSolitaireGame()
+                        selected = null
+                        scoreRecorded = false
+                        frame++
+                        viewModel.clearSave(gameId)
+                        showNewGameConfirmation = false
+                    },
+                ) {
+                    Text(tr("确认重开", "Restart"), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNewGameConfirmation = false }) {
+                    Text(tr("取消", "Cancel"))
+                }
+            },
+        )
     }
 
     if (current?.isWon == true) {

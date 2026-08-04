@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.deskcubby.app.takeCodePoints
 import com.deskcubby.app.data.model.AppSettings
@@ -43,12 +44,16 @@ import com.deskcubby.app.data.model.MIN_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MAX_APP_BACKGROUND_BLUR_DP
+import com.deskcubby.app.data.model.MAX_APP_BACKGROUND_OPACITY
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_CELLS
 import com.deskcubby.app.data.model.MAX_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
+import com.deskcubby.app.data.model.MIN_APP_BACKGROUND_BLUR_DP
+import com.deskcubby.app.data.model.MIN_APP_BACKGROUND_OPACITY
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_CELLS
 import com.deskcubby.app.data.model.MIN_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
@@ -94,6 +99,11 @@ class SettingsRepository @Inject constructor(
         val themeSecondaryColorsArgb = stringPreferencesKey("theme_secondary_colors_argb")
         val fontScale = floatPreferencesKey("font_scale")
         val compactMode = booleanPreferencesKey("compact_mode")
+        val backgroundImageUri = stringPreferencesKey("background_image_uri")
+        val backgroundImageOpacity = floatPreferencesKey("background_image_opacity")
+        val backgroundImageBlurDp = floatPreferencesKey("background_image_blur_dp")
+        val tutorialModeEnabled = booleanPreferencesKey("tutorial_mode_enabled")
+        val tutorialAcknowledgedPages = stringSetPreferencesKey("tutorial_acknowledged_pages")
         val useChineseLauncherName = booleanPreferencesKey("use_chinese_launcher_name")
         val launcherIcon = stringPreferencesKey("launcher_icon")
         val backupTreeUri = stringPreferencesKey("backup_tree_uri")
@@ -229,6 +239,21 @@ class SettingsRepository @Inject constructor(
             ),
             fontScale = normalizeFontScale(prefs[Keys.fontScale], defaults.fontScale),
             compactMode = prefs[Keys.compactMode] ?: defaults.compactMode,
+            backgroundImageUri = prefs[Keys.backgroundImageUri]
+                ?.takeIf(::hasPersistedReadAccess),
+            backgroundImageOpacity = normalizeAppBackgroundOpacity(
+                prefs[Keys.backgroundImageOpacity],
+                defaults.backgroundImageOpacity,
+            ),
+            backgroundImageBlurDp = normalizeAppBackgroundBlur(
+                prefs[Keys.backgroundImageBlurDp],
+                defaults.backgroundImageBlurDp,
+            ),
+            tutorialModeEnabled = prefs[Keys.tutorialModeEnabled]
+                ?: defaults.tutorialModeEnabled,
+            tutorialAcknowledgedPages = normalizeTutorialPageIds(
+                prefs[Keys.tutorialAcknowledgedPages].orEmpty(),
+            ),
             useChineseLauncherName = prefs[Keys.useChineseLauncherName]
                 ?: defaults.useChineseLauncherName,
             launcherIcon = prefs[Keys.launcherIcon].enumValueOr(defaults.launcherIcon),
@@ -401,6 +426,40 @@ class SettingsRepository @Inject constructor(
     )
     suspend fun setFontScale(value: Float) = set(Keys.fontScale, normalizeFontScale(value))
     suspend fun setCompactMode(value: Boolean) = set(Keys.compactMode, value)
+    suspend fun setAppearanceSettings(
+        visualStyle: VisualStyle,
+        darkMode: DarkMode,
+        appLanguage: AppLanguage,
+        themeColorArgb: Int,
+        themeSecondaryColorsArgb: List<Int>,
+        fontScale: Float,
+        compactMode: Boolean,
+        backgroundImageUri: String?,
+        backgroundImageOpacity: Float,
+        backgroundImageBlurDp: Float,
+    ) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.visualStyle] = visualStyle.name
+            prefs[Keys.darkMode] = darkMode.name
+            prefs[Keys.appLanguage] = appLanguage.name
+            prefs[Keys.themeColorArgb] = opaqueArgb(themeColorArgb)
+            prefs[Keys.themeSecondaryColorsArgb] = encodeThemeSecondaryColors(
+                normalizeThemeSecondaryColors(themeSecondaryColorsArgb),
+            )
+            prefs[Keys.fontScale] = normalizeFontScale(fontScale)
+            prefs[Keys.compactMode] = compactMode
+            prefs.setOrRemove(
+                Keys.backgroundImageUri,
+                backgroundImageUri?.takeIf(::hasPersistedReadAccess),
+            )
+            prefs[Keys.backgroundImageOpacity] = normalizeAppBackgroundOpacity(
+                backgroundImageOpacity,
+            )
+            prefs[Keys.backgroundImageBlurDp] = normalizeAppBackgroundBlur(
+                backgroundImageBlurDp,
+            )
+        }
+    }
     suspend fun setUseChineseLauncherName(value: Boolean) = set(Keys.useChineseLauncherName, value)
     suspend fun setLauncherIcon(value: LauncherIcon) = set(Keys.launcherIcon, value.name)
     suspend fun setBackupTreeUri(value: String?) {
@@ -565,6 +624,18 @@ class SettingsRepository @Inject constructor(
     suspend fun setUsageTrackingEnabled(value: Boolean) = set(Keys.usageTrackingEnabled, value)
     suspend fun setStepTrackingEnabled(value: Boolean) = set(Keys.stepTrackingEnabled, value)
     suspend fun acknowledgeNavigationIntro() = set(Keys.navigationIntroAcknowledged, true)
+    suspend fun setTutorialModeEnabled(value: Boolean) = set(Keys.tutorialModeEnabled, value)
+    suspend fun acknowledgeTutorialPage(pageId: String) {
+        val normalized = normalizeTutorialPageIds(listOf(pageId)).firstOrNull() ?: return
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.tutorialAcknowledgedPages] = normalizeTutorialPageIds(
+                prefs[Keys.tutorialAcknowledgedPages].orEmpty() + normalized,
+            )
+        }
+    }
+    suspend fun resetTutorialPages() {
+        context.settingsDataStore.edit { prefs -> prefs.remove(Keys.tutorialAcknowledgedPages) }
+    }
     suspend fun setDefaultPage(value: NavItemId) = set(Keys.defaultPage, value.name)
     suspend fun setBottomNavShowLabels(value: Boolean) = set(Keys.bottomNavShowLabels, value)
     suspend fun setGame2048AnimationSpeed(value: Game2048AnimationSpeed) =
@@ -723,6 +794,20 @@ class SettingsRepository @Inject constructor(
             )
             prefs[Keys.fontScale] = normalizeFontScale(value.fontScale)
             prefs[Keys.compactMode] = value.compactMode
+            prefs.setOrRemove(
+                Keys.backgroundImageUri,
+                restorableReadUriOrCurrent(
+                    value.backgroundImageUri,
+                    prefs[Keys.backgroundImageUri],
+                ),
+            )
+            prefs[Keys.backgroundImageOpacity] = normalizeAppBackgroundOpacity(
+                value.backgroundImageOpacity,
+            )
+            prefs[Keys.backgroundImageBlurDp] = normalizeAppBackgroundBlur(
+                value.backgroundImageBlurDp,
+            )
+            prefs[Keys.tutorialModeEnabled] = value.tutorialModeEnabled
             prefs[Keys.useChineseLauncherName] = value.useChineseLauncherName
             prefs[Keys.launcherIcon] = value.launcherIcon.name
             prefs[Keys.cloudSyncConfigs] = encodeCloudSyncConfigs(restoredCloudSyncConfigs)
@@ -1497,6 +1582,31 @@ internal fun normalizeFontScale(value: Float?, fallback: Float = 1f): Float {
         ?: normalizedFallback
 }
 
+internal fun normalizeAppBackgroundOpacity(value: Float?, fallback: Float = 0.45f): Float {
+    val normalizedFallback = fallback.takeIf(Float::isFinite)
+        ?.coerceIn(MIN_APP_BACKGROUND_OPACITY, MAX_APP_BACKGROUND_OPACITY)
+        ?: 0.45f
+    return value?.takeIf(Float::isFinite)
+        ?.coerceIn(MIN_APP_BACKGROUND_OPACITY, MAX_APP_BACKGROUND_OPACITY)
+        ?: normalizedFallback
+}
+
+internal fun normalizeAppBackgroundBlur(value: Float?, fallback: Float = 0f): Float {
+    val normalizedFallback = fallback.takeIf(Float::isFinite)
+        ?.coerceIn(MIN_APP_BACKGROUND_BLUR_DP, MAX_APP_BACKGROUND_BLUR_DP)
+        ?: 0f
+    return value?.takeIf(Float::isFinite)
+        ?.coerceIn(MIN_APP_BACKGROUND_BLUR_DP, MAX_APP_BACKGROUND_BLUR_DP)
+        ?: normalizedFallback
+}
+
+internal fun normalizeTutorialPageIds(values: Iterable<String>): Set<String> = values.asSequence()
+    .map(String::trim)
+    .filter(TUTORIAL_PAGE_ID_REGEX::matches)
+    .distinct()
+    .take(MAX_TUTORIAL_ACKNOWLEDGED_PAGES)
+    .toSet()
+
 internal fun normalizePoetryFontSize(value: Float?, fallback: Float = 18f): Float {
     val normalizedFallback = fallback.takeIf(Float::isFinite)
         ?.coerceIn(MIN_POETRY_FONT_SIZE_SP, MAX_POETRY_FONT_SIZE_SP)
@@ -1528,7 +1638,7 @@ internal fun normalizeDailyEventTemplates(items: List<DailyEventTemplate>): List
     items.asSequence()
         .map { item ->
             val migratedText = buildString {
-                append(item.text.trim().replaceLineBreaks())
+                append(item.text.trim().normalizeLineBreaks())
                 item.firstUnit.trim().replaceLineBreaks().takeIf(String::isNotEmpty)?.let {
                     append(" xx ").append(it)
                 }
@@ -1613,10 +1723,13 @@ internal fun normalizeDesktopWidgetConfigs(
 private fun opaqueArgb(value: Int): Int = value or 0xFF000000.toInt()
 
 private const val MAX_USER_NAME_CHARS = 32
+private const val MAX_TUTORIAL_ACKNOWLEDGED_PAGES = 128
+private val TUTORIAL_PAGE_ID_REGEX = Regex("[A-Za-z0-9._:/-]{1,120}")
 internal const val MAX_HOME_GREETINGS = 100
 internal const val MAX_HOME_GREETING_CODE_POINTS = 40
 private const val MAX_MEAL_BUTTON_ICON_CHARS = 16
 private fun String.replaceLineBreaks(): String = replace('\r', ' ').replace('\n', ' ')
+private fun String.normalizeLineBreaks(): String = replace("\r\n", "\n").replace('\r', '\n')
 
 private const val MAX_DAILY_EVENT_TEMPLATES = 100
 private const val MAX_DAILY_EVENT_TEXT_CHARS = 100
