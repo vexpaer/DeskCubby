@@ -16,6 +16,7 @@ import com.deskcubby.app.data.model.DEFAULT_CALORIE_TEXT_PROMPT
 import com.deskcubby.app.data.model.DEFAULT_CALORIE_VISION_PROMPT
 import com.deskcubby.app.data.model.DEFAULT_MARKDOWN_HEADING_SIZES_SP
 import com.deskcubby.app.data.model.normalizeMarkdownHeadingSizes
+import com.deskcubby.app.data.model.normalizeHomeGameShortcutIds
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -357,6 +358,17 @@ class SettingsRepositoryTest {
             migrateHomeModulesV26(original, migrated = false),
         )
         assertEquals(original, migrateHomeModulesV26(original, migrated = true))
+    }
+
+    @Test
+    fun homeGameShortcutsDropUnknownDuplicatesAndKeepCatalogOrder() {
+        assertEquals(
+            listOf("2048", "tetris", "spider"),
+            normalizeHomeGameShortcutIds(
+                listOf("spider", "unknown", "tetris", "2048", "tetris"),
+            ),
+        )
+        assertTrue(normalizeHomeGameShortcutIds(emptyList()).isEmpty())
     }
 
     @Test

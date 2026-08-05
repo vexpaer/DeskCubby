@@ -24,6 +24,27 @@ enum class PoetryTextAlignment { START, CENTER }
 
 enum class DesktopWidgetContentType { HOME_MODULE, APP_SHORTCUT }
 
+val HOME_GAME_SHORTCUT_IDS: List<String> = listOf(
+    "2048",
+    "2048_5",
+    "2048_6",
+    "snake",
+    "tetris",
+    "minesweeper",
+    "spider",
+)
+
+val DEFAULT_HOME_GAME_SHORTCUT_IDS: List<String> = listOf(
+    "2048",
+    "snake",
+    "minesweeper",
+)
+
+fun normalizeHomeGameShortcutIds(items: List<String>): List<String> {
+    val selected = items.toSet()
+    return HOME_GAME_SHORTCUT_IDS.filter(selected::contains)
+}
+
 val DESKTOP_WIDGET_HOME_MODULE_IDS: List<String> = listOf(
     "calendar",
     "weather",
@@ -512,6 +533,7 @@ data class AppSettings(
         "game_shortcuts",
         "record_overview",
     ),
+    val homeGameShortcuts: List<String> = DEFAULT_HOME_GAME_SHORTCUT_IDS,
     val homeWidgetTitles: List<String> = listOf(
         "calendar",
         "weather",

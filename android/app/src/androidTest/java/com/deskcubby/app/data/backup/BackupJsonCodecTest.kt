@@ -54,7 +54,7 @@ import org.json.JSONObject
 @RunWith(AndroidJUnit4::class)
 class BackupJsonCodecTest {
     @Test
-    fun versionTwentySixRoundTripPreservesEncryptedVaultGamesUsageWidgetsAndNewSettings() {
+    fun versionTwentySevenRoundTripPreservesEncryptedVaultGamesUsageWidgetsAndNewSettings() {
         val iv = Base64.getEncoder().encodeToString(ByteArray(12) { 2 })
         val cipher = Base64.getEncoder().encodeToString(ByteArray(32) { 3 })
         val vault = VaultEncryptedBackup(
@@ -159,6 +159,7 @@ class BackupJsonCodecTest {
                 tutorialAcknowledgedPages = setOf("page/home", "reader/txt"),
                 notesTreeUri = "content://notes/tree/vault",
                 markdownHeadingSizesSp = listOf(36f, 31f, 27f, 23f, 20f, 18f),
+                homeGameShortcuts = listOf("tetris", "spider"),
             ),
             thoughts = emptyList(),
             favorites = emptyList(),
@@ -170,7 +171,7 @@ class BackupJsonCodecTest {
 
         val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
 
-        assertEquals(26, decoded.formatVersion)
+        assertEquals(27, decoded.formatVersion)
         assertEquals(vault, decoded.vault)
         assertEquals(gameStates, decoded.gameStates)
         assertEquals(gameStatistics, decoded.gameStatistics)
@@ -194,8 +195,48 @@ class BackupJsonCodecTest {
             listOf(36f, 31f, 27f, 23f, 20f, 18f),
             decoded.settings.markdownHeadingSizesSp,
         )
+        assertEquals(listOf("tetris", "spider"), decoded.settings.homeGameShortcuts)
         // Per-page acknowledgements are device-local and deliberately excluded from backups.
         assertEquals(emptySet<String>(), decoded.settings.tutorialAcknowledgedPages)
+    }
+
+    @Test
+    fun versionTwentySixDefaultsHomeGameShortcuts() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 26,
+                    settings = AppSettings(homeGameShortcuts = listOf("spider")),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        ).apply {
+            put("version", 26)
+            getJSONObject("settings").remove("homeGameShortcuts")
+        }
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+
+        assertEquals(AppSettings().homeGameShortcuts, decoded.settings.homeGameShortcuts)
+    }
+
+    @Test
+    fun versionTwentySevenRejectsUnknownHomeGameShortcut() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 27,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        root.getJSONObject("settings")
+            .put("homeGameShortcuts", JSONArray(listOf("snake", "unknown")))
+
+        assertDecodeRejected(root)
     }
 
     @Test

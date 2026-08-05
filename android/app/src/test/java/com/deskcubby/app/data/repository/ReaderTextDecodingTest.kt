@@ -32,15 +32,57 @@ class ReaderTextDecodingTest {
                 fontSizeSp = Float.NaN,
                 lineHeightMultiplier = Float.POSITIVE_INFINITY,
                 paragraphSpacingDp = 999f,
+                pdfZoomPercent = 999,
             ),
         )
 
         assertEquals(19f, normalized.fontSizeSp)
         assertEquals(1.6f, normalized.lineHeightMultiplier)
         assertEquals(36f, normalized.paragraphSpacingDp)
+        assertEquals(MAX_READER_PDF_ZOOM_PERCENT, normalized.pdfZoomPercent)
         assertEquals(0xFF345678.toInt(), normalizeReaderPreferences(
             ReaderPreferences(customBackgroundArgb = 0x00345678),
         ).customBackgroundArgb)
+    }
+
+    @Test
+    fun `chapter detection skips integrated TOC entries and keeps later body headings`() {
+        val layout = paginateReaderText(
+            paragraphs = listOf(
+                "目录",
+                "第一章、初见 10",
+                "第二章 重逢 25",
+                "第三章 远行 40",
+                "过渡说明",
+                "\u200B第 1 章 初见",
+                "正文内容".repeat(80),
+                "第　2　章 重逢",
+                "后续内容".repeat(80),
+                "第3章 远行",
+            ),
+            targetChars = 400,
+        )
+
+        assertEquals(
+            listOf("第 1 章 初见", "第 2 章 重逢", "第3章 远行"),
+            layout.chapters.map(ReaderChapter::title),
+        )
+        assertTrue(layout.chapters.all { it.paragraphIndex >= 5 })
+        assertFalse(isReaderChapterHeading("第四章 归来……52"))
+    }
+
+    @Test
+    fun `full book text search is case insensitive and bounded`() {
+        val pages = listOf(
+            ReaderTextPage("Alpha beta ALPHA", 0),
+            ReaderTextPage("later alpha", 1),
+        )
+
+        val matches = findReaderTextMatches(pages, "alpha")
+
+        assertEquals(listOf(0, 0, 1), matches.map(ReaderTextSearchMatch::pageIndex))
+        assertEquals(2, findReaderTextMatches(pages, "alpha", maxResults = 2).size)
+        assertTrue(findReaderTextMatches(pages, "   ").isEmpty())
     }
 
     @Test

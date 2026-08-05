@@ -44,6 +44,7 @@ data class ReaderPreferences(
     val fontSizeSp: Float = 19f,
     val lineHeightMultiplier: Float = 1.6f,
     val paragraphSpacingDp: Float = 10f,
+    val pdfZoomPercent: Int = 100,
     val orientation: ReaderOrientation = ReaderOrientation.FOLLOW_SYSTEM,
     val chapterDetectionMode: ReaderChapterDetectionMode =
         ReaderChapterDetectionMode.SMART_AND_CUSTOM,
@@ -88,6 +89,12 @@ data class ReaderChapter(
     val title: String,
     val pageIndex: Int,
     val paragraphIndex: Int,
+)
+
+data class ReaderTextSearchMatch(
+    val pageIndex: Int,
+    val startIndex: Int,
+    val endIndex: Int,
 )
 
 internal data class ReaderTextLayout(
@@ -423,6 +430,10 @@ internal fun normalizeReaderPreferences(value: ReaderPreferences): ReaderPrefere
         ?.coerceIn(1f, 2.4f) ?: 1.6f,
     paragraphSpacingDp = value.paragraphSpacingDp.takeIf(Float::isFinite)
         ?.coerceIn(0f, 36f) ?: 10f,
+    pdfZoomPercent = value.pdfZoomPercent.coerceIn(
+        MIN_READER_PDF_ZOOM_PERCENT,
+        MAX_READER_PDF_ZOOM_PERCENT,
+    ),
     customChapterRegex = value.customChapterRegex.trim().take(MAX_READER_CUSTOM_REGEX_CHARS),
     chapterHeadingMaxChars = value.chapterHeadingMaxChars.coerceIn(
         MIN_READER_CHAPTER_HEADING_CHARS,
@@ -462,7 +473,7 @@ internal fun paginateReaderText(
 
     source.forEachIndexed { paragraphIndex, rawParagraph ->
         val paragraph = rawParagraph.trimEnd()
-        val chapterTitle = paragraph.trim().takeIf { value ->
+        val chapterTitle = normalizeReaderChapterCandidate(paragraph).takeIf { value ->
             isReaderChapterHeading(value, detectionPreferences, customChapterRegex)
         }
         if (chapterTitle != null) {
@@ -501,7 +512,53 @@ internal fun paginateReaderText(
     }
     flush()
     if (pages.isEmpty()) pages += ReaderTextPage("", 0)
-    return ReaderTextLayout(pages, chapters)
+    return ReaderTextLayout(pages, collapseReaderChapterDuplicates(chapters))
+}
+
+internal fun collapseReaderChapterDuplicates(
+    chapters: List<ReaderChapter>,
+): List<ReaderChapter> {
+    if (chapters.size < 2) return chapters
+    val densePages = chapters.groupingBy(ReaderChapter::pageIndex)
+        .eachCount()
+        .filterValues { it >= MIN_TOC_HEADINGS_ON_PAGE }
+        .keys
+    val likelyTocEntries = HashSet<ReaderChapter>()
+    chapters.windowed(MIN_TOC_HEADINGS_ON_PAGE).forEach { window ->
+        if (window.last().paragraphIndex - window.first().paragraphIndex <=
+            MAX_TOC_PARAGRAPH_SPAN
+        ) {
+            likelyTocEntries += window
+        }
+    }
+    val grouped = LinkedHashMap<String, MutableList<ReaderChapter>>()
+    chapters.forEach { chapter ->
+        val withoutPageNumber = chapter.title
+            .lowercase()
+            .replace(READER_CHAPTER_TRAILING_PAGE_REGEX, "")
+        val key = READER_CHINESE_CHAPTER_KEY_REGEX.replace(withoutPageNumber) { match ->
+            val prefix = match.groupValues[1]
+            val number = readerChapterNumberKey(match.groupValues[2])
+            val unit = match.groupValues[3]
+            val suffix = match.groupValues[4]
+            "$prefix 第$number$unit$suffix"
+        }
+            .replace(READER_CHAPTER_KEY_DECORATION_REGEX, "")
+            .trim()
+        grouped.getOrPut(key) { ArrayList() } += chapter
+    }
+    return grouped.values
+        .map { matches ->
+            val first = matches.first()
+            if (first.pageIndex in densePages || first in likelyTocEntries) {
+                matches.firstOrNull {
+                    it.pageIndex !in densePages && it !in likelyTocEntries
+                } ?: first
+            } else {
+                first
+            }
+        }
+        .sortedWith(compareBy(ReaderChapter::pageIndex, ReaderChapter::paragraphIndex))
 }
 
 internal fun textPageForParagraph(
@@ -525,7 +582,7 @@ internal fun isReaderChapterHeading(
     preferences: ReaderPreferences = ReaderPreferences(),
 ): Boolean {
     val normalizedPreferences = normalizeReaderPreferences(preferences)
-    val value = raw.trim()
+    val value = normalizeReaderChapterCandidate(raw)
     val customRegex = normalizedPreferences.customChapterRegex
         .takeIf(String::isNotBlank)
         ?.let { runCatching { Regex(it) }.getOrNull() }
@@ -537,7 +594,9 @@ private fun isReaderChapterHeading(
     preferences: ReaderPreferences,
     customRegex: Regex?,
 ): Boolean {
-    if (value.isEmpty() || value.length > preferences.chapterHeadingMaxChars) return false
+    if (value.isEmpty() || value.length > preferences.chapterHeadingMaxChars ||
+        READER_TOC_ENTRY_REGEX.containsMatchIn(value)
+    ) return false
     val smartEnabled = preferences.chapterDetectionMode !=
         ReaderChapterDetectionMode.CUSTOM
     val customEnabled = preferences.chapterDetectionMode !=
@@ -545,6 +604,58 @@ private fun isReaderChapterHeading(
     val smartMatch = smartEnabled && SMART_READER_CHAPTER_REGEXES.any { it.matches(value) }
     val customMatch = customEnabled && customRegex?.matches(value) == true
     return smartMatch || customMatch
+}
+
+internal fun findReaderTextMatches(
+    pages: List<ReaderTextPage>,
+    rawQuery: String,
+    maxResults: Int = MAX_READER_SEARCH_RESULTS,
+): List<ReaderTextSearchMatch> {
+    require(maxResults in 1..MAX_READER_SEARCH_RESULTS)
+    val query = rawQuery.trim().take(MAX_READER_SEARCH_QUERY_CHARS)
+    if (query.isEmpty()) return emptyList()
+    return buildList {
+        pages.forEachIndexed { pageIndex, page ->
+            var fromIndex = 0
+            while (size < maxResults) {
+                val match = page.text.indexOf(query, fromIndex, ignoreCase = true)
+                if (match < 0) break
+                add(
+                    ReaderTextSearchMatch(
+                        pageIndex = pageIndex,
+                        startIndex = match,
+                        endIndex = match + query.length,
+                    ),
+                )
+                fromIndex = match + query.length.coerceAtLeast(1)
+            }
+            if (size >= maxResults) return@buildList
+        }
+    }
+}
+
+internal fun detectReaderChaptersInTextBlocks(
+    pageIndex: Int,
+    textBlocks: List<String>,
+    preferences: ReaderPreferences = ReaderPreferences(),
+): List<ReaderChapter> {
+    if (pageIndex < 0) return emptyList()
+    return textBlocks
+        .asSequence()
+        .flatMap { it.lineSequence() }
+        .map(::normalizeReaderChapterCandidate)
+        .filter(String::isNotEmpty)
+        .filter { isReaderChapterHeading(it, preferences) }
+        .distinct()
+        .take(MAX_READER_CHAPTERS)
+        .map { title ->
+            ReaderChapter(
+                title = title.take(MAX_READER_CHAPTER_TITLE_CHARS),
+                pageIndex = pageIndex,
+                paragraphIndex = pageIndex,
+            )
+        }
+        .toList()
 }
 
 internal fun isValidReaderChapterRegex(value: String): Boolean {
@@ -564,15 +675,88 @@ private fun safeReaderTextBoundary(value: String, requested: Int): Int {
     return boundary.coerceAtLeast(1)
 }
 
-private const val MAX_READER_CHAPTERS = 20_000
+internal const val MAX_READER_CHAPTERS = 20_000
 internal const val MAX_READER_CHAPTER_TITLE_CHARS = 240
 internal const val MIN_READER_CHAPTER_HEADING_CHARS = 20
 internal const val MAX_READER_CUSTOM_REGEX_CHARS = 1_024
+internal const val MIN_READER_PDF_ZOOM_PERCENT = 50
+internal const val MAX_READER_PDF_ZOOM_PERCENT = 300
+internal const val MAX_READER_SEARCH_QUERY_CHARS = 128
+internal const val MAX_READER_SEARCH_RESULTS = 5_000
+private val READER_INVISIBLE_HEADING_CHARS = setOf('\uFEFF', '\u200B', '\u200C', '\u200D', '\u2060')
+private val READER_HEADING_WHITESPACE_REGEX = Regex("[\\t\\u00A0\\u3000 ]+")
+private val READER_TOC_ENTRY_REGEX = Regex(
+    "(?:\\.{3,}|…{2,}|·{3,}|_{3,})\\s*(?:[0-9０-９]+|[ivxlcdm]+)\\s*$",
+    RegexOption.IGNORE_CASE,
+)
+private val READER_CHAPTER_TRAILING_PAGE_REGEX = Regex(
+    "(?:\\s+|[.．…·_]{2,})(?:[0-9０-９]+|[ivxlcdm]+)\\s*$",
+    RegexOption.IGNORE_CASE,
+)
+private val READER_CHAPTER_KEY_DECORATION_REGEX = Regex(
+    "[\\s:：、.．_\\-—【】\\[\\]〈〉《》（）()☆★◎◇◆•·]+",
+)
+private val READER_CHINESE_CHAPTER_KEY_REGEX = Regex(
+    "^(正文)?\\s*第\\s*([0-9０-９零〇○一二三四五六七八九十百千万两壹贰叁肆伍陆柒捌玖拾佰仟]+)\\s*([章节卷回部篇集幕])(.*)$",
+)
+private const val MIN_TOC_HEADINGS_ON_PAGE = 3
+private const val MAX_TOC_PARAGRAPH_SPAN = 2
+
+private fun readerChapterNumberKey(raw: String): String {
+    val asciiDigits = buildString(raw.length) {
+        raw.forEach { value ->
+            append(if (value in '０'..'９') '0' + (value - '０') else value)
+        }
+    }
+    asciiDigits.toLongOrNull()?.let { return it.toString() }
+    val digits = mapOf(
+        '零' to 0, '〇' to 0, '○' to 0,
+        '一' to 1, '壹' to 1,
+        '二' to 2, '贰' to 2, '两' to 2,
+        '三' to 3, '叁' to 3,
+        '四' to 4, '肆' to 4,
+        '五' to 5, '伍' to 5,
+        '六' to 6, '陆' to 6,
+        '七' to 7, '柒' to 7,
+        '八' to 8, '捌' to 8,
+        '九' to 9, '玖' to 9,
+    )
+    val units = mapOf(
+        '十' to 10, '拾' to 10,
+        '百' to 100, '佰' to 100,
+        '千' to 1_000, '仟' to 1_000,
+    )
+    var total = 0L
+    var section = 0L
+    var number = 0L
+    raw.forEach { value ->
+        when {
+            value in digits -> number = digits.getValue(value).toLong()
+            value in units -> {
+                section += (if (number == 0L) 1L else number) * units.getValue(value)
+                number = 0L
+            }
+            value == '万' -> {
+                total += (section + number).coerceAtLeast(1L) * 10_000L
+                section = 0L
+                number = 0L
+            }
+            else -> return raw
+        }
+    }
+    return (total + section + number).toString()
+}
+
+private fun normalizeReaderChapterCandidate(raw: String): String = raw
+    .filterNot(READER_INVISIBLE_HEADING_CHARS::contains)
+    .trim()
+    .replace(READER_HEADING_WHITESPACE_REGEX, " ")
+
 private val CHINESE_READER_CHAPTER_REGEX = Regex(
-    "^(?:正文\\s*)?第[0-9０-９零〇○一二三四五六七八九十百千万两壹贰叁肆伍陆柒捌玖拾佰仟]+[章节卷回部篇集幕](?:\\s+|[:：、.．_-]?)[^\\n]*$",
+    "^(?:正文\\s*)?[【\\[〈《（(]?[☆★◎◇◆•·\\s]*第\\s*[0-9０-９零〇○一二三四五六七八九十百千万两壹贰叁肆伍陆柒捌玖拾佰仟]+\\s*[章节卷回部篇集幕]\\s*[】\\]〉》）)]?(?:\\s+|[:：、.．_\\-—]?)[^\\n]*$",
 )
 private val ENGLISH_READER_CHAPTER_REGEX = Regex(
-    "^(?:chapter|part|book|section|episode)\\s+(?:[0-9０-９]+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)(?:\\s*[:：.\\-]?\\s*.*)?$",
+    "^(?:chapter|part|book|section|episode)\\s*(?:[0-9０-９]+|[ivxlcdm]+|[a-z]+(?:[ -][a-z]+){0,5})(?:\\s*[:：.\\-—]?\\s*.*)?$",
     RegexOption.IGNORE_CASE,
 )
 private val NUMBERED_READER_CHAPTER_REGEX = Regex(
@@ -622,7 +806,7 @@ internal fun decodeReaderText(bytes: ByteArray): String {
 }
 
 internal object ReaderStateCodec {
-    private const val SCHEMA_VERSION = 3
+    private const val SCHEMA_VERSION = 4
     private const val MAX_BOOKS = 500
     private val idPattern = Regex("[A-Za-z0-9._:-]{1,256}")
 
@@ -636,6 +820,7 @@ internal object ReaderStateCodec {
                 .put("fontSizeSp", value.preferences.fontSizeSp.toDouble())
                 .put("lineHeightMultiplier", value.preferences.lineHeightMultiplier.toDouble())
                 .put("paragraphSpacingDp", value.preferences.paragraphSpacingDp.toDouble())
+                .put("pdfZoomPercent", value.preferences.pdfZoomPercent)
                 .put("orientation", value.preferences.orientation.name)
                 .put("chapterDetectionMode", value.preferences.chapterDetectionMode.name)
                 .put("customChapterRegex", value.preferences.customChapterRegex)
@@ -682,6 +867,11 @@ internal object ReaderStateCodec {
                 fontSizeSp = preferencesJson.getDouble("fontSizeSp").toFloat(),
                 lineHeightMultiplier = preferencesJson.getDouble("lineHeightMultiplier").toFloat(),
                 paragraphSpacingDp = preferencesJson.getDouble("paragraphSpacingDp").toFloat(),
+                pdfZoomPercent = if (schemaVersion >= 4) {
+                    preferencesJson.getInt("pdfZoomPercent")
+                } else {
+                    ReaderPreferences().pdfZoomPercent
+                },
                 orientation = enumValueOr(
                     preferencesJson.getString("orientation"),
                     ReaderOrientation.FOLLOW_SYSTEM,

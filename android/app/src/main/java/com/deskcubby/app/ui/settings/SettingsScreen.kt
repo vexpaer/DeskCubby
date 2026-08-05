@@ -343,6 +343,7 @@ private data class HomeSettingsDraft(
     val userName: String,
     val widgetBordersEnabled: Boolean,
     val widgets: List<String>,
+    val gameShortcuts: List<String>,
     val visibleWidgetTitles: List<String>,
     val mealButtonsUseIcons: Boolean,
     val mealButtonIcons: List<String>,
@@ -390,6 +391,16 @@ private val homeWidgetOptions = listOf(
     HomeWidgetOption("notes", "笔记入口", "Notes shortcut"),
     HomeWidgetOption("game_shortcuts", "小游戏快捷入口", "Mini-game shortcuts"),
     HomeWidgetOption("record_overview", "记录概览", "Record overview"),
+)
+
+private val homeGameShortcutOptions = listOf(
+    HomeWidgetOption("2048", "2048 · 4×4", "2048 · 4×4"),
+    HomeWidgetOption("2048_5", "2048 · 5×5", "2048 · 5×5"),
+    HomeWidgetOption("2048_6", "2048 · 6×6", "2048 · 6×6"),
+    HomeWidgetOption("snake", "贪吃蛇", "Snake"),
+    HomeWidgetOption("tetris", "俄罗斯方块", "Tetris"),
+    HomeWidgetOption("minesweeper", "扫雷", "Minesweeper"),
+    HomeWidgetOption("spider", "蜘蛛纸牌", "Spider Solitaire"),
 )
 
 private val mealButtonOptions = listOf(
@@ -620,6 +631,7 @@ fun SettingsScreen(
                         userName = draft.userName,
                         widgetBordersEnabled = draft.widgetBordersEnabled,
                         widgets = draft.widgets,
+                        gameShortcuts = draft.gameShortcuts,
                         visibleWidgetTitles = draft.visibleWidgetTitles,
                         mealButtonsUseIcons = draft.mealButtonsUseIcons,
                         mealButtonIcons = draft.mealButtonIcons,
@@ -1689,8 +1701,8 @@ private fun CloudSyncSettingsPage(
             text = {
                 Text(
                     tr(
-                        "这会按 v26 备份导入应用设置和结构化数据，恢复 Markdown 标题字号、背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Vault 随后保持锁定。日记、笔记、媒体与背景图片文件不会被替换。",
-                        "This imports v26 app settings and structured data, restores Markdown heading sizes, background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. The Vault remains locked, and diary, note, media, and background-image files are not replaced.",
+                        "这会按 v27 备份导入应用设置和结构化数据，恢复 Markdown 标题字号、主页小游戏快捷入口、背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Vault 随后保持锁定。日记、笔记、媒体与背景图片文件不会被替换。",
+                        "This imports v27 app settings and structured data, restores Markdown heading sizes, Home mini-game shortcuts, background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. The Vault remains locked, and diary, note, media, and background-image files are not replaced.",
                     ),
                 )
             },
@@ -1991,8 +2003,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.JSON_BACKUP in selectedContents) {
                     Text(
                         tr(
-                            "v26 应用 JSON 包含 Markdown 显示设置、全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "The v26 app JSON contains Markdown display settings, global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                            "v27 应用 JSON 包含 Markdown 显示设置、主页小游戏快捷入口、全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "The v27 app JSON contains Markdown display settings, Home mini-game shortcuts, global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2337,8 +2349,8 @@ private fun BackupSettingsPage(
             text = {
                 Text(
                     tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v26 还会恢复 Markdown 标题字号、全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。日记、笔记、媒体和背景图片文件不会被修改。确定继续吗？",
-                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. v26 also restores Markdown heading sizes, global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merges games and per-device screen time while leaving the Vault locked. Diary, note, media, and background-image files are unchanged. Continue?",
+                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v27 还会恢复 Markdown 标题字号、主页小游戏快捷入口、全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。日记、笔记、媒体和背景图片文件不会被修改。确定继续吗？",
+                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. v27 also restores Markdown heading sizes, Home mini-game shortcuts, global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merges games and per-device screen time while leaving the Vault locked. Diary, note, media, and background-image files are unchanged. Continue?",
                     ),
                 )
             },
@@ -2513,8 +2525,8 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "v26 包含应用设置（含 Markdown 标题字号与笔记目录引用、全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。笔记/日记正文、媒体文件、逐页教学确认和背景图片文件不包含在内。",
-                        "v26 includes app settings (including Markdown heading sizes and the notes-folder reference, global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time. Note/diary contents, media files, per-page confirmations, and background-image files are excluded.",
+                        "v27 包含应用设置（含 Markdown 标题字号与笔记目录引用、主页小游戏快捷入口、全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。笔记/日记正文、媒体文件、逐页教学确认和背景图片文件不包含在内。",
+                        "v27 includes app settings (including Markdown heading sizes and the notes-folder reference, Home mini-game shortcuts, global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time. Note/diary contents, media files, per-page confirmations, and background-image files are excluded.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -3089,6 +3101,9 @@ private fun HomeSettingsPage(
         mutableStateOf(settings.homeWidgetBordersEnabled)
     }
     var widgets by remember(settings.homeWidgets) { mutableStateOf(settings.homeWidgets.distinct()) }
+    var gameShortcuts by remember(settings.homeGameShortcuts) {
+        mutableStateOf(settings.homeGameShortcuts.distinct())
+    }
     var visibleWidgetTitles by remember(settings.homeWidgetTitles) {
         mutableStateOf(settings.homeWidgetTitles.distinct())
     }
@@ -3118,6 +3133,7 @@ private fun HomeSettingsPage(
         userName = settings.userName,
         widgetBordersEnabled = widgetBordersEnabled,
         widgets = widgets,
+        gameShortcuts = gameShortcuts,
         visibleWidgetTitles = visibleWidgetTitles,
         mealButtonsUseIcons = mealButtonsUseIcons,
         mealButtonIcons = mealButtonIcons.map(String::trim),
@@ -3126,6 +3142,7 @@ private fun HomeSettingsPage(
         userName = settings.userName,
         widgetBordersEnabled = settings.homeWidgetBordersEnabled,
         widgets = settings.homeWidgets.distinct(),
+        gameShortcuts = settings.homeGameShortcuts.distinct(),
         visibleWidgetTitles = settings.homeWidgetTitles.distinct(),
         mealButtonsUseIcons = settings.mealButtonsUseIcons,
         mealButtonIcons = settings.mealButtonIcons,
@@ -3138,6 +3155,7 @@ private fun HomeSettingsPage(
             val defaults = AppSettings()
             widgetBordersEnabled = defaults.homeWidgetBordersEnabled
             widgets = defaults.homeWidgets
+            gameShortcuts = defaults.homeGameShortcuts
             visibleWidgetTitles = defaults.homeWidgetTitles
             mealButtonsUseIcons = defaults.mealButtonsUseIcons
             mealButtonIcons = defaults.mealButtonIcons
@@ -3335,6 +3353,52 @@ private fun HomeSettingsPage(
                             Spacer(Modifier.width(8.dp))
                             Text(tr(option.chinese, option.english))
                         }
+                    }
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("小游戏快捷入口", "Mini-game shortcuts")) {
+                Text(
+                    tr(
+                        "选择主页“小游戏”模块中显示的入口；全部关闭时模块会显示设置提示。",
+                        "Choose which entries appear in the Home mini-games widget. With all disabled, the widget shows a settings hint.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                homeGameShortcutOptions.forEach { option ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                gameShortcuts = if (option.id in gameShortcuts) {
+                                    gameShortcuts - option.id
+                                } else {
+                                    homeGameShortcutOptions
+                                        .map(HomeWidgetOption::id)
+                                        .filter { it in gameShortcuts || it == option.id }
+                                }
+                            }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            tr(option.chinese, option.english),
+                            modifier = Modifier.weight(1f),
+                        )
+                        Checkbox(
+                            checked = option.id in gameShortcuts,
+                            onCheckedChange = { checked ->
+                                gameShortcuts = if (checked) {
+                                    homeGameShortcutOptions
+                                        .map(HomeWidgetOption::id)
+                                        .filter { it in gameShortcuts || it == option.id }
+                                } else {
+                                    gameShortcuts - option.id
+                                }
+                            },
+                        )
                     }
                 }
             }

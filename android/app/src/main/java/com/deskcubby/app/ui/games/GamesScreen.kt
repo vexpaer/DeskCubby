@@ -59,10 +59,12 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -152,66 +154,72 @@ fun GamesScreen(
             onTutorialTargetChanged(null)
         }
     }
-    Box(
-        Modifier
-            .fillMaxSize()
-            .padding(bottom = if (gameOpen) 0.dp else padding.calculateBottomPadding())
-            .windowInsetsPadding(
-                WindowInsets.safeDrawing.only(
-                    WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
-                ),
-            )
-            .then(
-                if (gameOpen) {
-                    Modifier.windowInsetsPadding(
-                        WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom),
-                    )
-                } else {
-                    Modifier
-                },
-            ),
+    CompositionLocalProvider(
+        LocalContentColor provides MaterialTheme.colorScheme.onSurface,
     ) {
-        val current = launch
-        if (current == null) {
-            GameListPage(viewModel, onLaunch)
-        } else {
-            when (current.gameId) {
-                GamesViewModel.GAME_2048 -> Game2048Page(
-                    viewModel = viewModel,
-                    gameId = current.gameId,
-                    boardSize = 4,
-                    resume = current.resume,
-                    onExit = { launch = null },
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(bottom = if (gameOpen) 0.dp else padding.calculateBottomPadding())
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(
+                        WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+                    ),
                 )
-                GamesViewModel.GAME_2048_5 -> Game2048Page(
-                    viewModel = viewModel,
-                    gameId = current.gameId,
-                    boardSize = 5,
-                    resume = current.resume,
-                    onExit = { launch = null },
-                )
-                GamesViewModel.GAME_2048_6 -> Game2048Page(
-                    viewModel = viewModel,
-                    gameId = current.gameId,
-                    boardSize = 6,
-                    resume = current.resume,
-                    onExit = { launch = null },
-                )
-                GamesViewModel.GAME_SNAKE -> SnakePage(viewModel, current.resume) { launch = null }
-                GamesViewModel.GAME_TETRIS -> TetrisPage(viewModel, current.resume) { launch = null }
-                GamesViewModel.GAME_MINESWEEPER -> MinesweeperPage(
-                    viewModel = viewModel,
-                    resume = current.resume,
-                    onExit = { launch = null },
-                    onStatisticsDelta = viewModel::recordMinesweeperStatistics,
-                )
-                GamesViewModel.GAME_SPIDER -> SpiderSolitairePage(
-                    viewModel = viewModel,
-                    resume = current.resume,
-                    onExit = { launch = null },
-                    onStatisticsDelta = viewModel::recordSpiderStatistics,
-                )
-                else -> GameListPage(viewModel, onLaunch)
+                .then(
+                    if (gameOpen) {
+                        Modifier.windowInsetsPadding(
+                            WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom),
+                        )
+                    } else {
+                        Modifier
+                    },
+                ),
+        ) {
+            val current = launch
+            if (current == null) {
+                GameListPage(viewModel, onLaunch)
+            } else {
+                when (current.gameId) {
+                    GamesViewModel.GAME_2048 -> Game2048Page(
+                        viewModel = viewModel,
+                        gameId = current.gameId,
+                        boardSize = 4,
+                        resume = current.resume,
+                        onExit = { launch = null },
+                    )
+                    GamesViewModel.GAME_2048_5 -> Game2048Page(
+                        viewModel = viewModel,
+                        gameId = current.gameId,
+                        boardSize = 5,
+                        resume = current.resume,
+                        onExit = { launch = null },
+                    )
+                    GamesViewModel.GAME_2048_6 -> Game2048Page(
+                        viewModel = viewModel,
+                        gameId = current.gameId,
+                        boardSize = 6,
+                        resume = current.resume,
+                        onExit = { launch = null },
+                    )
+                    GamesViewModel.GAME_SNAKE ->
+                        SnakePage(viewModel, current.resume) { launch = null }
+                    GamesViewModel.GAME_TETRIS ->
+                        TetrisPage(viewModel, current.resume) { launch = null }
+                    GamesViewModel.GAME_MINESWEEPER -> MinesweeperPage(
+                        viewModel = viewModel,
+                        resume = current.resume,
+                        onExit = { launch = null },
+                        onStatisticsDelta = viewModel::recordMinesweeperStatistics,
+                    )
+                    GamesViewModel.GAME_SPIDER -> SpiderSolitairePage(
+                        viewModel = viewModel,
+                        resume = current.resume,
+                        onExit = { launch = null },
+                        onStatisticsDelta = viewModel::recordSpiderStatistics,
+                    )
+                    else -> GameListPage(viewModel, onLaunch)
+                }
             }
         }
     }

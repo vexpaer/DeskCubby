@@ -29,6 +29,7 @@ import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
 import com.deskcubby.app.data.model.DEFAULT_CALORIE_TEXT_PROMPT
 import com.deskcubby.app.data.model.DEFAULT_CALORIE_VISION_PROMPT
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
+import com.deskcubby.app.data.model.normalizeHomeGameShortcutIds
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.DEFAULT_DESKTOP_WIDGET_CONFIGS
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
@@ -187,6 +188,7 @@ class SettingsRepository @Inject constructor(
         val morePageShowDescriptions = booleanPreferencesKey("more_page_show_descriptions")
         val homeWidgetBordersEnabled = booleanPreferencesKey("home_widget_borders_enabled")
         val homeWidgets = stringPreferencesKey("home_widgets")
+        val homeGameShortcuts = stringPreferencesKey("home_game_shortcuts")
         val mealPhotosWidgetMigrated = booleanPreferencesKey("meal_photos_widget_migrated")
         val dailyRecordsWidgetMigrated = booleanPreferencesKey("daily_records_widget_migrated")
         val homeModulesV26Migrated = booleanPreferencesKey("home_modules_v26_migrated")
@@ -402,6 +404,13 @@ class SettingsRepository @Inject constructor(
                         migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
                     ),
                     migrated = prefs[Keys.homeModulesV26Migrated] == true,
+                )
+            },
+            homeGameShortcuts = if (prefs[Keys.homeGameShortcuts] == null) {
+                defaults.homeGameShortcuts
+            } else {
+                normalizeHomeGameShortcutIds(
+                    decodeStringList(prefs[Keys.homeGameShortcuts], defaults.homeGameShortcuts),
                 )
             },
             homeWidgetTitles = if (prefs[Keys.homeWidgetTitles] == null) {
@@ -666,6 +675,7 @@ class SettingsRepository @Inject constructor(
         userName: String,
         widgetBordersEnabled: Boolean,
         widgets: List<String>,
+        gameShortcuts: List<String>,
         visibleWidgetTitles: List<String>,
         mealButtonsUseIcons: Boolean,
         mealButtonIcons: List<String>,
@@ -674,6 +684,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.userName] = normalizeUserName(userName)
             prefs[Keys.homeWidgetBordersEnabled] = widgetBordersEnabled
             prefs[Keys.homeWidgets] = encodeStringList(widgets.distinct())
+            prefs[Keys.homeGameShortcuts] = encodeStringList(
+                normalizeHomeGameShortcutIds(gameShortcuts),
+            )
             prefs[Keys.mealPhotosWidgetMigrated] = true
             prefs[Keys.dailyRecordsWidgetMigrated] = true
             prefs[Keys.homeModulesV26Migrated] = true
@@ -941,6 +954,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.morePageShowDescriptions] = value.morePageShowDescriptions
             prefs[Keys.homeWidgetBordersEnabled] = value.homeWidgetBordersEnabled
             prefs[Keys.homeWidgets] = encodeStringList(value.homeWidgets.distinct())
+            prefs[Keys.homeGameShortcuts] = encodeStringList(
+                normalizeHomeGameShortcutIds(value.homeGameShortcuts),
+            )
             prefs[Keys.mealPhotosWidgetMigrated] = true
             prefs[Keys.dailyRecordsWidgetMigrated] = true
             prefs[Keys.homeModulesV26Migrated] = true

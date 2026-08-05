@@ -24,6 +24,7 @@ import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.HomeGreetingTemplate
+import com.deskcubby.app.data.model.HOME_GAME_SHORTCUT_IDS
 import com.deskcubby.app.data.model.Game2048AnimationSpeed
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
@@ -34,6 +35,7 @@ import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.normalizeMarkdownHeadingSizes
+import com.deskcubby.app.data.model.normalizeHomeGameShortcutIds
 import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MAX_APP_BACKGROUND_BLUR_DP
@@ -79,7 +81,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 26,
+    val formatVersion: Int = 27,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -114,7 +116,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 26
+    const val FORMAT_VERSION: Int = 27
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -460,6 +462,10 @@ object BackupJsonCodec {
         .put("game2048AnimationSpeed", settings.game2048AnimationSpeed.name)
         .put("morePageShowDescriptions", settings.morePageShowDescriptions)
         .put("homeWidgets", settings.homeWidgets.toJsonArray())
+        .put(
+            "homeGameShortcuts",
+            normalizeHomeGameShortcutIds(settings.homeGameShortcuts).toJsonArray(),
+        )
         .put("homeWidgetTitles", settings.homeWidgetTitles.toJsonArray())
         .put("desktopWidgetConfigs", encodeDesktopWidgetConfigs(settings.desktopWidgetConfigs))
 
@@ -758,6 +764,18 @@ object BackupJsonCodec {
             ),
             migrated = version >= 26,
         )
+        val homeGameShortcuts = if (version >= 27) {
+            json.requiredArray("homeGameShortcuts")
+                .requiredStringList("homeGameShortcuts")
+                .also { items ->
+                    require(items.all(HOME_GAME_SHORTCUT_IDS::contains)) {
+                        "homeGameShortcuts contains an unsupported game"
+                    }
+                }
+                .let(::normalizeHomeGameShortcutIds)
+        } else {
+            defaults.homeGameShortcuts
+        }
         val navItems = decodeNavItems(json.requiredArray("navItems"), version)
         val musicVisualizerMinFrequencyHz = if (version >= 24) {
             json.requiredInt("musicVisualizerMinFrequencyHz").also { value ->
@@ -1136,6 +1154,7 @@ object BackupJsonCodec {
                 defaults.morePageShowDescriptions
             },
             homeWidgets = homeWidgets,
+            homeGameShortcuts = homeGameShortcuts,
             homeWidgetTitles = homeWidgetTitles,
             desktopWidgetConfigs = if (version >= 22) {
                 decodeDesktopWidgetConfigs(json.requiredArray("desktopWidgetConfigs"))

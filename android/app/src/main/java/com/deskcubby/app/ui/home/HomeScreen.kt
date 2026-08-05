@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -125,6 +126,22 @@ private val mealQuickActions = listOf(
     MealQuickAction("dinner", "晚餐", "Dinner", "🍜"),
     MealQuickAction("fruit", "水果", "Fruit", "🍊"),
     MealQuickAction("late_snack", "夜宵", "Late snack", "🍤"),
+)
+
+private data class HomeGameShortcut(
+    val id: String,
+    val chinese: String,
+    val english: String,
+)
+
+private val homeGameShortcuts = listOf(
+    HomeGameShortcut("2048", "2048 · 4×4", "2048 · 4×4"),
+    HomeGameShortcut("2048_5", "2048 · 5×5", "2048 · 5×5"),
+    HomeGameShortcut("2048_6", "2048 · 6×6", "2048 · 6×6"),
+    HomeGameShortcut("snake", "贪吃蛇", "Snake"),
+    HomeGameShortcut("tetris", "俄罗斯方块", "Tetris"),
+    HomeGameShortcut("minesweeper", "扫雷", "Minesweeper"),
+    HomeGameShortcut("spider", "蜘蛛纸牌", "Spider Solitaire"),
 )
 
 @Composable
@@ -537,24 +554,34 @@ private fun HomeWidget(
             }
         }
         "game_shortcuts" -> WidgetCard(tr("小游戏", "Mini games"), showTitle, settings.homeWidgetBordersEnabled) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                listOf(
-                    Triple("2048", "2048", "2048"),
-                    Triple("snake", "贪吃蛇", "Snake"),
-                    Triple("minesweeper", "扫雷", "Minesweeper"),
-                ).forEach { (gameId, chinese, english) ->
-                    TextButton(
-                        onClick = { onOpenGame(gameId) },
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(
-                            if (settings.appLanguage == AppLanguage.ENGLISH) english else chinese,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+            val shortcuts = homeGameShortcuts.filter { it.id in settings.homeGameShortcuts }
+            if (shortcuts.isEmpty()) {
+                Text(
+                    tr(
+                        "可在“设置 → 子页面设置 → 主页”选择快捷入口",
+                        "Choose shortcuts in Settings → Subpage settings → Home",
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    shortcuts.forEach { shortcut ->
+                        TextButton(
+                            onClick = { onOpenGame(shortcut.id) },
+                        ) {
+                            Text(
+                                if (settings.appLanguage == AppLanguage.ENGLISH) {
+                                    shortcut.english
+                                } else {
+                                    shortcut.chinese
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }
