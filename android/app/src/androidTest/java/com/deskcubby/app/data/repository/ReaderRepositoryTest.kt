@@ -31,6 +31,9 @@ class ReaderRepositoryTest {
                 lineHeightMultiplier = 1.8f,
                 paragraphSpacingDp = 16f,
                 orientation = ReaderOrientation.LANDSCAPE,
+                chapterDetectionMode = ReaderChapterDetectionMode.CUSTOM,
+                customChapterRegex = "^Scene\\s+[0-9]+$",
+                chapterHeadingMaxChars = 96,
             )
             val repository = ReaderRepository(isolatedContext)
             // Construction must not touch the filesystem; initialization is explicitly async.
@@ -44,7 +47,7 @@ class ReaderRepositoryTest {
             )
             assertTrue(stored.isFile)
             assertTrue(stored.length() in 1..ReaderRepository.MAX_STATE_BYTES.toLong())
-            assertEquals(2, JSONObject(stored.readText(Charsets.UTF_8)).getInt("schemaVersion"))
+            assertEquals(3, JSONObject(stored.readText(Charsets.UTF_8)).getInt("schemaVersion"))
 
             val reloaded = ReaderRepository(isolatedContext)
             assertEquals(ReaderPreferences(), reloaded.state.value.preferences)
@@ -110,6 +113,86 @@ class ReaderRepositoryTest {
         assertEquals(-1, decoded.books.single().textPageIndex)
         assertEquals(37, decoded.books.single().textParagraphIndex)
         assertEquals(ReaderPreferences().customBackgroundArgb, decoded.preferences.customBackgroundArgb)
+    }
+
+    @Test
+    fun schemaTwoReaderStateDefaultsNewChapterPreferences() {
+        val encoded = JSONObject(
+            ReaderStateCodec.encode(
+                ReaderLibraryState(
+                    preferences = ReaderPreferences(
+                        chapterDetectionMode = ReaderChapterDetectionMode.CUSTOM,
+                        customChapterRegex = "^Scene [0-9]+$",
+                        chapterHeadingMaxChars = 88,
+                    ),
+                ),
+            ),
+        ).apply {
+            put("schemaVersion", 2)
+            getJSONObject("preferences").apply {
+                remove("chapterDetectionMode")
+                remove("customChapterRegex")
+                remove("chapterHeadingMaxChars")
+            }
+        }
+
+        assertEquals(
+            ReaderPreferences(),
+            ReaderStateCodec.decode(encoded.toString()).preferences,
+        )
+    }
+
+    @Test
+    fun smartChapterDetectionHandlesChineseEnglishMarkdownAndSpecialHeadings() {
+        listOf(
+            "第一百二十三章 风雪夜归人",
+            "Chapter XLII: The Answer",
+            "【第七回】故人重逢",
+            "# Markdown chapter",
+            "尾声",
+            "12. Numbered section",
+        ).forEach { heading ->
+            assertTrue("Expected chapter heading: $heading", isReaderChapterHeading(heading))
+        }
+        assertFalse(isReaderChapterHeading("这是一段普通的正文，不应该进入目录。"))
+    }
+
+    @Test
+    fun customChapterRegexCanReplaceSmartRulesAndHonorsLengthLimit() {
+        val custom = ReaderPreferences(
+            chapterDetectionMode = ReaderChapterDetectionMode.CUSTOM,
+            customChapterRegex = "^Scene\\s+[0-9]+$",
+            chapterHeadingMaxChars = 40,
+        )
+
+        assertTrue(isReaderChapterHeading("Scene 18", custom))
+        assertFalse(isReaderChapterHeading("Chapter 18", custom))
+        assertFalse(isReaderChapterHeading("Scene ${"1".repeat(50)}", custom))
+        assertTrue(isValidReaderChapterRegex(custom.customChapterRegex))
+        assertFalse(isValidReaderChapterRegex("[unfinished"))
+    }
+
+    @Test
+    fun detectedChapterStartsAStableLogicalPage() {
+        val layout = paginateReaderText(
+            paragraphs = listOf(
+                "opening text",
+                "第一章 起点",
+                "chapter body",
+                "Scene 2",
+                "custom body",
+            ),
+            targetChars = 200,
+            preferences = ReaderPreferences(
+                chapterDetectionMode = ReaderChapterDetectionMode.SMART_AND_CUSTOM,
+                customChapterRegex = "^Scene\\s+[0-9]+$",
+            ),
+        )
+
+        assertEquals(listOf("第一章 起点", "Scene 2"), layout.chapters.map { it.title })
+        layout.chapters.forEach { chapter ->
+            assertEquals(chapter.paragraphIndex, layout.pages[chapter.pageIndex].firstParagraphIndex)
+        }
     }
 
     @Test

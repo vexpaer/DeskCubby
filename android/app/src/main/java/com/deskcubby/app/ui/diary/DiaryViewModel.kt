@@ -1,6 +1,7 @@
 package com.deskcubby.app.ui.diary
 
 import android.net.Uri
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.deskcubby.app.data.model.AppSettings
@@ -17,6 +18,7 @@ import com.deskcubby.app.data.repository.DiaryPreviewMedia
 import com.deskcubby.app.data.repository.DiaryTextUtils
 import com.deskcubby.app.data.repository.ExternalFileConflictException
 import com.deskcubby.app.data.repository.MealCalorieEstimationStage
+import com.deskcubby.app.data.repository.MealCalorieModelUpdate
 import com.deskcubby.app.data.repository.MealCalendarDay
 import com.deskcubby.app.data.repository.MealCalendarPhoto
 import com.deskcubby.app.data.repository.MealDayDetails
@@ -84,6 +86,7 @@ private data class CalorieEstimationWork(
     val noteOverride: String?,
     val fallbackNote: String,
     val settings: AppSettings,
+    val clearManualTotalOnSave: Boolean,
 )
 
 private enum class CalorieEnqueueResult {
@@ -93,6 +96,7 @@ private enum class CalorieEnqueueResult {
 }
 
 private const val MAX_PROGRESS_PHOTO_LABEL_CHARS = 160
+private const val MAX_MODEL_TRACE_TEXT_CHARS = 32_000
 
 @OptIn(FlowPreview::class)
 @HiltViewModel
@@ -204,6 +208,7 @@ class DiaryViewModel @Inject constructor(
         dateIso: String? = null,
         force: Boolean = false,
         noteOverride: String? = null,
+        photoFileName: String? = null,
     ) {
         if (!settings.value.calorieEstimationEnabled) return
         viewModelScope.launch {
@@ -232,6 +237,11 @@ class DiaryViewModel @Inject constructor(
                         .mapNotNull { day ->
                             val seenInDay = seenPhotoKeys ?: mutableSetOf()
                             val selectedPhotos = day.photos.mapIndexedNotNull { index, photo ->
+                                if (photoFileName != null &&
+                                    !photo.fileName.equals(photoFileName, ignoreCase = true)
+                                ) {
+                                    return@mapIndexedNotNull null
+                                }
                                 if (!force && photo.energyKj != null) return@mapIndexedNotNull null
                                 val key = photo.fileName
                                     .lowercase(Locale.ROOT)
@@ -258,6 +268,7 @@ class DiaryViewModel @Inject constructor(
                                 },
                                 fallbackNote = day.details.note,
                                 settings = currentSettings,
+                                clearManualTotalOnSave = force && photoFileName == null,
                             )
                         }
 
@@ -425,7 +436,11 @@ class DiaryViewModel @Inject constructor(
                             )
                         }
                     },
+                    onModelUpdate = { update ->
+                        updateCalorieModelTrace(work.id, update)
+                    },
                 )
+                finishCalorieModelTrace(work.id)
                 replaceCalorieProgress(work.id) {
                     it.copy(completedPhotoCount = index + 1)
                 }
@@ -452,7 +467,11 @@ class DiaryViewModel @Inject constructor(
                     ?: MealDayDetails(note = work.fallbackNote)
                 mapOf(
                     work.dateIso to latestDetails.copy(
-                        totalEnergyKjOverride = null,
+                        totalEnergyKjOverride = if (work.clearManualTotalOnSave) {
+                            null
+                        } else {
+                            latestDetails.totalEnergyKjOverride
+                        },
                         note = work.noteOverride ?: latestDetails.note,
                     ),
                 )
@@ -476,6 +495,7 @@ class DiaryViewModel @Inject constructor(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
+            finishCalorieModelTrace(work.id)
             replaceCalorieProgress(work.id) {
                 it.copy(
                     status = CalorieEstimationQueueStatus.FAILED,
@@ -525,6 +545,56 @@ class DiaryViewModel @Inject constructor(
         _calorieEstimationQueueState.value = CalorieEstimationQueueState(
             items = current.items.map { item -> if (item.id == id) transform(item) else item },
         )
+    }
+
+    private fun updateCalorieModelTrace(
+        workId: Long,
+        update: MealCalorieModelUpdate,
+    ) {
+        val now = SystemClock.elapsedRealtime()
+        replaceCalorieProgress(workId) { progress ->
+            val selectedPhotoIndex = progress.currentSelectedPhotoIndex
+                ?: return@replaceCalorieProgress progress
+            val current = progress.modelTraces.lastOrNull()
+            val sameRequest = current?.isRunning == true &&
+                current.stage == update.stage &&
+                current.selectedPhotoIndex == selectedPhotoIndex
+            val traces = if (sameRequest) {
+                progress.modelTraces.dropLast(1) + current.copy(
+                    modelName = update.modelName.take(MAX_PROGRESS_PHOTO_LABEL_CHARS),
+                    reasoning = update.completion.reasoning.take(MAX_MODEL_TRACE_TEXT_CHARS),
+                    response = update.completion.content.take(MAX_MODEL_TRACE_TEXT_CHARS),
+                )
+            } else {
+                progress.modelTraces.map { trace ->
+                    if (trace.isRunning) trace.copy(finishedAtElapsedRealtime = now) else trace
+                } + CalorieModelTrace(
+                    stage = update.stage,
+                    modelName = update.modelName.take(MAX_PROGRESS_PHOTO_LABEL_CHARS),
+                    selectedPhotoIndex = selectedPhotoIndex,
+                    photoLabel = progress.currentPhotoLabel.orEmpty(),
+                    startedAtElapsedRealtime = now,
+                    reasoning = update.completion.reasoning.take(MAX_MODEL_TRACE_TEXT_CHARS),
+                    response = update.completion.content.take(MAX_MODEL_TRACE_TEXT_CHARS),
+                )
+            }
+            progress.copy(modelTraces = traces)
+        }
+    }
+
+    private fun finishCalorieModelTrace(workId: Long) {
+        val now = SystemClock.elapsedRealtime()
+        replaceCalorieProgress(workId) { progress ->
+            if (progress.modelTraces.none(CalorieModelTrace::isRunning)) {
+                progress
+            } else {
+                progress.copy(
+                    modelTraces = progress.modelTraces.map { trace ->
+                        if (trace.isRunning) trace.copy(finishedAtElapsedRealtime = now) else trace
+                    },
+                )
+            }
+        }
     }
 
     fun saveMealDayDetails(

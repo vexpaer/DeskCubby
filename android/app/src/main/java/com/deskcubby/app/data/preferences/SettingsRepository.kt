@@ -67,6 +67,7 @@ import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.model.normalizeMarkdownHeadingSizes
 import com.deskcubby.app.data.model.normalizeMorePageOrder
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -111,11 +112,13 @@ class SettingsRepository @Inject constructor(
         val cloudSyncConfigs = stringPreferencesKey("cloud_sync_configs_v1")
         val diaryTreeUri = stringPreferencesKey("diary_tree_uri")
         val mediaTreeUri = stringPreferencesKey("media_tree_uri")
+        val notesTreeUri = stringPreferencesKey("notes_tree_uri")
         val fileNamePattern = stringPreferencesKey("file_name_pattern")
         val markdownTemplate = stringPreferencesKey("markdown_template")
         val imageNamePattern = stringPreferencesKey("image_name_pattern")
         val imageMaxWidthDp = intPreferencesKey("image_max_width_dp")
         val imageMaxHeightDp = intPreferencesKey("image_max_height_dp")
+        val markdownHeadingSizesSp = stringPreferencesKey("markdown_heading_sizes_sp_v1")
         val mealImageCompressionEnabled = booleanPreferencesKey("meal_image_compression_enabled")
         val mealImageCompressionQuality = intPreferencesKey("meal_image_compression_quality")
         val saveOriginalToGallery = booleanPreferencesKey("save_original_to_gallery")
@@ -186,6 +189,7 @@ class SettingsRepository @Inject constructor(
         val homeWidgets = stringPreferencesKey("home_widgets")
         val mealPhotosWidgetMigrated = booleanPreferencesKey("meal_photos_widget_migrated")
         val dailyRecordsWidgetMigrated = booleanPreferencesKey("daily_records_widget_migrated")
+        val homeModulesV26Migrated = booleanPreferencesKey("home_modules_v26_migrated")
         val homeWidgetTitles = stringPreferencesKey("home_widget_titles")
         val desktopWidgetConfigs = stringPreferencesKey("desktop_widget_configs_v1")
     }
@@ -263,12 +267,17 @@ class SettingsRepository @Inject constructor(
             cloudSyncConfigs = cloudSyncConfigs,
             diaryTreeUri = prefs[Keys.diaryTreeUri]?.takeIf(::hasPersistedTreeAccess),
             mediaTreeUri = prefs[Keys.mediaTreeUri]?.takeIf(::hasPersistedTreeAccess),
+            notesTreeUri = prefs[Keys.notesTreeUri]?.takeIf(::hasPersistedTreeAccess),
             fileNamePattern = (prefs[Keys.fileNamePattern] ?: defaults.fileNamePattern)
                 .let { if (it == "yyyy-MM-dd '日记'") defaults.fileNamePattern else it },
             markdownTemplate = prefs[Keys.markdownTemplate] ?: defaults.markdownTemplate,
             imageNamePattern = prefs[Keys.imageNamePattern] ?: defaults.imageNamePattern,
             imageMaxWidthDp = (prefs[Keys.imageMaxWidthDp] ?: defaults.imageMaxWidthDp).coerceIn(120, 2400),
             imageMaxHeightDp = (prefs[Keys.imageMaxHeightDp] ?: defaults.imageMaxHeightDp).coerceIn(120, 2400),
+            markdownHeadingSizesSp = decodeMarkdownHeadingSizes(
+                prefs[Keys.markdownHeadingSizesSp],
+                defaults.markdownHeadingSizesSp,
+            ),
             mealImageCompressionEnabled = prefs[Keys.mealImageCompressionEnabled]
                 ?: defaults.mealImageCompressionEnabled,
             mealImageCompressionQuality = (prefs[Keys.mealImageCompressionQuality]
@@ -384,20 +393,29 @@ class SettingsRepository @Inject constructor(
             homeWidgets = if (prefs[Keys.homeWidgets] == null) {
                 defaults.homeWidgets
             } else {
-                migrateDailyRecordsWidget(
-                    items = migrateMealPhotosWidget(
-                        items = decodeWidgets(prefs[Keys.homeWidgets], defaults.homeWidgets),
-                        migrated = prefs[Keys.mealPhotosWidgetMigrated] == true,
+                migrateHomeModulesV26(
+                    items = migrateDailyRecordsWidget(
+                        items = migrateMealPhotosWidget(
+                            items = decodeWidgets(prefs[Keys.homeWidgets], defaults.homeWidgets),
+                            migrated = prefs[Keys.mealPhotosWidgetMigrated] == true,
+                        ),
+                        migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
                     ),
-                    migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
+                    migrated = prefs[Keys.homeModulesV26Migrated] == true,
                 )
             },
             homeWidgetTitles = if (prefs[Keys.homeWidgetTitles] == null) {
                 defaults.homeWidgetTitles
             } else {
-                migrateDailyRecordsWidget(
-                    items = decodeStringList(prefs[Keys.homeWidgetTitles], defaults.homeWidgetTitles),
-                    migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
+                migrateHomeModulesV26(
+                    items = migrateDailyRecordsWidget(
+                        items = decodeStringList(
+                            prefs[Keys.homeWidgetTitles],
+                            defaults.homeWidgetTitles,
+                        ),
+                        migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
+                    ),
+                    migrated = prefs[Keys.homeModulesV26Migrated] == true,
                 )
             },
             desktopWidgetConfigs = decodeDesktopWidgetConfigs(
@@ -482,11 +500,14 @@ class SettingsRepository @Inject constructor(
     }
     suspend fun setDiaryTreeUri(value: String) = set(Keys.diaryTreeUri, value)
     suspend fun setMediaTreeUri(value: String) = set(Keys.mediaTreeUri, value)
+    suspend fun setNotesTreeUri(value: String) = set(Keys.notesTreeUri, value)
     suspend fun setFileNamePattern(value: String) = set(Keys.fileNamePattern, value)
     suspend fun setMarkdownTemplate(value: String) = set(Keys.markdownTemplate, value)
     suspend fun setImageNamePattern(value: String) = set(Keys.imageNamePattern, value)
     suspend fun setImageMaxWidth(value: Int) = set(Keys.imageMaxWidthDp, value.coerceIn(120, 2400))
     suspend fun setImageMaxHeight(value: Int) = set(Keys.imageMaxHeightDp, value.coerceIn(120, 2400))
+    suspend fun setMarkdownHeadingSizes(value: List<Float>) =
+        set(Keys.markdownHeadingSizesSp, encodeMarkdownHeadingSizes(value))
     suspend fun setMealImageCompressionEnabled(value: Boolean) =
         set(Keys.mealImageCompressionEnabled, value)
     suspend fun setMealImageCompressionQuality(value: Int) =
@@ -655,6 +676,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.homeWidgets] = encodeStringList(widgets.distinct())
             prefs[Keys.mealPhotosWidgetMigrated] = true
             prefs[Keys.dailyRecordsWidgetMigrated] = true
+            prefs[Keys.homeModulesV26Migrated] = true
             prefs[Keys.homeWidgetTitles] = encodeStringList(visibleWidgetTitles.distinct())
             prefs[Keys.mealButtonsUseIcons] = mealButtonsUseIcons
             prefs[Keys.mealButtonIcons] = encodeStringList(normalizeMealButtonIcons(mealButtonIcons))
@@ -665,6 +687,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.homeWidgets] = encodeStringList(value.distinct())
             prefs[Keys.mealPhotosWidgetMigrated] = true
             prefs[Keys.dailyRecordsWidgetMigrated] = true
+            prefs[Keys.homeModulesV26Migrated] = true
         }
     }
     suspend fun setHomeWidgetTitles(value: List<String>) =
@@ -823,11 +846,18 @@ class SettingsRepository @Inject constructor(
                 Keys.mediaTreeUri,
                 restorableTreeUriOrCurrent(value.mediaTreeUri, prefs[Keys.mediaTreeUri]),
             )
+            prefs.setOrRemove(
+                Keys.notesTreeUri,
+                restorableTreeUriOrCurrent(value.notesTreeUri, prefs[Keys.notesTreeUri]),
+            )
             prefs[Keys.fileNamePattern] = value.fileNamePattern
             prefs[Keys.markdownTemplate] = value.markdownTemplate
             prefs[Keys.imageNamePattern] = value.imageNamePattern
             prefs[Keys.imageMaxWidthDp] = value.imageMaxWidthDp.coerceIn(120, 2400)
             prefs[Keys.imageMaxHeightDp] = value.imageMaxHeightDp.coerceIn(120, 2400)
+            prefs[Keys.markdownHeadingSizesSp] = encodeMarkdownHeadingSizes(
+                value.markdownHeadingSizesSp,
+            )
             prefs[Keys.mealImageCompressionEnabled] = value.mealImageCompressionEnabled
             prefs[Keys.mealImageCompressionQuality] = value.mealImageCompressionQuality.coerceIn(30, 95)
             prefs[Keys.saveOriginalToGallery] = value.saveOriginalToGallery
@@ -913,6 +943,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.homeWidgets] = encodeStringList(value.homeWidgets.distinct())
             prefs[Keys.mealPhotosWidgetMigrated] = true
             prefs[Keys.dailyRecordsWidgetMigrated] = true
+            prefs[Keys.homeModulesV26Migrated] = true
             prefs[Keys.homeWidgetTitles] = encodeStringList(value.homeWidgetTitles.distinct())
             prefs[Keys.desktopWidgetConfigs] = encodeDesktopWidgetConfigs(
                 restoredDesktopWidgetConfigs,
@@ -1226,6 +1257,20 @@ class SettingsRepository @Inject constructor(
         }.getOrElse { fallback }
     }
 
+    private fun decodeMarkdownHeadingSizes(
+        raw: String?,
+        fallback: List<Float>,
+    ): List<Float> {
+        if (raw == null) return normalizeMarkdownHeadingSizes(fallback)
+        return runCatching {
+            val array = JSONArray(raw)
+            require(array.length() == 6)
+            normalizeMarkdownHeadingSizes(
+                List(array.length()) { index -> array.getDouble(index).toFloat() },
+            )
+        }.getOrElse { normalizeMarkdownHeadingSizes(fallback) }
+    }
+
     private fun decodeMealButtonIcons(raw: String?, fallback: List<String>): List<String> {
         if (raw == null) return fallback
         return runCatching {
@@ -1339,6 +1384,10 @@ class SettingsRepository @Inject constructor(
 
     private fun encodeStringList(items: List<String>): String = JSONArray().apply {
         items.forEach { put(it) }
+    }.toString()
+
+    private fun encodeMarkdownHeadingSizes(items: List<Float>): String = JSONArray().apply {
+        normalizeMarkdownHeadingSizes(items).forEach { put(it.toDouble()) }
     }.toString()
 
     private fun decodeHomeGreetings(
@@ -1820,4 +1869,9 @@ internal fun migrateDailyRecordsWidget(items: List<String>, migrated: Boolean): 
     return items.toMutableList().apply {
         add(quickInputIndex + 1, "daily_records")
     }
+}
+
+internal fun migrateHomeModulesV26(items: List<String>, migrated: Boolean): List<String> {
+    if (migrated) return items
+    return (items + listOf("notes", "game_shortcuts", "record_overview")).distinct()
 }

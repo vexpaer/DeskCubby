@@ -459,6 +459,8 @@ class SettingsViewModel @Inject constructor(
     fun setImageNamePattern(value: String) = launch { repository.setImageNamePattern(value) }
     fun setImageMaxWidth(value: Int) = launch { repository.setImageMaxWidth(value) }
     fun setImageMaxHeight(value: Int) = launch { repository.setImageMaxHeight(value) }
+    fun setMarkdownHeadingSizes(value: List<Float>) =
+        launch { repository.setMarkdownHeadingSizes(value) }
     fun setMealImageCompressionEnabled(value: Boolean) =
         launch { repository.setMealImageCompressionEnabled(value) }
     fun setMealImageCompressionQuality(value: Int) =

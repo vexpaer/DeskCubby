@@ -36,6 +36,8 @@ enum class ReaderOrientation { FOLLOW_SYSTEM, PORTRAIT, LANDSCAPE }
 
 enum class ReaderBackground { WHITE, PAPER, SEPIA, GREEN, NIGHT, CUSTOM }
 
+enum class ReaderChapterDetectionMode { SMART, CUSTOM, SMART_AND_CUSTOM }
+
 data class ReaderPreferences(
     val background: ReaderBackground = ReaderBackground.PAPER,
     val customBackgroundArgb: Int = 0xFFF4F0E6.toInt(),
@@ -43,6 +45,10 @@ data class ReaderPreferences(
     val lineHeightMultiplier: Float = 1.6f,
     val paragraphSpacingDp: Float = 10f,
     val orientation: ReaderOrientation = ReaderOrientation.FOLLOW_SYSTEM,
+    val chapterDetectionMode: ReaderChapterDetectionMode =
+        ReaderChapterDetectionMode.SMART_AND_CUSTOM,
+    val customChapterRegex: String = "",
+    val chapterHeadingMaxChars: Int = 160,
 )
 
 data class ReaderBook(
@@ -124,7 +130,7 @@ class ReaderRepository @Inject constructor(
             }
             // Validate that the provider can still be read before adding a library entry.
             when (type) {
-                ReaderBookType.TXT -> readText(uri)
+                ReaderBookType.TXT -> readText(uri, _state.value.preferences)
                 ReaderBookType.PDF -> readPdfPageCount(uri)
             }
             val alreadyPersisted = resolver.persistedUriPermissions.any { permission ->
@@ -168,7 +174,7 @@ class ReaderRepository @Inject constructor(
     suspend fun load(book: ReaderBook): ReaderContent = withContext(Dispatchers.IO) {
         val uri = Uri.parse(book.uri)
         when (book.type) {
-            ReaderBookType.TXT -> readText(uri).let { layout ->
+            ReaderBookType.TXT -> readText(uri, _state.value.preferences).let { layout ->
                 ReaderContent.TextBook(layout.pages, layout.chapters)
             }
             ReaderBookType.PDF -> ReaderContent.PdfBook(readPdfPageCount(uri))
@@ -256,7 +262,7 @@ class ReaderRepository @Inject constructor(
             }
         }
 
-    private fun readText(uri: Uri): ReaderTextLayout {
+    private fun readText(uri: Uri, preferences: ReaderPreferences): ReaderTextLayout {
         val bytes = resolver.openInputStream(uri)?.use { input ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             var total = 0
@@ -277,7 +283,10 @@ class ReaderRepository @Inject constructor(
             .take(MAX_PARAGRAPHS + 1)
             .toList()
         require(paragraphs.size <= MAX_PARAGRAPHS) { "TXT 段落数量过多" }
-        return paginateReaderText(paragraphs.ifEmpty { listOf("") })
+        return paginateReaderText(
+            paragraphs = paragraphs.ifEmpty { listOf("") },
+            preferences = preferences,
+        )
     }
 
     private fun readPdfPageCount(uri: Uri): Int {
@@ -414,6 +423,11 @@ internal fun normalizeReaderPreferences(value: ReaderPreferences): ReaderPrefere
         ?.coerceIn(1f, 2.4f) ?: 1.6f,
     paragraphSpacingDp = value.paragraphSpacingDp.takeIf(Float::isFinite)
         ?.coerceIn(0f, 36f) ?: 10f,
+    customChapterRegex = value.customChapterRegex.trim().take(MAX_READER_CUSTOM_REGEX_CHARS),
+    chapterHeadingMaxChars = value.chapterHeadingMaxChars.coerceIn(
+        MIN_READER_CHAPTER_HEADING_CHARS,
+        MAX_READER_CHAPTER_TITLE_CHARS,
+    ),
 )
 
 internal const val READER_TEXT_PAGE_TARGET_CHARS = 1_800
@@ -426,9 +440,14 @@ internal const val READER_TEXT_PAGE_TARGET_CHARS = 1_800
 internal fun paginateReaderText(
     paragraphs: List<String>,
     targetChars: Int = READER_TEXT_PAGE_TARGET_CHARS,
+    preferences: ReaderPreferences = ReaderPreferences(),
 ): ReaderTextLayout {
     require(targetChars in 200..20_000)
     val source = paragraphs.ifEmpty { listOf("") }
+    val detectionPreferences = normalizeReaderPreferences(preferences)
+    val customChapterRegex = detectionPreferences.customChapterRegex
+        .takeIf(String::isNotBlank)
+        ?.let { runCatching { Regex(it) }.getOrNull() }
     val pages = ArrayList<ReaderTextPage>()
     val chapters = ArrayList<ReaderChapter>()
     val buffer = StringBuilder(targetChars + 128)
@@ -443,7 +462,9 @@ internal fun paginateReaderText(
 
     source.forEachIndexed { paragraphIndex, rawParagraph ->
         val paragraph = rawParagraph.trimEnd()
-        val chapterTitle = paragraph.trim().takeIf(::isReaderChapterHeading)
+        val chapterTitle = paragraph.trim().takeIf { value ->
+            isReaderChapterHeading(value, detectionPreferences, customChapterRegex)
+        }
         if (chapterTitle != null) {
             flush()
             if (chapters.size < MAX_READER_CHAPTERS) {
@@ -499,13 +520,38 @@ internal fun textPageForParagraph(
     }
 }
 
-internal fun isReaderChapterHeading(raw: String): Boolean {
+internal fun isReaderChapterHeading(
+    raw: String,
+    preferences: ReaderPreferences = ReaderPreferences(),
+): Boolean {
+    val normalizedPreferences = normalizeReaderPreferences(preferences)
     val value = raw.trim()
-    if (value.isEmpty() || value.length > MAX_READER_CHAPTER_TITLE_CHARS) return false
-    return CHINESE_READER_CHAPTER_REGEX.matches(value) ||
-        ENGLISH_READER_CHAPTER_REGEX.matches(value) ||
-        NUMBERED_READER_CHAPTER_REGEX.matches(value) ||
-        SPECIAL_READER_CHAPTER_REGEX.matches(value)
+    val customRegex = normalizedPreferences.customChapterRegex
+        .takeIf(String::isNotBlank)
+        ?.let { runCatching { Regex(it) }.getOrNull() }
+    return isReaderChapterHeading(value, normalizedPreferences, customRegex)
+}
+
+private fun isReaderChapterHeading(
+    value: String,
+    preferences: ReaderPreferences,
+    customRegex: Regex?,
+): Boolean {
+    if (value.isEmpty() || value.length > preferences.chapterHeadingMaxChars) return false
+    val smartEnabled = preferences.chapterDetectionMode !=
+        ReaderChapterDetectionMode.CUSTOM
+    val customEnabled = preferences.chapterDetectionMode !=
+        ReaderChapterDetectionMode.SMART
+    val smartMatch = smartEnabled && SMART_READER_CHAPTER_REGEXES.any { it.matches(value) }
+    val customMatch = customEnabled && customRegex?.matches(value) == true
+    return smartMatch || customMatch
+}
+
+internal fun isValidReaderChapterRegex(value: String): Boolean {
+    val normalized = value.trim()
+    if (normalized.isEmpty()) return true
+    if (normalized.length > MAX_READER_CUSTOM_REGEX_CHARS) return false
+    return runCatching { Regex(normalized) }.isSuccess
 }
 
 private fun safeReaderTextBoundary(value: String, requested: Int): Int {
@@ -519,19 +565,39 @@ private fun safeReaderTextBoundary(value: String, requested: Int): Int {
 }
 
 private const val MAX_READER_CHAPTERS = 20_000
-private const val MAX_READER_CHAPTER_TITLE_CHARS = 240
+internal const val MAX_READER_CHAPTER_TITLE_CHARS = 240
+internal const val MIN_READER_CHAPTER_HEADING_CHARS = 20
+internal const val MAX_READER_CUSTOM_REGEX_CHARS = 1_024
 private val CHINESE_READER_CHAPTER_REGEX = Regex(
-    "^(?:正文\\s*)?第[0-9０-９零〇○一二三四五六七八九十百千万两]+[章节卷回部篇集](?:\\s+|[:：、.-]?)[^\\n]*$",
+    "^(?:正文\\s*)?第[0-9０-９零〇○一二三四五六七八九十百千万两壹贰叁肆伍陆柒捌玖拾佰仟]+[章节卷回部篇集幕](?:\\s+|[:：、.．_-]?)[^\\n]*$",
 )
 private val ENGLISH_READER_CHAPTER_REGEX = Regex(
-    "^(?:chapter|part|book)\\s+(?:[0-9０-９]+|[ivxlcdm]+)(?:\\s*[:：.\\-]?\\s*.*)?$",
+    "^(?:chapter|part|book|section|episode)\\s+(?:[0-9０-９]+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)(?:\\s*[:：.\\-]?\\s*.*)?$",
     RegexOption.IGNORE_CASE,
 )
 private val NUMBERED_READER_CHAPTER_REGEX = Regex(
-    "^[0-9０-９]{1,5}[.、]\\s*\\S.{0,200}$",
+    "^(?:[0-9０-９]{1,5}(?:[.．、]|\\s+-\\s+)|[一二三四五六七八九十百千万]+、)\\s*\\S.*$",
 )
 private val SPECIAL_READER_CHAPTER_REGEX = Regex(
-    "^(?:序章|序言|前言|楔子|引子|终章|尾声|后记|番外(?:篇)?)(?:\\s*[:：.、\\-]?\\s*.*)?$",
+    "^(?:[【\\[])?(?:序章|序言|前言|楔子|引子|终章|尾声|后记|番外(?:篇)?|上卷|中卷|下卷|prologue|epilogue|preface|introduction|afterword)(?:[】\\]])?(?:\\s*[:：.、\\-]?\\s*.*)?$",
+    RegexOption.IGNORE_CASE,
+)
+private val VOLUME_READER_CHAPTER_REGEX = Regex(
+    "^(?:卷|部|篇|集)\\s*[0-9０-９零〇○一二三四五六七八九十百千万两]+(?:\\s*[:：.、\\-]?\\s*.*)?$",
+)
+private val MARKDOWN_READER_CHAPTER_REGEX = Regex("^#{1,6}\\s+\\S.*$")
+private val BRACKETED_READER_CHAPTER_REGEX = Regex(
+    "^[【\\[](?:第[0-9０-９零〇○一二三四五六七八九十百千万两]+[章节卷回部篇集幕]|chapter\\s+[^】\\]]+)[】\\]](?:\\s*.*)?$",
+    RegexOption.IGNORE_CASE,
+)
+private val SMART_READER_CHAPTER_REGEXES = listOf(
+    CHINESE_READER_CHAPTER_REGEX,
+    ENGLISH_READER_CHAPTER_REGEX,
+    NUMBERED_READER_CHAPTER_REGEX,
+    SPECIAL_READER_CHAPTER_REGEX,
+    VOLUME_READER_CHAPTER_REGEX,
+    MARKDOWN_READER_CHAPTER_REGEX,
+    BRACKETED_READER_CHAPTER_REGEX,
 )
 
 internal fun decodeReaderText(bytes: ByteArray): String {
@@ -556,7 +622,7 @@ internal fun decodeReaderText(bytes: ByteArray): String {
 }
 
 internal object ReaderStateCodec {
-    private const val SCHEMA_VERSION = 2
+    private const val SCHEMA_VERSION = 3
     private const val MAX_BOOKS = 500
     private val idPattern = Regex("[A-Za-z0-9._:-]{1,256}")
 
@@ -570,7 +636,10 @@ internal object ReaderStateCodec {
                 .put("fontSizeSp", value.preferences.fontSizeSp.toDouble())
                 .put("lineHeightMultiplier", value.preferences.lineHeightMultiplier.toDouble())
                 .put("paragraphSpacingDp", value.preferences.paragraphSpacingDp.toDouble())
-                .put("orientation", value.preferences.orientation.name),
+                .put("orientation", value.preferences.orientation.name)
+                .put("chapterDetectionMode", value.preferences.chapterDetectionMode.name)
+                .put("customChapterRegex", value.preferences.customChapterRegex)
+                .put("chapterHeadingMaxChars", value.preferences.chapterHeadingMaxChars),
         )
         .put(
             "books",
@@ -617,6 +686,25 @@ internal object ReaderStateCodec {
                     preferencesJson.getString("orientation"),
                     ReaderOrientation.FOLLOW_SYSTEM,
                 ),
+                chapterDetectionMode = if (schemaVersion >= 3) {
+                    enumValueOr(
+                        preferencesJson.getString("chapterDetectionMode"),
+                        ReaderChapterDetectionMode.SMART_AND_CUSTOM,
+                    )
+                } else {
+                    ReaderChapterDetectionMode.SMART_AND_CUSTOM
+                },
+                customChapterRegex = if (schemaVersion >= 3) {
+                    preferencesJson.getString("customChapterRegex")
+                        .take(MAX_READER_CUSTOM_REGEX_CHARS)
+                } else {
+                    ""
+                },
+                chapterHeadingMaxChars = if (schemaVersion >= 3) {
+                    preferencesJson.getInt("chapterHeadingMaxChars")
+                } else {
+                    ReaderPreferences().chapterHeadingMaxChars
+                },
             ),
         )
         val booksJson = root.getJSONArray("books")

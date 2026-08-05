@@ -99,7 +99,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -126,7 +125,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import androidx.core.text.HtmlCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.deskcubby.app.data.model.AppSettings
@@ -140,10 +138,11 @@ import com.deskcubby.app.data.repository.MealCalendarPhoto
 import com.deskcubby.app.data.repository.MealCalendarDay
 import com.deskcubby.app.data.repository.MAX_MEAL_ENERGY_KJ
 import com.deskcubby.app.data.repository.MAX_MEAL_NOTE_CHARS
-import com.deskcubby.app.data.repository.DiaryPreviewMedia
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.FourDotDragHandle
+import com.deskcubby.app.ui.components.MarkdownPreview
+import com.deskcubby.app.ui.components.MarkdownResolvedMedia
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
 import com.deskcubby.app.ui.components.OrganicSplitActionRowSize
 import com.deskcubby.app.ui.components.ZoomableImageDialog
@@ -155,8 +154,6 @@ import com.deskcubby.app.ui.theme.organicFutureAccentColors
 import com.deskcubby.app.ui.theme.tr
 import com.deskcubby.app.ui.diary.filter.asComposeColorFilter
 import com.deskcubby.app.ui.diary.filter.mealCalendarExportLayout
-import org.commonmark.parser.Parser
-import org.commonmark.renderer.html.HtmlRenderer
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -623,14 +620,17 @@ fun MealCalendarScreen(
                                     verticalAlignment = Alignment.CenterVertically) {
                                     Text(day.dateIso, style = MaterialTheme.typography.titleMedium,
                                         color = MaterialTheme.colorScheme.onSurface)
-                                    canonicalDay.totalEnergyKj?.let { energy ->
+                                    if (canonicalDay.totalEnergyKj != null ||
+                                        settings.calorieEstimationEnabled
+                                    ) {
                                         TextButton(
                                             enabled = mealOperationsEnabled,
                                             contentPadding = PaddingValues(horizontal = 6.dp),
                                             onClick = { energyDetailsDate = canonicalDay.dateIso },
                                         ) {
                                             Text(
-                                                "·  $energy kJ",
+                                                canonicalDay.totalEnergyKj?.let { "·  $it kJ" }
+                                                    ?: tr("·  热量详情", "·  Energy details"),
                                                 color = MaterialTheme.colorScheme.primary,
                                             )
                                         }
@@ -883,6 +883,15 @@ fun MealCalendarScreen(
                         noteOverride = note,
                     )
                 },
+                onRecalculatePhoto = { photo, note ->
+                    energyDetailsDate = null
+                    viewModel.calculateUncalculatedCalories(
+                        dateIso = dateIso,
+                        force = true,
+                        noteOverride = note,
+                        photoFileName = photo.fileName,
+                    )
+                },
             )
         }
     }
@@ -1090,6 +1099,7 @@ private fun MealEnergyDetailsDialog(
     onDismiss: () -> Unit,
     onSave: (totalEnergyKjOverride: Int?, note: String) -> Unit,
     onRecalculate: (note: String) -> Unit,
+    onRecalculatePhoto: (photo: MealCalendarPhoto, note: String) -> Unit,
 ) {
     var editingTotal by remember(day.dateIso) { mutableStateOf(false) }
     var totalEdited by remember(day.dateIso) { mutableStateOf(false) }
@@ -1195,9 +1205,14 @@ private fun MealEnergyDetailsDialog(
                                     }
                                 }
                                 Text(
-                                    "${day.totalEnergyKj ?: 0} kJ",
+                                    day.totalEnergyKj?.let { "$it kJ" }
+                                        ?: tr("估算失败", "Estimation failed"),
                                     style = MaterialTheme.typography.titleLarge,
-                                    color = MaterialTheme.colorScheme.primary,
+                                    color = if (day.totalEnergyKj == null) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.primary
+                                    },
                                 )
                                 Spacer(Modifier.width(6.dp))
                                 Icon(Icons.Outlined.Edit, tr("修改总热量", "Edit total energy"))
@@ -1256,15 +1271,37 @@ private fun MealEnergyDetailsDialog(
                                             color = MaterialTheme.colorScheme.primary,
                                         )
                                     }
+                                    if (calorieEstimationEnabled) {
+                                        IconButton(
+                                            enabled = actionsEnabled,
+                                            onClick = { onRecalculatePhoto(photo, noteDraft) },
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Calculate,
+                                                tr(
+                                                    "重新计算这张图片",
+                                                    "Recalculate this photo",
+                                                ),
+                                            )
+                                        }
+                                    }
                                 }
                                 if (photo.foods.isEmpty()) {
                                     Text(
-                                        tr(
-                                            "此旧估算只有总量；重新计算后可生成食物明细。",
-                                            "This older estimate only has a total; recalculate to create an itemized breakdown.",
-                                        ),
+                                        if (photo.energyKj == null) {
+                                            tr("估算失败", "Estimation failed")
+                                        } else {
+                                            tr(
+                                                "此旧估算只有总量；重新计算后可生成食物明细。",
+                                                "This older estimate only has a total; recalculate to create an itemized breakdown.",
+                                            )
+                                        },
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = if (photo.energyKj == null) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
                                     )
                                 } else {
                                     photo.foods.forEachIndexed { index, food ->
@@ -1301,8 +1338,8 @@ private fun MealEnergyDetailsDialog(
                     item(key = "recalculate-note") {
                         Text(
                             tr(
-                                "重新计算会保留当前备注、更新全部食物明细，并清除手动总热量。",
-                                "Recalculating keeps this note, refreshes every food item, and clears the manual total.",
+                                "每张图片可单独重新计算并保留手动总量；底部重新计算会更新当天全部图片并清除手动总量。",
+                                "Each photo can be recalculated while preserving the manual total; the action below refreshes every photo and clears the manual total.",
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1548,10 +1585,25 @@ fun DiaryEditorScreen(
                 state.loading -> AppLoadingIndicator(Modifier.align(Alignment.Center))
                 state.preview -> MarkdownPreview(
                     content = state.content,
-                    maxWidth = settings.imageMaxWidthDp,
-                    maxHeight = settings.imageMaxHeightDp,
-                    mediaTreeUri = settings.mediaTreeUri,
-                    resolveMediaBatch = viewModel::resolveDiaryPreviewMedia,
+                    headingSizesSp = settings.markdownHeadingSizesSp,
+                    maxWidthDp = settings.imageMaxWidthDp,
+                    maxHeightDp = settings.imageMaxHeightDp,
+                    mediaScopeKey = settings.mediaTreeUri,
+                    resolveMediaBatch = { targets ->
+                        buildMap {
+                            viewModel.resolveDiaryPreviewMedia(targets).forEach { (target, media) ->
+                                media.uri?.let { uri ->
+                                    put(
+                                        target,
+                                        MarkdownResolvedMedia(
+                                            model = uri,
+                                            locationName = media.locationName,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                    },
                     onEditCaption = { markdown, caption -> captionTarget = markdown to caption },
                     onDeleteMedia = { target -> mediaDeleteTarget = target },
                 )
@@ -1883,140 +1935,6 @@ private fun findMediaSourceLines(source: String): List<MediaSourceLine> = buildL
         }
         startOffset += line.length + 1
     }
-}
-
-@Composable
-private fun MarkdownPreview(
-    content: String,
-    maxWidth: Int,
-    maxHeight: Int,
-    mediaTreeUri: String?,
-    resolveMediaBatch: suspend (Collection<String>) -> Map<String, DiaryPreviewMedia>,
-    onEditCaption: (String, String) -> Unit,
-    onDeleteMedia: (String) -> Unit,
-) {
-    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
-    val visuals = deskCubbyVisuals
-    val imageRegex = remember { Regex("!\\[([^]]*)]\\((?:<([^>]+)>|([^\\s)]+))\\)") }
-    val parser = remember { Parser.builder().build() }
-    val renderer = remember { HtmlRenderer.builder().build() }
-    val parts = remember(content) {
-        buildList {
-            var cursor = 0
-            imageRegex.findAll(content).forEach { match ->
-                if (match.range.first > cursor) add(PreviewPart.Text(content.substring(cursor, match.range.first)))
-                add(PreviewPart.Image(match.value, match.groupValues[1], match.groupValues[2].ifBlank { match.groupValues[3] }))
-                cursor = match.range.last + 1
-            }
-            if (cursor < content.length) add(PreviewPart.Text(content.substring(cursor)))
-        }
-    }
-    val mediaTargets = remember(parts) {
-        parts.filterIsInstance<PreviewPart.Image>().map(PreviewPart.Image::target).distinct()
-    }
-    val resolvedMedia by produceState<Map<String, DiaryPreviewMedia>>(
-        initialValue = emptyMap(),
-        mediaTargets,
-        mediaTreeUri,
-    ) {
-        value = try {
-            resolveMediaBatch(mediaTargets)
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            emptyMap()
-        }
-    }
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(18.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        items(parts) { part ->
-            when (part) {
-                is PreviewPart.Text -> {
-                    val html = renderer.render(parser.parse(part.markdown))
-                    val plain = HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY).toString().trim()
-                    if (plain.isNotBlank()) Text(plain, style = MaterialTheme.typography.bodyLarge)
-                }
-                is PreviewPart.Image -> {
-                    val media = resolvedMedia[part.target]
-                    GlassPanel(
-                        modifier = Modifier.fillMaxWidth(),
-                        role = PanelRole.MEDIA,
-                        padding = PaddingValues(10.dp),
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            AsyncImage(
-                                model = media?.uri,
-                                contentDescription = part.caption,
-                                modifier = Modifier
-                                    .widthIn(max = maxWidth.dp)
-                                    .fillMaxWidth()
-                                    .heightIn(max = maxHeight.dp)
-                                    .then(if (organic) Modifier.clip(visuals.mediaShape) else Modifier),
-                                contentScale = ContentScale.Fit,
-                            )
-                            media?.locationName?.let { location ->
-                                val locationDescription = tr(
-                                    "拍摄地点：$location",
-                                    "Photo location: $location",
-                                )
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 8.dp)
-                                        .clearAndSetSemantics {
-                                            contentDescription = locationDescription
-                                        },
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(
-                                        Icons.Outlined.Place,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
-                                        tint = MaterialTheme.colorScheme.primary,
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                    Text(
-                                        location,
-                                        modifier = Modifier.weight(1f, fill = false),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                TextButton(
-                                    modifier = Modifier.weight(1f),
-                                    onClick = { onEditCaption(part.fullMarkdown, part.caption) },
-                                ) {
-                                    Text(part.caption.ifBlank { tr("点击添加图片说明", "Tap to add a caption") })
-                                }
-                                IconButton(onClick = { onDeleteMedia(part.target) }) {
-                                    Icon(
-                                        Icons.Outlined.Delete,
-                                        contentDescription = tr("删除媒体", "Delete media"),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private sealed interface PreviewPart {
-    data class Text(val markdown: String) : PreviewPart
-    data class Image(val fullMarkdown: String, val caption: String, val target: String) : PreviewPart
 }
 
 @Composable

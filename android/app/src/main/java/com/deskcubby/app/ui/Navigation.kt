@@ -44,6 +44,7 @@ import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Create
 import androidx.compose.material.icons.outlined.MonitorHeart
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Language
@@ -112,6 +113,9 @@ import com.deskcubby.app.ui.date.DateRecordViewModel
 import com.deskcubby.app.ui.home.HomeScreen
 import com.deskcubby.app.ui.home.HomeViewModel
 import com.deskcubby.app.ui.more.MoreHubScreen
+import com.deskcubby.app.ui.notes.NoteEditorScreen
+import com.deskcubby.app.ui.notes.NotesScreen
+import com.deskcubby.app.ui.notes.NotesViewModel
 import com.deskcubby.app.ui.poetry.PoetryBookScreen
 import com.deskcubby.app.ui.poetry.PoetryBookViewModel
 import com.deskcubby.app.ui.reader.ReaderScreen
@@ -149,6 +153,8 @@ import com.deskcubby.app.data.statistics.StepHealthConnectAccess
 
 object Routes {
     const val EDITOR = "diary_editor"
+    const val NOTE_EDITOR = "note_editor"
+    const val GAME_SHORTCUT = "game_shortcut"
     const val MEAL_CALENDAR = "meal_calendar"
     const val CALORIE_ESTIMATION_PROGRESS = "meal_calendar/calorie_progress"
     const val MEAL_FILTER_SETTINGS = "meal_filter_settings"
@@ -170,6 +176,7 @@ fun DeskCubbyRoot(
     settingsViewModel: SettingsViewModel = hiltViewModel(),
     diaryViewModel: DiaryViewModel = hiltViewModel(),
     thoughtViewModel: ThoughtViewModel = hiltViewModel(),
+    notesViewModel: NotesViewModel = hiltViewModel(),
     blogViewModel: BlogViewModel = hiltViewModel(),
     homeViewModel: HomeViewModel = hiltViewModel(),
     dateRecordViewModel: DateRecordViewModel = hiltViewModel(),
@@ -199,6 +206,7 @@ fun DeskCubbyRoot(
         var settingsSubpageOpen by remember { mutableStateOf(false) }
         var readerOpen by remember { mutableStateOf(false) }
         var gameOpen by remember { mutableStateOf(false) }
+        var requestedGameId by remember { mutableStateOf<String?>(null) }
         var childTutorialTarget by remember { mutableStateOf<PageTutorialTarget?>(null) }
         var tutorialConfirmedThisSession by remember { mutableStateOf(emptySet<String>()) }
         val initialStartDestination = remember { settings.defaultPage.route }
@@ -307,6 +315,14 @@ fun DeskCubbyRoot(
                             onOpenWebsite = { navController.navigate(NavItemId.BLOG.route) },
                             onOpenDateRecords = { navController.navigate(NavItemId.DATE.route) },
                             onOpenDailyRecords = { navController.navigate(Routes.DAILY_RECORDS_TODAY) },
+                            onOpenNotes = { navController.navigate(NavItemId.NOTES.route) },
+                            onOpenGame = { gameId ->
+                                requestedGameId = gameId
+                                navController.navigate(Routes.GAME_SHORTCUT)
+                            },
+                            onOpenStatistics = {
+                                navController.navigate(NavItemId.STATISTICS.route)
+                            },
                         )
                     }
                     composable(NavItemId.DIARY.route) {
@@ -392,6 +408,13 @@ fun DeskCubbyRoot(
                             viewModel = gamesViewModel,
                             onGameOpenChanged = { gameOpen = it },
                             onTutorialTargetChanged = { childTutorialTarget = it },
+                        )
+                    }
+                    composable(NavItemId.NOTES.route) {
+                        NotesScreen(
+                            padding = padding,
+                            viewModel = notesViewModel,
+                            onOpenNote = { navController.navigate(Routes.NOTE_EDITOR) },
                         )
                     }
                     composable(NavItemId.STATISTICS.route) {
@@ -510,6 +533,22 @@ fun DeskCubbyRoot(
                             onOpenCalorieProgress = {
                                 navController.navigate(Routes.CALORIE_ESTIMATION_PROGRESS)
                             },
+                        )
+                    }
+                    composable(Routes.NOTE_EDITOR) {
+                        NoteEditorScreen(
+                            viewModel = notesViewModel,
+                            onBack = { navController.popBackStack() },
+                        )
+                    }
+                    composable(Routes.GAME_SHORTCUT) {
+                        val gamesViewModel: GamesViewModel = hiltViewModel()
+                        GamesScreen(
+                            padding = PaddingValues(0.dp),
+                            viewModel = gamesViewModel,
+                            initialGameId = requestedGameId,
+                            onGameOpenChanged = { gameOpen = it },
+                            onTutorialTargetChanged = { childTutorialTarget = it },
                         )
                     }
                     composable(Routes.STATISTICS_USAGE) {
@@ -677,6 +716,15 @@ private fun routeTutorialTarget(route: String?, settings: AppSettings): PageTuto
             "“日常记录”可把常用多行内容追加到当前日记。" to
                 "Daily records can append reusable multi-line text to this diary.",
         )
+        Routes.NOTE_EDITOR -> target(
+            "page/note-editor",
+            "笔记编辑器",
+            "Note editor",
+            "编辑 Obsidian 兼容 Markdown，并在外部修改冲突时选择加载、覆盖或另存副本。",
+            "Edit Obsidian-compatible Markdown and choose reload, overwrite, or save a copy when external changes conflict.",
+            "上传媒体时每次都要选择当前笔记库内的存储文件夹。" to
+                "Each media upload asks for a destination folder inside the current vault.",
+        )
         Routes.MEAL_CALENDAR -> target(
             "page/meal-calendar",
             "吃历",
@@ -757,6 +805,10 @@ private fun routeTutorialTarget(route: String?, settings: AppSettings): PageTuto
                 )
                 NavItemId.DIARY -> listOf(
                     tr("点日记进入编辑；顶部按钮可新建、打开今日日记或进入吃历。", "Tap a diary to edit it; top actions create, open today, or enter the meal calendar."),
+                )
+                NavItemId.NOTES -> listOf(
+                    tr("按文件夹浏览；可新建、重命名或删除 Markdown 文件和文件夹。", "Browse by folder; create, rename, or delete Markdown files and folders."),
+                    tr("媒体不会使用日记媒体目录；每次上传都会重新选择位置。", "Notes never reuse the diary media folder; every upload asks for a location."),
                 )
                 NavItemId.MORE -> listOf(
                     tr("拖动四点手柄调整卡片顺序；收纳内容在导航页设置中管理。", "Drag four-dot handles to reorder cards; manage included pages in Navigation page settings."),
@@ -976,6 +1028,7 @@ private fun String.isDefaultLabelFor(id: NavItemId): Boolean =
 fun iconFor(key: String): ImageVector = when (key) {
     "home" -> Icons.Outlined.Home
     "book" -> Icons.Outlined.Book
+    "notes" -> Icons.Outlined.Description
     "language" -> Icons.Outlined.Language
     "bolt" -> Icons.Outlined.Bolt
     "poetry" -> Icons.AutoMirrored.Outlined.MenuBook

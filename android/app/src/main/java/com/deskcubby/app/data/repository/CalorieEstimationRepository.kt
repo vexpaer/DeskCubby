@@ -21,6 +21,12 @@ enum class MealCalorieEstimationStage {
     TEXT_ESTIMATION,
 }
 
+data class MealCalorieModelUpdate(
+    val stage: MealCalorieEstimationStage,
+    val modelName: String,
+    val completion: AiChatCompletion,
+)
+
 @Singleton
 class CalorieEstimationRepository @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -35,6 +41,7 @@ class CalorieEstimationRepository @Inject constructor(
         settings: AppSettings,
         note: String? = null,
         onStageChanged: (MealCalorieEstimationStage) -> Unit = {},
+        onModelUpdate: (MealCalorieModelUpdate) -> Unit = {},
     ): MealEnergyEstimate {
         val vision = settings.aiConfigs.firstOrNull {
             it.id == settings.calorieImageConfigId && it.type == AiModelType.IMAGE
@@ -64,13 +71,39 @@ class CalorieEstimationRepository @Inject constructor(
                 ?: "image/jpeg"
             bytes to mime
         }
-        val rawVision = ai.analyzeImage(vision, settings.calorieVisionPrompt, mime, bytes)
+        val visionUpdate: (AiChatCompletion) -> Unit = { completion ->
+            onModelUpdate(
+                MealCalorieModelUpdate(
+                    stage = MealCalorieEstimationStage.IMAGE_RECOGNITION,
+                    modelName = vision.model,
+                    completion = completion,
+                ),
+            )
+        }
+        visionUpdate(AiChatCompletion(content = ""))
+        val rawVision = ai.analyzeImageWithReasoningStreaming(
+            config = vision,
+            prompt = settings.calorieVisionPrompt,
+            mimeType = mime,
+            imageBytes = bytes,
+            onUpdate = visionUpdate,
+        ).content
         val visionJson = extractJsonObject(rawVision)
         // Parse before crossing the second network boundary so malformed or excessively large
         // model output is not relayed verbatim to another service.
         val textInput = buildCalorieTextInput(visionJson, note)
         onStageChanged(MealCalorieEstimationStage.TEXT_ESTIMATION)
-        val answer = ai.complete(
+        val textUpdate: (AiChatCompletion) -> Unit = { completion ->
+            onModelUpdate(
+                MealCalorieModelUpdate(
+                    stage = MealCalorieEstimationStage.TEXT_ESTIMATION,
+                    modelName = text.model,
+                    completion = completion,
+                ),
+            )
+        }
+        textUpdate(AiChatCompletion(content = ""))
+        val answer = ai.completeWithReasoning(
             settings.copy(
                 aiConfigs = listOf(text.copy(systemPrompt = "")),
                 aiChatConfigId = text.id,
@@ -78,7 +111,8 @@ class CalorieEstimationRepository @Inject constructor(
                     "\n\n" + CALORIE_DETAIL_RESPONSE_CONTRACT,
             ),
             listOf(AiChatMessage(1, AiChatRole.USER, textInput)),
-        )
+            onUpdate = textUpdate,
+        ).content
         return parseMealEnergyEstimate(visionJson, answer)
     }
 

@@ -161,6 +161,17 @@ const val MIN_POETRY_FONT_SIZE_SP: Float = 14f
 const val MAX_POETRY_FONT_SIZE_SP: Float = 36f
 const val MIN_POETRY_LINE_SPACING: Float = 1f
 const val MAX_POETRY_LINE_SPACING: Float = 2f
+const val MIN_MARKDOWN_HEADING_SIZE_SP: Float = 12f
+const val MAX_MARKDOWN_HEADING_SIZE_SP: Float = 48f
+val DEFAULT_MARKDOWN_HEADING_SIZES_SP: List<Float> = listOf(32f, 28f, 24f, 21f, 19f, 17f)
+
+fun normalizeMarkdownHeadingSizes(values: List<Float>): List<Float> =
+    DEFAULT_MARKDOWN_HEADING_SIZES_SP.mapIndexed { index, fallback ->
+        values.getOrNull(index)
+            ?.takeIf(Float::isFinite)
+            ?.coerceIn(MIN_MARKDOWN_HEADING_SIZE_SP, MAX_MARKDOWN_HEADING_SIZE_SP)
+            ?: fallback
+    }
 
 enum class NavItemId(
     val route: String,
@@ -174,6 +185,16 @@ enum class NavItemId(
 ) {
     HOME("home", "首页", "Home", "home", "今日概览与快捷记录", "Overview and quick capture"),
     DIARY("diary", "日记", "Diary", "book", "浏览、编辑日记与吃历", "Diaries and meal calendar"),
+    NOTES(
+        "notes",
+        "笔记",
+        "Notes",
+        "notes",
+        "按文件夹管理 Obsidian 兼容 Markdown 笔记",
+        "Manage Obsidian-compatible Markdown notes by folder",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
     BLOG(
         "blog",
         "浏览器",
@@ -408,11 +429,13 @@ data class AppSettings(
     val cloudSyncConfigs: List<CloudSyncConfig> = emptyList(),
     val diaryTreeUri: String? = null,
     val mediaTreeUri: String? = null,
+    val notesTreeUri: String? = null,
     val fileNamePattern: String = "yyyy-MM-dd",
     val markdownTemplate: String = "# {title}\n\n",
     val imageNamePattern: String = "{date}_{category}_{seq}",
     val imageMaxWidthDp: Int = 720,
     val imageMaxHeightDp: Int = 640,
+    val markdownHeadingSizesSp: List<Float> = DEFAULT_MARKDOWN_HEADING_SIZES_SP,
     val mealImageCompressionEnabled: Boolean = true,
     val mealImageCompressionQuality: Int = 80,
     val saveOriginalToGallery: Boolean = false,
@@ -485,6 +508,9 @@ data class AppSettings(
         "quick_input",
         "meal_photos",
         "year_progress",
+        "notes",
+        "game_shortcuts",
+        "record_overview",
     ),
     val homeWidgetTitles: List<String> = listOf(
         "calendar",
@@ -503,6 +529,9 @@ data class AppSettings(
         "random_diary",
         "year_progress",
         "website",
+        "notes",
+        "game_shortcuts",
+        "record_overview",
     ),
     val desktopWidgetConfigs: List<DesktopWidgetConfig> = DEFAULT_DESKTOP_WIDGET_CONFIGS,
 )

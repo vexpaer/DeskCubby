@@ -33,11 +33,13 @@ import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.model.normalizeMarkdownHeadingSizes
 import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MAX_APP_BACKGROUND_BLUR_DP
 import com.deskcubby.app.data.model.MAX_APP_BACKGROUND_OPACITY
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_CELLS
+import com.deskcubby.app.data.model.MAX_MARKDOWN_HEADING_SIZE_SP
 import com.deskcubby.app.data.model.MAX_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
@@ -47,6 +49,7 @@ import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MIN_APP_BACKGROUND_BLUR_DP
 import com.deskcubby.app.data.model.MIN_APP_BACKGROUND_OPACITY
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_CELLS
+import com.deskcubby.app.data.model.MIN_MARKDOWN_HEADING_SIZE_SP
 import com.deskcubby.app.data.model.MIN_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
@@ -55,6 +58,7 @@ import com.deskcubby.app.data.model.MIN_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.preferences.migrateMealPhotosWidget
 import com.deskcubby.app.data.preferences.migrateDailyRecordsWidget
+import com.deskcubby.app.data.preferences.migrateHomeModulesV26
 import com.deskcubby.app.data.preferences.normalizeThemeSecondaryColors
 import com.deskcubby.app.data.preferences.normalizeNavItems
 import com.deskcubby.app.data.repository.VAULT_KEY_MARKER_ENTITY_ID
@@ -75,7 +79,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 25,
+    val formatVersion: Int = 26,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -110,7 +114,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 25
+    const val FORMAT_VERSION: Int = 26
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -328,11 +332,19 @@ object BackupJsonCodec {
         .put("cloudSyncConfigs", encodeCloudSyncConfigs(settings.cloudSyncConfigs))
         .putNullable("diaryTreeUri", settings.diaryTreeUri)
         .putNullable("mediaTreeUri", settings.mediaTreeUri)
+        .putNullable("notesTreeUri", settings.notesTreeUri)
         .put("fileNamePattern", settings.fileNamePattern)
         .put("markdownTemplate", settings.markdownTemplate)
         .put("imageNamePattern", settings.imageNamePattern)
         .put("imageMaxWidthDp", settings.imageMaxWidthDp)
         .put("imageMaxHeightDp", settings.imageMaxHeightDp)
+        .put(
+            "markdownHeadingSizesSp",
+            JSONArray().apply {
+                normalizeMarkdownHeadingSizes(settings.markdownHeadingSizesSp)
+                    .forEach { put(it.toDouble()) }
+            },
+        )
         .put("mealImageCompressionEnabled", settings.mealImageCompressionEnabled)
         .put("mealImageCompressionQuality", settings.mealImageCompressionQuality)
         .put("saveOriginalToGallery", settings.saveOriginalToGallery)
@@ -723,12 +735,15 @@ object BackupJsonCodec {
 
     private fun decodeSettings(json: JSONObject, version: Int): AppSettings {
         val defaults = AppSettings()
-        val homeWidgets = migrateDailyRecordsWidget(
-            items = migrateMealPhotosWidget(
-                items = json.requiredArray("homeWidgets").requiredStringList("homeWidgets"),
-                migrated = version >= 4,
+        val homeWidgets = migrateHomeModulesV26(
+            items = migrateDailyRecordsWidget(
+                items = migrateMealPhotosWidget(
+                    items = json.requiredArray("homeWidgets").requiredStringList("homeWidgets"),
+                    migrated = version >= 4,
+                ),
+                migrated = version >= 9,
             ),
-            migrated = version >= 9,
+            migrated = version >= 26,
         )
         val decodedTitles = json.requiredArray("homeWidgetTitles").requiredStringList("homeWidgetTitles")
         val mealMigratedTitles = if (version < 4 && "meal_photos" !in decodedTitles) {
@@ -736,9 +751,12 @@ object BackupJsonCodec {
         } else {
             decodedTitles
         }
-        val homeWidgetTitles = migrateDailyRecordsWidget(
-            items = mealMigratedTitles,
-            migrated = version >= 9,
+        val homeWidgetTitles = migrateHomeModulesV26(
+            items = migrateDailyRecordsWidget(
+                items = mealMigratedTitles,
+                migrated = version >= 9,
+            ),
+            migrated = version >= 26,
         )
         val navItems = decodeNavItems(json.requiredArray("navItems"), version)
         val musicVisualizerMinFrequencyHz = if (version >= 24) {
@@ -840,12 +858,22 @@ object BackupJsonCodec {
             },
             diaryTreeUri = json.requiredNullableString("diaryTreeUri"),
             mediaTreeUri = json.requiredNullableString("mediaTreeUri"),
+            notesTreeUri = if (version >= 26) {
+                json.requiredNullableString("notesTreeUri")
+            } else {
+                defaults.notesTreeUri
+            },
             fileNamePattern = json.requiredString("fileNamePattern").requireMaxLength("fileNamePattern", 1_024),
             markdownTemplate = json.requiredString("markdownTemplate")
                 .requireMaxLength("markdownTemplate", MAX_SETTING_STRING_CHARS),
             imageNamePattern = json.requiredString("imageNamePattern").requireMaxLength("imageNamePattern", 1_024),
             imageMaxWidthDp = json.requiredCoercedInt("imageMaxWidthDp", 120, 2400),
             imageMaxHeightDp = json.requiredCoercedInt("imageMaxHeightDp", 120, 2400),
+            markdownHeadingSizesSp = if (version >= 26) {
+                decodeMarkdownHeadingSizes(json.requiredArray("markdownHeadingSizesSp"))
+            } else {
+                defaults.markdownHeadingSizesSp
+            },
             mealImageCompressionEnabled = if (version >= 6) {
                 json.requiredBoolean("mealImageCompressionEnabled")
             } else {
@@ -1254,6 +1282,24 @@ object BackupJsonCodec {
             }
         }
         return normalizeThemeSecondaryColors(decoded)
+    }
+
+    private fun decodeMarkdownHeadingSizes(json: JSONArray): List<Float> {
+        require(json.length() == 6) { "markdownHeadingSizesSp must contain six items" }
+        val decoded = List(json.length()) { index ->
+            val value = (json.get(index) as? Number)?.toDouble()
+                ?.takeIf(Double::isFinite)
+                ?: throw IllegalArgumentException(
+                    "markdownHeadingSizesSp[$index] must be a finite number",
+                )
+            value.also {
+                require(
+                    it in MIN_MARKDOWN_HEADING_SIZE_SP.toDouble()..
+                        MAX_MARKDOWN_HEADING_SIZE_SP.toDouble(),
+                ) { "markdownHeadingSizesSp[$index] is out of range" }
+            }.toFloat()
+        }
+        return normalizeMarkdownHeadingSizes(decoded)
     }
 
     private fun decodeNavItems(json: JSONArray, version: Int): List<NavItemConfig> {

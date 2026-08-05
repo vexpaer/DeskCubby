@@ -1,5 +1,7 @@
 package com.deskcubby.app.ui.diary
 
+import com.deskcubby.app.data.repository.MealCalorieEstimationStage
+
 enum class CalorieEstimationQueueStatus {
     QUEUED,
     IMAGE_RECOGNITION,
@@ -11,6 +13,23 @@ enum class CalorieEstimationQueueStatus {
 
     val isTerminal: Boolean
         get() = this == COMPLETED || this == FAILED
+}
+
+data class CalorieModelTrace(
+    val stage: MealCalorieEstimationStage,
+    val modelName: String,
+    val selectedPhotoIndex: Int,
+    val photoLabel: String,
+    val startedAtElapsedRealtime: Long,
+    val finishedAtElapsedRealtime: Long? = null,
+    val reasoning: String = "",
+    val response: String = "",
+) {
+    val isRunning: Boolean get() = finishedAtElapsedRealtime == null
+
+    fun elapsedMillis(nowElapsedRealtime: Long): Long =
+        ((finishedAtElapsedRealtime ?: nowElapsedRealtime) - startedAtElapsedRealtime)
+            .coerceAtLeast(0L)
 }
 
 /**
@@ -31,6 +50,7 @@ data class CalorieEstimationDayProgress(
     val forceRecalculation: Boolean = false,
     val failedAtStatus: CalorieEstimationQueueStatus? = null,
     val error: String? = null,
+    val modelTraces: List<CalorieModelTrace> = emptyList(),
 ) {
     val isTerminal: Boolean get() = status.isTerminal
 }

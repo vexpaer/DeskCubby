@@ -2,6 +2,8 @@
 
 package com.deskcubby.app.ui.diary
 
+import android.os.SystemClock
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -30,6 +32,8 @@ import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material3.Card
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -37,17 +41,26 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.theme.tr
+import kotlinx.coroutines.delay
 
 @Composable
 fun CalorieEstimationProgressScreen(
@@ -58,6 +71,7 @@ fun CalorieEstimationProgressScreen(
     val active = state.active
     val queued = state.queued
     val finished = state.items.filter(CalorieEstimationDayProgress::isTerminal).asReversed()
+    var inspectedWorkId by rememberSaveable { mutableStateOf<Long?>(null) }
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
@@ -110,7 +124,11 @@ fun CalorieEstimationProgressScreen(
                         ProgressSectionTitle(tr("正在处理", "In progress"))
                     }
                     item(key = "active-${progress.id}") {
-                        CalorieDayProgressCard(progress = progress, emphasized = true)
+                        CalorieDayProgressCard(
+                            progress = progress,
+                            emphasized = true,
+                            onClick = { inspectedWorkId = progress.id },
+                        )
                     }
                 }
                 if (queued.isNotEmpty()) {
@@ -140,6 +158,15 @@ fun CalorieEstimationProgressScreen(
                     }
                 }
             }
+        }
+    }
+
+    inspectedWorkId?.let { workId ->
+        state.items.firstOrNull { it.id == workId }?.let { progress ->
+            CalorieModelTraceDialog(
+                progress = progress,
+                onDismiss = { inspectedWorkId = null },
+            )
         }
     }
 }
@@ -210,10 +237,17 @@ private fun CalorieDayProgressCard(
     progress: CalorieEstimationDayProgress,
     emphasized: Boolean = false,
     queuePosition: Int? = null,
+    onClick: (() -> Unit)? = null,
 ) {
     val status = calorieProgressStatus(progress)
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                enabled = onClick != null,
+                role = Role.Button,
+                onClick = { onClick?.invoke() },
+            ),
         shape = MaterialTheme.shapes.large,
         colors = androidx.compose.material3.CardDefaults.cardColors(
             containerColor = if (emphasized) {
@@ -300,6 +334,16 @@ private fun CalorieDayProgressCard(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (onClick != null) {
+                    Text(
+                        tr(
+                            "点按查看模型实时思考、回复与用时",
+                            "Tap to view live model reasoning, response, and elapsed time",
+                        ),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
             when (progress.status) {
                 CalorieEstimationQueueStatus.QUEUED -> Text(
@@ -327,6 +371,163 @@ private fun CalorieDayProgressCard(
             }
         }
     }
+}
+
+@Composable
+private fun CalorieModelTraceDialog(
+    progress: CalorieEstimationDayProgress,
+    onDismiss: () -> Unit,
+) {
+    var nowElapsedRealtime by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    val hasRunningTrace = progress.modelTraces.any(CalorieModelTrace::isRunning)
+    LaunchedEffect(hasRunningTrace) {
+        while (hasRunningTrace) {
+            nowElapsedRealtime = SystemClock.elapsedRealtime()
+            delay(200L)
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("模型实时进度", "Live model progress")) },
+        text = {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item(key = "summary") {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(progress.dateIso, style = MaterialTheme.typography.titleMedium)
+                        progress.currentPhotoLabel?.let { label ->
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                if (progress.modelTraces.isEmpty()) {
+                    item(key = "waiting") {
+                        Text(
+                            tr("正在准备模型请求…", "Preparing the model request…"),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    itemsIndexed(
+                        items = progress.modelTraces,
+                        key = { index, trace ->
+                            "${trace.stage}-${trace.selectedPhotoIndex}-${trace.startedAtElapsedRealtime}-$index"
+                        },
+                    ) { _, trace ->
+                        CalorieModelTraceCard(trace, nowElapsedRealtime)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(tr("关闭", "Close")) }
+        },
+    )
+}
+
+@Composable
+private fun CalorieModelTraceCard(
+    trace: CalorieModelTrace,
+    nowElapsedRealtime: Long,
+) {
+    var reasoningExpanded by rememberSaveable(
+        trace.stage.name,
+        trace.selectedPhotoIndex,
+        trace.startedAtElapsedRealtime,
+    ) { mutableStateOf(trace.isRunning) }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = if (trace.isRunning) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        when (trace.stage) {
+                            com.deskcubby.app.data.repository.MealCalorieEstimationStage.IMAGE_RECOGNITION ->
+                                tr("图片识别模型", "Image recognition model")
+                            com.deskcubby.app.data.repository.MealCalorieEstimationStage.TEXT_ESTIMATION ->
+                                tr("文字估算模型", "Text estimation model")
+                        },
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        trace.modelName.ifBlank { tr("未命名模型", "Unnamed model") },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        tr(
+                            "第 ${trace.selectedPhotoIndex} 张 · ${trace.photoLabel}",
+                            "Photo ${trace.selectedPhotoIndex} · ${trace.photoLabel}",
+                        ),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    tr(
+                        "${formatCalorieTraceElapsed(trace.elapsedMillis(nowElapsedRealtime))} 秒",
+                        "${formatCalorieTraceElapsed(trace.elapsedMillis(nowElapsedRealtime))} s",
+                    ),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            TextButton(onClick = { reasoningExpanded = !reasoningExpanded }) {
+                Text(
+                    if (reasoningExpanded) tr("收起思考", "Collapse reasoning")
+                    else tr("展开思考", "Expand reasoning"),
+                )
+            }
+            if (reasoningExpanded) {
+                Text(
+                    trace.reasoning.ifBlank {
+                        if (trace.isRunning) {
+                            tr("等待模型输出思考内容…", "Waiting for model reasoning…")
+                        } else {
+                            tr(
+                                "模型没有提供独立的思考内容。",
+                                "The model did not provide separate reasoning.",
+                            )
+                        }
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            HorizontalDivider()
+            Text(tr("回复", "Response"), style = MaterialTheme.typography.labelLarge)
+            Text(
+                trace.response.ifBlank {
+                    if (trace.isRunning) tr("等待模型回复…", "Waiting for model response…")
+                    else tr("模型没有返回回复。", "The model returned no response.")
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+internal fun formatCalorieTraceElapsed(elapsedMillis: Long): String {
+    val tenths = elapsedMillis.coerceAtLeast(0L) / 100L
+    return "${tenths / 10}.${tenths % 10}"
 }
 
 private data class CalorieProgressStatusUi(

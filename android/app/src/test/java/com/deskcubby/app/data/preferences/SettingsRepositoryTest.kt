@@ -14,6 +14,8 @@ import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.DEFAULT_CALORIE_TEXT_PROMPT
 import com.deskcubby.app.data.model.DEFAULT_CALORIE_VISION_PROMPT
+import com.deskcubby.app.data.model.DEFAULT_MARKDOWN_HEADING_SIZES_SP
+import com.deskcubby.app.data.model.normalizeMarkdownHeadingSizes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -343,6 +345,31 @@ class SettingsRepositoryTest {
                 items = listOf("today", "quick_input", "website"),
                 migrated = true,
             ),
+        )
+    }
+
+    @Test
+    fun versionTwentySixHomeModulesAreAddedOnceAndRespectCompletedMigration() {
+        val original = listOf("today", "notes")
+
+        assertEquals(
+            listOf("today", "notes", "game_shortcuts", "record_overview"),
+            migrateHomeModulesV26(original, migrated = false),
+        )
+        assertEquals(original, migrateHomeModulesV26(original, migrated = true))
+    }
+
+    @Test
+    fun markdownHeadingSizesClampEachLevelAndRestoreMissingOrInvalidValues() {
+        assertEquals(
+            listOf(12f, 48f, 24f, 21f, 19f, 17f),
+            normalizeMarkdownHeadingSizes(
+                listOf(1f, 99f, Float.NaN),
+            ),
+        )
+        assertEquals(
+            DEFAULT_MARKDOWN_HEADING_SIZES_SP,
+            normalizeMarkdownHeadingSizes(emptyList()),
         )
     }
 

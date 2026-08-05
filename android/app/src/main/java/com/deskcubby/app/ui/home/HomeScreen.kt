@@ -37,8 +37,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.EventNote
+import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.SportsEsports
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.WbSunny
@@ -134,6 +137,9 @@ fun HomeScreen(
     onOpenDateRecords: () -> Unit,
     onOpenWebsite: () -> Unit,
     onOpenDailyRecords: () -> Unit,
+    onOpenNotes: () -> Unit,
+    onOpenGame: (String) -> Unit,
+    onOpenStatistics: () -> Unit,
 ) {
     val context = LocalContext.current
     val organic = settings.visualStyle == VisualStyle.ORGANIC_FUTURE
@@ -327,6 +333,9 @@ fun HomeScreen(
                         viewModel.addDailyRecordToToday(templateId, entry, settings, onDone)
                     },
                     onOpenDailyRecords = onOpenDailyRecords,
+                    onOpenNotes = onOpenNotes,
+                    onOpenGame = onOpenGame,
+                    onOpenStatistics = onOpenStatistics,
                 )
             }
             item { Spacer(Modifier.height(20.dp)) }
@@ -357,6 +366,9 @@ private fun HomeWidget(
     dailyRecordInProgress: Set<String>,
     onAddDailyRecord: (String, String, (Boolean) -> Unit) -> Unit,
     onOpenDailyRecords: () -> Unit,
+    onOpenNotes: () -> Unit,
+    onOpenGame: (String) -> Unit,
+    onOpenStatistics: () -> Unit,
 ) {
     val today = LocalDate.now()
     val locale = if (settings.appLanguage == AppLanguage.ENGLISH) Locale.ENGLISH else Locale.SIMPLIFIED_CHINESE
@@ -509,6 +521,71 @@ private fun HomeWidget(
         "website" -> WidgetCard(tr("网站快捷入口", "Website shortcut"), showTitle, settings.homeWidgetBordersEnabled) {
             AssistChip(onClick = onOpenWebsite, label = { Text(settings.browserHomeUrl) }, leadingIcon = { Icon(Icons.Outlined.Language, null) })
         }
+        "notes" -> WidgetCard(tr("笔记", "Notes"), showTitle, settings.homeWidgetBordersEnabled) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Description, contentDescription = null)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    tr("打开 Obsidian 兼容的 Markdown 笔记库", "Open your Obsidian-compatible Markdown vault"),
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = onOpenNotes) { Text(tr("打开", "Open")) }
+            }
+        }
+        "game_shortcuts" -> WidgetCard(tr("小游戏", "Mini games"), showTitle, settings.homeWidgetBordersEnabled) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                listOf(
+                    Triple("2048", "2048", "2048"),
+                    Triple("snake", "贪吃蛇", "Snake"),
+                    Triple("minesweeper", "扫雷", "Minesweeper"),
+                ).forEach { (gameId, chinese, english) ->
+                    TextButton(
+                        onClick = { onOpenGame(gameId) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(
+                            if (settings.appLanguage == AppLanguage.ENGLISH) english else chinese,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+        "record_overview" -> WidgetCard(tr("记录概览", "Record overview"), showTitle, settings.homeWidgetBordersEnabled) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                HomeMetric(diaries.size.toString(), tr("日记", "Diaries"))
+                HomeMetric(thoughts.size.toString(), tr("小巧思", "Thoughts"))
+                HomeMetric(dateRecords.size.toString(), tr("日期", "Dates"))
+            }
+            TextButton(onClick = onOpenStatistics, modifier = Modifier.align(Alignment.End)) {
+                Icon(Icons.Outlined.Insights, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text(tr("查看统计", "View statistics"))
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeMetric(value: String, label: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, style = MaterialTheme.typography.headlineSmall)
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

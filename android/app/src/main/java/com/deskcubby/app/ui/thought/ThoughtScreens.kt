@@ -137,6 +137,7 @@ fun ThoughtScreen(
     var showSendCategoryPicker by remember { mutableStateOf(false) }
     var showAddCategory by remember { mutableStateOf(false) }
     var editingCategory by remember { mutableStateOf<com.deskcubby.app.data.local.ThoughtCategoryEntity?>(null) }
+    var initiallyPositionedPages by remember { mutableStateOf(emptySet<String>()) }
     val listState = rememberLazyListState()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -148,6 +149,11 @@ fun ThoughtScreen(
     val shareFailedMessage = tr("没有可用的分享应用", "No app is available for sharing")
     val emptyCategoryExportMessage = tr("该分类还没有小巧思", "This category has no thoughts yet")
     val thoughtDateFormatter = remember { DateTimeFormatter.ofPattern("yyyy/M/d HH:mm") }
+    val selectedPageKey = when (val category = selectedCategory) {
+        ThoughtCategoryFilter.All -> "all"
+        ThoughtCategoryFilter.Uncategorized -> "uncategorized"
+        is ThoughtCategoryFilter.Category -> "category:${category.id}"
+    }
 
     fun findDragTargetIndex(itemId: Long, verticalDistancePx: Float): Int? {
         val visibleItems = listState.layoutInfo.visibleItemsInfo
@@ -176,6 +182,22 @@ fun ThoughtScreen(
                 listState.animateScrollToItem(itemIndex)
                 viewModel.consumeScrollRequest(itemId)
             }
+        }
+    }
+
+    LaunchedEffect(
+        activeState.isLoaded,
+        activeState.pendingScrollItemId,
+        selectedPageKey,
+        items.size,
+    ) {
+        if (activeState.isLoaded &&
+            activeState.pendingScrollItemId == null &&
+            items.isNotEmpty() &&
+            selectedPageKey !in initiallyPositionedPages
+        ) {
+            listState.scrollToItem(items.lastIndex)
+            initiallyPositionedPages = initiallyPositionedPages + selectedPageKey
         }
     }
 

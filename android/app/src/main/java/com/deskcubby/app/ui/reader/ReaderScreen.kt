@@ -111,10 +111,15 @@ import com.deskcubby.app.data.repository.ReaderBook
 import com.deskcubby.app.data.repository.ReaderBookType
 import com.deskcubby.app.data.repository.ReaderContent
 import com.deskcubby.app.data.repository.ReaderChapter
+import com.deskcubby.app.data.repository.ReaderChapterDetectionMode
 import com.deskcubby.app.data.repository.ReaderTextPage
 import com.deskcubby.app.data.repository.ReaderOrientation
 import com.deskcubby.app.data.repository.ReaderPreferences
 import com.deskcubby.app.data.repository.ReaderStorageIssue
+import com.deskcubby.app.data.repository.MAX_READER_CHAPTER_TITLE_CHARS
+import com.deskcubby.app.data.repository.MIN_READER_CHAPTER_HEADING_CHARS
+import com.deskcubby.app.data.repository.MAX_READER_CUSTOM_REGEX_CHARS
+import com.deskcubby.app.data.repository.isValidReaderChapterRegex
 import com.deskcubby.app.data.statistics.EngagementKind
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.ColorPickerDialog
@@ -622,8 +627,8 @@ private fun ReaderChapterDrawer(
         if (chapters.isEmpty()) {
             Text(
                 tr(
-                    "没有识别到“第…章”、Chapter 等章节标题；仍可使用逻辑页跳转。",
-                    "No headings such as 第…章 or Chapter were detected; logical-page jumping is still available.",
+                    "当前智能/自定义规则没有识别到章节标题；仍可使用逻辑页跳转，并可在阅读设置中调整规则。",
+                    "The current smart/custom rules found no chapter headings. Logical-page jumping remains available, and the rules can be changed in Reading settings.",
                 ),
                 modifier = Modifier.padding(20.dp),
                 color = foreground.copy(alpha = 0.72f),
@@ -829,6 +834,7 @@ private fun ReaderSettingsDialog(
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
     var showCustomColorPicker by remember { mutableStateOf(false) }
+    val customRegexValid = isValidReaderChapterRegex(draft.customChapterRegex)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(tr("阅读设置", "Reading settings")) },
@@ -899,6 +905,80 @@ private fun ReaderSettingsDialog(
                     ) { draft = draft.copy(paragraphSpacingDp = it) }
                 }
                 item {
+                    Text(tr("智能章节", "Smart chapters"), fontWeight = FontWeight.SemiBold)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ReaderChapterDetectionMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = draft.chapterDetectionMode == mode,
+                                onClick = { draft = draft.copy(chapterDetectionMode = mode) },
+                                label = {
+                                    Text(
+                                        when (mode) {
+                                            ReaderChapterDetectionMode.SMART ->
+                                                tr("仅智能", "Smart only")
+                                            ReaderChapterDetectionMode.CUSTOM ->
+                                                tr("仅自定义", "Custom only")
+                                            ReaderChapterDetectionMode.SMART_AND_CUSTOM ->
+                                                tr("智能 + 自定义", "Smart + custom")
+                                        },
+                                    )
+                                },
+                            )
+                        }
+                    }
+                    Text(
+                        tr(
+                            "智能规则支持中文章节/卷/回/幕、英文 Chapter/Part/Book/Section/Episode、Markdown 标题、序章/尾声及多种编号格式。",
+                            "Smart rules cover Chinese chapters/volumes, Chapter/Part/Book/Section/Episode, Markdown headings, prologues/epilogues, and several numbering styles.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (draft.chapterDetectionMode != ReaderChapterDetectionMode.SMART) {
+                    item {
+                        OutlinedTextField(
+                            value = draft.customChapterRegex,
+                            onValueChange = {
+                                draft = draft.copy(
+                                    customChapterRegex = it.take(MAX_READER_CUSTOM_REGEX_CHARS),
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(tr("自定义整行正则", "Custom full-line regex")) },
+                            placeholder = { Text("^(第.+章|Chapter\\s+.+)$") },
+                            isError = !customRegexValid,
+                            supportingText = {
+                                Text(
+                                    if (customRegexValid) {
+                                        tr(
+                                            "规则匹配整行；留空等于不追加自定义规则。",
+                                            "The rule matches a whole line; leave blank to add no custom rule.",
+                                        )
+                                    } else {
+                                        tr("正则格式无效", "Invalid regular expression")
+                                    },
+                                )
+                            },
+                            minLines = 2,
+                            maxLines = 5,
+                        )
+                    }
+                }
+                item {
+                    SettingSlider(
+                        label = tr("章节标题最长字符数", "Maximum heading length"),
+                        valueText = draft.chapterHeadingMaxChars.toString(),
+                        value = draft.chapterHeadingMaxChars.toFloat(),
+                        range = MIN_READER_CHAPTER_HEADING_CHARS.toFloat()..
+                            MAX_READER_CHAPTER_TITLE_CHARS.toFloat(),
+                        steps = MAX_READER_CHAPTER_TITLE_CHARS -
+                            MIN_READER_CHAPTER_HEADING_CHARS - 1,
+                    ) {
+                        draft = draft.copy(chapterHeadingMaxChars = it.roundToInt())
+                    }
+                }
+                item {
                     Text(tr("屏幕方向", "Screen orientation"), fontWeight = FontWeight.SemiBold)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ReaderOrientation.entries.forEach { orientation ->
@@ -918,7 +998,12 @@ private fun ReaderSettingsDialog(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(draft) }) { Text(tr("保存", "Save")) } },
+        confirmButton = {
+            TextButton(
+                enabled = customRegexValid,
+                onClick = { onSave(draft) },
+            ) { Text(tr("保存", "Save")) }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) } },
     )
     if (showCustomColorPicker) {

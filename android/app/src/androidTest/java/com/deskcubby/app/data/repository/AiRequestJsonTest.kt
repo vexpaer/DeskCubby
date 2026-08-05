@@ -3,6 +3,7 @@ package com.deskcubby.app.data.repository
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -165,6 +166,32 @@ class AiRequestJsonTest {
 
         assertEquals("最终答案", parsed.content)
         assertEquals("先识别问题，再检查答案。", parsed.reasoning)
+    }
+
+    @Test
+    fun streamAccumulatorCombinesIncrementalReasoningAndResponse() {
+        fun delta(content: String? = null, reasoning: String? = null): String {
+            val delta = JSONObject().apply {
+                content?.let { put("content", it) }
+                reasoning?.let { put("reasoning_content", it) }
+            }
+            return JSONObject()
+                .put("choices", JSONArray().put(JSONObject().put("delta", delta)))
+                .toString()
+        }
+        val accumulator = AiStreamAccumulator(apiKey = "secret")
+
+        assertEquals("检查", accumulator.consumePayload(delta(reasoning = "检查"))?.reasoning)
+        accumulator.consumePayload(delta(content = "<think>内部"))
+        val update = accumulator.consumePayload(
+            delta(content = "步骤</think>{\"energyKj\":1200}"),
+        )
+        accumulator.consumePayload("[DONE]")
+
+        assertTrue(accumulator.done)
+        assertEquals("{\"energyKj\":1200}", update?.content)
+        assertEquals("检查\n\n内部步骤", update?.reasoning)
+        assertEquals(update, accumulator.requireResult())
     }
 
     @Test

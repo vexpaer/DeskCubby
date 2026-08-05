@@ -14,12 +14,14 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -349,5 +351,7 @@ fun GlassPanel(
                 .clip(shape)
                 .background(scheme.surfaceContainer)
     }
-    Box(panelModifier.padding(padding), content = content)
+    CompositionLocalProvider(LocalContentColor provides scheme.onSurface) {
+        Box(panelModifier.padding(padding), content = content)
+    }
 }

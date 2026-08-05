@@ -97,7 +97,13 @@ class ReaderViewModel @Inject constructor(
 
     fun updatePreferences(value: ReaderPreferences) = viewModelScope.launch {
         try {
+            val previous = repository.state.value.preferences
+            val activeBook = (content.value as? ReaderContentState.Ready)?.book
             repository.updatePreferences(value)
+            val chapterRulesChanged = previous.chapterDetectionMode != value.chapterDetectionMode ||
+                previous.customChapterRegex.trim() != value.customChapterRegex.trim() ||
+                previous.chapterHeadingMaxChars != value.chapterHeadingMaxChars
+            if (chapterRulesChanged && activeBook != null) open(activeBook)
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {

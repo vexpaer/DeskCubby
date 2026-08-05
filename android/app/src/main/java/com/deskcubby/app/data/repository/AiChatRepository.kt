@@ -12,6 +12,7 @@ import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -310,6 +311,7 @@ class AiChatRepository @Inject constructor(
     suspend fun completeWithReasoning(
         settings: AppSettings,
         messages: List<AiChatMessage>,
+        onUpdate: ((AiChatCompletion) -> Unit)? = null,
     ): AiChatCompletion = withContext(Dispatchers.IO) {
         val config = settings.aiConfigs.firstOrNull {
             it.id == settings.aiChatConfigId && it.type == AiModelType.TEXT
@@ -340,7 +342,7 @@ class AiChatRepository @Inject constructor(
                 totalImageBytes += imageBytes.size
             }
         }
-        val requestBody = buildTextChatRequestJson(
+        val requestJson = buildTextChatRequestJson(
             model = model,
             temperature = config?.temperature ?: settings.aiTemperature,
             systemPrompt = config?.systemPrompt?.takeIf(String::isNotBlank)
@@ -348,7 +350,8 @@ class AiChatRepository @Inject constructor(
             messages = messages,
             imageDataUrls = imageDataUrls,
         )
-            .toString()
+        if (onUpdate != null) requestJson.put("stream", true)
+        val requestBody = requestJson.toString()
             .toByteArray(StandardCharsets.UTF_8)
         val requestBodyLimit = if (imageDataUrls.isEmpty()) {
             MAX_BODY_BYTES
@@ -363,13 +366,28 @@ class AiChatRepository @Inject constructor(
         }
 
         try {
-            val response = executeRequest(
-                initialUrl = endpoint,
-                body = requestBody,
-                apiKey = config?.apiKey?.trim().orEmpty(),
-                allowInsecureHttp = config?.allowInsecureHttp ?: settings.aiAllowInsecureHttp,
-            )
-            parseAssistantContent(response, config?.apiKey?.trim().orEmpty())
+            val apiKey = config?.apiKey?.trim().orEmpty()
+            if (onUpdate == null) {
+                parseAssistantContent(
+                    executeRequest(
+                        initialUrl = endpoint,
+                        body = requestBody,
+                        apiKey = apiKey,
+                        allowInsecureHttp = config?.allowInsecureHttp
+                            ?: settings.aiAllowInsecureHttp,
+                    ),
+                    apiKey,
+                )
+            } else {
+                executeStreamingRequest(
+                    initialUrl = endpoint,
+                    body = requestBody,
+                    apiKey = apiKey,
+                    allowInsecureHttp = config?.allowInsecureHttp
+                        ?: settings.aiAllowInsecureHttp,
+                    onUpdate = onUpdate,
+                )
+            }
         } catch (error: AiChatException) {
             throw error
         } catch (error: IOException) {
@@ -406,6 +424,52 @@ class AiChatRepository @Inject constructor(
         if (body.size > MAX_IMAGE_REQUEST_BODY_BYTES) throw AiChatException(AiChatFailure.CONFIGURATION, "图片过大，无法发送。")
         val response = executeRequest(endpoint, body, config.apiKey.trim(), config.allowInsecureHttp)
         parseAssistantContent(response, config.apiKey.trim()).content
+    }
+
+    suspend fun analyzeImageWithReasoningStreaming(
+        config: AiModelConfig,
+        prompt: String,
+        mimeType: String,
+        imageBytes: ByteArray,
+        onUpdate: (AiChatCompletion) -> Unit,
+    ): AiChatCompletion = withContext(Dispatchers.IO) {
+        require(config.type == AiModelType.IMAGE)
+        val endpoint = parseAndValidateEndpoint(config.endpointUrl, config.allowInsecureHttp)
+        val imageDataUrl =
+            "data:$mimeType;base64,${Base64.encodeToString(imageBytes, Base64.NO_WRAP)}"
+        val requestJson = buildImageChatRequestJson(
+            model = config.model,
+            temperature = config.temperature,
+            prompt = prompt,
+            imageDataUrl = imageDataUrl,
+        ).put("stream", true)
+        val body = requestJson.toString().toByteArray(StandardCharsets.UTF_8)
+        if (body.size > MAX_IMAGE_REQUEST_BODY_BYTES) {
+            throw AiChatException(AiChatFailure.CONFIGURATION, "图片过大，无法发送。")
+        }
+        try {
+            executeStreamingRequest(
+                initialUrl = endpoint,
+                body = body,
+                apiKey = config.apiKey.trim(),
+                allowInsecureHttp = config.allowInsecureHttp,
+                onUpdate = onUpdate,
+            )
+        } catch (error: AiChatException) {
+            throw error
+        } catch (error: IOException) {
+            throw AiChatException(
+                AiChatFailure.NETWORK,
+                "无法连接 AI 服务，请检查网络和接口地址。",
+                error,
+            )
+        } catch (error: JSONException) {
+            throw AiChatException(
+                AiChatFailure.INVALID_RESPONSE,
+                "AI 服务返回了无法识别的数据。",
+                error,
+            )
+        }
     }
 
     private suspend fun executeRequest(
@@ -518,6 +582,204 @@ class AiChatRepository @Inject constructor(
         }
     }
 
+    /**
+     * Reads OpenAI-compatible server-sent events without exposing the connection to callers.
+     * Providers that ignore `stream=true` and return a normal JSON body still use the regular
+     * response parser, so calorie estimation remains compatible with non-streaming endpoints.
+     */
+    private suspend fun executeStreamingRequest(
+        initialUrl: URL,
+        body: ByteArray,
+        apiKey: String,
+        allowInsecureHttp: Boolean,
+        onUpdate: (AiChatCompletion) -> Unit,
+    ): AiChatCompletion = suspendCancellableCoroutine { continuation ->
+        val allowedHost = initialUrl.host
+        var currentUrl = initialUrl
+        var redirects = 0
+        val activeConnection = AtomicReference<HttpURLConnection?>(null)
+        continuation.invokeOnCancellation {
+            activeConnection.getAndSet(null)?.disconnect()
+        }
+
+        try {
+            while (true) {
+                ensureRequestActive(continuation.isActive)
+                val connection = (currentUrl.openConnection() as? HttpURLConnection)
+                    ?: throw AiChatException(
+                        AiChatFailure.CONFIGURATION,
+                        "AI 接口地址不是 HTTP 地址。",
+                    )
+                activeConnection.set(connection)
+                ensureRequestActive(continuation.isActive)
+                var redirectUrl: URL? = null
+                try {
+                    connection.instanceFollowRedirects = false
+                    connection.requestMethod = "POST"
+                    connection.doOutput = true
+                    connection.connectTimeout = CONNECT_TIMEOUT_MS
+                    connection.readTimeout = READ_TIMEOUT_MS
+                    connection.useCaches = false
+                    connection.setRequestProperty("Accept", "text/event-stream, application/json")
+                    connection.setRequestProperty("Accept-Encoding", "identity")
+                    connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    if (apiKey.isNotEmpty()) {
+                        connection.setRequestProperty("Authorization", "Bearer $apiKey")
+                    }
+                    connection.setFixedLengthStreamingMode(body.size)
+                    connection.outputStream.use { output ->
+                        var offset = 0
+                        while (offset < body.size) {
+                            ensureRequestActive(continuation.isActive)
+                            val count = minOf(WRITE_BUFFER_BYTES, body.size - offset)
+                            output.write(body, offset, count)
+                            offset += count
+                        }
+                        output.flush()
+                    }
+                    ensureRequestActive(continuation.isActive)
+
+                    val status = connection.responseCode
+                    ensureRequestActive(continuation.isActive)
+                    if (status in REDIRECT_STATUS_CODES) {
+                        if (redirects >= MAX_REDIRECTS) {
+                            throw AiChatException(
+                                AiChatFailure.NETWORK,
+                                "AI 接口重定向次数过多。",
+                            )
+                        }
+                        val location = connection.getHeaderField("Location")
+                            ?.trim()
+                            ?.takeIf(String::isNotEmpty)
+                            ?: throw AiChatException(
+                                AiChatFailure.INVALID_RESPONSE,
+                                "AI 接口返回了无效的重定向。",
+                            )
+                        val candidate = try {
+                            URL(currentUrl, location)
+                        } catch (error: MalformedURLException) {
+                            throw AiChatException(
+                                AiChatFailure.INVALID_RESPONSE,
+                                "AI 接口返回了无效的重定向地址。",
+                                error,
+                            )
+                        }
+                        validateRedirect(
+                            from = currentUrl,
+                            candidate = candidate,
+                            allowedHost = allowedHost,
+                            allowInsecureHttp = allowInsecureHttp,
+                        )
+                        redirectUrl = candidate
+                    } else if (status !in 200..299) {
+                        val responseBody = readResponseBody(
+                            connection = connection,
+                            status = status,
+                            isActive = { continuation.isActive },
+                        )
+                        val remoteMessage = parseRemoteError(responseBody)
+                            ?.let { sanitizeAiRemoteError(it, apiKey) }
+                        val suffix = remoteMessage?.let { "：$it" }.orEmpty()
+                        throw AiChatException(
+                            AiChatFailure.REMOTE,
+                            "AI 服务返回 HTTP $status$suffix",
+                        )
+                    } else {
+                        val contentType = connection.contentType
+                            ?.substringBefore(';')
+                            ?.trim()
+                            ?.lowercase()
+                        val completion = if (contentType == "text/event-stream") {
+                            readStreamingCompletion(
+                                connection = connection,
+                                apiKey = apiKey,
+                                isActive = { continuation.isActive },
+                                onUpdate = onUpdate,
+                            )
+                        } else {
+                            val parsed = parseAssistantContent(
+                                readResponseBody(
+                                    connection = connection,
+                                    status = status,
+                                    isActive = { continuation.isActive },
+                                ),
+                                apiKey,
+                            )
+                            onUpdate(parsed)
+                            parsed
+                        }
+                        continuation.resume(completion)
+                        return@suspendCancellableCoroutine
+                    }
+                } finally {
+                    activeConnection.compareAndSet(connection, null)
+                    connection.disconnect()
+                }
+
+                currentUrl = checkNotNull(redirectUrl)
+                redirects += 1
+            }
+        } catch (error: Throwable) {
+            if (continuation.isActive) continuation.resumeWithException(error)
+        } finally {
+            activeConnection.getAndSet(null)?.disconnect()
+        }
+    }
+
+    private fun readStreamingCompletion(
+        connection: HttpURLConnection,
+        apiKey: String,
+        isActive: () -> Boolean,
+        onUpdate: (AiChatCompletion) -> Unit,
+    ): AiChatCompletion {
+        ensureRequestActive(isActive())
+        val declaredLength = connection.contentLengthLong
+        if (declaredLength > MAX_BODY_BYTES) {
+            throw AiChatException(
+                AiChatFailure.RESPONSE_TOO_LARGE,
+                "AI 服务响应超过 4 MiB，已停止读取。",
+            )
+        }
+        val accumulator = AiStreamAccumulator(apiKey)
+
+        fun consumeDataLine(line: String) {
+            if (!line.startsWith("data:")) return
+            val payload = line.substringAfter(':').trim()
+            if (payload.isEmpty()) return
+            accumulator.consumePayload(payload)?.let(onUpdate)
+        }
+
+        BufferedInputStream(connection.inputStream).use { input ->
+            val line = ByteArrayOutputStream()
+            var total = 0
+            while (!accumulator.done) {
+                ensureRequestActive(isActive())
+                val value = input.read()
+                ensureRequestActive(isActive())
+                if (value < 0) break
+                total += 1
+                if (total > MAX_BODY_BYTES) {
+                    throw AiChatException(
+                        AiChatFailure.RESPONSE_TOO_LARGE,
+                        "AI 服务响应超过 4 MiB，已停止读取。",
+                    )
+                }
+                if (value == '\n'.code) {
+                    consumeDataLine(
+                        line.toByteArray().toString(StandardCharsets.UTF_8).trimEnd('\r'),
+                    )
+                    line.reset()
+                } else {
+                    line.write(value)
+                }
+            }
+            if (!accumulator.done && line.size() > 0) {
+                consumeDataLine(line.toByteArray().toString(StandardCharsets.UTF_8).trimEnd('\r'))
+            }
+        }
+        return accumulator.requireResult()
+    }
+
     private fun readResponseBody(
         connection: HttpURLConnection,
         status: Int,
@@ -623,12 +885,12 @@ class AiChatRepository @Inject constructor(
                 "AI 响应中没有可用的回答。",
             )
         val message = firstChoice.optJSONObject("message")
-        val rawContent = extractContent(message?.opt("content"))
+        val rawContent = extractAiContent(message?.opt("content"))
             ?: firstChoice.optString("text").takeIf(String::isNotBlank)
             ?: ""
         val tagged = splitAiThinkingContent(rawContent)
         val explicitReasoning = listOf("reasoning_content", "reasoning", "analysis")
-            .mapNotNull { key -> extractContent(message?.opt(key))?.takeIf(String::isNotBlank) }
+            .mapNotNull { key -> extractAiContent(message?.opt(key))?.takeIf(String::isNotBlank) }
             .firstOrNull()
             ?.trim()
             .orEmpty()
@@ -646,23 +908,6 @@ class AiChatRepository @Inject constructor(
             content = tagged.content.trim(),
             reasoning = reasoning,
         )
-    }
-
-    private fun extractContent(value: Any?): String? = when (value) {
-        is String -> value
-        is JSONArray -> buildString {
-            for (index in 0 until value.length()) {
-                val part = value.optJSONObject(index) ?: continue
-                val textValue = part.opt("text")
-                val text = when (textValue) {
-                    is String -> textValue
-                    is JSONObject -> textValue.optString("value")
-                    else -> null
-                }
-                if (!text.isNullOrEmpty()) append(text)
-            }
-        }.takeIf(String::isNotEmpty)
-        else -> null
     }
 
     private fun parseRemoteError(responseBody: String): String? {
@@ -741,6 +986,82 @@ class AiChatRepository @Inject constructor(
         const val MAX_TITLE_CHARS = 80
         val REDIRECT_STATUS_CODES = setOf(301, 302, 303, 307, 308)
     }
+}
+
+internal class AiStreamAccumulator(private val apiKey: String) {
+    private val content = StringBuilder()
+    private val explicitReasoning = StringBuilder()
+    private var lastUpdate: AiChatCompletion? = null
+    var done: Boolean = false
+        private set
+
+    fun consumePayload(payload: String): AiChatCompletion? {
+        if (payload == "[DONE]") {
+            done = true
+            return null
+        }
+        val root = try {
+            JSONObject(payload)
+        } catch (error: JSONException) {
+            throw AiChatException(
+                AiChatFailure.INVALID_RESPONSE,
+                "AI 服务返回了无法识别的流式数据。",
+                error,
+            )
+        }
+        root.optJSONObject("error")?.let { errorObject ->
+            val message = sanitizeAiRemoteError(errorObject.optString("message"), apiKey)
+            throw AiChatException(
+                AiChatFailure.REMOTE,
+                message.takeIf(String::isNotEmpty) ?: "AI 服务返回了错误。",
+            )
+        }
+        val choice = root.optJSONArray("choices")?.optJSONObject(0) ?: return null
+        val delta = choice.optJSONObject("delta") ?: choice.optJSONObject("message")
+        extractAiContent(delta?.opt("content"))?.let(content::append)
+        listOf("reasoning_content", "reasoning", "analysis")
+            .firstNotNullOfOrNull { key -> extractAiContent(delta?.opt(key)) }
+            ?.let(explicitReasoning::append)
+        val update = currentCompletion()
+        return update.takeIf {
+            it != lastUpdate && (it.content.isNotBlank() || it.reasoning.isNotBlank())
+        }?.also { lastUpdate = it }
+    }
+
+    fun requireResult(): AiChatCompletion = currentCompletion().also { result ->
+        if (result.content.isBlank() && result.reasoning.isBlank()) {
+            throw AiChatException(
+                AiChatFailure.INVALID_RESPONSE,
+                "AI 返回了空回答。",
+            )
+        }
+    }
+
+    private fun currentCompletion(): AiChatCompletion {
+        val tagged = splitAiThinkingContent(content.toString())
+        val reasoning = listOf(explicitReasoning.toString().trim(), tagged.reasoning)
+            .filter(String::isNotBlank)
+            .distinct()
+            .joinToString("\n\n")
+        return AiChatCompletion(tagged.content, reasoning)
+    }
+}
+
+internal fun extractAiContent(value: Any?): String? = when (value) {
+    is String -> value
+    is JSONArray -> buildString {
+        for (index in 0 until value.length()) {
+            val part = value.optJSONObject(index) ?: continue
+            val textValue = part.opt("text")
+            val text = when (textValue) {
+                is String -> textValue
+                is JSONObject -> textValue.optString("value")
+                else -> null
+            }
+            if (!text.isNullOrEmpty()) append(text)
+        }
+    }.takeIf(String::isNotEmpty)
+    else -> null
 }
 
 internal fun sanitizeAiRemoteError(message: String, apiKey: String): String {

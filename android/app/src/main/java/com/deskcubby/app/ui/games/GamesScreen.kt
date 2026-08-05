@@ -83,6 +83,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalDensity
@@ -111,10 +112,12 @@ import kotlinx.coroutines.isActive
 fun GamesScreen(
     padding: PaddingValues,
     viewModel: GamesViewModel,
+    initialGameId: String? = null,
     onGameOpenChanged: (Boolean) -> Unit = {},
     onTutorialTargetChanged: (PageTutorialTarget?) -> Unit = {},
 ) {
     var launch by rememberSaveable(
+        initialGameId,
         stateSaver = Saver(
             save = { active -> active?.gameId.orEmpty() },
             restore = { gameId ->
@@ -122,7 +125,13 @@ fun GamesScreen(
                     ?.let { GameLaunch(it, resume = true) }
             },
         ),
-    ) { mutableStateOf<GameLaunch?>(null) }
+    ) {
+        mutableStateOf(
+            initialGameId
+                ?.takeIf(GamesViewModel.GAME_IDS::contains)
+                ?.let { GameLaunch(it, resume = true) },
+        )
+    }
     val onLaunch: (String, Boolean) -> Unit = { gameId, resume ->
         if (!resume && gameId == GamesViewModel.GAME_SPIDER) {
             viewModel.discardSavedSpiderAndThen {
@@ -706,7 +715,9 @@ private fun Game2048Page(
     var scoreRecorded by rememberSaveable { mutableStateOf(false) }
     var transition by remember { mutableStateOf<Game2048.MoveResult?>(null) }
     var transitionSequence by remember { mutableIntStateOf(0) }
-    var darkMode by rememberSaveable { mutableStateOf(false) }
+    val themeDarkMode = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    var darkModeOverride by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    val darkMode = darkModeOverride ?: themeDarkMode
     var animationsEnabled by rememberSaveable { mutableStateOf(true) }
     val animationSpeed by viewModel.animationSpeed.collectAsStateWithLifecycle()
     val animationDurationMillis = animationSpeed.durationMillis
@@ -831,7 +842,7 @@ private fun Game2048Page(
                 }
                 Spacer(Modifier.weight(1f))
                 FilledTonalIconButton(
-                    onClick = { darkMode = !darkMode },
+                    onClick = { darkModeOverride = !darkMode },
                 ) {
                     Icon(
                         imageVector = if (darkMode) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,

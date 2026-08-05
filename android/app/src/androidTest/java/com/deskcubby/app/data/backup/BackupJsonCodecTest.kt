@@ -20,6 +20,7 @@ import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DEFAULT_MARKDOWN_HEADING_SIZES_SP
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.Game2048AnimationSpeed
 import com.deskcubby.app.data.model.LauncherIcon
@@ -53,7 +54,7 @@ import org.json.JSONObject
 @RunWith(AndroidJUnit4::class)
 class BackupJsonCodecTest {
     @Test
-    fun versionTwentyFiveRoundTripPreservesEncryptedVaultGamesUsageWidgetsAndNewSettings() {
+    fun versionTwentySixRoundTripPreservesEncryptedVaultGamesUsageWidgetsAndNewSettings() {
         val iv = Base64.getEncoder().encodeToString(ByteArray(12) { 2 })
         val cipher = Base64.getEncoder().encodeToString(ByteArray(32) { 3 })
         val vault = VaultEncryptedBackup(
@@ -156,6 +157,8 @@ class BackupJsonCodecTest {
                 backgroundImageBlurDp = 18f,
                 tutorialModeEnabled = false,
                 tutorialAcknowledgedPages = setOf("page/home", "reader/txt"),
+                notesTreeUri = "content://notes/tree/vault",
+                markdownHeadingSizesSp = listOf(36f, 31f, 27f, 23f, 20f, 18f),
             ),
             thoughts = emptyList(),
             favorites = emptyList(),
@@ -167,7 +170,7 @@ class BackupJsonCodecTest {
 
         val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
 
-        assertEquals(25, decoded.formatVersion)
+        assertEquals(26, decoded.formatVersion)
         assertEquals(vault, decoded.vault)
         assertEquals(gameStates, decoded.gameStates)
         assertEquals(gameStatistics, decoded.gameStatistics)
@@ -186,6 +189,11 @@ class BackupJsonCodecTest {
         assertEquals(0.7f, decoded.settings.backgroundImageOpacity)
         assertEquals(18f, decoded.settings.backgroundImageBlurDp)
         assertFalse(decoded.settings.tutorialModeEnabled)
+        assertEquals("content://notes/tree/vault", decoded.settings.notesTreeUri)
+        assertEquals(
+            listOf(36f, 31f, 27f, 23f, 20f, 18f),
+            decoded.settings.markdownHeadingSizesSp,
+        )
         // Per-page acknowledgements are device-local and deliberately excluded from backups.
         assertEquals(emptySet<String>(), decoded.settings.tutorialAcknowledgedPages)
     }
@@ -223,6 +231,72 @@ class BackupJsonCodecTest {
         assertEquals(AppSettings().backgroundImageOpacity, decoded.settings.backgroundImageOpacity)
         assertEquals(AppSettings().backgroundImageBlurDp, decoded.settings.backgroundImageBlurDp)
         assertEquals(AppSettings().tutorialModeEnabled, decoded.settings.tutorialModeEnabled)
+    }
+
+    @Test
+    fun versionTwentyFiveDefaultsNotesAndHeadingSizesAndMigratesNewHomeModules() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 25,
+                    settings = AppSettings(
+                        notesTreeUri = "content://notes/tree/vault",
+                        markdownHeadingSizesSp = listOf(40f, 35f, 30f, 25f, 20f, 15f),
+                        homeWidgets = listOf("today"),
+                        homeWidgetTitles = listOf("today"),
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        ).apply {
+            put("version", 25)
+            getJSONObject("settings").apply {
+                remove("notesTreeUri")
+                remove("markdownHeadingSizesSp")
+            }
+        }
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+
+        assertEquals(25, decoded.formatVersion)
+        assertNull(decoded.settings.notesTreeUri)
+        assertEquals(DEFAULT_MARKDOWN_HEADING_SIZES_SP, decoded.settings.markdownHeadingSizesSp)
+        assertEquals(
+            listOf("today", "notes", "game_shortcuts", "record_overview"),
+            decoded.settings.homeWidgets,
+        )
+        assertEquals(
+            listOf("today", "notes", "game_shortcuts", "record_overview"),
+            decoded.settings.homeWidgetTitles,
+        )
+    }
+
+    @Test
+    fun versionTwentySixRejectsInvalidMarkdownHeadingSizes() {
+        fun currentRoot() = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 26,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").put(
+                "markdownHeadingSizesSp",
+                JSONArray().put(32).put(28),
+            )
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").getJSONArray("markdownHeadingSizesSp").put(0, 49)
+        })
+        assertDecodeRejected(currentRoot().apply {
+            getJSONObject("settings").getJSONArray("markdownHeadingSizesSp").put(0, "32")
+        })
     }
 
     @Test

@@ -173,11 +173,14 @@ import com.deskcubby.app.data.model.MusicVisualizerStyle
 import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.MAX_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
+import com.deskcubby.app.data.model.MAX_MARKDOWN_HEADING_SIZE_SP
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_POETRY_FONT_SIZE_SP
 import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
+import com.deskcubby.app.data.model.MIN_MARKDOWN_HEADING_SIZE_SP
 import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MAX_VAULT_ROW_HEIGHT_DP
+import com.deskcubby.app.data.model.normalizeMarkdownHeadingSizes
 import com.deskcubby.app.data.model.MIN_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.PoetryTextAlignment
@@ -384,6 +387,9 @@ private val homeWidgetOptions = listOf(
     HomeWidgetOption("random_diary", "随机旧日记", "Random old diary"),
     HomeWidgetOption("year_progress", "年度进度", "Year progress"),
     HomeWidgetOption("website", "网站快捷入口", "Website shortcut"),
+    HomeWidgetOption("notes", "笔记入口", "Notes shortcut"),
+    HomeWidgetOption("game_shortcuts", "小游戏快捷入口", "Mini-game shortcuts"),
+    HomeWidgetOption("record_overview", "记录概览", "Record overview"),
 )
 
 private val mealButtonOptions = listOf(
@@ -403,6 +409,7 @@ private data class DiarySettingsDraft(
     val imagePattern: String,
     val imageWidth: Int?,
     val imageHeight: Int?,
+    val markdownHeadingSizesSp: List<Float>,
     val mealImageCompressionEnabled: Boolean,
     val mealImageCompressionQuality: Int,
     val saveOriginalToGallery: Boolean,
@@ -746,6 +753,7 @@ fun SettingsScreen(
                     viewModel.setImageNamePattern(draft.imagePattern)
                     draft.imageWidth?.let(viewModel::setImageMaxWidth)
                     draft.imageHeight?.let(viewModel::setImageMaxHeight)
+                    viewModel.setMarkdownHeadingSizes(draft.markdownHeadingSizesSp)
                     viewModel.setMealImageCompressionEnabled(draft.mealImageCompressionEnabled)
                     viewModel.setMealImageCompressionQuality(draft.mealImageCompressionQuality)
                     viewModel.setSaveOriginalToGallery(draft.saveOriginalToGallery)
@@ -1681,8 +1689,8 @@ private fun CloudSyncSettingsPage(
             text = {
                 Text(
                     tr(
-                        "这会按 v25 备份导入应用设置和结构化数据，恢复背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Vault 随后保持锁定。日记、媒体与背景图片文件不会被替换。",
-                        "This imports v25 app settings and structured data, restores background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. The Vault remains locked, and diary, media, and background-image files are not replaced.",
+                        "这会按 v26 备份导入应用设置和结构化数据，恢复 Markdown 标题字号、背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Vault 随后保持锁定。日记、笔记、媒体与背景图片文件不会被替换。",
+                        "This imports v26 app settings and structured data, restores Markdown heading sizes, background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. The Vault remains locked, and diary, note, media, and background-image files are not replaced.",
                     ),
                 )
             },
@@ -1983,8 +1991,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.JSON_BACKUP in selectedContents) {
                     Text(
                         tr(
-                            "v25 应用 JSON 包含全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "The v25 app JSON contains global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                            "v26 应用 JSON 包含 Markdown 显示设置、全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "The v26 app JSON contains Markdown display settings, global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2329,8 +2337,8 @@ private fun BackupSettingsPage(
             text = {
                 Text(
                     tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v25 还会恢复全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。日记、媒体和背景图片文件不会被修改。确定继续吗？",
-                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. v25 also restores global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merges games and per-device screen time while leaving the Vault locked. Diary, media, and background-image files are unchanged. Continue?",
+                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v26 还会恢复 Markdown 标题字号、全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。日记、笔记、媒体和背景图片文件不会被修改。确定继续吗？",
+                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. v26 also restores Markdown heading sizes, global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merges games and per-device screen time while leaving the Vault locked. Diary, note, media, and background-image files are unchanged. Continue?",
                     ),
                 )
             },
@@ -2505,8 +2513,8 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "v25 包含应用设置（含全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。逐页教学确认和背景图片文件不包含在内。",
-                        "v25 includes app settings (including global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time. Per-page confirmations and background-image files are excluded.",
+                        "v26 包含应用设置（含 Markdown 标题字号与笔记目录引用、全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。笔记/日记正文、媒体文件、逐页教学确认和背景图片文件不包含在内。",
+                        "v26 includes app settings (including Markdown heading sizes and the notes-folder reference, global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time. Note/diary contents, media files, per-page confirmations, and background-image files are excluded.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -3829,6 +3837,9 @@ private fun DiarySettingsPage(
     var imagePattern by remember(settings.imageNamePattern) { mutableStateOf(settings.imageNamePattern) }
     var imageWidth by remember(settings.imageMaxWidthDp) { mutableStateOf(settings.imageMaxWidthDp.toString()) }
     var imageHeight by remember(settings.imageMaxHeightDp) { mutableStateOf(settings.imageMaxHeightDp.toString()) }
+    var markdownHeadingSizes by remember(settings.markdownHeadingSizesSp) {
+        mutableStateOf(normalizeMarkdownHeadingSizes(settings.markdownHeadingSizesSp))
+    }
     var mealImageCompressionEnabled by rememberSaveable(settings.mealImageCompressionEnabled) {
         mutableStateOf(settings.mealImageCompressionEnabled)
     }
@@ -3884,6 +3895,7 @@ private fun DiarySettingsPage(
         imagePattern = imagePattern,
         imageWidth = imageWidth.toIntOrNull(),
         imageHeight = imageHeight.toIntOrNull(),
+        markdownHeadingSizesSp = normalizeMarkdownHeadingSizes(markdownHeadingSizes),
         mealImageCompressionEnabled = mealImageCompressionEnabled,
         mealImageCompressionQuality = mealImageCompressionQuality,
         saveOriginalToGallery = saveOriginalToGallery,
@@ -3902,6 +3914,9 @@ private fun DiarySettingsPage(
         filePattern != settings.fileNamePattern || template != settings.markdownTemplate ||
         imagePattern != settings.imageNamePattern || diaryDraft.imageWidth != settings.imageMaxWidthDp ||
         diaryDraft.imageHeight != settings.imageMaxHeightDp ||
+        diaryDraft.markdownHeadingSizesSp != normalizeMarkdownHeadingSizes(
+            settings.markdownHeadingSizesSp,
+        ) ||
         mealImageCompressionEnabled != settings.mealImageCompressionEnabled ||
         mealImageCompressionQuality != settings.mealImageCompressionQuality ||
         saveOriginalToGallery != settings.saveOriginalToGallery ||
@@ -3929,6 +3944,7 @@ private fun DiarySettingsPage(
             imagePattern = defaults.imageNamePattern
             imageWidth = defaults.imageMaxWidthDp.toString()
             imageHeight = defaults.imageMaxHeightDp.toString()
+            markdownHeadingSizes = defaults.markdownHeadingSizesSp
             mealImageCompressionEnabled = defaults.mealImageCompressionEnabled
             mealImageCompressionQuality = defaults.mealImageCompressionQuality
             saveOriginalToGallery = defaults.saveOriginalToGallery
@@ -3992,6 +4008,47 @@ private fun DiarySettingsPage(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(1f),
                     )
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("Markdown 阅读预览", "Markdown reading preview")) {
+                Text(
+                    tr(
+                        "标题、粗体、斜体、列表、引用、代码和链接会保留排版。下面可分别调整 H1–H6 标题字号；笔记预览也共用这些设置。",
+                        "Headings, emphasis, lists, quotes, code, and links retain their formatting. Adjust H1–H6 sizes individually below; Notes uses the same preview settings.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                markdownHeadingSizes.forEachIndexed { index, size ->
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                tr("${index + 1} 级标题", "Heading ${index + 1}"),
+                                fontSize = size.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text("${size.roundToInt()} sp", color = MaterialTheme.colorScheme.primary)
+                        }
+                        Slider(
+                            value = size,
+                            onValueChange = { value ->
+                                markdownHeadingSizes = markdownHeadingSizes.mapIndexed {
+                                        itemIndex, current ->
+                                    if (itemIndex == index) value.roundToInt().toFloat() else current
+                                }
+                            },
+                            valueRange = MIN_MARKDOWN_HEADING_SIZE_SP..
+                                MAX_MARKDOWN_HEADING_SIZE_SP,
+                            steps = (MAX_MARKDOWN_HEADING_SIZE_SP -
+                                MIN_MARKDOWN_HEADING_SIZE_SP).toInt() - 1,
+                        )
+                    }
                 }
             }
         }
