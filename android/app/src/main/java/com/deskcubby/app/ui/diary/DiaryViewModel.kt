@@ -17,8 +17,8 @@ import com.deskcubby.app.data.repository.CalorieEstimationRepository
 import com.deskcubby.app.data.repository.DiaryPreviewMedia
 import com.deskcubby.app.data.repository.DiaryTextUtils
 import com.deskcubby.app.data.repository.ExternalFileConflictException
-import com.deskcubby.app.data.repository.MealCalorieEstimationStage
 import com.deskcubby.app.data.repository.MealCalorieModelUpdate
+import com.deskcubby.app.data.repository.MealImageRecognition
 import com.deskcubby.app.data.repository.MealCalendarDay
 import com.deskcubby.app.data.repository.MealCalendarPhoto
 import com.deskcubby.app.data.repository.MealDayDetails
@@ -32,8 +32,11 @@ import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -43,9 +46,12 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 
 data class DiaryListState(
     val loading: Boolean = false,
@@ -74,7 +80,11 @@ data class EditorState(
 
 private data class CalorieEstimationWorkPhoto(
     val photo: MealCalendarPhoto,
-    val positionInDay: Int,
+)
+
+private data class RecognizedCaloriePhoto(
+    val fileName: String,
+    val recognition: MealImageRecognition,
 )
 
 private data class CalorieEstimationWork(
@@ -89,6 +99,12 @@ private data class CalorieEstimationWork(
     val clearManualTotalOnSave: Boolean,
 )
 
+private data class MealCalendarSource(
+    val diaryTreeUri: String?,
+    val mediaTreeUri: String?,
+    val contentRevision: Long,
+)
+
 private enum class CalorieEnqueueResult {
     ADDED,
     UPGRADED,
@@ -97,6 +113,19 @@ private enum class CalorieEnqueueResult {
 
 private const val MAX_PROGRESS_PHOTO_LABEL_CHARS = 160
 private const val MAX_MODEL_TRACE_TEXT_CHARS = 32_000
+private const val MAX_PARALLEL_MEAL_IMAGE_RECOGNITIONS = 3
+
+internal suspend fun <T, R> mapConcurrentOrdered(
+    items: List<T>,
+    maxConcurrency: Int,
+    transform: suspend (T) -> R,
+): List<R> = coroutineScope {
+    require(maxConcurrency > 0) { "maxConcurrency must be positive" }
+    val semaphore = Semaphore(minOf(maxConcurrency, items.size).coerceAtLeast(1))
+    items.map { item ->
+        async { semaphore.withPermit { transform(item) } }
+    }.awaitAll()
+}
 
 @OptIn(FlowPreview::class)
 @HiltViewModel
@@ -147,6 +176,8 @@ class DiaryViewModel @Inject constructor(
     private val calorieWorkQueue = mutableListOf<CalorieEstimationWork>()
     private var refreshJob: Job? = null
     private var mealCalendarRefreshJob: Job? = null
+    private var loadedMealCalendarSource: MealCalendarSource? = null
+    private var mealCalendarDirty: Boolean = true
     private var calorieQueueJob: Job? = null
     private var activeCalorieWork: CalorieEstimationWork? = null
     private var nextCalorieWorkId = 1L
@@ -178,20 +209,28 @@ class DiaryViewModel @Inject constructor(
         }
     }
 
-    fun refreshMealCalendar() {
-        refreshMealCalendar(force = false)
+    fun loadMealCalendarIfNeeded() {
+        val source = mealCalendarSource(settings.value)
+        if (!mealCalendarDirty && loadedMealCalendarSource == source) return
+        refreshMealCalendar(force = false, source = source)
     }
 
     fun forceRefreshMealCalendar() {
-        refreshMealCalendar(force = true)
+        refreshMealCalendar(force = true, source = mealCalendarSource(settings.value))
     }
 
-    private fun refreshMealCalendar(force: Boolean) {
+    private fun refreshMealCalendar(force: Boolean, source: MealCalendarSource) {
         mealCalendarRefreshJob?.cancel()
         mealCalendarRefreshJob = viewModelScope.launch {
-            _mealCalendarState.value = _mealCalendarState.value.copy(loading = true, error = null)
+            _mealCalendarState.value = if (loadedMealCalendarSource == source) {
+                _mealCalendarState.value.copy(loading = true, error = null)
+            } else {
+                MealCalendarState(loading = true)
+            }
             try {
                 val items = repository.scanMealCalendar(settings.value, forceRefresh = force)
+                loadedMealCalendarSource = source
+                mealCalendarDirty = mealCalendarSource(settings.value) != source
                 _mealCalendarState.value = MealCalendarState(items = items)
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -203,6 +242,33 @@ class DiaryViewModel @Inject constructor(
             }
         }
     }
+
+    private fun markMealCalendarDirty() {
+        mealCalendarDirty = true
+    }
+
+    private fun acceptIncrementalMealCalendarMutation(
+        previousSource: MealCalendarSource,
+        cacheWasCurrent: Boolean,
+    ) {
+        val currentSource = mealCalendarSource(settings.value)
+        val isOnlyExpectedMutation =
+            currentSource.diaryTreeUri == previousSource.diaryTreeUri &&
+                currentSource.mediaTreeUri == previousSource.mediaTreeUri &&
+                currentSource.contentRevision == previousSource.contentRevision + 1
+        if (cacheWasCurrent && isOnlyExpectedMutation) {
+            loadedMealCalendarSource = currentSource
+            mealCalendarDirty = false
+        } else {
+            markMealCalendarDirty()
+        }
+    }
+
+    private fun mealCalendarSource(settings: AppSettings) = MealCalendarSource(
+        diaryTreeUri = settings.diaryTreeUri,
+        mediaTreeUri = settings.mediaTreeUri,
+        contentRevision = repository.currentMealCalendarContentRevision(),
+    )
 
     fun calculateUncalculatedCalories(
         dateIso: String? = null,
@@ -220,14 +286,18 @@ class DiaryViewModel @Inject constructor(
                         _message.value = error
                         return@withLock
                     }
-                    val currentItems = _mealCalendarState.value.items.takeIf { it.isNotEmpty() }
-                        ?: repository.scanMealCalendar(currentSettings).also { scanned ->
-                            _mealCalendarState.value = _mealCalendarState.value.copy(
-                                loading = false,
-                                items = scanned,
-                                error = null,
-                            )
-                        }
+                    val currentSource = mealCalendarSource(currentSettings)
+                    val currentItems = _mealCalendarState.value.items.takeIf {
+                        !mealCalendarDirty && loadedMealCalendarSource == currentSource
+                    } ?: repository.scanMealCalendar(currentSettings).also { scanned ->
+                        loadedMealCalendarSource = currentSource
+                        mealCalendarDirty = mealCalendarSource(settings.value) != currentSource
+                        _mealCalendarState.value = _mealCalendarState.value.copy(
+                            loading = false,
+                            items = scanned,
+                            error = null,
+                        )
+                    }
                     val normalizedOverride = noteOverride
                         ?.trim()
                         ?.take(MAX_MEAL_NOTE_CHARS)
@@ -236,22 +306,21 @@ class DiaryViewModel @Inject constructor(
                         .filter { dateIso == null || it.dateIso == dateIso }
                         .mapNotNull { day ->
                             val seenInDay = seenPhotoKeys ?: mutableSetOf()
-                            val selectedPhotos = day.photos.mapIndexedNotNull { index, photo ->
+                            val selectedPhotos = day.photos.mapNotNull { photo ->
                                 if (photoFileName != null &&
                                     !photo.fileName.equals(photoFileName, ignoreCase = true)
                                 ) {
-                                    return@mapIndexedNotNull null
+                                    return@mapNotNull null
                                 }
-                                if (!force && photo.energyKj != null) return@mapIndexedNotNull null
+                                if (!force && photo.energyKj != null) return@mapNotNull null
                                 val key = photo.fileName
                                     .lowercase(Locale.ROOT)
                                     .ifBlank { photo.uri.toString() }
                                 if (!seenInDay.add(key)) {
-                                    return@mapIndexedNotNull null
+                                    return@mapNotNull null
                                 }
                                 CalorieEstimationWorkPhoto(
                                     photo = photo,
-                                    positionInDay = index + 1,
                                 )
                             }
                             if (selectedPhotos.isEmpty()) return@mapNotNull null
@@ -309,9 +378,11 @@ class DiaryViewModel @Inject constructor(
     }
 
     fun clearFinishedCalorieEstimationProgress() {
-        _calorieEstimationQueueState.value = CalorieEstimationQueueState(
-            items = _calorieEstimationQueueState.value.items.filterNot { it.isTerminal },
-        )
+        _calorieEstimationQueueState.update { current ->
+            CalorieEstimationQueueState(
+                items = current.items.filterNot { it.isTerminal },
+            )
+        }
     }
 
     private fun enqueueCalorieWork(work: CalorieEstimationWork): CalorieEnqueueResult {
@@ -337,9 +408,9 @@ class DiaryViewModel @Inject constructor(
             return CalorieEnqueueResult.DUPLICATE
         }
         calorieWorkQueue += work
-        _calorieEstimationQueueState.value = CalorieEstimationQueueState(
-            items = _calorieEstimationQueueState.value.items + progressFor(work),
-        )
+        _calorieEstimationQueueState.update { current ->
+            CalorieEstimationQueueState(items = current.items + progressFor(work))
+        }
         return CalorieEnqueueResult.ADDED
     }
 
@@ -384,6 +455,55 @@ class DiaryViewModel @Inject constructor(
         }
     }
 
+    private suspend fun recognizeCaloriePhotos(
+        work: CalorieEstimationWork,
+        executionSettings: AppSettings,
+    ): List<RecognizedCaloriePhoto> {
+        val indexedPhotos = work.photos.mapIndexed { index, workPhoto -> index to workPhoto }
+        return mapConcurrentOrdered(
+            items = indexedPhotos,
+            maxConcurrency = MAX_PARALLEL_MEAL_IMAGE_RECOGNITIONS,
+        ) { (index, workPhoto) ->
+            requireCalorieDirectoriesUnchanged(work.settings, settings.value)
+            val photo = workPhoto.photo
+            val fileName = photo.fileName.takeIf(String::isNotBlank)
+                ?: error("无法确定图片文件名，热量未记录")
+            val selectedPhotoIndex = index + 1
+            val photoLabel = listOf(photo.caption.trim(), photo.fileName.trim())
+                .filter(String::isNotBlank)
+                .distinct()
+                .joinToString(" · ")
+                .ifBlank { localized("饮食图片", "Meal photo") }
+                .take(MAX_PROGRESS_PHOTO_LABEL_CHARS)
+            replaceCalorieProgress(work.id) {
+                it.copy(activePhotoCount = it.activePhotoCount + 1)
+            }
+            try {
+                val recognition = calorieRepository.recognizeImage(
+                    imageUri = photo.uri.toString(),
+                    settings = executionSettings,
+                    onModelUpdate = { update ->
+                        updateCalorieModelTrace(
+                            workId = work.id,
+                            selectedPhotoIndex = selectedPhotoIndex,
+                            photoLabel = photoLabel,
+                            update = update,
+                        )
+                    },
+                )
+                replaceCalorieProgress(work.id) {
+                    it.copy(completedPhotoCount = it.completedPhotoCount + 1)
+                }
+                RecognizedCaloriePhoto(fileName, recognition)
+            } finally {
+                finishCalorieModelTrace(work.id, selectedPhotoIndex)
+                replaceCalorieProgress(work.id) {
+                    it.copy(activePhotoCount = (it.activePhotoCount - 1).coerceAtLeast(0))
+                }
+            }
+        }
+    }
+
     private suspend fun processCalorieWork(work: CalorieEstimationWork): Boolean {
         return try {
             val executionSettings = settings.value
@@ -392,57 +512,51 @@ class DiaryViewModel @Inject constructor(
             }
             requireCalorieDirectoriesUnchanged(work.settings, executionSettings)
             calorieConfigurationError(executionSettings)?.let(::error)
-            val estimates = linkedMapOf<String, MealEnergyEstimate>()
             val calculationNote = work.noteOverride
                 ?: _mealCalendarState.value.items
                     .firstOrNull { it.dateIso == work.dateIso }
                     ?.details
                     ?.note
                 ?: work.fallbackNote
-            work.photos.forEachIndexed { index, workPhoto ->
-                requireCalorieDirectoriesUnchanged(work.settings, settings.value)
-                val photo = workPhoto.photo
-                val photoLabel = listOf(photo.caption.trim(), photo.fileName.trim())
-                    .filter(String::isNotBlank)
-                    .distinct()
-                    .joinToString(" · ")
-                    .ifBlank { localized("饮食图片", "Meal photo") }
-                    .take(MAX_PROGRESS_PHOTO_LABEL_CHARS)
-                replaceCalorieProgress(work.id) {
-                    it.copy(
-                        status = CalorieEstimationQueueStatus.IMAGE_RECOGNITION,
-                        completedPhotoCount = index,
-                        currentSelectedPhotoIndex = index + 1,
-                        currentDayPhotoIndex = workPhoto.positionInDay,
-                        currentPhotoLabel = photoLabel,
-                        error = null,
-                    )
-                }
-                val fileName = photo.fileName.takeIf(String::isNotBlank)
-                    ?: error("无法确定图片文件名，热量未记录")
-                estimates[fileName] = calorieRepository.estimate(
-                    imageUri = photo.uri.toString(),
+            replaceCalorieProgress(work.id) {
+                it.copy(
+                    status = CalorieEstimationQueueStatus.IMAGE_RECOGNITION,
+                    completedPhotoCount = 0,
+                    activePhotoCount = 0,
+                    currentPhotoLabel = null,
+                    error = null,
+                )
+            }
+            val recognizedPhotos = recognizeCaloriePhotos(work, executionSettings)
+            requireCalorieDirectoriesUnchanged(work.settings, settings.value)
+            replaceCalorieProgress(work.id) {
+                it.copy(
+                    status = CalorieEstimationQueueStatus.TEXT_ESTIMATION,
+                    completedPhotoCount = work.photos.size,
+                    activePhotoCount = 0,
+                    currentPhotoLabel = localized("全日统一计算", "Unified day calculation"),
+                )
+            }
+            val estimateList = try {
+                calorieRepository.estimateRecognizedDay(
+                    recognitions = recognizedPhotos.map(RecognizedCaloriePhoto::recognition),
                     settings = executionSettings,
                     note = calculationNote,
-                    onStageChanged = { stage ->
-                        replaceCalorieProgress(work.id) {
-                            it.copy(
-                                status = when (stage) {
-                                    MealCalorieEstimationStage.IMAGE_RECOGNITION ->
-                                        CalorieEstimationQueueStatus.IMAGE_RECOGNITION
-                                    MealCalorieEstimationStage.TEXT_ESTIMATION ->
-                                        CalorieEstimationQueueStatus.TEXT_ESTIMATION
-                                },
-                            )
-                        }
-                    },
                     onModelUpdate = { update ->
-                        updateCalorieModelTrace(work.id, update)
+                        updateCalorieModelTrace(
+                            workId = work.id,
+                            selectedPhotoIndex = 0,
+                            photoLabel = localized("全日统一计算", "Unified day calculation"),
+                            update = update,
+                        )
                     },
                 )
-                finishCalorieModelTrace(work.id)
-                replaceCalorieProgress(work.id) {
-                    it.copy(completedPhotoCount = index + 1)
+            } finally {
+                finishCalorieModelTrace(work.id, selectedPhotoIndex = 0)
+            }
+            val estimates = linkedMapOf<String, MealEnergyEstimate>().apply {
+                recognizedPhotos.zip(estimateList).forEach { (recognized, estimate) ->
+                    put(recognized.fileName, estimate)
                 }
             }
 
@@ -450,8 +564,7 @@ class DiaryViewModel @Inject constructor(
                 it.copy(
                     status = CalorieEstimationQueueStatus.SAVING,
                     completedPhotoCount = work.photos.size,
-                    currentSelectedPhotoIndex = null,
-                    currentDayPhotoIndex = null,
+                    activePhotoCount = 0,
                     currentPhotoLabel = null,
                 )
             }
@@ -479,14 +592,16 @@ class DiaryViewModel @Inject constructor(
                 emptyMap()
             }
             requireCalorieDirectoriesUnchanged(work.settings, settings.value)
+            val sourceBeforeWrite = mealCalendarSource(executionSettings)
+            val cacheWasCurrent = !mealCalendarDirty && loadedMealCalendarSource == sourceBeforeWrite
             repository.setMealEnergyResults(estimates, detailsByDate, executionSettings)
             applyCompletedCalorieWork(work.dateIso, estimates, detailsByDate[work.dateIso])
+            acceptIncrementalMealCalendarMutation(sourceBeforeWrite, cacheWasCurrent)
             replaceCalorieProgress(work.id) {
                 it.copy(
                     status = CalorieEstimationQueueStatus.COMPLETED,
                     completedPhotoCount = work.photos.size,
-                    currentSelectedPhotoIndex = null,
-                    currentDayPhotoIndex = null,
+                    activePhotoCount = 0,
                     currentPhotoLabel = null,
                     error = null,
                 )
@@ -503,6 +618,7 @@ class DiaryViewModel @Inject constructor(
                         status != CalorieEstimationQueueStatus.QUEUED &&
                             !status.isTerminal
                     },
+                    activePhotoCount = 0,
                     error = error.userMessage(),
                 )
             }
@@ -541,38 +657,43 @@ class DiaryViewModel @Inject constructor(
         id: Long,
         transform: (CalorieEstimationDayProgress) -> CalorieEstimationDayProgress,
     ) {
-        val current = _calorieEstimationQueueState.value
-        _calorieEstimationQueueState.value = CalorieEstimationQueueState(
-            items = current.items.map { item -> if (item.id == id) transform(item) else item },
-        )
+        _calorieEstimationQueueState.update { current ->
+            CalorieEstimationQueueState(
+                items = current.items.map { item -> if (item.id == id) transform(item) else item },
+            )
+        }
     }
 
     private fun updateCalorieModelTrace(
         workId: Long,
+        selectedPhotoIndex: Int,
+        photoLabel: String,
         update: MealCalorieModelUpdate,
     ) {
         val now = SystemClock.elapsedRealtime()
         replaceCalorieProgress(workId) { progress ->
-            val selectedPhotoIndex = progress.currentSelectedPhotoIndex
-                ?: return@replaceCalorieProgress progress
-            val current = progress.modelTraces.lastOrNull()
-            val sameRequest = current?.isRunning == true &&
-                current.stage == update.stage &&
-                current.selectedPhotoIndex == selectedPhotoIndex
-            val traces = if (sameRequest) {
-                progress.modelTraces.dropLast(1) + current.copy(
-                    modelName = update.modelName.take(MAX_PROGRESS_PHOTO_LABEL_CHARS),
-                    reasoning = update.completion.reasoning.take(MAX_MODEL_TRACE_TEXT_CHARS),
-                    response = update.completion.content.take(MAX_MODEL_TRACE_TEXT_CHARS),
-                )
+            val traceIndex = progress.modelTraces.indexOfLast { trace ->
+                trace.isRunning && trace.stage == update.stage &&
+                    trace.selectedPhotoIndex == selectedPhotoIndex
+            }
+            val traces = if (traceIndex >= 0) {
+                progress.modelTraces.toMutableList().apply {
+                    val current = get(traceIndex)
+                    set(
+                        traceIndex,
+                        current.copy(
+                            modelName = update.modelName.take(MAX_PROGRESS_PHOTO_LABEL_CHARS),
+                            reasoning = update.completion.reasoning.take(MAX_MODEL_TRACE_TEXT_CHARS),
+                            response = update.completion.content.take(MAX_MODEL_TRACE_TEXT_CHARS),
+                        ),
+                    )
+                }
             } else {
-                progress.modelTraces.map { trace ->
-                    if (trace.isRunning) trace.copy(finishedAtElapsedRealtime = now) else trace
-                } + CalorieModelTrace(
+                progress.modelTraces + CalorieModelTrace(
                     stage = update.stage,
                     modelName = update.modelName.take(MAX_PROGRESS_PHOTO_LABEL_CHARS),
                     selectedPhotoIndex = selectedPhotoIndex,
-                    photoLabel = progress.currentPhotoLabel.orEmpty(),
+                    photoLabel = photoLabel,
                     startedAtElapsedRealtime = now,
                     reasoning = update.completion.reasoning.take(MAX_MODEL_TRACE_TEXT_CHARS),
                     response = update.completion.content.take(MAX_MODEL_TRACE_TEXT_CHARS),
@@ -582,15 +703,25 @@ class DiaryViewModel @Inject constructor(
         }
     }
 
-    private fun finishCalorieModelTrace(workId: Long) {
+    private fun finishCalorieModelTrace(workId: Long, selectedPhotoIndex: Int? = null) {
         val now = SystemClock.elapsedRealtime()
         replaceCalorieProgress(workId) { progress ->
-            if (progress.modelTraces.none(CalorieModelTrace::isRunning)) {
+            val hasMatchingRunningTrace = progress.modelTraces.any { trace ->
+                trace.isRunning &&
+                    (selectedPhotoIndex == null || trace.selectedPhotoIndex == selectedPhotoIndex)
+            }
+            if (!hasMatchingRunningTrace) {
                 progress
             } else {
                 progress.copy(
                     modelTraces = progress.modelTraces.map { trace ->
-                        if (trace.isRunning) trace.copy(finishedAtElapsedRealtime = now) else trace
+                        if (trace.isRunning &&
+                            (selectedPhotoIndex == null || trace.selectedPhotoIndex == selectedPhotoIndex)
+                        ) {
+                            trace.copy(finishedAtElapsedRealtime = now)
+                        } else {
+                            trace
+                        }
                     },
                 )
             }
@@ -627,7 +758,10 @@ class DiaryViewModel @Inject constructor(
         _mealCalendarState.value = initialState.copy(loading = true, error = null)
         viewModelScope.launch {
             try {
-                repository.setMealDayDetails(dateIso, normalizedDetails, settings.value)
+                val executionSettings = settings.value
+                val sourceBeforeWrite = mealCalendarSource(executionSettings)
+                val cacheWasCurrent = !mealCalendarDirty && loadedMealCalendarSource == sourceBeforeWrite
+                repository.setMealDayDetails(dateIso, normalizedDetails, executionSettings)
                 val current = _mealCalendarState.value
                 _mealCalendarState.value = current.copy(
                     loading = false,
@@ -636,6 +770,7 @@ class DiaryViewModel @Inject constructor(
                         if (day.dateIso == dateIso) day.copy(details = normalizedDetails) else day
                     },
                 )
+                acceptIncrementalMealCalendarMutation(sourceBeforeWrite, cacheWasCurrent)
                 _message.value = localized("热量详情已保存", "Energy details saved")
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -830,6 +965,7 @@ class DiaryViewModel @Inject constructor(
                 conflict = null,
             )
             if (changedDuringSave) saveRequests.tryEmit(Unit)
+            markMealCalendarDirty()
             refresh()
             true
         } catch (error: Exception) {
@@ -932,6 +1068,7 @@ class DiaryViewModel @Inject constructor(
                             "The media file was already missing; diary references deleted",
                         )
                     }
+                    markMealCalendarDirty()
                     refresh()
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -970,6 +1107,7 @@ class DiaryViewModel @Inject constructor(
                         "已重命名为 ${renamed.name}",
                         "Renamed to ${renamed.name}",
                     )
+                    markMealCalendarDirty()
                     refresh()
                 }
                 .onFailure { _message.value = it.userMessage() }
@@ -983,6 +1121,7 @@ class DiaryViewModel @Inject constructor(
             }
                 .onSuccess {
                     _message.value = localized("已移入日记回收站", "Moved to diary trash")
+                    markMealCalendarDirty()
                     refresh()
                     refreshTrash()
                 }
@@ -1005,6 +1144,7 @@ class DiaryViewModel @Inject constructor(
             }
                 .onSuccess {
                     _message.value = localized("日记已恢复", "Diary restored")
+                    markMealCalendarDirty()
                     refresh()
                     refreshTrash()
                 }

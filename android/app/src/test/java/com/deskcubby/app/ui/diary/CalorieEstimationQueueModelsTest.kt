@@ -1,6 +1,11 @@
 package com.deskcubby.app.ui.diary
 
 import com.deskcubby.app.data.repository.MealCalorieEstimationStage
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -50,6 +55,37 @@ class CalorieEstimationQueueModelsTest {
         assertTrue(running.isRunning)
         assertFalse(finished.isRunning)
         assertEquals("1.3", formatCalorieTraceElapsed(finished.elapsedMillis(9_999L)))
+    }
+
+    @Test
+    fun concurrentMapStartsUpToLimitAndKeepsInputOrder() = runBlocking {
+        withTimeout(5_000) {
+            val active = AtomicInteger(0)
+            val maximumActive = AtomicInteger(0)
+            val firstWaveStarted = CompletableDeferred<Unit>()
+            val releaseFirstWave = CompletableDeferred<Unit>()
+            val started = AtomicInteger(0)
+            val result = async {
+                mapConcurrentOrdered((1..5).toList(), maxConcurrency = 3) { value ->
+                    val nowActive = active.incrementAndGet()
+                    maximumActive.updateAndGet { previous -> maxOf(previous, nowActive) }
+                    if (started.incrementAndGet() == 3) firstWaveStarted.complete(Unit)
+                    try {
+                        releaseFirstWave.await()
+                        value * 10
+                    } finally {
+                        active.decrementAndGet()
+                    }
+                }
+            }
+
+            firstWaveStarted.await()
+            assertEquals(3, active.get())
+            releaseFirstWave.complete(Unit)
+
+            assertEquals(listOf(10, 20, 30, 40, 50), result.await())
+            assertEquals(3, maximumActive.get())
+        }
     }
 
     private fun progress(id: Long, status: CalorieEstimationQueueStatus) =

@@ -32,6 +32,10 @@ class SettingsRepositoryTest {
             DEFAULT_CALORIE_TEXT_PROMPT,
             normalizeCalorieTextPrompt(LEGACY_DEFAULT_CALORIE_TEXT_PROMPT),
         )
+        assertEquals(
+            DEFAULT_CALORIE_TEXT_PROMPT,
+            normalizeCalorieTextPrompt(V091_DEFAULT_CALORIE_TEXT_PROMPT),
+        )
         assertEquals("custom vision", normalizeCalorieVisionPrompt("custom vision"))
         assertEquals("custom text", normalizeCalorieTextPrompt("custom text"))
     }

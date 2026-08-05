@@ -1477,11 +1477,26 @@ internal const val LEGACY_DEFAULT_CALORIE_TEXT_PROMPT: String =
     "根据随后提供的食物识别 JSON，估算整张图片中食物的总能量。只返回 JSON，不要 Markdown：" +
         "{\"energyKj\":整数}。energyKj 使用千焦(kJ)，综合份量并避免重复计算。"
 
+internal const val V091_DEFAULT_CALORIE_TEXT_PROMPT: String =
+    "你是谨慎的营养能量估算助手。根据随后 JSON 中的 recognizedFoods、visionNotes 和可选 " +
+        "userNote，结合可食用分量、常见烹饪方式、可见油脂/酱汁与饮料估算能量；用户备注" +
+        "可用于判断多人分享、同一餐多角度拍摄、剩余比例或实际分量。避免重复计算，并在证据" +
+        "不足时采用中性的合理估值。只返回 JSON，不要 Markdown：{\"energyKj\":整数," +
+        "\"foods\":[{\"name\":\"食物名称\",\"amount\":\"分量\",\"unit\":\"单位\"," +
+        "\"energyKj\":整数}]}。所有能量使用千焦(kJ)，保留每种食物，各项之和应与总能量" +
+        "在合理舍入范围内一致。"
+
 internal fun normalizeCalorieVisionPrompt(value: String): String =
     if (value == LEGACY_DEFAULT_CALORIE_VISION_PROMPT) DEFAULT_CALORIE_VISION_PROMPT else value
 
 internal fun normalizeCalorieTextPrompt(value: String): String =
-    if (value == LEGACY_DEFAULT_CALORIE_TEXT_PROMPT) DEFAULT_CALORIE_TEXT_PROMPT else value
+    if (value == LEGACY_DEFAULT_CALORIE_TEXT_PROMPT ||
+        value == V091_DEFAULT_CALORIE_TEXT_PROMPT
+    ) {
+        DEFAULT_CALORIE_TEXT_PROMPT
+    } else {
+        value
+    }
 
 internal fun normalizeUserName(value: String): String = value.trim().takeCodePoints(MAX_USER_NAME_CHARS)
 

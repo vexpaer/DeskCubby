@@ -489,8 +489,8 @@ fun MealCalendarScreen(
         }
     }
 
-    LaunchedEffect(viewModel) {
-        viewModel.refreshMealCalendar()
+    LaunchedEffect(viewModel, settings.diaryTreeUri, settings.mediaTreeUri) {
+        viewModel.loadMealCalendarIfNeeded()
     }
     LaunchedEffect(operationMessage) {
         operationMessage?.let { message ->

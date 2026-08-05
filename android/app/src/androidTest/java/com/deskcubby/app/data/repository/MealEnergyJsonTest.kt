@@ -61,6 +61,71 @@ class MealEnergyJsonTest {
     }
 
     @Test
+    fun dayPayloadKeepsPhotoOrderAndIncludesNoteOnce() {
+        val payload = JSONObject(
+            buildCalorieDayTextInput(
+                visionJsons = listOf(
+                    """{"foods":[{"name":"米饭","amount":"150","unit":"g"}]}""",
+                    """{"foods":[{"name":"鸡蛋","amount":"1","unit":"个"}],"sceneNotes":"同一餐近景"}""",
+                ),
+                note = "第二张是同一餐的近景",
+            ),
+        )
+
+        assertEquals("第二张是同一餐的近景", payload.getString("userNote"))
+        val photos = payload.getJSONArray("photos")
+        assertEquals(2, photos.length())
+        assertEquals(1, photos.getJSONObject(0).getInt("photoIndex"))
+        assertEquals("米饭", photos.getJSONObject(0).getJSONArray("recognizedFoods")
+            .getJSONObject(0).getString("name"))
+        assertEquals("同一餐近景", photos.getJSONObject(1).getString("visionNotes"))
+    }
+
+    @Test
+    fun dayParserMapsEveryPhotoAndAllowsZeroForDuplicateAngle() {
+        val estimates = parseMealDayEnergyEstimates(
+            visionJsons = listOf(
+                """{"foods":[{"name":"面条","amount":"1","unit":"碗"}]}""",
+                """{"foods":[{"name":"面条","amount":"1","unit":"碗"}]}""",
+            ),
+            textResponse = """{
+              "photos": [
+                {"photoIndex":2,"energyKj":0,"foods":[{"name":"面条","energyKj":0}]},
+                {"photoIndex":1,"energyKj":1800,"foods":[{"name":"面条","energyKj":1800}]}
+              ]
+            }""".trimIndent(),
+        )
+
+        assertEquals(listOf(1_800, 0), estimates.map(MealEnergyEstimate::energyKj))
+        assertEquals(0, estimates[1].foods.single().energyKj)
+    }
+
+    @Test
+    fun dayParserRejectsMissingOrDuplicatePhotoResults() {
+        val visions = listOf(
+            """{"foods":[{"name":"米饭"}]}""",
+            """{"foods":[{"name":"青菜"}]}""",
+        )
+
+        assertTrue(
+            runCatching {
+                parseMealDayEnergyEstimates(
+                    visions,
+                    """{"photos":[{"photoIndex":1,"energyKj":300}]}""",
+                )
+            }.isFailure,
+        )
+        assertTrue(
+            runCatching {
+                parseMealDayEnergyEstimates(
+                    visions,
+                    """{"photos":[{"photoIndex":1,"energyKj":300},{"photoIndex":1,"energyKj":400}]}""",
+                )
+            }.isFailure,
+        )
+    }
+
+    @Test
     fun sidecarUpgradePreservesUnknownFieldsLocationAndLowercaseKey() {
         val legacy = """{
           "version": 1,

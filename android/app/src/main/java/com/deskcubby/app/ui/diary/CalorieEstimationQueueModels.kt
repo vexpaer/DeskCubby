@@ -34,8 +34,9 @@ data class CalorieModelTrace(
 
 /**
  * User-visible progress for one date. A date is committed only after every selected photo has
- * completed both model stages, so [completedPhotoCount] is calculation progress rather than a
- * claim that those intermediate results have already been saved.
+ * completed parallel recognition and the single date-scoped text calculation, so
+ * [completedPhotoCount] is recognition progress rather than a claim that intermediate results
+ * have already been saved.
  */
 data class CalorieEstimationDayProgress(
     val id: Long,
@@ -44,8 +45,7 @@ data class CalorieEstimationDayProgress(
     val selectedPhotoCount: Int,
     val dayPhotoCount: Int,
     val completedPhotoCount: Int = 0,
-    val currentSelectedPhotoIndex: Int? = null,
-    val currentDayPhotoIndex: Int? = null,
+    val activePhotoCount: Int = 0,
     val currentPhotoLabel: String? = null,
     val forceRecalculation: Boolean = false,
     val failedAtStatus: CalorieEstimationQueueStatus? = null,

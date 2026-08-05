@@ -55,6 +55,8 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -163,6 +165,22 @@ class DiaryFileRepository @Inject constructor(
     private val writeMutex = Mutex()
     private val mediaMutex = Mutex()
     private val mealCalendarCacheMutex = Mutex()
+    private val mealCalendarContentRevision = AtomicLong(0L)
+    private val dirtyMealDiaryRevisions = ConcurrentHashMap<String, AtomicLong>()
+
+    fun currentMealCalendarContentRevision(): Long = mealCalendarContentRevision.get()
+
+    private fun recordMealCalendarContentChange(diaryUri: Uri? = null) {
+        // Mark a known Markdown document before publishing the global revision. A scan that races
+        // this notification will therefore reparse that document even when a provider reports an
+        // unchanged timestamp and byte length.
+        diaryUri?.let { uri ->
+            dirtyMealDiaryRevisions
+                .computeIfAbsent(uri.toString()) { AtomicLong(0L) }
+                .incrementAndGet()
+        }
+        mealCalendarContentRevision.incrementAndGet()
+    }
 
     suspend fun scan(settings: AppSettings): List<DiaryDocument> = withContext(Dispatchers.IO) {
         val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext emptyList()
@@ -236,18 +254,20 @@ class DiaryFileRepository @Inject constructor(
             }
             val refreshedCache = LinkedHashMap<String, MealDiaryParseCacheEntry>()
             val photosByDate = linkedMapOf<String, MutableList<MealCalendarPhoto>>()
-            val diaries = diaryRoot.listFiles()
+            val diaries = snapshotDirectChildren(diaryRoot)
                 .asSequence()
-                .filter { it.isFile && it.name?.endsWith(".md", ignoreCase = true) == true }
+                .filter { it.isFile && it.name.endsWith(".md", ignoreCase = true) }
                 .map { document ->
-                    val name = document.name.orEmpty()
-                    val modified = document.lastModified()
                     MealDiaryScanDocument(
-                        document = document,
-                        name = name,
-                        modified = modified,
-                        size = document.length(),
-                        date = extractDate(name, modified, settings.fileNamePattern),
+                        uri = document.uri,
+                        name = document.name,
+                        modified = document.lastModified,
+                        size = document.size,
+                        date = extractDate(
+                            document.name,
+                            document.lastModified,
+                            settings.fileNamePattern,
+                        ),
                     )
                 }
                 .sortedWith(
@@ -257,22 +277,28 @@ class DiaryFileRepository @Inject constructor(
 
             for (diary in diaries) {
                 currentCoroutineContext().ensureActive()
-                val uri = diary.document.uri.toString()
+                val uri = diary.uri.toString()
+                val localDirtyRevision = dirtyMealDiaryRevisions[uri]
+                    ?.get()
+                    ?.takeIf { it > 0L }
                 val cachedEntry = cached[uri]?.takeIf { entry ->
-                    diary.modified > 0L &&
+                    localDirtyRevision == null &&
+                        diary.modified > 0L &&
                         entry.name == diary.name &&
                         entry.lastModified == diary.modified &&
                         entry.size == diary.size
                 }
                 var stableForCache = cachedEntry != null
                 val references = cachedEntry?.references ?: try {
-                    parseMealImageReferences(readText(diary.document.uri)).also {
+                    parseMealImageReferences(readText(diary.uri)).also {
                         // Do not publish a cache stamp when the provider reports that the file
                         // changed while it was being read. The current best-effort result remains
                         // visible, but the next load reparses it instead of trusting mixed state.
+                        val afterRead = queryDocumentVersion(diary.uri)
                         stableForCache = diary.modified > 0L &&
-                            diary.document.lastModified() == diary.modified &&
-                            diary.document.length() == diary.size
+                            afterRead != null &&
+                            afterRead.lastModified == diary.modified &&
+                            afterRead.size == diary.size
                     }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -287,6 +313,9 @@ class DiaryFileRepository @Inject constructor(
                         size = diary.size,
                         references = references,
                     )
+                    localDirtyRevision?.let { revision ->
+                        dirtyMealDiaryRevisions[uri]?.compareAndSet(revision, 0L)
+                    }
                 }
 
                 val dateIso = diary.date.toString()
@@ -306,7 +335,7 @@ class DiaryFileRepository @Inject constructor(
                             uri = mediaUri,
                             caption = reference.caption,
                             category = category,
-                            diaryUri = diary.document.uri,
+                            diaryUri = diary.uri,
                             markdown = reference.markdown,
                             // The JSON sidecar wins; captions written by older releases
                             // (e.g. "午餐-800kJ") remain readable as a fallback.
@@ -454,11 +483,26 @@ class DiaryFileRepository @Inject constructor(
     }
 
     private data class MealDiaryScanDocument(
-        val document: DocumentFile,
+        val uri: Uri,
         val name: String,
         val modified: Long,
         val size: Long,
         val date: LocalDate,
+    )
+
+    private data class SafDocumentSnapshot(
+        val uri: Uri,
+        val name: String,
+        val mimeType: String,
+        val lastModified: Long,
+        val size: Long,
+    ) {
+        val isFile: Boolean get() = mimeType != DocumentsContract.Document.MIME_TYPE_DIR
+    }
+
+    private data class SafDocumentVersion(
+        val lastModified: Long,
+        val size: Long,
     )
 
     private data class MealImageReference(
@@ -1044,6 +1088,7 @@ class DiaryFileRepository @Inject constructor(
             val key = fileName.takeIf(String::isNotBlank)
                 ?: error("无法确定图片文件名，热量未记录")
             updateMediaMetaEntryUnlocked(root, key) { entry -> entry.copy(energyKj = energyKj) }
+            recordMealCalendarContentChange()
         }
     }
 
@@ -1077,7 +1122,7 @@ class DiaryFileRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             if (estimatesByFileName.isEmpty() && dayDetailsByDate.isEmpty()) return@withContext
             estimatesByFileName.values.forEach { estimate ->
-                require(estimate.energyKj in 1..MAX_MEAL_ENERGY_KJ) { "AI 返回的热量无效" }
+                require(estimate.energyKj in 0..MAX_MEAL_ENERGY_KJ) { "AI 返回的热量无效" }
             }
             dayDetailsByDate.values.forEach { details ->
                 require(
@@ -1099,6 +1144,7 @@ class DiaryFileRepository @Inject constructor(
                 encoded = MediaMetaJsonCodec.updateMealDay(encoded, dateIso, details)
             }
             writeMediaMetaRawUnlocked(root, encoded, expectedOriginal = original)
+            recordMealCalendarContentChange()
         }
     }
 
@@ -1116,15 +1162,14 @@ class DiaryFileRepository @Inject constructor(
 
     /** Caller must hold [mediaMutex]. */
     private suspend fun snapshotMediaDirectoryUnlocked(root: DocumentFile): MediaDirectorySnapshot {
-        val files = root.listFiles()
+        val files = snapshotDirectChildren(root)
         val byName = files.asSequence()
-            .filter(DocumentFile::isFile)
-            .mapNotNull { file ->
-                file.name?.let { name -> name.lowercase(Locale.ROOT) to file.uri }
-            }
-            .toMap()
+            .filter(SafDocumentSnapshot::isFile)
+            .associate { file -> file.name.lowercase(Locale.ROOT) to file.uri }
         val metadata = try {
-            MediaMetaJsonCodec.decode(readMediaMetaRawUnlocked(root))
+            // Reuse this directory snapshot for both media lookup and sidecar lookup. Some SAF
+            // providers turn every list operation into remote IPC or a network request.
+            MediaMetaJsonCodec.decode(readMediaMetaRawUnlocked(root, byName))
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -1138,17 +1183,24 @@ class DiaryFileRepository @Inject constructor(
     }
 
     /** Caller must hold [mediaMutex]. Returns only a fully bounded and decoded sidecar. */
-    private suspend fun readMediaMetaRawUnlocked(root: DocumentFile): String {
+    private suspend fun readMediaMetaRawUnlocked(
+        root: DocumentFile,
+        knownFilesByName: Map<String, Uri>? = null,
+    ): String {
+        val filesByName = knownFilesByName ?: snapshotDirectChildren(root)
+            .asSequence()
+            .filter(SafDocumentSnapshot::isFile)
+            .associate { file -> file.name.lowercase(Locale.ROOT) to file.uri }
         val candidates = listOf(
             MEDIA_META_FILE_NAME,
             MEDIA_META_PREVIOUS_FILE_NAME,
             LEGACY_MEDIA_META_FILE_NAME,
             MEDIA_META_PENDING_FILE_NAME,
-        ).mapNotNull { name -> namedMediaMetaFile(root, name) }
+        ).mapNotNull { name -> filesByName[name.lowercase(Locale.ROOT)] }
         if (candidates.isEmpty()) return "{}"
         candidates.forEach { candidate ->
             try {
-                val raw = readMediaMetaTextBounded(candidate.uri)
+                val raw = readMediaMetaTextBounded(candidate)
                 MediaMetaJsonCodec.decode(raw)
                 return raw
             } catch (cancelled: CancellationException) {
@@ -1329,10 +1381,14 @@ class DiaryFileRepository @Inject constructor(
                 ?: error("无法在所选目录中创建日记")
             try {
                 writeText(created.uri, content)
-                load(created.uri)
+                load(created.uri).also { recordMealCalendarContentChange(created.uri) }
             } catch (error: Exception) {
                 val committed = runCatching { readText(created.uri) == content }.getOrDefault(false)
-                if (committed && error !is CancellationException) return@withContext load(created.uri)
+                if (committed && error !is CancellationException) {
+                    return@withContext load(created.uri).also {
+                        recordMealCalendarContentChange(created.uri)
+                    }
+                }
                 if (!committed) {
                     withContext(NonCancellable + Dispatchers.IO) {
                         runCatching { created.delete() }
@@ -1358,7 +1414,7 @@ class DiaryFileRepository @Inject constructor(
                 .replace("{title}", title.ifBlank { "新日记" })
                 .replace("{date}", dateText)
             writeText(file.uri, content)
-            load(file.uri)
+            load(file.uri).also { recordMealCalendarContentChange(file.uri) }
         }
 
     suspend fun save(
@@ -1372,7 +1428,7 @@ class DiaryFileRepository @Inject constructor(
             val onDisk = load(target)
             if (!force && onDisk.sha256 != expectedSha256) throw ExternalFileConflictException(onDisk)
             writeText(target, content)
-            load(target)
+            load(target).also { recordMealCalendarContentChange(target) }
         }
     }
 
@@ -1462,6 +1518,7 @@ class DiaryFileRepository @Inject constructor(
                     throw deleteError
                 }
 
+                recordMealCalendarContentChange(targetUri)
                 DiaryMediaDeleteResult(
                     document = load(targetUri),
                     mediaFileDeleted = mediaFileDeleted,
@@ -1517,6 +1574,7 @@ class DiaryFileRepository @Inject constructor(
                     ?: error("文件可能已重命名，但存储服务没有返回可访问的新文件")
                 val renamedDocument = load(renamedFile.uri)
                 updateIndexAfterRename(uri, renamedDocument)
+                recordMealCalendarContentChange()
                 renamedDocument
             }
         }
@@ -1557,7 +1615,9 @@ class DiaryFileRepository @Inject constructor(
             require(readBytes(backup.uri).contentEquals(bytes)) { "回收站备份校验失败" }
             require(document.delete()) { "原日记无法删除，文件已保持不变" }
             true
-        }.onFailure { backup.delete() }.getOrThrow()
+        }.onFailure { backup.delete() }.getOrThrow().also { deleted ->
+            if (deleted) recordMealCalendarContentChange()
+        }
     }
 
     suspend fun scanTrash(settings: AppSettings): List<DiaryTrashItem> = withContext(Dispatchers.IO) {
@@ -1598,7 +1658,7 @@ class DiaryFileRepository @Inject constructor(
             candidate = "$stem (恢复 $sequence).$extension"
             sequence++
         }
-        if (legacy) {
+        val restoredSuccessfully = if (legacy) {
             document.renameTo(candidate)
         } else {
             val restored = root.createFile("text/markdown", candidate) ?: return@withContext false
@@ -1613,6 +1673,8 @@ class DiaryFileRepository @Inject constructor(
                 true
             }.onFailure { restored.delete() }.getOrThrow()
         }
+        if (restoredSuccessfully) recordMealCalendarContentChange()
+        restoredSuccessfully
     }
 
     suspend fun permanentlyDelete(uri: String): Boolean = withContext(Dispatchers.IO) {
@@ -1766,7 +1828,7 @@ class DiaryFileRepository @Inject constructor(
         var diaryUri: Uri? = null
         var originalContent: String? = null
         var updatedContent: String? = null
-        return try {
+        val appended = try {
             writeMutex.withLock {
                 withContext(Dispatchers.IO) {
                     val document = enterTodayUnlocked(settings, date)
@@ -1815,9 +1877,10 @@ class DiaryFileRepository @Inject constructor(
                     }.exceptionOrNull()?.let(error::addSuppressed)
                 }
             }
-            if (committed && error !is CancellationException) return media
-            throw error
+            if (committed && error !is CancellationException) media else throw error
         }
+        recordMealCalendarContentChange(diaryUri)
+        return appended
     }
 
     /** Appends one exact, standalone text block to today's Markdown diary. */
@@ -1857,7 +1920,7 @@ class DiaryFileRepository @Inject constructor(
                 throw error
             }
         }
-    }
+    }.also { document -> recordMealCalendarContentChange(Uri.parse(document.uri)) }
 
     suspend fun resolveMedia(markdownTarget: String, settings: AppSettings): Uri? =
         resolveDiaryPreviewMedia(listOf(markdownTarget), settings)[markdownTarget]?.uri
@@ -1968,7 +2031,7 @@ class DiaryFileRepository @Inject constructor(
             require(validName.endsWith(".md", ignoreCase = true)) { "远端日记不是 Markdown 文件" }
         }
         val mutex = if (area == DiaryCloudSyncArea.MEDIA) mediaMutex else writeMutex
-        return mutex.withLock {
+        val result = mutex.withLock {
             withContext(Dispatchers.IO) {
                 val rawTree = when (area) {
                     DiaryCloudSyncArea.DIARY -> settings.diaryTreeUri
@@ -2074,6 +2137,16 @@ class DiaryFileRepository @Inject constructor(
                 }
             }
         }
+        val changedDiaryUri = if (area == DiaryCloudSyncArea.DIARY) {
+            when (result) {
+                is DiaryCloudSyncWriteResult.Applied -> Uri.parse(result.file.uri)
+                is DiaryCloudSyncWriteResult.ConflictCopy -> Uri.parse(result.copy.uri)
+            }
+        } else {
+            null
+        }
+        recordMealCalendarContentChange(changedDiaryUri)
+        return result
     }
 
     fun hasPersistedAccess(uri: String?): Boolean {
@@ -2082,6 +2155,79 @@ class DiaryFileRepository @Inject constructor(
             it.uri.toString() == uri && it.isReadPermission && it.isWritePermission
         }
     }
+
+    /**
+     * Takes one metadata snapshot of the direct children of a SAF tree. `DocumentFile` exposes
+     * child properties lazily, which can otherwise cause several provider queries per file after
+     * `listFiles()`. The direct DocumentsContract query keeps URI values opaque and falls back for
+     * non-standard providers.
+     */
+    private fun snapshotDirectChildren(root: DocumentFile): List<SafDocumentSnapshot> = try {
+        val rootUri = root.uri
+        val rootDocumentId = runCatching { DocumentsContract.getDocumentId(rootUri) }
+            .getOrElse { DocumentsContract.getTreeDocumentId(rootUri) }
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+            rootUri,
+            rootDocumentId,
+        )
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+            DocumentsContract.Document.COLUMN_SIZE,
+        )
+        resolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val documentId = cursor.getString(0) ?: continue
+                    val name = cursor.getString(1) ?: continue
+                    val mimeType = cursor.getString(2).orEmpty()
+                    add(
+                        SafDocumentSnapshot(
+                            uri = DocumentsContract.buildDocumentUriUsingTree(rootUri, documentId),
+                            name = name,
+                            mimeType = mimeType,
+                            lastModified = if (cursor.isNull(3)) 0L else cursor.getLong(3),
+                            size = if (cursor.isNull(4)) 0L else cursor.getLong(4),
+                        ),
+                    )
+                }
+            }
+        } ?: error("目录提供方没有返回文件列表")
+    } catch (_: Exception) {
+        root.listFiles().mapNotNull { file ->
+            val name = file.name ?: return@mapNotNull null
+            SafDocumentSnapshot(
+                uri = file.uri,
+                name = name,
+                mimeType = file.type.orEmpty().ifBlank {
+                    if (file.isDirectory) DocumentsContract.Document.MIME_TYPE_DIR else ""
+                },
+                lastModified = file.lastModified(),
+                size = file.length(),
+            )
+        }
+    }
+
+    private fun queryDocumentVersion(uri: Uri): SafDocumentVersion? = runCatching {
+        resolver.query(
+            uri,
+            arrayOf(
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                DocumentsContract.Document.COLUMN_SIZE,
+            ),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            SafDocumentVersion(
+                lastModified = if (cursor.isNull(0)) 0L else cursor.getLong(0),
+                size = if (cursor.isNull(1)) 0L else cursor.getLong(1),
+            )
+        }
+    }.getOrNull()
 
     private fun tree(raw: String): DocumentFile =
         DocumentFile.fromTreeUri(context, Uri.parse(raw)) ?: error("目录授权已失效，请重新选择")

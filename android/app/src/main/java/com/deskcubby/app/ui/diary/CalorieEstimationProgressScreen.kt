@@ -212,8 +212,9 @@ private fun CalorieQueueSummary(state: CalorieEstimationQueueState) {
             } else {
                 Text(
                     tr(
-                        "每一天的全部图片完成后才保存一次，中途结果不会部分写入。",
-                        "Each date is saved once only after all of its photos finish; intermediate results are not partially written.",
+                        "同一天最多 3 张图片并行识别，再统一计算并只保存一次；中途结果不会部分写入。",
+                        "Up to 3 photos per date are recognized in parallel, then calculated " +
+                            "together and saved once; intermediate results are not partially written.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -301,39 +302,39 @@ private fun CalorieDayProgressCard(
                 }
             }
 
-            progress.currentSelectedPhotoIndex?.let { selectedIndex ->
-                val dayIndex = progress.currentDayPhotoIndex ?: selectedIndex
-                val position = if (progress.selectedPhotoCount == progress.dayPhotoCount) {
+            when (progress.status) {
+                CalorieEstimationQueueStatus.IMAGE_RECOGNITION -> Text(
                     tr(
-                        "第 $dayIndex / ${progress.dayPhotoCount} 张图片",
-                        "Photo $dayIndex / ${progress.dayPhotoCount}",
-                    )
-                } else {
+                        "并行识别中：${progress.activePhotoCount} 张正在处理，" +
+                            "已完成 ${progress.completedPhotoCount} / ${progress.selectedPhotoCount} 张",
+                        "Parallel recognition: ${progress.activePhotoCount} active, " +
+                            "${progress.completedPhotoCount} / ${progress.selectedPhotoCount} complete",
+                    ),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                CalorieEstimationQueueStatus.TEXT_ESTIMATION -> Text(
                     tr(
-                        "待估算第 $selectedIndex / ${progress.selectedPhotoCount} 张（当天第 $dayIndex / ${progress.dayPhotoCount} 张）",
-                        "Pending photo $selectedIndex / ${progress.selectedPhotoCount} (day photo $dayIndex / ${progress.dayPhotoCount})",
-                    )
-                }
-                Text(position, style = MaterialTheme.typography.labelLarge)
-                progress.currentPhotoLabel?.let { label ->
-                    Text(
-                        label,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                        "${progress.selectedPhotoCount} 张图片均已识别，正在统一计算当天热量",
+                        "All ${progress.selectedPhotoCount} photos are recognized; " +
+                            "calculating this date together",
+                    ),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                else -> Unit
             }
 
             if (!progress.isTerminal && progress.status != CalorieEstimationQueueStatus.QUEUED) {
-                LinearProgressIndicator(
-                    progress = {
-                        progress.completedPhotoCount.toFloat() /
-                            progress.selectedPhotoCount.coerceAtLeast(1).toFloat()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (progress.status == CalorieEstimationQueueStatus.IMAGE_RECOGNITION) {
+                    LinearProgressIndicator(
+                        progress = {
+                            progress.completedPhotoCount.toFloat() /
+                                progress.selectedPhotoCount.coerceAtLeast(1).toFloat()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
                 if (onClick != null) {
                     Text(
                         tr(
@@ -471,10 +472,14 @@ private fun CalorieModelTraceCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        tr(
-                            "第 ${trace.selectedPhotoIndex} 张 · ${trace.photoLabel}",
-                            "Photo ${trace.selectedPhotoIndex} · ${trace.photoLabel}",
-                        ),
+                        if (trace.selectedPhotoIndex > 0) {
+                            tr(
+                                "第 ${trace.selectedPhotoIndex} 张 · ${trace.photoLabel}",
+                                "Photo ${trace.selectedPhotoIndex} · ${trace.photoLabel}",
+                            )
+                        } else {
+                            trace.photoLabel
+                        },
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodySmall,
