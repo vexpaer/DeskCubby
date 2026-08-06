@@ -52,6 +52,7 @@ internal fun AndroidxPdfReader(
     uri: Uri,
     initialPage: Int,
     preferences: ReaderPreferences,
+    textFeaturesAvailable: Boolean,
     background: Color,
     modifier: Modifier = Modifier,
     requestedPage: Int?,
@@ -62,16 +63,21 @@ internal fun AndroidxPdfReader(
     onSearchResultCountChanged: (Int) -> Unit,
     onChaptersChanged: (List<ReaderChapter>) -> Unit,
     onChapterScanRunningChanged: (Boolean) -> Unit,
+    onEnhancedReaderUnavailable: () -> Unit,
 ) {
     val context = LocalContext.current
     val documentResult by produceState<Result<PdfDocument>?>(null, uri) {
-        value = runCatching {
+        value = runReaderPdfLoadWithTimeout(READER_PDF_DOCUMENT_OPEN_TIMEOUT_MILLIS) {
             SandboxedPdfLoader(context).openDocument(uri)
         }
     }
     val document = documentResult?.getOrNull()
+    val currentOnEnhancedReaderUnavailable by rememberUpdatedState(onEnhancedReaderUnavailable)
     DisposableEffect(document) {
         onDispose { document?.close() }
+    }
+    LaunchedEffect(documentResult) {
+        if (documentResult?.isFailure == true) currentOnEnhancedReaderUnavailable()
     }
 
     Box(modifier = modifier.background(background), contentAlignment = Alignment.Center) {
@@ -85,6 +91,7 @@ internal fun AndroidxPdfReader(
                 document = document,
                 initialPage = initialPage,
                 preferences = preferences,
+                textFeaturesAvailable = textFeaturesAvailable,
                 background = background,
                 requestedPage = requestedPage,
                 searchQuery = searchQuery,
@@ -94,6 +101,7 @@ internal fun AndroidxPdfReader(
                 onSearchResultCountChanged = onSearchResultCountChanged,
                 onChaptersChanged = onChaptersChanged,
                 onChapterScanRunningChanged = onChapterScanRunningChanged,
+                onEnhancedReaderUnavailable = onEnhancedReaderUnavailable,
             )
         }
     }
@@ -105,6 +113,7 @@ private fun AndroidxPdfDocumentView(
     document: PdfDocument,
     initialPage: Int,
     preferences: ReaderPreferences,
+    textFeaturesAvailable: Boolean,
     background: Color,
     requestedPage: Int?,
     searchQuery: String,
@@ -114,13 +123,17 @@ private fun AndroidxPdfDocumentView(
     onSearchResultCountChanged: (Int) -> Unit,
     onChaptersChanged: (List<ReaderChapter>) -> Unit,
     onChapterScanRunningChanged: (Boolean) -> Unit,
+    onEnhancedReaderUnavailable: () -> Unit,
 ) {
     var pdfView by remember(document) { mutableStateOf<PdfView?>(null) }
     var fitWidthZoom by remember(document) { mutableStateOf<Float?>(null) }
+    var firstContentLoaded by remember(document) { mutableStateOf(false) }
     var searchMatches by remember(document) {
         mutableStateOf<List<AndroidxPdfSearchMatch>>(emptyList())
     }
     val currentOnPageChanged by rememberUpdatedState(onCurrentPageChanged)
+    val currentOnEnhancedReaderUnavailable by rememberUpdatedState(onEnhancedReaderUnavailable)
+    val currentPdfZoomPercent by rememberUpdatedState(preferences.pdfZoomPercent)
     val safeInitialPage = initialPage.coerceIn(0, document.pageCount - 1)
 
     AndroidView(
@@ -146,9 +159,10 @@ private fun AndroidxPdfDocumentView(
                     },
                 )
                 addOnFirstContentLoadListener {
+                    firstContentLoaded = true
                     if (fitWidthZoom == null) fitWidthZoom = zoom
                     fitWidthZoom?.let { fit ->
-                        zoom = (fit * preferences.pdfZoomPercent / 100f)
+                        zoom = (fit * currentPdfZoomPercent / 100f)
                             .coerceIn(minZoom, maxZoom)
                     }
                     scrollToPage(safeInitialPage)
@@ -163,6 +177,16 @@ private fun AndroidxPdfDocumentView(
         modifier = Modifier.fillMaxSize(),
     )
 
+    if (!firstContentLoaded) {
+        CircularProgressIndicator()
+    }
+
+    LaunchedEffect(document, pdfView, firstContentLoaded) {
+        if (pdfView == null || firstContentLoaded) return@LaunchedEffect
+        delay(READER_PDF_FIRST_CONTENT_TIMEOUT_MILLIS)
+        currentOnEnhancedReaderUnavailable()
+    }
+
     LaunchedEffect(pdfView, fitWidthZoom, preferences.pdfZoomPercent) {
         val view = pdfView ?: return@LaunchedEffect
         val fit = fitWidthZoom ?: return@LaunchedEffect
@@ -176,9 +200,9 @@ private fun AndroidxPdfDocumentView(
         onRequestedPageConsumed()
     }
 
-    LaunchedEffect(document, searchQuery) {
+    LaunchedEffect(document, firstContentLoaded, textFeaturesAvailable, searchQuery) {
         val query = searchQuery.trim().take(MAX_READER_SEARCH_QUERY_CHARS)
-        if (query.isEmpty()) {
+        if (!firstContentLoaded || !textFeaturesAvailable || query.isEmpty()) {
             searchMatches = emptyList()
             onSearchResultCountChanged(0)
             pdfView?.let { runCatching { it.setHighlights(emptyList()) } }
@@ -236,10 +260,17 @@ private fun AndroidxPdfDocumentView(
 
     LaunchedEffect(
         document,
+        firstContentLoaded,
+        textFeaturesAvailable,
         preferences.chapterDetectionMode,
         preferences.customChapterRegex,
         preferences.chapterHeadingMaxChars,
     ) {
+        if (!firstContentLoaded || !textFeaturesAvailable) {
+            onChapterScanRunningChanged(false)
+            onChaptersChanged(emptyList())
+            return@LaunchedEffect
+        }
         onChapterScanRunningChanged(true)
         onChaptersChanged(emptyList())
         try {
