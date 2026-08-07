@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ArtifactDirectory,
-    [string]$Version = "0.2.0",
+    [string]$Version,
     [Parameter(Mandatory)]
     [ValidateSet("SignedRelease", "AllowUnsignedTestBuild")]
     [string]$Mode,
@@ -13,6 +13,15 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $windowsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $tauriConfigurationPath = Join-Path $windowsRoot "src-tauri\tauri.conf.json"
+    $tauriConfiguration = Get-Content -Raw -LiteralPath $tauriConfigurationPath |
+        ConvertFrom-Json
+    $Version = [string]$tauriConfiguration.version
+}
+if ($Version -notmatch "^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$") {
+    throw "Version must be valid release SemVer."
+}
 if ([string]::IsNullOrWhiteSpace($ArtifactDirectory)) {
     $ArtifactDirectory = Join-Path $windowsRoot "artifacts"
 }
@@ -40,6 +49,7 @@ if ($bytes.Length -lt 64 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
 }
 $peOffset = [BitConverter]::ToUInt32($bytes, 0x3c)
 if (
+    $peOffset -gt ($bytes.Length - 24) -or
     $bytes[$peOffset] -ne 0x50 -or
     $bytes[$peOffset + 1] -ne 0x45 -or
     $bytes[$peOffset + 2] -ne 0 -or
@@ -59,6 +69,12 @@ $results = foreach ($path in @($portable, $installer)) {
     $file = Get-Item -LiteralPath $path
     $signature = Get-AuthenticodeSignature -LiteralPath $path
     if ($Mode -eq "SignedRelease") {
+        if (
+            [string]::IsNullOrWhiteSpace($ExpectedCertificateThumbprint) -and
+            [string]::IsNullOrWhiteSpace($ExpectedSignerSubject)
+        ) {
+            throw "SignedRelease requires an expected Authenticode identity."
+        }
         if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
             throw "Authenticode verification failed for $($file.Name): $($signature.Status)."
         }
@@ -112,12 +128,16 @@ if ($Mode -eq "SignedRelease") {
     }
 
     $signTool = Get-Command signtool.exe -ErrorAction SilentlyContinue
-    if ($null -ne $signTool) {
-        foreach ($path in @($portable, $installer)) {
-            & $signTool.Source verify /pa /all /v /tw $path
-            if ($LASTEXITCODE -ne 0) {
-                throw "SignTool verification failed for $path."
-            }
+    if ($null -eq $signTool) {
+        throw (
+            "SignedRelease requires signtool.exe so certificate-chain and " +
+            "trusted-timestamp verification cannot be skipped."
+        )
+    }
+    foreach ($path in @($portable, $installer)) {
+        & $signTool.Source verify /pa /all /v /tw $path
+        if ($LASTEXITCODE -ne 0) {
+            throw "SignTool verification failed for $path."
         }
     }
     Write-Host "Authenticode and Tauri updater signature checks passed."

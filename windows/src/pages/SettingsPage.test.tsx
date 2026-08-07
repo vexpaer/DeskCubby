@@ -19,6 +19,10 @@ const SAVED_SETTINGS = {
   ],
   fontScale: 1,
   compactMode: false,
+  backgroundImagePath: null,
+  backgroundImageOpacity: 0.45,
+  backgroundImageBlurPx: 0,
+  tutorialModeEnabled: true,
   diaryDirectory: "D:\\DeskCubby\\Diary",
   mediaDirectory: "D:\\DeskCubby\\Media",
   backupDirectory: "D:\\DeskCubby\\Backup",
@@ -27,12 +31,14 @@ const SAVED_SETTINGS = {
   imageNamePattern: "{date}_{category}_{seq}",
   imageMaxWidthPx: 2560,
   imageMaxHeightPx: 2560,
+  markdownHeadingSizesSp: [32, 28, 24, 21, 19, 17],
   mealImageCompressionEnabled: true,
   mealImageCompressionQuality: 80,
   photoLocationEnabled: false,
   thoughtDisplayMode: "SINGLE_LINE",
   thoughtHighlightColorArgb: 0xfff6e3a1 | 0,
   thoughtEditorMaxHeightPx: 168,
+  vaultRowHeightDp: 64,
   poetryFontSizePx: 18,
   poetryLineSpacing: 1.45,
   poetryTextAlignment: "START",
@@ -43,6 +49,16 @@ const SAVED_SETTINGS = {
   mealCalendarShowCaptions: true,
   mealCalendarWrapEnabled: false,
   mealCalendarPhotosPerRow: "SMART",
+  mealButtonsUseIcons: false,
+  mealButtonIcons: ["", "", "", "", "", ""],
+  userName: "测试用户",
+  homeGreetings: [
+    { chinese: "你好，{name}", english: "Hello, {name}" },
+  ],
+  homeWidgetBordersEnabled: true,
+  homeWidgets: ["TODAY_DIARY", "THOUGHTS"],
+  homeGameShortcuts: ["MINESWEEPER"],
+  homeWidgetTitles: [],
 } as const satisfies WindowsSettings;
 
 const DEFAULT_SETTINGS = {
@@ -128,6 +144,31 @@ describe("SettingsPage", () => {
     );
   });
 
+  it("matches Android subpage settings without exposing excluded Windows pages", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await screen.findByRole("heading", { name: "设置", level: 1 });
+
+    await user.click(screen.getByRole("button", { name: /子页面设置/ }));
+
+    expect(await screen.findByRole("button", { name: /RSS 订阅/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /AI 配置/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /健康/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /浏览器/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /桌面小卡片/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^阅读/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^笔记/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /健康/ }));
+    expect(
+      await screen.findByRole("heading", { name: "健康", level: 1 }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看健康数据" })).toHaveAttribute(
+      "href",
+      "/health",
+    );
+  });
+
   it("restores only the current page as a dirty draft until top-right save", async () => {
     const user = userEvent.setup();
     renderSettings();
@@ -135,10 +176,12 @@ describe("SettingsPage", () => {
     await user.click(screen.getByRole("button", { name: /外观与语言/ }));
 
     expect(await screen.findByLabelText("视觉风格")).toHaveValue("LIQUID_GLASS");
+    expect(screen.getByRole("checkbox", { name: "启用应用教学" })).toBeChecked();
     await user.click(screen.getByRole("button", { name: "恢复默认" }));
 
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("本页设置"));
     expect(screen.getByLabelText("视觉风格")).toHaveValue("MATERIAL");
+    expect(screen.getByRole("checkbox", { name: "启用应用教学" })).toBeChecked();
     expect(
       screen.getByText("本页有未保存的修改。离开页面或关闭窗口前会询问你。"),
     ).toBeInTheDocument();
@@ -157,6 +200,30 @@ describe("SettingsPage", () => {
     });
     expect(await screen.findByText("设置已保存。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "已保存" })).toBeDisabled();
+  });
+
+  it("keeps the tutorial master switch in the appearance draft until save", async () => {
+    const user = userEvent.setup();
+    renderSettings(["/settings/appearance"]);
+    await screen.findByRole("heading", { name: "外观与语言", level: 1 });
+
+    const tutorialSwitch = screen.getByRole("checkbox", { name: "启用应用教学" });
+    expect(tutorialSwitch).toBeChecked();
+    await user.click(tutorialSwitch);
+
+    expect(tutorialSwitch).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      const updateCall = invokeMock.mock.calls.find(
+        ([command]) => command === "update_windows_settings",
+      );
+      expect(
+        (updateCall?.[1] as { settings: WindowsSettings }).settings
+          .tutorialModeEnabled,
+      ).toBe(false);
+    });
   });
 
   it("persists the active subpage draft with Ctrl+S", async () => {

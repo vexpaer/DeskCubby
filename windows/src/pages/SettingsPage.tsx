@@ -1,11 +1,13 @@
 import {
+  ArchiveRestore,
   ArrowLeft,
+  Bot,
   Check,
   Cloud,
-  Home,
+  HeartPulse,
   Info,
   LayoutDashboard,
-  LockKeyhole,
+  Rss,
   RotateCcw,
   Save,
   Settings2,
@@ -26,8 +28,10 @@ import {
   AppDataSettings,
   AppearanceSettings,
   DiaryMediaSettings,
+  HomeSettings,
   PoetryMealSettings,
   ThoughtSettings,
+  VaultSettings,
 } from "./settings/SettingsSections";
 import {
   SettingsHome,
@@ -50,6 +54,10 @@ const DEFAULT_SETTINGS: WindowsSettings = {
   themeSecondaryColorsArgb: [0xffc96f4a | 0, 0xffd4a72c | 0, 0xff527f91 | 0],
   fontScale: 1,
   compactMode: false,
+  backgroundImagePath: null,
+  backgroundImageOpacity: 0.45,
+  backgroundImageBlurPx: 0,
+  tutorialModeEnabled: true,
   diaryDirectory: null,
   mediaDirectory: null,
   backupDirectory: null,
@@ -58,12 +66,14 @@ const DEFAULT_SETTINGS: WindowsSettings = {
   imageNamePattern: "{date}_{category}_{seq}",
   imageMaxWidthPx: 720,
   imageMaxHeightPx: 640,
+  markdownHeadingSizesSp: [32, 28, 24, 21, 19, 17],
   mealImageCompressionEnabled: true,
   mealImageCompressionQuality: 80,
   photoLocationEnabled: false,
   thoughtDisplayMode: "SINGLE_LINE",
   thoughtHighlightColorArgb: 0xfff6e3a1 | 0,
   thoughtEditorMaxHeightPx: 168,
+  vaultRowHeightDp: 56,
   poetryFontSizePx: 18,
   poetryLineSpacing: 1.45,
   poetryTextAlignment: "START",
@@ -74,6 +84,45 @@ const DEFAULT_SETTINGS: WindowsSettings = {
   mealCalendarShowCaptions: true,
   mealCalendarWrapEnabled: false,
   mealCalendarPhotosPerRow: "SMART",
+  mealButtonsUseIcons: false,
+  mealButtonIcons: ["🥪", "🍱", "🍹", "🍜", "🍊", "🍤"],
+  userName: "",
+  homeGreetings: [
+    { chinese: "今天也要好好生活，{name}", english: "Make today count, {name}" },
+  ],
+  homeWidgetBordersEnabled: true,
+  homeWidgets: [
+    "today",
+    "poem",
+    "quick_input",
+    "meal_photos",
+    "year_progress",
+    "notes",
+    "game_shortcuts",
+    "record_overview",
+  ],
+  homeGameShortcuts: ["2048", "snake", "minesweeper"],
+  homeWidgetTitles: [
+    "calendar",
+    "weather",
+    "poem",
+    "today",
+    "streak",
+    "month_diaries",
+    "total_words",
+    "recent_diary",
+    "recent_thought",
+    "date_records",
+    "quick_input",
+    "daily_records",
+    "meal_photos",
+    "random_diary",
+    "year_progress",
+    "website",
+    "notes",
+    "game_shortcuts",
+    "record_overview",
+  ],
 };
 
 const EDITABLE_FIELDS = {
@@ -85,6 +134,20 @@ const EDITABLE_FIELDS = {
     "themeSecondaryColorsArgb",
     "fontScale",
     "compactMode",
+    "tutorialModeEnabled",
+    "backgroundImagePath",
+    "backgroundImageOpacity",
+    "backgroundImageBlurPx",
+  ],
+  home: [
+    "userName",
+    "homeGreetings",
+    "homeWidgetBordersEnabled",
+    "homeWidgets",
+    "homeGameShortcuts",
+    "homeWidgetTitles",
+    "mealButtonsUseIcons",
+    "mealButtonIcons",
   ],
   "diary-media": [
     "diaryDirectory",
@@ -94,6 +157,7 @@ const EDITABLE_FIELDS = {
     "imageNamePattern",
     "imageMaxWidthPx",
     "imageMaxHeightPx",
+    "markdownHeadingSizesSp",
     "mealImageCompressionEnabled",
     "mealImageCompressionQuality",
     "photoLocationEnabled",
@@ -116,6 +180,7 @@ const EDITABLE_FIELDS = {
     "mealCalendarPhotosPerRow",
   ],
   "app-data": ["backupDirectory"],
+  vault: ["vaultRowHeightDp"],
 } as const satisfies Partial<
   Record<SettingsPageId, readonly (keyof WindowsSettings)[]>
 >;
@@ -129,6 +194,8 @@ function normalizeSettings(input: WindowsSettings): WindowsSettings {
   return {
     ...DEFAULT_SETTINGS,
     ...input,
+    backgroundImageOpacity: Math.min(1, Math.max(0, input.backgroundImageOpacity)),
+    backgroundImageBlurPx: Math.min(40, Math.max(0, input.backgroundImageBlurPx)),
     imageMaxWidthPx: clampInteger(input.imageMaxWidthPx, 120, 2_400),
     imageMaxHeightPx: clampInteger(input.imageMaxHeightPx, 120, 2_400),
     mealImageCompressionQuality: clampInteger(
@@ -137,6 +204,7 @@ function normalizeSettings(input: WindowsSettings): WindowsSettings {
       95,
     ),
     thoughtEditorMaxHeightPx: clampInteger(input.thoughtEditorMaxHeightPx, 96, 400),
+    vaultRowHeightDp: clampInteger(input.vaultRowHeightDp, 48, 120),
     mealCalendarImageMaxHeightPx: clampInteger(
       input.mealCalendarImageMaxHeightPx,
       80,
@@ -146,6 +214,10 @@ function normalizeSettings(input: WindowsSettings): WindowsSettings {
       input.themeSecondaryColorsArgb?.length >= 2
         ? input.themeSecondaryColorsArgb.slice(0, 5)
         : DEFAULT_SETTINGS.themeSecondaryColorsArgb,
+    markdownHeadingSizesSp:
+      input.markdownHeadingSizesSp?.length === 6
+        ? input.markdownHeadingSizesSp.map((size) => clampInteger(size, 12, 48))
+        : DEFAULT_SETTINGS.markdownHeadingSizesSp,
   };
 }
 
@@ -217,6 +289,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [choosingDirectory, setChoosingDirectory] = useState<DirectoryKind | null>(null);
+  const [choosingBackground, setChoosingBackground] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -366,6 +439,23 @@ export default function SettingsPage() {
     }
   };
 
+  const chooseBackground = async () => {
+    setChoosingBackground(true);
+    setError("");
+    try {
+      const selected = await invokeCommand<string | null>("select_background_image", {
+        currentPath: draft.backgroundImagePath,
+      });
+      if (selected) {
+        setDraft((current) => ({ ...current, backgroundImagePath: selected }));
+      }
+    } catch (reason) {
+      setError(readableError(reason, errorLanguage));
+    } finally {
+      setChoosingBackground(false);
+    }
+  };
+
   if (loading) {
     return (
       <main className="page-shell settings-page">
@@ -384,7 +474,18 @@ export default function SettingsPage() {
       case "subpages":
         return <SubpageSettingsHome settings={draft} tr={tr} onOpen={openPage} />;
       case "appearance":
-        return <AppearanceSettings draft={draft} setDraft={setDraft} tr={tr} />;
+        return (
+          <AppearanceSettings
+            draft={draft}
+            setDraft={setDraft}
+            tr={tr}
+            choosingBackground={choosingBackground}
+            onChooseBackground={() => void chooseBackground()}
+            onClearBackground={() =>
+              setDraft((current) => ({ ...current, backgroundImagePath: null }))
+            }
+          />
+        );
       case "diary-media":
         return (
           <DiaryMediaSettings
@@ -410,35 +511,9 @@ export default function SettingsPage() {
           />
         );
       case "home":
-        return (
-          <SettingsInfoPage
-            icon={Home}
-            title={tr("主页设置", "Home settings")}
-            description={tr(
-              "Windows 首页已经使用与手机端相同的双语问候和核心模块。模块管理入口会在对应 IPC 完成后显示在这里。",
-              "Windows Home already uses bilingual greetings and core widgets. Widget management will appear here when its IPC is available.",
-            )}
-          >
-            <Link className="button button-secondary" to="/">
-              {tr("打开首页", "Open Home")}
-            </Link>
-          </SettingsInfoPage>
-        );
+        return <HomeSettings draft={draft} setDraft={setDraft} tr={tr} />;
       case "vault":
-        return (
-          <SettingsInfoPage
-            icon={LockKeyhole}
-            title={tr("收藏夹安全", "Vault security")}
-            description={tr(
-              "密码设置、解锁与改密由收藏夹的受限 Rust 边界处理，不会进入普通设置或 Android JSON 备份。",
-              "Password setup, unlocking and changes stay behind the Vault's restricted Rust boundary and never enter ordinary settings or Android JSON backups.",
-            )}
-          >
-            <Link className="button button-secondary" to="/vault">
-              {tr("打开收藏夹", "Open Vault")}
-            </Link>
-          </SettingsInfoPage>
-        );
+        return <VaultSettings draft={draft} setDraft={setDraft} tr={tr} />;
       case "mobile-usage":
         return (
           <SettingsInfoPage
@@ -454,6 +529,51 @@ export default function SettingsPage() {
             </Link>
           </SettingsInfoPage>
         );
+      case "rss":
+        return (
+          <SettingsInfoPage
+            icon={Rss}
+            title={tr("RSS 订阅", "RSS")}
+            description={tr(
+              "订阅地址、每个订阅的文章上限和摘要显示均在 RSS 页面管理；只接受经过限制的公网 HTTPS 来源。",
+              "Feed URLs, per-feed item limits and summaries are managed on the RSS page, which accepts only constrained public HTTPS sources.",
+            )}
+          >
+            <Link className="button button-secondary" to="/rss">
+              {tr("打开 RSS 设置", "Open RSS settings")}
+            </Link>
+          </SettingsInfoPage>
+        );
+      case "ai":
+        return (
+          <SettingsInfoPage
+            icon={Bot}
+            title={tr("AI 配置", "AI configurations")}
+            description={tr(
+              "在独立 AI 设置页管理兼容端点、模型、系统提示词和 API Key。所有改动先保留为草稿，保存后才生效。",
+              "Manage compatible endpoints, models, system prompts and API keys on the dedicated AI settings page. Changes remain drafts until saved.",
+            )}
+          >
+            <Link className="button button-secondary" to="/settings/ai">
+              {tr("打开 AI 配置", "Open AI configurations")}
+            </Link>
+          </SettingsInfoPage>
+        );
+      case "health":
+        return (
+          <SettingsInfoPage
+            icon={HeartPulse}
+            title={tr("健康", "Health")}
+            description={tr(
+              "Windows 只显示你明确导入或链接的 Android 健康统计，不申请健康或活动权限，也不采集这台电脑的数据。",
+              "Windows only displays Android health statistics you explicitly import or link. It requests no health or activity permissions and collects nothing from this PC.",
+            )}
+          >
+            <Link className="button button-secondary" to="/health">
+              {tr("查看健康数据", "View health data")}
+            </Link>
+          </SettingsInfoPage>
+        );
       case "cloud":
         return (
           <SettingsInfoPage
@@ -464,6 +584,21 @@ export default function SettingsPage() {
               "Service endpoints, direction and content are managed here. Passwords and access keys are sent only to Rust and protected with Windows encryption.",
             )}
           />
+        );
+      case "data-usage":
+        return (
+          <SettingsInfoPage
+            icon={ArchiveRestore}
+            title={tr("数据占用", "Storage usage")}
+            description={tr(
+              "日记和媒体保留在你选择的目录；应用数据库、缩略图与只读手机数据缓存保留在 Windows 本机应用目录。Windows 不会把本机路径写回 Android 备份。",
+              "Diary and media remain in your selected folders. The app database, thumbnails and read-only phone-data cache remain in Windows local app data. Windows paths are never written back to Android backups.",
+            )}
+          >
+            <Link className="button button-secondary" to="/backup">
+              {tr("打开备份管理", "Open backup manager")}
+            </Link>
+          </SettingsInfoPage>
         );
       case "navigation":
         return (
@@ -483,8 +618,8 @@ export default function SettingsPage() {
               icon={Info}
               title="DeskCubby"
               description={tr(
-                "本地优先的跨平台日记与个人记录应用。Windows 版本 0.2.0。",
-                "A local-first cross-platform diary and personal records app. Windows version 0.2.0.",
+                "本地优先的跨平台日记与个人记录应用。Windows 版本 0.3.0。",
+                "A local-first cross-platform diary and personal records app. Windows version 0.3.0.",
               )}
             >
               <button

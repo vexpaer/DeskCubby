@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -23,7 +23,8 @@ use super::{
 
 const JSON_SYNC_KEY: &str = "json/dc.json";
 const LEGACY_JSON_SYNC_KEY: &str = "json/DeskCubby.json";
-const MAX_JSON_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_JSON_BYTES: u64 = 64 * 1024 * 1024;
+const ANDROID_BACKUP_FORMAT_VERSION: i64 = 27;
 const MAX_PENDING_JSON: usize = 100;
 const RECOVERY_SUFFIX: &str = ".dc-sync-recovery";
 
@@ -80,7 +81,7 @@ pub trait JsonBackupBridge: Send + Sync {
         max_bytes: u64,
     ) -> BoxFuture<'a, Result<JsonSnapshot, CloudSyncError>>;
 
-    /// Perform the full Android-v18 validation. No database mutation is allowed
+    /// Perform the full Android-v27/legacy validation. No database mutation is allowed
     /// here; importing remains a separate user-confirmed command.
     fn validate_incoming<'a>(
         &'a self,
@@ -88,11 +89,55 @@ pub trait JsonBackupBridge: Send + Sync {
     ) -> BoxFuture<'a, Result<(), CloudSyncError>>;
 }
 
+/// One canonical Android-compatible `usage/v1/{deviceId}.json` object.
+/// The bridge owns schema validation and per-day merge semantics; this local
+/// store only enforces sync-key, hash, size and transfer boundaries.
+#[derive(Clone, PartialEq, Eq)]
+pub struct UsageStatisticsSnapshot {
+    pub key: String,
+    pub bytes: Vec<u8>,
+    pub last_modified_millis: i64,
+    pub local_token: String,
+}
+
+impl fmt::Debug for UsageStatisticsSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UsageStatisticsSnapshot")
+            .field("key", &self.key)
+            .field("bytes", &format_args!("<redacted:{}>", self.bytes.len()))
+            .field("last_modified_millis", &self.last_modified_millis)
+            .field("local_token", &"<redacted>")
+            .finish()
+    }
+}
+
+pub trait UsageStatisticsBridge: Send + Sync {
+    fn snapshots<'a>(
+        &'a self,
+        max_objects: usize,
+        max_object_bytes: u64,
+    ) -> BoxFuture<'a, Result<Vec<UsageStatisticsSnapshot>, CloudSyncError>>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn merge_remote<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: &'a [u8],
+        content_sha256: &'a str,
+        last_modified_millis: i64,
+        expected_local_sha256: Option<&'a str>,
+        limits: CloudSyncLimits,
+    ) -> BoxFuture<'a, Result<LocalWriteResult, CloudSyncError>>;
+}
+
 pub struct FileSystemLocalStore {
     roots: LocalRoots,
     config_id: String,
     json_bridge: Option<Arc<dyn JsonBackupBridge>>,
+    usage_bridge: Option<Arc<dyn UsageStatisticsBridge>>,
     json_snapshot: Mutex<Option<JsonSnapshot>>,
+    usage_snapshots: Mutex<BTreeMap<String, UsageStatisticsSnapshot>>,
     mutation_mutex: Mutex<()>,
 }
 
@@ -102,6 +147,15 @@ impl FileSystemLocalStore {
         config_id: String,
         json_bridge: Option<Arc<dyn JsonBackupBridge>>,
     ) -> Result<Self, CloudSyncError> {
+        Self::new_with_usage(roots, config_id, json_bridge, None)
+    }
+
+    pub fn new_with_usage(
+        roots: LocalRoots,
+        config_id: String,
+        json_bridge: Option<Arc<dyn JsonBackupBridge>>,
+        usage_bridge: Option<Arc<dyn UsageStatisticsBridge>>,
+    ) -> Result<Self, CloudSyncError> {
         if config_id.trim().is_empty() || config_id.chars().any(char::is_control) {
             return Err(CloudSyncError::invalid_configuration());
         }
@@ -109,7 +163,9 @@ impl FileSystemLocalStore {
             roots,
             config_id,
             json_bridge,
+            usage_bridge,
             json_snapshot: Mutex::new(None),
+            usage_snapshots: Mutex::new(BTreeMap::new()),
             mutation_mutex: Mutex::new(()),
         })
     }
@@ -240,6 +296,43 @@ impl CloudLocalStore for FileSystemLocalStore {
             } else {
                 *self.json_snapshot.lock().await = None;
             }
+            if selected_contents.contains(&CloudSyncContent::UsageStatistics) {
+                let bridge = self
+                    .usage_bridge
+                    .as_ref()
+                    .ok_or_else(CloudSyncError::invalid_configuration)?;
+                let snapshots = bridge
+                    .snapshots(
+                        limits.max_objects.saturating_sub(result.len()),
+                        limits.max_object_bytes,
+                    )
+                    .await?;
+                let mut cached = BTreeMap::new();
+                for snapshot in snapshots {
+                    require_valid_sync_key(&snapshot.key)?;
+                    if !snapshot.key.starts_with("usage/v1/")
+                        || snapshot.key["usage/v1/".len()..].contains('/')
+                        || snapshot.bytes.is_empty()
+                        || snapshot.bytes.len() as u64 > limits.max_object_bytes
+                        || cached.contains_key(&snapshot.key)
+                    {
+                        return Err(CloudSyncError::invalid_input());
+                    }
+                    let sha256 = sha256_hex(&snapshot.bytes);
+                    result.push(LocalSyncObject {
+                        key: snapshot.key.clone(),
+                        content: CloudSyncContent::UsageStatistics,
+                        size: snapshot.bytes.len() as u64,
+                        last_modified_millis: snapshot.last_modified_millis.max(0),
+                        sha256,
+                        local_token: snapshot.local_token.clone(),
+                    });
+                    cached.insert(snapshot.key.clone(), snapshot);
+                }
+                *self.usage_snapshots.lock().await = cached;
+            } else {
+                self.usage_snapshots.lock().await.clear();
+            }
             if result.len() > limits.max_objects {
                 return Err(CloudSyncError::limit_exceeded());
             }
@@ -256,6 +349,19 @@ impl CloudLocalStore for FileSystemLocalStore {
             if object.content == CloudSyncContent::JsonBackup {
                 let snapshot = self.json_snapshot.lock().await;
                 let snapshot = snapshot.as_ref().ok_or_else(CloudSyncError::conflict)?;
+                if snapshot.local_token != object.local_token
+                    || snapshot.bytes.len() as u64 != object.size
+                    || sha256_hex(&snapshot.bytes) != object.sha256
+                {
+                    return Err(CloudSyncError::conflict());
+                }
+                return Ok(snapshot.bytes.clone());
+            }
+            if object.content == CloudSyncContent::UsageStatistics {
+                let snapshots = self.usage_snapshots.lock().await;
+                let snapshot = snapshots
+                    .get(&object.key)
+                    .ok_or_else(CloudSyncError::conflict)?;
                 if snapshot.local_token != object.local_token
                     || snapshot.bytes.len() as u64 != object.size
                     || sha256_hex(&snapshot.bytes) != object.sha256
@@ -330,6 +436,22 @@ impl CloudLocalStore for FileSystemLocalStore {
                     },
                 });
             }
+            if key.starts_with("usage/v1/") {
+                let bridge = self
+                    .usage_bridge
+                    .as_ref()
+                    .ok_or_else(CloudSyncError::invalid_configuration)?;
+                return bridge
+                    .merge_remote(
+                        key,
+                        bytes,
+                        content_sha256,
+                        last_modified_millis,
+                        expected_local_sha256,
+                        limits,
+                    )
+                    .await;
+            }
             let (content, leaf) = parse_file_key(key)?;
             let root = validate_directory(root_for_content(&self.roots, content)?, false)?;
             write_remote_file(
@@ -356,7 +478,7 @@ pub fn canonicalize_backup_for_cloud(bytes: &[u8]) -> Result<Vec<u8>, CloudSyncE
         .as_object_mut()
         .ok_or_else(CloudSyncError::backup_invalid)?;
     if root.get("format").and_then(Value::as_str) != Some("DeskCubby")
-        || root.get("version").and_then(Value::as_i64) != Some(18)
+        || root.get("version").and_then(Value::as_i64) != Some(ANDROID_BACKUP_FORMAT_VERSION)
     {
         return Err(CloudSyncError::backup_invalid());
     }
@@ -571,6 +693,7 @@ fn root_for_content(
         CloudSyncContent::Diaries => roots.diary.as_deref(),
         CloudSyncContent::Media => roots.media.as_deref(),
         CloudSyncContent::JsonBackup => None,
+        CloudSyncContent::UsageStatistics => None,
     }
     .ok_or_else(CloudSyncError::invalid_configuration)
 }
@@ -882,8 +1005,8 @@ mod tests {
 
     #[test]
     fn canonical_json_ignores_export_time() {
-        let first = br#"{"format":"DeskCubby","version":18,"exportedAt":1,"settings":{}}"#;
-        let second = br#"{"format":"DeskCubby","version":18,"exportedAt":999,"settings":{}}"#;
+        let first = br#"{"format":"DeskCubby","version":27,"exportedAt":1,"settings":{}}"#;
+        let second = br#"{"format":"DeskCubby","version":27,"exportedAt":999,"settings":{}}"#;
         assert_eq!(
             canonicalize_backup_for_cloud(first).unwrap(),
             canonicalize_backup_for_cloud(second).unwrap()

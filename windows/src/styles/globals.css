@@ -1,9 +1,14 @@
 html {
+  --global-background-image: none;
+  --global-background-opacity: 0;
+  --global-background-blur: 0px;
   background: var(--background);
   font-size: calc(16px * var(--font-scale));
 }
 
 body {
+  position: relative;
+  isolation: isolate;
   overflow: hidden;
   background:
     radial-gradient(
@@ -18,6 +23,25 @@ body {
   line-height: 1.55;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  position: fixed;
+  z-index: 0;
+  inset: -40px;
+  background-image: var(--global-background-image);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  content: "";
+  filter: blur(var(--global-background-blur));
+  opacity: var(--global-background-opacity);
+  pointer-events: none;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
 }
 
 ::selection {

@@ -1,0 +1,162 @@
+.ai-settings-page {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.ai-default-models,
+.ai-config-list,
+.ai-config-editor,
+.ai-calorie-prompts {
+  padding: var(--space-5);
+}
+
+.ai-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(15rem, 20rem) minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+.ai-config-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ai-config-list > header,
+.ai-config-list > header > div,
+.ai-config-actions,
+.ai-config-editor > header,
+.ai-config-editor > header > div,
+.ai-preview-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ai-config-list > header,
+.ai-config-editor > header {
+  justify-content: space-between;
+}
+
+.ai-config-actions .button {
+  flex: 1;
+}
+
+.ai-config-list > div:last-child {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 42rem;
+  overflow: auto;
+}
+
+.ai-config-row {
+  display: grid;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text);
+  text-align: start;
+}
+
+.ai-config-row.selected {
+  border-color: var(--border-strong);
+  background: var(--surface-selected);
+}
+
+.ai-config-row span,
+.ai-config-row strong,
+.ai-config-row small,
+.ai-config-row em {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-config-row small,
+.ai-config-row em,
+.ai-preview-toggle small {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-style: normal;
+}
+
+.ai-config-editor {
+  min-width: 0;
+}
+
+.ai-config-editor > header {
+  margin-bottom: var(--space-5);
+}
+
+.ai-config-editor > header h2,
+.ai-config-editor > header p {
+  margin: 0;
+}
+
+.ai-config-editor > header p {
+  color: var(--text-muted);
+}
+
+.ai-model-fields .wide {
+  grid-column: 1 / -1;
+}
+
+.ai-model-fields textarea,
+.ai-calorie-prompts textarea {
+  min-height: 8rem;
+  resize: vertical;
+}
+
+.ai-preview-toggle {
+  flex-wrap: wrap;
+  margin-top: var(--space-4);
+}
+
+.ai-request-preview {
+  max-height: 24rem;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-calorie-prompts {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.ai-calorie-prompts > label {
+  display: grid;
+  gap: var(--space-2);
+}
+
+@media (max-width: 900px) {
+  .ai-settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-config-list > div:last-child {
+    max-height: 16rem;
+  }
+}
+
+@media (max-width: 620px) {
+  .ai-config-editor > header,
+  .ai-config-editor > header > div:last-child {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ai-model-fields .wide {
+    grid-column: auto;
+  }
+}

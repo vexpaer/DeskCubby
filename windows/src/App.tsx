@@ -23,8 +23,17 @@ const BackupPage = lazy(() => import("./pages/BackupPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const VaultPage = lazy(() => import("./pages/VaultPage"));
 const UsagePage = lazy(() => import("./pages/UsagePage"));
+const AiPage = lazy(() => import("./pages/AiPage"));
+const AiSettingsPage = lazy(() => import("./pages/settings/AiSettingsPage"));
 const CloudSyncPage = lazy(() => import("./pages/CloudSyncPage"));
 const AboutPage = lazy(() => import("./pages/AboutPage"));
+const NotesPage = lazy(() => import("./pages/NotesPage"));
+const ReaderPage = lazy(() => import("./pages/ReaderPage"));
+const RssPage = lazy(() => import("./pages/RssPage"));
+const GamesPage = lazy(() => import("./pages/GamesPage"));
+const StatsPage = lazy(() => import("./pages/StatsPage"));
+const HealthPage = lazy(() => import("./pages/HealthPage"));
+const MorePage = lazy(() => import("./pages/MorePage"));
 
 function NotFoundPage() {
   const language = useAppStore((state) => state.appearance.language);
@@ -61,11 +70,20 @@ function AppRoutes() {
           <Route path="/poetry" element={<PoetryPage />} />
           <Route path="/vault" element={<VaultPage />} />
           <Route path="/usage" element={<UsagePage />} />
+          <Route path="/ai" element={<AiPage />} />
+          <Route path="/health" element={<HealthPage />} />
+          <Route path="/notes" element={<NotesPage />} />
+          <Route path="/reader" element={<ReaderPage />} />
+          <Route path="/rss" element={<RssPage />} />
+          <Route path="/games" element={<GamesPage />} />
+          <Route path="/statistics" element={<StatsPage />} />
+          <Route path="/more" element={<MorePage />} />
           <Route path="/backup" element={<BackupPage />} />
           <Route path="/settings/data/sync" element={<CloudSyncPage />} />
           <Route path="/settings/cloud" element={<CloudSyncPage />} />
           <Route path="/settings/about" element={<AboutPage />} />
           <Route path="/settings/updates" element={<AboutPage />} />
+          <Route path="/settings/ai" element={<AiSettingsPage />} />
           <Route path="/settings/*" element={<SettingsPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

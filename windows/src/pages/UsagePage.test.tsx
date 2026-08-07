@@ -8,7 +8,7 @@ import { useAppStore } from "../store/appStore";
 import UsagePage from "./UsagePage";
 
 const SNAPSHOT = {
-  dtoVersion: 1,
+  dtoVersion: 2,
   source: {
     dtoVersion: 1,
     mode: "snapshot",
@@ -22,7 +22,17 @@ const SNAPSHOT = {
   trackingStartedOn: "2026-07-01",
   backfillCompletedThrough: "2026-07-27",
   anchorDate: "2026-07-28",
+  selectedDeviceId: null,
   selectedPackageName: null,
+  deviceChoices: [
+    {
+      deviceId: "11111111-1111-4111-8111-111111111111",
+      deviceName: "Pixel",
+      platform: "android",
+      updatedAtEpochMillis: "1785254400000",
+      recordedDays: 7,
+    },
+  ],
   overview: {
     rangeStartedOn: "2026-07-22",
     recordedDays: 7,
@@ -80,9 +90,10 @@ describe("UsagePage", () => {
     expect(await screen.findByText("还没有手机统计数据")).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith("get_usage_page", {
       query: {
-        dtoVersion: 1,
+        dtoVersion: 2,
         range: "LAST_7_DAYS",
         packageName: null,
+        deviceId: null,
       },
     });
     expect(screen.queryByText("开启统计")).not.toBeInTheDocument();
@@ -90,7 +101,7 @@ describe("UsagePage", () => {
 
     await user.click(screen.getAllByRole("button", { name: "导入快照" })[0]);
     expect(invokeMock).toHaveBeenCalledWith("choose_usage_statistics_source", {
-      request: { dtoVersion: 1, mode: "snapshot" },
+      request: { dtoVersion: 2, mode: "snapshot" },
     });
     expect(await screen.findByText("usage-statistics.json")).toBeInTheDocument();
   });
@@ -117,7 +128,7 @@ describe("UsagePage", () => {
     expect(
       await screen.findByRole("heading", { name: "无法读取手机统计" }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Android v4/)).toBeInTheDocument();
+    expect(screen.getByText(/Android v27/)).toBeInTheDocument();
     expect(screen.queryByText("private source path")).not.toBeInTheDocument();
 
     invokeMock.mockResolvedValueOnce(null as never);
@@ -138,13 +149,26 @@ describe("UsagePage", () => {
       }),
     ).toBeInTheDocument();
 
+    await user.selectOptions(screen.getByLabelText("设备"), SNAPSHOT.deviceChoices[0].deviceId);
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("get_usage_page", {
+        query: {
+          dtoVersion: 2,
+          range: "LAST_7_DAYS",
+          packageName: null,
+          deviceId: SNAPSHOT.deviceChoices[0].deviceId,
+        },
+      });
+    });
+
     await user.click(screen.getByRole("button", { name: "近 30 天" }));
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("get_usage_page", {
         query: {
-          dtoVersion: 1,
+          dtoVersion: 2,
           range: "LAST_30_DAYS",
           packageName: null,
+          deviceId: SNAPSHOT.deviceChoices[0].deviceId,
         },
       });
     });
@@ -153,9 +177,10 @@ describe("UsagePage", () => {
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("refresh_usage_statistics", {
         query: {
-          dtoVersion: 1,
+          dtoVersion: 2,
           range: "LAST_30_DAYS",
           packageName: null,
+          deviceId: SNAPSHOT.deviceChoices[0].deviceId,
         },
       });
     });

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::games::{GameBackupState, GameBackupStatistic};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thought {
@@ -77,6 +79,10 @@ pub struct SavedPoem {
     pub source: String,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default)]
+    pub sort_order: i64,
+    #[serde(default)]
+    pub category_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +93,28 @@ pub struct SavedPoemDraft {
     pub content: String,
     #[serde(default)]
     pub source: String,
+    #[serde(default)]
+    pub category_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PoetryCategory {
+    pub id: i64,
+    pub name: String,
+    pub color_argb: i32,
+    pub sort_order: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PoetryCategoryDraft {
+    #[serde(default)]
+    pub id: Option<i64>,
+    pub name: String,
+    pub color_argb: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +133,36 @@ pub struct DailyEventTemplate {
     pub first_unit: String,
     #[serde(default)]
     pub second_unit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RssSubscription {
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiModelConfig {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub model_type: String,
+    pub endpoint_url: String,
+    pub model: String,
+    pub enabled: bool,
+    pub allow_insecure_http: bool,
+    pub temperature: f64,
+    #[serde(default)]
+    pub system_prompt: String,
+    /// Product requirement: Android stores this value in plain text and v27
+    /// backups must round-trip it. Callers must never include it in logs or
+    /// user-visible error/preview payloads.
+    #[serde(default)]
+    pub api_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -137,7 +195,7 @@ impl Default for MealPhotoFilter {
 /// the DPAPI-protected compatibility shadow. Export overlays these fields on that
 /// shadow, so an Android -> Windows -> Android round trip does not erase data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct ManagedSettings {
     pub visual_style: String,
     pub dark_mode: String,
@@ -146,17 +204,26 @@ pub struct ManagedSettings {
     pub theme_secondary_colors_argb: Vec<i32>,
     pub font_scale: f64,
     pub compact_mode: bool,
+    /// Windows-local background selected through the Rust command boundary.
+    /// These three fields are persisted locally but never overlaid onto the
+    /// Android v27 compatibility document.
+    pub background_image_path: Option<String>,
+    pub background_image_opacity: f64,
+    pub background_image_blur_px: f64,
+    pub tutorial_mode_enabled: bool,
     pub file_name_pattern: String,
     pub markdown_template: String,
     pub image_name_pattern: String,
     pub image_max_width_dp: i32,
     pub image_max_height_dp: i32,
+    pub markdown_heading_sizes_sp: Vec<f64>,
     pub meal_image_compression_enabled: bool,
     pub meal_image_compression_quality: i32,
     pub photo_location_enabled: bool,
     pub thought_display_mode: String,
     pub thought_highlight_color_argb: i32,
     pub thought_editor_max_height_dp: i32,
+    pub vault_row_height_dp: i32,
     pub poetry_font_size_sp: f64,
     pub poetry_line_spacing: f64,
     pub poetry_text_alignment: String,
@@ -174,7 +241,18 @@ pub struct ManagedSettings {
     pub home_greetings: Vec<HomeGreeting>,
     pub home_widget_borders_enabled: bool,
     pub daily_event_templates: Vec<DailyEventTemplate>,
+    pub rss_subscriptions: Vec<RssSubscription>,
+    pub rss_max_items_per_feed: i32,
+    pub rss_show_summaries: bool,
+    pub ai_configs: Vec<AiModelConfig>,
+    pub ai_chat_config_id: Option<String>,
+    pub calorie_estimation_enabled: bool,
+    pub calorie_text_config_id: Option<String>,
+    pub calorie_image_config_id: Option<String>,
+    pub calorie_vision_prompt: String,
+    pub calorie_text_prompt: String,
     pub home_widgets: Vec<String>,
+    pub home_game_shortcuts: Vec<String>,
     pub home_widget_titles: Vec<String>,
 }
 
@@ -192,17 +270,23 @@ impl Default for ManagedSettings {
             ],
             font_scale: 1.0,
             compact_mode: false,
+            background_image_path: None,
+            background_image_opacity: 0.45,
+            background_image_blur_px: 0.0,
+            tutorial_mode_enabled: true,
             file_name_pattern: "yyyy-MM-dd".to_owned(),
             markdown_template: "# {title}\n\n".to_owned(),
             image_name_pattern: "{date}_{category}_{seq}".to_owned(),
             image_max_width_dp: 720,
             image_max_height_dp: 640,
+            markdown_heading_sizes_sp: vec![32.0, 28.0, 24.0, 21.0, 19.0, 17.0],
             meal_image_compression_enabled: true,
             meal_image_compression_quality: 80,
             photo_location_enabled: false,
             thought_display_mode: "SINGLE_LINE".to_owned(),
             thought_highlight_color_argb: 0xFFF6_E3A1u32 as i32,
             thought_editor_max_height_dp: 168,
+            vault_row_height_dp: 56,
             poetry_font_size_sp: 18.0,
             poetry_line_spacing: 1.45,
             poetry_text_alignment: "START".to_owned(),
@@ -324,12 +408,30 @@ impl Default for ManagedSettings {
             ],
             home_widget_borders_enabled: true,
             daily_event_templates: Vec::new(),
+            rss_subscriptions: Vec::new(),
+            rss_max_items_per_feed: 50,
+            rss_show_summaries: true,
+            ai_configs: Vec::new(),
+            ai_chat_config_id: None,
+            calorie_estimation_enabled: false,
+            calorie_text_config_id: None,
+            calorie_image_config_id: None,
+            calorie_vision_prompt: "你是谨慎的餐食视觉记录助手。识别图片中所有可食用食物和饮料，按主食、蛋白质、蔬菜、水果、酱汁/油和饮料等实际组成拆分；估计可食用部分的数值分量与单位，餐具和装饰不要算作食物，同一食物不要重复列出。只返回 JSON，不要 Markdown：{\"foods\":[{\"name\":\"食物名称\",\"amount\":\"估计数值或范围\",\"unit\":\"g、ml、个或份\",\"confidence\":0.0}],\"sceneNotes\":\"烹饪方式、遮挡和份量不确定性\"}。看不清时给出保守的合理范围并降低 confidence，不要虚构无法从图片推断的品牌或配方。".to_owned(),
+            calorie_text_prompt: "你是谨慎的营养能量估算助手。根据随后 JSON 中同一天 photos 的 recognizedFoods、visionNotes 和可选 userNote，结合可食用分量、常见烹饪方式、可见油脂/酱汁与饮料统一估算当天各图片的能量；用户备注可用于判断多人分享、同一餐多角度拍摄、剩余比例或实际分量。综合全部图片避免重复计算，并在证据不足时采用中性的合理估值。按输入 photoIndex 为每张图片返回结果；确认是同一餐的重复角度时，可将重复图片记为 0 kJ。只返回 JSON，不要 Markdown：{\"photos\":[{\"photoIndex\":1,\"energyKj\":整数,\"foods\":[{\"name\":\"食物名称\",\"amount\":\"分量\",\"unit\":\"单位\",\"energyKj\":整数}]}]}。所有能量使用千焦(kJ)，单张图片各项之和应与该图片总能量在合理舍入范围内一致。".to_owned(),
             home_widgets: vec![
                 "today".to_owned(),
                 "poem".to_owned(),
                 "quick_input".to_owned(),
                 "meal_photos".to_owned(),
                 "year_progress".to_owned(),
+                "notes".to_owned(),
+                "game_shortcuts".to_owned(),
+                "record_overview".to_owned(),
+            ],
+            home_game_shortcuts: vec![
+                "2048".to_owned(),
+                "snake".to_owned(),
+                "minesweeper".to_owned(),
             ],
             home_widget_titles: vec![
                 "calendar".to_owned(),
@@ -348,6 +450,9 @@ impl Default for ManagedSettings {
                 "random_diary".to_owned(),
                 "year_progress".to_owned(),
                 "website".to_owned(),
+                "notes".to_owned(),
+                "game_shortcuts".to_owned(),
+                "record_overview".to_owned(),
             ],
         }
     }
@@ -363,9 +468,13 @@ impl ManagedSettings {
             normalize_theme_secondary_colors(&self.theme_secondary_colors_argb);
         self.image_max_width_dp = self.image_max_width_dp.clamp(120, 2_400);
         self.image_max_height_dp = self.image_max_height_dp.clamp(120, 2_400);
+        for size in &mut self.markdown_heading_sizes_sp {
+            *size = android_float(*size).clamp(12.0, 48.0);
+        }
         self.meal_image_compression_quality = self.meal_image_compression_quality.clamp(30, 95);
         self.thought_highlight_color_argb = opaque_argb(self.thought_highlight_color_argb);
         self.thought_editor_max_height_dp = self.thought_editor_max_height_dp.clamp(96, 400);
+        self.vault_row_height_dp = self.vault_row_height_dp.clamp(48, 120);
         self.poetry_font_size_sp = android_float(self.poetry_font_size_sp);
         self.poetry_line_spacing = android_float(self.poetry_line_spacing);
         self.meal_calendar_image_max_height_dp =
@@ -375,6 +484,25 @@ impl ManagedSettings {
         self.meal_photo_filter.saturation = android_float(self.meal_photo_filter.saturation);
         self.meal_photo_filter.warmth = android_float(self.meal_photo_filter.warmth);
         self.meal_photo_filter.tint = android_float(self.meal_photo_filter.tint);
+        const GAME_IDS: [&str; 7] = [
+            "2048",
+            "2048_5",
+            "2048_6",
+            "snake",
+            "tetris",
+            "minesweeper",
+            "spider",
+        ];
+        let selected = self
+            .home_game_shortcuts
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::HashSet<_>>();
+        self.home_game_shortcuts = GAME_IDS
+            .into_iter()
+            .filter(|id| selected.contains(id))
+            .map(str::to_owned)
+            .collect();
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -394,11 +522,40 @@ impl ManagedSettings {
             f64::from(0.8_f32),
             f64::from(1.3_f32),
         )?;
+        if let Some(path) = self.background_image_path.as_deref() {
+            require_len("backgroundImagePath", path, 32_767)?;
+            if path.trim().is_empty() {
+                return Err("backgroundImagePath must not be blank".to_owned());
+            }
+        }
+        require_finite_range(
+            "backgroundImageOpacity",
+            self.background_image_opacity,
+            0.0,
+            1.0,
+        )?;
+        require_finite_range(
+            "backgroundImageBlurPx",
+            self.background_image_blur_px,
+            0.0,
+            40.0,
+        )?;
         require_len("fileNamePattern", &self.file_name_pattern, 1_024)?;
         require_len("markdownTemplate", &self.markdown_template, 1_000_000)?;
         require_len("imageNamePattern", &self.image_name_pattern, 1_024)?;
         require_integer_range("imageMaxWidthDp", self.image_max_width_dp, 120, 2_400)?;
         require_integer_range("imageMaxHeightDp", self.image_max_height_dp, 120, 2_400)?;
+        if self.markdown_heading_sizes_sp.len() != 6 {
+            return Err("markdownHeadingSizesSp must contain six items".to_owned());
+        }
+        for (index, size) in self.markdown_heading_sizes_sp.iter().copied().enumerate() {
+            require_finite_range(
+                &format!("markdownHeadingSizesSp[{index}]"),
+                size,
+                12.0,
+                48.0,
+            )?;
+        }
         require_integer_range(
             "mealImageCompressionQuality",
             self.meal_image_compression_quality,
@@ -416,6 +573,7 @@ impl ManagedSettings {
             96,
             400,
         )?;
+        require_integer_range("vaultRowHeightDp", self.vault_row_height_dp, 48, 120)?;
         require_finite_range("poetryFontSizeSp", self.poetry_font_size_sp, 14.0, 36.0)?;
         require_finite_range("poetryLineSpacing", self.poetry_line_spacing, 1.0, 2.0)?;
         require_enum(
@@ -505,6 +663,88 @@ impl ManagedSettings {
             if utf16_len(&item.first_unit) > 12 || utf16_len(&item.second_unit) > 12 {
                 return Err(format!("dailyEventTemplates[{index}] unit is too long"));
             }
+        }
+        if self.rss_subscriptions.len() > 100 {
+            return Err("Too many RSS subscriptions".to_owned());
+        }
+        let mut rss_ids = std::collections::HashSet::new();
+        for (index, item) in self.rss_subscriptions.iter().enumerate() {
+            if item.id.trim().is_empty()
+                || utf16_len(&item.id) > 80
+                || !rss_ids.insert(item.id.as_str())
+            {
+                return Err(format!(
+                    "rssSubscriptions[{index}].id is invalid or duplicated"
+                ));
+            }
+            if utf16_len(&item.title) > 120 || utf16_len(&item.url) > 8_192 {
+                return Err(format!("rssSubscriptions[{index}] is too long"));
+            }
+            let lower = item.url.to_ascii_lowercase();
+            if !lower.starts_with("https://") {
+                return Err(format!("rssSubscriptions[{index}].url must use HTTPS"));
+            }
+        }
+        require_integer_range("rssMaxItemsPerFeed", self.rss_max_items_per_feed, 10, 200)?;
+        if self.ai_configs.len() > 20 {
+            return Err("Too many AI configurations".to_owned());
+        }
+        for (index, item) in self.ai_configs.iter().enumerate() {
+            require_len(&format!("aiConfigs[{index}].id"), &item.id, 80)?;
+            require_len(&format!("aiConfigs[{index}].name"), &item.name, 80)?;
+            require_enum(
+                &format!("aiConfigs[{index}].type"),
+                &item.model_type,
+                &["TEXT", "IMAGE"],
+            )?;
+            require_len(
+                &format!("aiConfigs[{index}].endpointUrl"),
+                &item.endpoint_url,
+                8_192,
+            )?;
+            require_len(&format!("aiConfigs[{index}].model"), &item.model, 512)?;
+            if !item.temperature.is_finite() {
+                return Err(format!("aiConfigs[{index}].temperature must be finite"));
+            }
+            require_len(
+                &format!("aiConfigs[{index}].systemPrompt"),
+                &item.system_prompt,
+                20_000,
+            )?;
+            require_len(&format!("aiConfigs[{index}].apiKey"), &item.api_key, 8_192)?;
+        }
+        for (field, value) in [
+            ("aiChatConfigId", self.ai_chat_config_id.as_deref()),
+            (
+                "calorieTextConfigId",
+                self.calorie_text_config_id.as_deref(),
+            ),
+            (
+                "calorieImageConfigId",
+                self.calorie_image_config_id.as_deref(),
+            ),
+        ] {
+            if let Some(value) = value {
+                require_len(field, value, 80)?;
+            }
+        }
+        require_len("calorieVisionPrompt", &self.calorie_vision_prompt, 20_000)?;
+        require_len("calorieTextPrompt", &self.calorie_text_prompt, 20_000)?;
+        const GAME_IDS: [&str; 7] = [
+            "2048",
+            "2048_5",
+            "2048_6",
+            "snake",
+            "tetris",
+            "minesweeper",
+            "spider",
+        ];
+        if self
+            .home_game_shortcuts
+            .iter()
+            .any(|id| !GAME_IDS.contains(&id.as_str()))
+        {
+            return Err("homeGameShortcuts contains an unsupported game".to_owned());
         }
         validate_short_string_list("homeWidgets", &self.home_widgets)?;
         validate_short_string_list("homeWidgetTitles", &self.home_widget_titles)?;
@@ -681,7 +921,16 @@ pub struct CoreSnapshot {
     pub thoughts: Vec<Thought>,
     pub categories: Vec<ThoughtCategory>,
     pub date_records: Vec<DateRecord>,
+    #[serde(default)]
+    pub poetry_categories: Vec<PoetryCategory>,
     pub poems: Vec<SavedPoem>,
+    /// Present in recovery points created after Windows gained v27 game
+    /// parity. `None` keeps older recovery files from clearing newer local
+    /// game data when they are restored.
+    #[serde(default)]
+    pub game_states: Option<Vec<GameBackupState>>,
+    #[serde(default)]
+    pub game_statistics: Option<Vec<GameBackupStatistic>>,
     pub local_paths: LocalPaths,
     #[serde(default)]
     pub encrypted_compatibility_shadow: Option<Vec<u8>>,

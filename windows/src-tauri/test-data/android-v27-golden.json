@@ -1,0 +1,267 @@
+{
+  "format": "DeskCubby",
+  "version": 27,
+  "exportedAt": 40,
+  "settings": {
+    "visualStyle": "ORGANIC_FUTURE",
+    "darkMode": "SYSTEM",
+    "appLanguage": "CHINESE",
+    "themeColorArgb": -12425651,
+    "themeSecondaryColorsArgb": [-8692674, -11571846, -6133174],
+    "fontScale": 1.15,
+    "compactMode": false,
+    "backgroundImageUri": "content://background",
+    "backgroundImageOpacity": 0.35,
+    "backgroundImageBlurDp": 12.0,
+    "tutorialModeEnabled": true,
+    "useChineseLauncherName": false,
+    "launcherIcon": "DESK_CUBBY",
+    "cloudSyncEnabled": false,
+    "cloudSyncConfigs": [
+      {
+        "id": "android-s3",
+        "name": "Android S3",
+        "enabled": true,
+        "serviceType": "S3_COMPATIBLE",
+        "endpointUrl": "https://s3.example.com",
+        "remotePath": "DeskCubby",
+        "userAgent": "DeskCubby-Sync/1",
+        "webDavUsername": "",
+        "s3Bucket": "deskcubby-backups",
+        "s3Region": "us-east-1",
+        "s3PathStyle": false,
+        "allowInsecureHttp": false,
+        "selectedContents": ["DIARIES", "MEDIA", "JSON_BACKUP"],
+        "direction": "UPLOAD_ONLY",
+        "futureCloudField": {"preserve": true}
+      }
+    ],
+    "diaryTreeUri": "content://diaries",
+    "mediaTreeUri": "content://media",
+    "notesTreeUri": "content://notes",
+    "fileNamePattern": "yyyy-MM-dd",
+    "markdownTemplate": "# {title}\n\n正文",
+    "imageNamePattern": "{date}_{category}_{seq}",
+    "imageMaxWidthDp": 720,
+    "imageMaxHeightDp": 640,
+    "markdownHeadingSizesSp": [36.0, 31.0, 27.0, 23.0, 20.0, 18.0],
+    "mealImageCompressionEnabled": false,
+    "mealImageCompressionQuality": 65,
+    "saveOriginalToGallery": false,
+    "photoLocationEnabled": false,
+    "browserHomeUrl": "https://www.google.com",
+    "lastBrowserUrl": "https://example.com/last",
+    "browserTheme": "SYSTEM",
+    "browserDesktopMode": false,
+    "thoughtSplitRatio": 0.58,
+    "thoughtRowHeightDp": 56,
+    "thoughtReopenMode": "LAST_VISITED",
+    "thoughtDisplayMode": "FULL",
+    "thoughtHighlightColorArgb": -596831,
+    "thoughtEditorMaxHeightDp": 168,
+    "vaultRowHeightDp": 64,
+    "poetryFontUri": "content://com.example.fonts/document/poetry.otf",
+    "poetryFontSizeSp": 26.0,
+    "poetryLineSpacing": 1.7,
+    "poetryTextAlignment": "CENTER",
+    "poetryShowSource": false,
+    "poetryShowQuoteMark": false,
+    "poetrySevenCharacterWrapEnabled": true,
+    "mealCalendarImageMaxHeightDp": 188,
+    "mealCalendarShowCaptions": false,
+    "mealCalendarWrapEnabled": false,
+    "mealCalendarPhotosPerRow": "SMART",
+    "mealPhotoFilter": {
+      "enabled": false,
+      "brightness": 0.0,
+      "contrast": 1.0,
+      "saturation": 1.0,
+      "warmth": 0.0,
+      "tint": 0.0
+    },
+    "mealButtonsUseIcons": true,
+    "userName": "书桌主人",
+    "homeGreetings": [
+      {"chinese": "{name}，开始", "english": "Start, {name}"},
+      {"chinese": "看看今天", "english": "Review today"}
+    ],
+    "homeWidgetBordersEnabled": false,
+    "mealButtonIcons": ["🥐", "🍜", "🍹", "🍲", "🍓", "🍢"],
+    "dailyEventTemplates": [
+      {"id": "exercise", "text": "俯卧撑", "firstUnit": "个", "secondUnit": "次"}
+    ],
+    "rssSubscriptions": [
+      {
+        "id": "feed",
+        "title": "示例",
+        "url": "https://example.com/feed.xml",
+        "enabled": true,
+        "futureRssField": "keep"
+      }
+    ],
+    "rssMaxItemsPerFeed": 80,
+    "rssShowSummaries": false,
+    "aiEndpointUrl": "https://example.com/v1/chat/completions",
+    "aiModel": "example-model",
+    "aiSystemPrompt": "测试系统提示词",
+    "aiTemperature": 1.2,
+    "aiAllowInsecureHttp": false,
+    "aiConfigs": [
+      {
+        "id": "text-1",
+        "name": "文字一",
+        "type": "TEXT",
+        "endpointUrl": "https://example.com/text",
+        "model": "text-model",
+        "enabled": true,
+        "allowInsecureHttp": false,
+        "temperature": 0.7,
+        "systemPrompt": "配置自己的系统提示词",
+        "apiKey": "sk-text-plain",
+        "futureAiField": {"keep": 123456789012345678901234567890}
+      },
+      {
+        "id": "image-1",
+        "name": "图片一",
+        "type": "IMAGE",
+        "endpointUrl": "https://example.com/image",
+        "model": "image-model",
+        "enabled": true,
+        "allowInsecureHttp": false,
+        "temperature": 0.7,
+        "systemPrompt": "",
+        "apiKey": "sk-image-plain"
+      }
+    ],
+    "aiChatConfigId": "text-1",
+    "calorieEstimationEnabled": true,
+    "calorieTextConfigId": "text-1",
+    "calorieImageConfigId": "image-1",
+    "calorieVisionPrompt": "识别图片中的所有食物和饮料。只返回 JSON，不要 Markdown：{\"foods\":[{\"name\":\"食物名称\",\"amount\":\"估计份量\",\"unit\":\"单位\",\"confidence\":0.0}],\"notes\":\"必要说明\"}。无法确定时给出合理估计并降低 confidence。",
+    "calorieTextPrompt": "根据随后提供的食物识别 JSON，估算整张图片中食物的总能量。只返回 JSON，不要 Markdown：{\"energyKj\":整数}。energyKj 使用千焦(kJ)，综合份量并避免重复计算。",
+    "usageTrackingEnabled": true,
+    "stepTrackingEnabled": true,
+    "navItems": [
+      {"id": "HOME", "label": "首页", "iconKey": "home", "visible": true, "showInMore": false, "moreDescription": "今日概览与快捷记录"},
+      {"id": "DIARY", "label": "日记", "iconKey": "book", "visible": true, "showInMore": false, "moreDescription": "浏览、编辑日记与吃历"},
+      {"id": "BLOG", "label": "浏览器", "iconKey": "language", "visible": false, "showInMore": true, "moreDescription": "在应用内浏览网页"},
+      {"id": "THOUGHT", "label": "小巧思", "iconKey": "bolt", "visible": true, "showInMore": false, "moreDescription": "随手记录，也可完整展开"},
+      {"id": "DATE", "label": "日期记录", "iconKey": "event", "visible": false, "showInMore": true, "moreDescription": "追踪纪念日与目标日期"},
+      {"id": "POETRY", "label": "诗词本", "iconKey": "poetry", "visible": false, "showInMore": true, "moreDescription": "收藏喜欢的诗词"},
+      {"id": "RSS", "label": "RSS 订阅", "iconKey": "rss", "visible": false, "showInMore": true, "moreDescription": "阅读订阅源的最新文章"},
+      {"id": "AI_CHAT", "label": "AI 聊天", "iconKey": "ai", "visible": false, "showInMore": true, "moreDescription": "选择本机记录作为上下文并与模型分析"},
+      {"id": "VAULT", "label": "收藏夹", "iconKey": "lock", "visible": false, "showInMore": true, "moreDescription": "密码保护的私密收藏"},
+      {"id": "GAMES", "label": "小游戏", "iconKey": "game", "visible": false, "showInMore": true, "moreDescription": "4×4 / 5×5 / 6×6 版 2048、贪吃蛇与俄罗斯方块"},
+      {"id": "USAGE", "label": "手机使用时间", "iconKey": "usage", "visible": false, "showInMore": true, "moreDescription": "按天查看各应用的使用时长"},
+      {"id": "STEPS", "label": "步数记录", "iconKey": "steps", "visible": false, "showInMore": true, "moreDescription": "自动读取并可视化每日步数"},
+      {"id": "MORE", "label": "导航", "iconKey": "apps", "visible": true, "showInMore": false, "moreDescription": "打开收纳的页面"},
+      {"id": "SETTINGS", "label": "设置", "iconKey": "settings", "visible": true, "showInMore": false, "moreDescription": "调整应用与页面设置"}
+    ],
+    "morePageOrder": ["AI_CHAT", "DIARY", "BLOG", "THOUGHT", "DATE", "POETRY", "RSS", "VAULT", "GAMES", "USAGE", "STEPS"],
+    "defaultPage": "HOME",
+    "bottomNavShowLabels": true,
+    "musicVisualizerEnabled": false,
+    "musicVisualizerStyle": "BARS",
+    "musicVisualizerFrequencyMode": "ADAPTIVE",
+    "musicVisualizerMinFrequencyHz": 60,
+    "musicVisualizerMaxFrequencyHz": 16000,
+    "game2048AnimationSpeed": "NORMAL",
+    "morePageShowDescriptions": false,
+    "homeWidgets": [],
+    "homeGameShortcuts": ["2048", "snake", "minesweeper"],
+    "homeWidgetTitles": [],
+    "desktopWidgetConfigs": [
+      {
+        "id": "default-today",
+        "name": "今天 / Today",
+        "widthCells": 2,
+        "heightCells": 2,
+        "backgroundColorArgb": -14339528,
+        "textColorArgb": -1,
+        "backgroundImageUri": null,
+        "contentType": "HOME_MODULE",
+        "homeModuleId": "today",
+        "appPackageName": null,
+        "appLabel": null
+      }
+    ],
+    "futureSetting": {"keep": "android"}
+  },
+  "thoughts": [
+    {
+      "id": 7,
+      "content": "需要备份的小巧思\r\n\"emoji 😀\"",
+      "createdAt": 10,
+      "updatedAt": 20,
+      "pinned": true,
+      "deletedAt": null,
+      "sortOrder": 3,
+      "categoryId": 5,
+      "highlighted": false,
+      "futureThoughtField": "keep"
+    }
+  ],
+  "categories": [
+    {
+      "id": 5,
+      "name": "灵感",
+      "colorArgb": -10022748,
+      "sortOrder": 0,
+      "createdAt": 8,
+      "updatedAt": 9,
+      "futureCategoryField": true
+    }
+  ],
+  "favorites": [
+    {
+      "url": "https://example.com",
+      "title": "Example",
+      "lastVisitedAt": 30,
+      "visitCount": 4,
+      "favorite": true,
+      "futureFavoriteField": "keep"
+    }
+  ],
+  "dateRecords": [
+    {
+      "id": 9,
+      "name": "第一次旅行 😀",
+      "icon": "flight",
+      "dateIso": "2024-02-29",
+      "createdAt": 31,
+      "updatedAt": 32,
+      "futureDateField": "keep"
+    }
+  ],
+  "poetryCategories": [
+    {
+      "id": 3,
+      "name": "唐诗",
+      "colorArgb": -10022748,
+      "sortOrder": 0,
+      "createdAt": 30,
+      "updatedAt": 31,
+      "futurePoetryCategoryField": "keep"
+    }
+  ],
+  "poems": [
+    {
+      "id": 11,
+      "content": "海上生明月，天涯共此时。",
+      "source": "张九龄《望月怀远》",
+      "createdAt": 33,
+      "updatedAt": 34,
+      "sortOrder": 0,
+      "categoryId": 3,
+      "futurePoemField": "keep"
+    }
+  ],
+  "vault": {"active": null, "pending": null, "items": [], "futureVaultField": "keep"},
+  "gameStates": [],
+  "gameStatistics": [],
+  "usageDevices": [],
+  "futureRoot": {
+    "origin": "Android BackupJsonCodecTest",
+    "huge": 1234567890123456789012345678901234567890
+  }
+}

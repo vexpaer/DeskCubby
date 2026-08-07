@@ -98,17 +98,47 @@ foreach ($permission in $allowedPermissions) {
 }
 
 $csp = [string]$tauri.app.security.csp
-foreach ($requiredDirective in @(
-    "default-src 'self'",
-    "object-src 'none'",
-    "img-src 'self' data: blob: media: http://media.localhost",
-    "connect-src ipc: http://ipc.localhost"
-)) {
-    if (-not $csp.Contains($requiredDirective)) {
-        throw "Required CSP directive is missing: $requiredDirective"
+$cspDirectives = @{}
+foreach ($rawDirective in ($csp -split ";")) {
+    $parts = @($rawDirective.Trim() -split "\s+" | Where-Object { $_.Length -gt 0 })
+    if ($parts.Count -eq 0) {
+        continue
+    }
+    if ($cspDirectives.ContainsKey($parts[0])) {
+        throw "CSP contains a duplicate directive: $($parts[0])"
+    }
+    $cspDirectives[$parts[0]] = @($parts | Select-Object -Skip 1)
+}
+$requiredCspSources = @{
+    "default-src" = @("'self'")
+    "object-src" = @("'none'")
+    "frame-src" = @("reader:", "http://reader.localhost")
+    "img-src" = @(
+        "'self'",
+        "data:",
+        "blob:",
+        "background:",
+        "http://background.localhost",
+        "media:",
+        "http://media.localhost"
+    )
+    "connect-src" = @("ipc:", "http://ipc.localhost")
+}
+foreach ($directive in $requiredCspSources.GetEnumerator()) {
+    if (-not $cspDirectives.ContainsKey($directive.Key)) {
+        throw "Required CSP directive is missing: $($directive.Key)"
+    }
+    foreach ($source in $directive.Value) {
+        if ($cspDirectives[$directive.Key] -notcontains $source) {
+            throw "Required CSP source is missing from $($directive.Key): $source"
+        }
     }
 }
-if ($csp -match "https:\s*[; ]" -or $csp -match "http:\s*[; ]") {
+if (
+    $csp -match "https:\s*[; ]" -or
+    $csp -match "http:\s*[; ]" -or
+    @($cspDirectives.Values | ForEach-Object { $_ } | Where-Object { $_ -eq "*" }).Count -gt 0
+) {
     throw "CSP must not grant a wildcard HTTP or HTTPS source."
 }
 

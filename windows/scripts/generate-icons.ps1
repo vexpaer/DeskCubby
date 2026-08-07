@@ -1,5 +1,7 @@
 [CmdletBinding()]
 param(
+    [ValidateSet("Current", "MagicBook")]
+    [string]$Variant = "Current",
     [string]$Source
 )
 
@@ -13,23 +15,43 @@ $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $windowsRoot ".."))
 $outputDirectory = [System.IO.Path]::GetFullPath(
     (Join-Path $windowsRoot "src-tauri\icons")
 )
+$frontendAssetDirectory = [System.IO.Path]::GetFullPath(
+    (Join-Path $windowsRoot "src\assets")
+)
+
+if ($Variant -eq "MagicBook") {
+    $defaultSourceName = "ic_launcher_book_foreground.png"
+    $backgroundColor = [System.Drawing.Color]::FromArgb(255, 255, 253, 248)
+    $sourceInsetFraction = 0.0
+}
+else {
+    # Mirrors mipmap-anydpi/ic_launcher.xml: a black adaptive background plus
+    # drawable/ic_launcher_art_inset.xml, whose source is inset by 20%.
+    $defaultSourceName = "ic_launcher_art.png"
+    $backgroundColor = [System.Drawing.Color]::Black
+    $sourceInsetFraction = 0.2
+}
 
 if ([string]::IsNullOrWhiteSpace($Source)) {
     $Source = Join-Path $repositoryRoot (
-        "android\app\src\main\res\drawable-nodpi\" +
-        "ic_launcher_cubby_foreground.png"
+        "android\app\src\main\res\drawable-nodpi\" + $defaultSourceName
     )
 }
 
 $resolvedSource = (Resolve-Path -LiteralPath $Source).Path
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
+New-Item -ItemType Directory -Force -Path $frontendAssetDirectory | Out-Null
 
 function New-DeskCubbyBitmap {
     param(
         [Parameter(Mandatory)]
         [System.Drawing.Image]$SourceImage,
         [Parameter(Mandatory)]
-        [int]$Size
+        [int]$Size,
+        [Parameter(Mandatory)]
+        [System.Drawing.Color]$BackgroundColor,
+        [Parameter(Mandatory)]
+        [double]$SourceInsetFraction
     )
 
     $bitmap = [System.Drawing.Bitmap]::new(
@@ -85,9 +107,24 @@ function New-DeskCubbyBitmap {
             )
             $path.CloseFigure()
 
-            $graphics.FillPath([System.Drawing.Brushes]::White, $path)
+            $backgroundBrush = [System.Drawing.SolidBrush]::new(
+                $BackgroundColor
+            )
+            try {
+                $graphics.FillPath($backgroundBrush, $path)
+            }
+            finally {
+                $backgroundBrush.Dispose()
+            }
             $graphics.SetClip($path)
-            $destination = [System.Drawing.Rectangle]::new(0, 0, $Size, $Size)
+            $sourceInset = [int][Math]::Round($Size * $SourceInsetFraction)
+            $sourceSize = [Math]::Max(1, $Size - (2 * $sourceInset))
+            $destination = [System.Drawing.Rectangle]::new(
+                $sourceInset,
+                $sourceInset,
+                $sourceSize,
+                $sourceSize
+            )
             $graphics.DrawImage(
                 $SourceImage,
                 $destination,
@@ -136,7 +173,11 @@ try {
     }
 
     foreach ($entry in $pngOutputs.GetEnumerator()) {
-        $bitmap = New-DeskCubbyBitmap -SourceImage $sourceImage -Size $entry.Value
+        $bitmap = New-DeskCubbyBitmap `
+            -SourceImage $sourceImage `
+            -Size $entry.Value `
+            -BackgroundColor $backgroundColor `
+            -SourceInsetFraction $sourceInsetFraction
         try {
             $path = Join-Path $outputDirectory $entry.Key
             $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -145,10 +186,17 @@ try {
             $bitmap.Dispose()
         }
     }
+    Copy-Item -LiteralPath (Join-Path $outputDirectory "128x128.png") `
+        -Destination (Join-Path $frontendAssetDirectory "deskcubby.png") `
+        -Force
 
     $icoSizes = @(16, 24, 32, 48, 64, 128, 256)
     $frames = foreach ($size in $icoSizes) {
-        $bitmap = New-DeskCubbyBitmap -SourceImage $sourceImage -Size $size
+        $bitmap = New-DeskCubbyBitmap `
+            -SourceImage $sourceImage `
+            -Size $size `
+            -BackgroundColor $backgroundColor `
+            -SourceInsetFraction $sourceInsetFraction
         try {
             [pscustomobject]@{
                 Size = $size

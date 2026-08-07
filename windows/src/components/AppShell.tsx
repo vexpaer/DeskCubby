@@ -1,126 +1,60 @@
 import {
-  ArchiveRestore,
-  BookHeart,
-  CalendarDays,
   ChevronLeft,
   ChevronRight,
-  Home,
-  Hourglass,
-  Lightbulb,
-  LockKeyhole,
   Menu,
-  NotebookPen,
   Settings,
-  Soup,
-  Sparkles,
   X,
-  type LucideIcon,
 } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { translate, type MessageKey } from "../i18n";
 import { subscribeUpdateAvailable } from "../lib/updateApi";
 import { useAppStore } from "../store/appStore";
-import type { PageId } from "../types";
+import { DESKTOP_NAVIGATION_SECTIONS } from "./desktopNavigation";
 import { ToastViewport } from "./ToastViewport";
 
-interface NavigationItem {
-  id: PageId;
-  to: string;
-  label: MessageKey;
-  icon: LucideIcon;
-  end?: boolean;
-}
-
-interface NavigationSection {
-  label: MessageKey;
-  items: NavigationItem[];
-}
-
-const sections: NavigationSection[] = [
-  {
-    label: "nav.primary",
-    items: [
-      { id: "home", to: "/", label: "nav.home", icon: Home, end: true },
-      { id: "diary", to: "/diary", label: "nav.diary", icon: NotebookPen },
-      { id: "meals", to: "/meals", label: "nav.meals", icon: Soup },
-      { id: "daily", to: "/daily", label: "nav.daily", icon: Sparkles },
-    ],
-  },
-  {
-    label: "nav.data",
-    items: [
-      {
-        id: "thoughts",
-        to: "/thoughts",
-        label: "nav.thoughts",
-        icon: Lightbulb,
-      },
-      {
-        id: "dates",
-        to: "/dates",
-        label: "nav.dates",
-        icon: CalendarDays,
-      },
-      {
-        id: "poetry",
-        to: "/poetry",
-        label: "nav.poetry",
-        icon: BookHeart,
-      },
-      {
-        id: "vault",
-        to: "/vault",
-        label: "nav.vault",
-        icon: LockKeyhole,
-      },
-      {
-        id: "usage",
-        to: "/usage",
-        label: "nav.usage",
-        icon: Hourglass,
-      },
-      {
-        id: "backup",
-        to: "/backup",
-        label: "nav.backup",
-        icon: ArchiveRestore,
-      },
-    ],
-  },
-];
+const brandIcon = new URL("../assets/deskcubby.png", import.meta.url).href;
 
 const pathTitles: Array<[string, MessageKey]> = [
+  ["/settings/health", "nav.health"],
+  ["/settings/rss", "nav.rss"],
+  ["/settings/ai", "nav.ai"],
   ["/settings/data/sync", "nav.cloud"],
   ["/settings/cloud", "nav.cloud"],
   ["/settings/about", "nav.about"],
   ["/settings/updates", "nav.about"],
+  ["/settings", "nav.settings"],
+  ["/statistics", "nav.statistics"],
+  ["/thoughts", "nav.thoughts"],
+  ["/poetry", "nav.poetry"],
+  ["/reader", "nav.reader"],
+  ["/health", "nav.health"],
   ["/diary", "nav.diary"],
   ["/meals", "nav.meals"],
   ["/daily", "nav.daily"],
-  ["/thoughts", "nav.thoughts"],
+  ["/notes", "nav.notes"],
   ["/dates", "nav.dates"],
-  ["/poetry", "nav.poetry"],
+  ["/games", "nav.games"],
+  ["/rss", "nav.rss"],
+  ["/ai", "nav.ai"],
   ["/vault", "nav.vault"],
   ["/usage", "nav.usage"],
+  ["/more", "nav.more"],
   ["/backup", "nav.backup"],
-  ["/settings", "nav.settings"],
   ["/", "nav.home"],
 ];
 
-function Brand({ collapsed }: { collapsed: boolean }) {
+function Brand() {
   const language = useAppStore((state) => state.appearance.language);
   return (
     <NavLink className="brand" to="/" aria-label={translate(language, "app.name")}>
       <span className="brand-mark" aria-hidden="true">
-        <span />
+        <img src={brandIcon} alt="" />
       </span>
-      {!collapsed ? (
-        <span className="brand-copy">
-          <strong>{translate(language, "app.name")}</strong>
-          <small>{translate(language, "app.tagline")}</small>
-        </span>
-      ) : null}
+      <span className="brand-copy">
+        <strong>{translate(language, "app.name")}</strong>
+        <small>{translate(language, "app.tagline")}</small>
+      </span>
     </NavLink>
   );
 }
@@ -132,14 +66,15 @@ function Navigation({ collapsed }: { collapsed: boolean }) {
   );
 
   return (
-    <nav className="sidebar-navigation" aria-label={translate(language, "nav.primary")}>
-      {sections.map((section) => (
-        <section className="navigation-section" key={section.label}>
-          {!collapsed ? (
-            <h2>{translate(language, section.label)}</h2>
-          ) : (
-            <span className="navigation-divider" aria-hidden="true" />
-          )}
+    <nav className="sidebar-navigation" aria-label={translate(language, "nav.sidebar")}>
+      {DESKTOP_NAVIGATION_SECTIONS.map((section) => (
+        <section
+          className="navigation-section"
+          key={section.label}
+          aria-label={translate(language, section.label)}
+        >
+          <h2>{translate(language, section.label)}</h2>
+          <span className="navigation-divider" aria-hidden="true" />
           <div className="navigation-items">
             {section.items.map(({ id, to, label, icon: Icon, end }) => (
               <NavLink
@@ -151,10 +86,13 @@ function Navigation({ collapsed }: { collapsed: boolean }) {
                 end={end}
                 key={id}
                 title={collapsed ? translate(language, label) : undefined}
+                aria-label={translate(language, label)}
                 onClick={() => setMobileNavigationOpen(false)}
               >
                 <Icon aria-hidden="true" size={20} strokeWidth={1.9} />
-                {!collapsed ? <span>{translate(language, label)}</span> : null}
+                <span className="navigation-link-label">
+                  {translate(language, label)}
+                </span>
               </NavLink>
             ))}
           </div>
@@ -165,6 +103,8 @@ function Navigation({ collapsed }: { collapsed: boolean }) {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const sidebarRef = useRef<HTMLElement>(null);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const location = useLocation();
   const language = useAppStore((state) => state.appearance.language);
   const collapsed = useAppStore((state) => state.sidebarCollapsed);
@@ -179,9 +119,51 @@ export function AppShell({ children }: { children: ReactNode }) {
       path === "/" ? location.pathname === "/" : location.pathname.startsWith(path),
     )?.[1] ?? "app.name";
 
+  const closeMobileNavigation = useCallback(
+    (restoreFocus = false) => {
+      setMobileNavigationOpen(false);
+      if (restoreFocus) {
+        window.requestAnimationFrame(() => mobileMenuButtonRef.current?.focus());
+      }
+    },
+    [setMobileNavigationOpen],
+  );
+
   useEffect(() => {
     setMobileNavigationOpen(false);
   }, [location.pathname, setMobileNavigationOpen]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const sidebar = sidebarRef.current;
+    if (!sidebar) return;
+    const focusableSelector =
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const focusable = Array.from(
+      sidebar.querySelectorAll<HTMLElement>(focusableSelector),
+    ).filter((element) => !element.hasAttribute("hidden"));
+    focusable[0]?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMobileNavigation(true);
+        return;
+      }
+      if (event.key !== "Tab" || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [closeMobileNavigation, mobileOpen]);
 
   useEffect(() => {
     let active = true;
@@ -223,9 +205,16 @@ export function AppShell({ children }: { children: ReactNode }) {
         mobileOpen ? "mobile-navigation-is-open" : ""
       }`}
     >
-      <aside className="sidebar">
+      <aside
+        className="sidebar"
+        id="desktop-navigation"
+        ref={sidebarRef}
+        role={mobileOpen ? "dialog" : undefined}
+        aria-modal={mobileOpen ? true : undefined}
+        aria-label={translate(language, "nav.sidebar")}
+      >
         <div className="sidebar-top">
-          <Brand collapsed={collapsed} />
+          <Brand />
           <button
             className="icon-button desktop-sidebar-toggle"
             type="button"
@@ -245,7 +234,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             className="icon-button mobile-sidebar-close"
             type="button"
             aria-label={translate(language, "action.close")}
-            onClick={() => setMobileNavigationOpen(false)}
+            onClick={() => closeMobileNavigation(true)}
           >
             <X aria-hidden="true" size={20} />
           </button>
@@ -258,13 +247,15 @@ export function AppShell({ children }: { children: ReactNode }) {
             }
             to="/settings"
             title={collapsed ? translate(language, "nav.settings") : undefined}
+            aria-label={translate(language, "nav.settings")}
+            onClick={() => setMobileNavigationOpen(false)}
           >
             <Settings aria-hidden="true" size={20} strokeWidth={1.9} />
-            {!collapsed ? <span>{translate(language, "nav.settings")}</span> : null}
+            <span className="navigation-link-label">
+              {translate(language, "nav.settings")}
+            </span>
           </NavLink>
-          {!collapsed ? (
-            <small>{translate(language, "footer.localFirst")}</small>
-          ) : null}
+          <small>{translate(language, "footer.localFirst")}</small>
         </div>
       </aside>
 
@@ -272,15 +263,19 @@ export function AppShell({ children }: { children: ReactNode }) {
         className="navigation-scrim"
         type="button"
         aria-label={translate(language, "action.close")}
-        onClick={() => setMobileNavigationOpen(false)}
+        tabIndex={mobileOpen ? 0 : -1}
+        onClick={() => closeMobileNavigation(true)}
       />
 
       <div className="content-column">
         <header className="window-toolbar">
           <button
+            ref={mobileMenuButtonRef}
             className="icon-button mobile-menu-button"
             type="button"
             aria-label={translate(language, "action.expand")}
+            aria-controls="desktop-navigation"
+            aria-expanded={mobileOpen}
             onClick={() => setMobileNavigationOpen(true)}
           >
             <Menu aria-hidden="true" size={21} />

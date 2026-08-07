@@ -42,7 +42,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useSearchParams } from "react-router-dom";
-import { UnsavedChangesGuard } from "../components";
+import { ExternalMarkdownLink, UnsavedChangesGuard } from "../components";
 import { useAppStore } from "../store/appStore";
 import {
   diaryApi,
@@ -55,6 +55,7 @@ import {
   type DiarySaveResolution,
   type Language,
 } from "../lib/ipc";
+import { safeExternalHttpUrl } from "../lib/externalLinkApi";
 
 type EditorMode = "source" | "preview";
 type ConflictReason = "changed" | "deleted";
@@ -848,7 +849,17 @@ export default function DiaryPage() {
               ) : (
                 <article className="markdown-preview">
                   <ReactMarkdown
+                    urlTransform={(url) => safeExternalHttpUrl(url) ?? ""}
                     components={{
+                      a: ({ href, children }) => (
+                        <ExternalMarkdownLink
+                          href={href}
+                          language={language}
+                          onOpenError={setError}
+                        >
+                          {children}
+                        </ExternalMarkdownLink>
+                      ),
                       img: ({ src, alt }) =>
                         src ? (
                           <MarkdownImage

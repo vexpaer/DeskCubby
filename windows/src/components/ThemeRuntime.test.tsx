@@ -23,6 +23,7 @@ describe("ThemeRuntime", () => {
       },
     });
     document.documentElement.removeAttribute("style");
+    delete document.documentElement.dataset.hasGlobalBackground;
   });
 
   it("applies the selected appearance to the document", async () => {
@@ -77,6 +78,9 @@ describe("ThemeRuntime", () => {
             compactMode: true,
             themeColorArgb: 0xff336699 | 0,
             themeSecondaryColorsArgb: [0xff995533 | 0],
+            backgroundImagePath: "E:\\Pictures\\background.png",
+            backgroundImageOpacity: 0.64,
+            backgroundImageBlurPx: 12,
           },
         }),
       );
@@ -89,7 +93,83 @@ describe("ThemeRuntime", () => {
       expect(document.documentElement.style.getPropertyValue("--primary")).toBe(
         "#336699",
       );
+      const image = document.documentElement.style.getPropertyValue(
+        "--global-background-image",
+      );
+      expect(image).toMatch(
+        /^url\("http:\/\/background\.localhost\/current\?rev=\d+"\)$/,
+      );
+      expect(image).not.toContain("Pictures");
+      expect(
+        document.documentElement.style.getPropertyValue(
+          "--global-background-opacity",
+        ),
+      ).toBe("0.64");
+      expect(
+        document.documentElement.style.getPropertyValue("--global-background-blur"),
+      ).toBe("12px");
     });
+  });
+
+  it("does not create a protocol URL without a selected background and clears one immediately", async () => {
+    render(
+      <ThemeRuntime>
+        <span>content</span>
+      </ThemeRuntime>,
+    );
+    await waitFor(() => expect(document.body).toHaveTextContent("content"));
+    expect(
+      document.documentElement.style.getPropertyValue("--global-background-image"),
+    ).toBe("");
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("deskcubby:settings-changed", {
+          detail: {
+            visualStyle: "MATERIAL",
+            darkMode: "LIGHT",
+            appLanguage: "CHINESE",
+            fontScale: 1,
+            compactMode: false,
+            themeColorArgb: 0xff42664d | 0,
+            themeSecondaryColorsArgb: [0xffc96f4a | 0],
+            backgroundImagePath: "E:\\Pictures\\background.webp",
+            backgroundImageOpacity: 0.45,
+            backgroundImageBlurPx: 4,
+          },
+        }),
+      );
+    });
+    expect(document.documentElement.dataset.hasGlobalBackground).toBe("true");
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("deskcubby:settings-changed", {
+          detail: {
+            visualStyle: "MATERIAL",
+            darkMode: "LIGHT",
+            appLanguage: "CHINESE",
+            fontScale: 1,
+            compactMode: false,
+            themeColorArgb: 0xff42664d | 0,
+            themeSecondaryColorsArgb: [0xffc96f4a | 0],
+            backgroundImagePath: null,
+            backgroundImageOpacity: 0.45,
+            backgroundImageBlurPx: 0,
+          },
+        }),
+      );
+    });
+    expect(document.documentElement.dataset.hasGlobalBackground).toBeUndefined();
+    expect(
+      document.documentElement.style.getPropertyValue("--global-background-image"),
+    ).toBe("");
+    expect(
+      document.documentElement.style.getPropertyValue("--global-background-opacity"),
+    ).toBe("");
+    expect(
+      document.documentElement.style.getPropertyValue("--global-background-blur"),
+    ).toBe("");
   });
 
   it("reloads appearance after structured data is restored", async () => {
@@ -108,6 +188,9 @@ describe("ThemeRuntime", () => {
             compactMode: false,
             themeColorArgb: 0xff42664d | 0,
             themeSecondaryColorsArgb: [0xffc96f4a | 0],
+            backgroundImagePath: "E:\\Pictures\\background.png",
+            backgroundImageOpacity: 0.45,
+            backgroundImageBlurPx: 0,
           }
         : {
             visualStyle: "ORGANIC_FUTURE",
@@ -117,6 +200,9 @@ describe("ThemeRuntime", () => {
             compactMode: true,
             themeColorArgb: 0xff336633 | 0,
             themeSecondaryColorsArgb: [0xffaa6633 | 0],
+            backgroundImagePath: "E:\\Pictures\\background.png",
+            backgroundImageOpacity: 0.7,
+            backgroundImageBlurPx: 8,
           }) as never;
     });
     render(
@@ -128,6 +214,9 @@ describe("ThemeRuntime", () => {
       expect(document.documentElement.dataset.visualTheme).toBe("material");
       expect(document.body).toHaveTextContent("content");
     });
+    const initialBackground = document.documentElement.style.getPropertyValue(
+      "--global-background-image",
+    );
 
     act(() => {
       window.dispatchEvent(new CustomEvent("deskcubby:data-restored"));
@@ -143,7 +232,15 @@ describe("ThemeRuntime", () => {
       expect(
         document.documentElement.style.getPropertyValue("--font-scale"),
       ).toBe("1.25");
+      expect(
+        document.documentElement.style.getPropertyValue(
+          "--global-background-opacity",
+        ),
+      ).toBe("0.7");
     });
+    expect(
+      document.documentElement.style.getPropertyValue("--global-background-image"),
+    ).not.toBe(initialBackground);
   });
 
   it("verifies the Rust IPC protocol before reading settings", async () => {

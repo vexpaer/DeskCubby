@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use chrono::NaiveDate;
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -7,20 +10,28 @@ use thiserror::Error;
 
 use crate::{
     db::{DataError, Database, now_millis},
+    games::{GameBackupState, GameBackupStatistic},
     models::{
-        BackupPreview, CoreSnapshot, DailyEventTemplate, DateRecord, HomeGreeting, ImportReceipt,
-        ManagedSettings, MealPhotoFilter, SavedPoem, Thought, ThoughtCategory,
+        AiModelConfig, BackupPreview, CoreSnapshot, DailyEventTemplate, DateRecord, HomeGreeting,
+        ImportReceipt, ManagedSettings, MealPhotoFilter, PoetryCategory, RssSubscription,
+        SavedPoem, Thought, ThoughtCategory,
     },
 };
+use uuid::Uuid;
 
-pub const FORMAT_VERSION: i32 = 18;
-pub const MAX_JSON_BYTES: usize = 10 * 1024 * 1024;
+pub const FORMAT_VERSION: i32 = 27;
+pub const MAX_JSON_BYTES: usize = 64 * 1024 * 1024;
 
-const MAX_RECOVERY_POINT_BYTES: usize = 64 * 1024 * 1024;
+// Recovery points currently encode the encrypted compatibility shadow as a
+// JSON byte array. In the worst case that representation is materially larger
+// than the 64 MiB Android source document, so this separate bounded envelope
+// must accommodate a valid maximum-size v27 shadow.
+const MAX_RECOVERY_POINT_BYTES: usize = 320 * 1024 * 1024;
 const MAX_THOUGHTS: usize = 50_000;
 const MAX_FAVORITES: usize = 20_000;
 const MAX_DATE_RECORDS: usize = 50_000;
 const MAX_CATEGORIES: usize = 10_000;
+const MAX_POETRY_CATEGORIES: usize = 10_000;
 const MAX_POEMS: usize = 50_000;
 const MAX_THOUGHT_CHARS: usize = 1_000_000;
 const MAX_URL_CHARS: usize = 8_192;
@@ -29,11 +40,29 @@ const MAX_SETTING_STRING_CHARS: usize = 1_000_000;
 const MAX_DATE_NAME_CHARS: usize = 256;
 const MAX_DATE_ICON_CHARS: usize = 64;
 const MAX_CATEGORY_NAME_CHARS: usize = 40;
+const MAX_POETRY_CATEGORY_NAME_CHARS: usize = 100;
 const MAX_POEM_CONTENT_CHARS: usize = 100_000;
 const MAX_POEM_SOURCE_CHARS: usize = 4_096;
 const MAX_CLOUD_SYNC_CONFIGS: usize = 20;
+const MAX_DESKTOP_WIDGET_CONFIGS: usize = 50;
+const MAX_VAULT_ITEMS: usize = 50_000;
+const MAX_VAULT_CIPHER_CHARS: usize = 2 * 1024 * 1024;
+const MAX_VAULT_IV_CHARS: usize = 128;
+const MAX_VAULT_SALT_CHARS: usize = 2_048;
+const MAX_VAULT_GENERATION_CHARS: usize = 64;
+const MAX_GAME_STATES: usize = 16;
+const MAX_GAME_STATISTICS: usize = 64;
+const MAX_GAME_ID_CHARS: usize = 64;
+const MAX_GAME_SAVE_CHARS: usize = 16 * 1024 * 1024;
+const MAX_USAGE_DEVICES: usize = 64;
+const MAX_USAGE_DEVICE_JSON_BYTES: usize = 10 * 1024 * 1024 + 64 * 1024;
+const MAX_STATISTICS_DAYS: usize = 36_600;
+const MAX_APPS_PER_DAY: usize = 4_096;
+const MAX_PACKAGE_NAME_CHARS: usize = 255;
+const MAX_ZONE_ID_CHARS: usize = 128;
+const MAX_FOREGROUND_MILLIS_PER_APP_DAY: i64 = 26 * 60 * 60 * 1_000;
 
-/// Credential-free cloud-sync metadata shared with Android v18 backups.
+/// Credential-free cloud-sync metadata shared with Android v27 backups.
 ///
 /// Passwords, S3 access keys, secret keys and session tokens deliberately do
 /// not exist on this DTO. They are device-local secrets and must be persisted
@@ -47,9 +76,11 @@ pub struct CloudSyncConfig {
     pub service_type: CloudSyncServiceType,
     pub endpoint_url: String,
     pub remote_path: String,
+    pub user_agent: String,
     pub web_dav_username: String,
     pub s3_bucket: String,
     pub s3_region: String,
+    pub s3_path_style: bool,
     pub allow_insecure_http: bool,
     pub selected_contents: Vec<CloudSyncContent>,
     pub direction: CloudSyncDirection,
@@ -71,6 +102,8 @@ pub enum CloudSyncContent {
     Media,
     #[serde(rename = "JSON_BACKUP")]
     JsonBackup,
+    #[serde(rename = "USAGE_STATISTICS")]
+    UsageStatistics,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -107,6 +140,7 @@ impl From<DataError> for BackupError {
 
 #[derive(Debug, Clone)]
 pub struct ValidatedBackup {
+    pub format_version: i32,
     pub exported_at: i64,
     pub settings: ManagedSettings,
     #[allow(dead_code)]
@@ -115,12 +149,19 @@ pub struct ValidatedBackup {
     pub categories: Vec<ThoughtCategory>,
     pub favorite_count: usize,
     pub date_records: Vec<DateRecord>,
+    pub poetry_categories: Vec<PoetryCategory>,
     pub poems: Vec<SavedPoem>,
+    pub game_states: Vec<GameBackupState>,
+    pub game_statistics: Vec<GameBackupStatistic>,
+    pub merge_game_states: bool,
+    pub merge_game_statistics: bool,
+    pub usage_devices: Vec<Value>,
+    pub merge_usage_devices: bool,
     pub source_sha256: String,
     root: Value,
 }
 
-/// A validated v18 import whose compatibility-shadow bytes have had
+/// A validated v27 import whose compatibility-shadow bytes have had
 /// device-local private fields removed.
 ///
 /// `backup.source_sha256` is the digest of `canonical_bytes`, not of the
@@ -134,6 +175,11 @@ pub struct ValidatedBackup {
 pub(crate) struct PreparedV18Import {
     pub(crate) canonical_bytes: Vec<u8>,
     pub(crate) backup: ValidatedBackup,
+    /// Validated input-only usage rows. They may be merged into the private,
+    /// display-only cache after the structured database transaction commits,
+    /// but are deliberately absent from `canonical_bytes` and every export.
+    pub(crate) usage_devices: Vec<Value>,
+    pub(crate) merge_usage_devices: bool,
 }
 
 impl ValidatedBackup {
@@ -147,7 +193,12 @@ impl ValidatedBackup {
             "categories",
             "favorites",
             "dateRecords",
+            "poetryCategories",
             "poems",
+            "vault",
+            "gameStates",
+            "gameStatistics",
+            "usageDevices",
         ];
         let mut preserved_top_level_keys = self
             .root
@@ -159,7 +210,7 @@ impl ValidatedBackup {
             .collect::<Vec<_>>();
         preserved_top_level_keys.sort();
         BackupPreview {
-            format_version: FORMAT_VERSION,
+            format_version: self.format_version,
             exported_at: self.exported_at,
             thought_count: self.thoughts.len(),
             category_count: self.categories.len(),
@@ -173,21 +224,29 @@ impl ValidatedBackup {
 
 pub fn parse_v18(json_text: &str) -> Result<ValidatedBackup, BackupError> {
     require_size(json_text.as_bytes())?;
-    let root: Value = serde_json::from_str(json_text)?;
+    let mut root: Value = serde_json::from_str(json_text)?;
     let root_object = root
         .as_object()
         .ok_or_else(|| invalid("Backup root must be a JSON object"))?;
     if required_string(root_object, "format")? != "DeskCubby" {
         return Err(invalid("Unsupported backup format"));
     }
-    if required_i32(root_object, "version")? != FORMAT_VERSION {
-        return Err(invalid("Windows requires an Android v18 backup"));
+    let source_format_version = required_i32(root_object, "version")?;
+    if !(1..=FORMAT_VERSION).contains(&source_format_version) {
+        return Err(invalid("Windows requires an Android v1-v27 backup"));
     }
     let exported_at = required_i64(root_object, "exportedAt")?;
     require_nonnegative(exported_at, "exportedAt")?;
 
+    if source_format_version < FORMAT_VERSION {
+        root = upgrade_legacy_backup_to_v27(root, source_format_version, exported_at)?;
+    }
+    let root_object = root
+        .as_object()
+        .ok_or_else(|| invalid("Backup root must be a JSON object"))?;
+
     let settings_object = required_object(root_object, "settings")?;
-    let cloud_sync_configs = validate_full_v18_settings(settings_object)?;
+    let cloud_sync_configs = validate_full_v27_settings(settings_object)?;
     let settings = decode_managed_settings(settings_object)?;
     settings.validate().map_err(BackupError::Invalid)?;
 
@@ -209,10 +268,25 @@ pub fn parse_v18(json_text: &str) -> Result<ValidatedBackup, BackupError> {
     }
     let favorite_count = validate_favorites(required_array(root_object, "favorites")?)?;
     let date_records = decode_date_records(required_array(root_object, "dateRecords")?)?;
-    let poems = decode_poems(required_array(root_object, "poems")?)?;
+    let poetry_category_items = required_array(root_object, "poetryCategories")?;
+    let poetry_category_ids = validate_poetry_categories(poetry_category_items)?;
+    let poetry_categories = decode_poetry_categories(poetry_category_items)?;
+    let poem_items = required_array(root_object, "poems")?;
+    let poems = decode_poems(poem_items)?;
+    validate_v27_poem_fields(poem_items, &poetry_category_ids)?;
+    validate_vault(required_object(root_object, "vault")?)?;
+    let game_state_items = required_array(root_object, "gameStates")?;
+    let game_statistic_items = required_array(root_object, "gameStatistics")?;
+    let usage_device_items = required_array(root_object, "usageDevices")?;
+    validate_game_states(game_state_items)?;
+    validate_game_statistics(game_statistic_items)?;
+    validate_usage_devices(usage_device_items)?;
+    let game_states = decode_game_states(game_state_items)?;
+    let game_statistics = decode_game_statistics(game_statistic_items)?;
     let source_sha256 = sha256_hex(json_text.as_bytes());
 
     Ok(ValidatedBackup {
+        format_version: source_format_version,
         exported_at,
         settings,
         cloud_sync_configs,
@@ -220,24 +294,549 @@ pub fn parse_v18(json_text: &str) -> Result<ValidatedBackup, BackupError> {
         categories,
         favorite_count,
         date_records,
+        poetry_categories,
         poems,
+        game_states,
+        game_statistics,
+        merge_game_states: source_format_version >= 20,
+        merge_game_statistics: source_format_version >= 24,
+        usage_devices: usage_device_items.to_vec(),
+        merge_usage_devices: source_format_version >= 20,
         source_sha256,
         root,
     })
 }
 
-/// Validate and canonicalize an imported Android v18 backup before it becomes
+/// Android's decoder accepts every historical backup version and materializes
+/// newer fields from `AppSettings` defaults before restoring. Windows keeps a
+/// lossless compatibility shadow, so legacy input is upgraded once at the
+/// boundary into an Android-readable v27 document while unrelated unknown
+/// siblings remain untouched.
+fn upgrade_legacy_backup_to_v27(
+    mut root: Value,
+    version: i32,
+    exported_at: i64,
+) -> Result<Value, BackupError> {
+    let root_object = root
+        .as_object_mut()
+        .ok_or_else(|| invalid("Backup root must be a JSON object"))?;
+    validate_legacy_required_shape(root_object, version)?;
+
+    let original_settings = required_object(root_object, "settings")?.clone();
+    let defaults = default_root(&ManagedSettings::default(), exported_at);
+    let default_root_object = defaults
+        .as_object()
+        .ok_or_else(|| invalid("Internal v27 default root is invalid"))?;
+    let default_settings = required_object(default_root_object, "settings")?;
+    let mut upgraded_settings = default_settings.clone();
+    for (key, value) in original_settings {
+        upgraded_settings.insert(key, value);
+    }
+
+    // Fields unknown to an older Android decoder are not allowed to override
+    // the defaults that decoder would have materialized.
+    for (introduced, fields) in legacy_setting_introductions() {
+        if version < *introduced {
+            for field in *fields {
+                let value = default_settings
+                    .get(*field)
+                    .ok_or_else(|| invalid(format!("Missing internal default: {field}")))?;
+                upgraded_settings.insert((*field).to_owned(), value.clone());
+            }
+        }
+    }
+    migrate_legacy_settings(&mut upgraded_settings, default_settings, version)?;
+    root_object.insert("settings".to_owned(), Value::Object(upgraded_settings));
+
+    if version < 2 {
+        root_object.insert("dateRecords".to_owned(), json!([]));
+    }
+    if version < 3 {
+        root_object.insert("categories".to_owned(), json!([]));
+    }
+    if version < 4 {
+        root_object.insert("poems".to_owned(), json!([]));
+    }
+    if version < 19 {
+        root_object.insert("poetryCategories".to_owned(), json!([]));
+    }
+    if version < 20 {
+        root_object.insert(
+            "vault".to_owned(),
+            json!({"active": null, "pending": null, "items": []}),
+        );
+        root_object.insert("gameStates".to_owned(), json!([]));
+        root_object.insert("usageDevices".to_owned(), json!([]));
+    }
+    if version < 24 {
+        root_object.insert("gameStatistics".to_owned(), json!([]));
+    }
+    migrate_legacy_thoughts(root_object, version)?;
+    migrate_legacy_poems(root_object, version)?;
+    root_object.insert("version".to_owned(), Value::from(FORMAT_VERSION));
+    Ok(root)
+}
+
+fn validate_legacy_required_shape(
+    root: &Map<String, Value>,
+    version: i32,
+) -> Result<(), BackupError> {
+    for field in ["settings", "thoughts", "favorites"] {
+        if !root.contains_key(field) {
+            return Err(invalid(format!("Missing required field: {field}")));
+        }
+    }
+    for (introduced, fields) in [
+        (2, &["dateRecords"][..]),
+        (3, &["categories"][..]),
+        (4, &["poems"][..]),
+        (19, &["poetryCategories"][..]),
+        (20, &["vault", "gameStates", "usageDevices"][..]),
+        (24, &["gameStatistics"][..]),
+    ] {
+        if version >= introduced {
+            for field in fields {
+                if !root.contains_key(*field) {
+                    return Err(invalid(format!("Missing required field: {field}")));
+                }
+            }
+        }
+    }
+
+    let settings = required_object(root, "settings")?;
+    for field in [
+        "visualStyle",
+        "darkMode",
+        "appLanguage",
+        "themeColorArgb",
+        "diaryTreeUri",
+        "mediaTreeUri",
+        "fileNamePattern",
+        "markdownTemplate",
+        "imageNamePattern",
+        "imageMaxWidthDp",
+        "imageMaxHeightDp",
+        "browserHomeUrl",
+        "lastBrowserUrl",
+        "browserTheme",
+        "browserDesktopMode",
+        "thoughtSplitRatio",
+        "thoughtRowHeightDp",
+        "navItems",
+        "defaultPage",
+        "bottomNavShowLabels",
+        "homeWidgets",
+        "homeWidgetTitles",
+    ] {
+        if !settings.contains_key(field) {
+            return Err(invalid(format!("Missing required field: {field}")));
+        }
+    }
+    for (introduced, fields) in legacy_setting_introductions() {
+        if version >= *introduced {
+            for field in *fields {
+                if !settings.contains_key(*field) {
+                    return Err(invalid(format!("Missing required field: {field}")));
+                }
+            }
+        }
+    }
+    if version < 7 && required_string(settings, "visualStyle")? == "ORGANIC_FUTURE" {
+        return Err(invalid(
+            "visualStyle ORGANIC_FUTURE requires backup version 7 or newer",
+        ));
+    }
+    Ok(())
+}
+
+fn legacy_setting_introductions() -> &'static [(i32, &'static [&'static str])] {
+    &[
+        (4, &["mealButtonsUseIcons"]),
+        (
+            5,
+            &["userName", "homeWidgetBordersEnabled", "mealButtonIcons"],
+        ),
+        (
+            6,
+            &["mealImageCompressionEnabled", "mealImageCompressionQuality"],
+        ),
+        (8, &["themeSecondaryColorsArgb", "fontScale"]),
+        (
+            9,
+            &[
+                "thoughtReopenMode",
+                "thoughtDisplayMode",
+                "mealCalendarImageMaxHeightDp",
+                "mealCalendarShowCaptions",
+                "dailyEventTemplates",
+                "rssSubscriptions",
+                "rssMaxItemsPerFeed",
+                "rssShowSummaries",
+                "aiEndpointUrl",
+                "aiModel",
+                "aiSystemPrompt",
+                "aiTemperature",
+                "aiAllowInsecureHttp",
+            ],
+        ),
+        (
+            10,
+            &[
+                "aiConfigs",
+                "calorieEstimationEnabled",
+                "calorieVisionPrompt",
+                "calorieTextPrompt",
+            ],
+        ),
+        (
+            11,
+            &[
+                "aiChatConfigId",
+                "calorieTextConfigId",
+                "calorieImageConfigId",
+            ],
+        ),
+        (
+            13,
+            &["cloudSyncEnabled", "cloudSyncConfigs", "mealPhotoFilter"],
+        ),
+        (
+            14,
+            &[
+                "compactMode",
+                "useChineseLauncherName",
+                "saveOriginalToGallery",
+                "photoLocationEnabled",
+                "thoughtHighlightColorArgb",
+                "thoughtEditorMaxHeightDp",
+                "mealCalendarWrapEnabled",
+                "mealCalendarPhotosPerRow",
+            ],
+        ),
+        (
+            15,
+            &[
+                "launcherIcon",
+                "usageTrackingEnabled",
+                "stepTrackingEnabled",
+                "morePageShowDescriptions",
+            ],
+        ),
+        (16, &["homeGreetings", "morePageOrder"]),
+        (
+            17,
+            &[
+                "poetryFontUri",
+                "poetryFontSizeSp",
+                "poetryLineSpacing",
+                "poetryTextAlignment",
+                "poetryShowSource",
+                "poetryShowQuoteMark",
+            ],
+        ),
+        (18, &["poetrySevenCharacterWrapEnabled"]),
+        (21, &["vaultRowHeightDp"]),
+        (22, &["desktopWidgetConfigs"]),
+        (
+            23,
+            &[
+                "musicVisualizerEnabled",
+                "musicVisualizerStyle",
+                "game2048AnimationSpeed",
+            ],
+        ),
+        (
+            24,
+            &[
+                "musicVisualizerFrequencyMode",
+                "musicVisualizerMinFrequencyHz",
+                "musicVisualizerMaxFrequencyHz",
+            ],
+        ),
+        (
+            25,
+            &[
+                "backgroundImageUri",
+                "backgroundImageOpacity",
+                "backgroundImageBlurDp",
+                "tutorialModeEnabled",
+            ],
+        ),
+        (26, &["notesTreeUri", "markdownHeadingSizesSp"]),
+        (27, &["homeGameShortcuts"]),
+    ]
+}
+
+fn migrate_legacy_settings(
+    settings: &mut Map<String, Value>,
+    defaults: &Map<String, Value>,
+    version: i32,
+) -> Result<(), BackupError> {
+    if version < 19 {
+        if let Some(configs) = settings
+            .get_mut("cloudSyncConfigs")
+            .and_then(Value::as_array_mut)
+        {
+            for config in configs {
+                let object = config
+                    .as_object_mut()
+                    .ok_or_else(|| invalid("cloudSyncConfigs item must be an object"))?;
+                object.insert("s3PathStyle".to_owned(), Value::Bool(true));
+            }
+        }
+    }
+    if version < 21 {
+        if let Some(configs) = settings
+            .get_mut("cloudSyncConfigs")
+            .and_then(Value::as_array_mut)
+        {
+            for config in configs {
+                let object = config
+                    .as_object_mut()
+                    .ok_or_else(|| invalid("cloudSyncConfigs item must be an object"))?;
+                object.insert(
+                    "userAgent".to_owned(),
+                    Value::String("DeskCubby-Sync/1".to_owned()),
+                );
+            }
+        }
+    }
+    if (10..12).contains(&version) {
+        let configs = settings
+            .get_mut("aiConfigs")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| invalid("aiConfigs must be an array"))?;
+        for config in configs {
+            let object = config
+                .as_object_mut()
+                .ok_or_else(|| invalid("aiConfigs item must be an object"))?;
+            object.insert("apiKey".to_owned(), Value::String(String::new()));
+        }
+    }
+    if version >= 5 {
+        let icons = settings
+            .get_mut("mealButtonIcons")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| invalid("mealButtonIcons must be an array"))?;
+        if icons.len() == 5 {
+            let default_tea = defaults
+                .get("mealButtonIcons")
+                .and_then(Value::as_array)
+                .and_then(|items| items.get(2))
+                .cloned()
+                .ok_or_else(|| invalid("Internal meal icon default is invalid"))?;
+            icons.insert(2, default_tea);
+        }
+    }
+    migrate_legacy_home_modules(settings, version)?;
+    migrate_legacy_nav(settings, version)?;
+    Ok(())
+}
+
+fn migrate_legacy_home_modules(
+    settings: &mut Map<String, Value>,
+    version: i32,
+) -> Result<(), BackupError> {
+    for field in ["homeWidgets", "homeWidgetTitles"] {
+        let items = settings
+            .get_mut(field)
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| invalid(format!("{field} must be an array")))?;
+        if version < 4 {
+            insert_home_module_after_quick_input(items, "meal_photos");
+        }
+        if version < 9 {
+            insert_home_module_after_quick_input(items, "daily_records");
+        }
+        if version < 26 {
+            for id in ["notes", "game_shortcuts", "record_overview"] {
+                if !items.iter().any(|item| item.as_str() == Some(id)) {
+                    items.push(Value::String(id.to_owned()));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn insert_home_module_after_quick_input(items: &mut Vec<Value>, id: &str) {
+    if items.iter().any(|item| item.as_str() == Some(id)) {
+        return;
+    }
+    let insert_at = items
+        .iter()
+        .position(|item| item.as_str() == Some("quick_input"))
+        .map_or(items.len(), |index| index + 1);
+    items.insert(insert_at, Value::String(id.to_owned()));
+}
+
+fn migrate_legacy_nav(settings: &mut Map<String, Value>, version: i32) -> Result<(), BackupError> {
+    let default_items = default_nav_items();
+    let default_by_id = default_items
+        .iter()
+        .filter_map(|value| {
+            let object = value.as_object()?;
+            Some((
+                required_string(object, "id").ok()?.to_owned(),
+                object.clone(),
+            ))
+        })
+        .collect::<HashMap<_, _>>();
+    let nav = settings
+        .get_mut("navItems")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| invalid("navItems must be an array"))?;
+    let mut present = HashSet::new();
+    for (index, value) in nav.iter_mut().enumerate() {
+        let item = value
+            .as_object_mut()
+            .ok_or_else(|| invalid(format!("navItems[{index}] must be an object")))?;
+        let id = required_string(item, "id")?.to_owned();
+        if !present.insert(id.clone()) {
+            return Err(invalid(format!("Duplicate navigation item: {id}")));
+        }
+        let default = default_by_id
+            .get(&id)
+            .ok_or_else(|| invalid(format!("navItems[{index}].id is unsupported")))?;
+        let visible = required_bool(item, "visible")?;
+        if version < 13 {
+            let default_more = required_bool(default, "showInMore")?;
+            item.insert(
+                "showInMore".to_owned(),
+                Value::Bool(default_more && !visible),
+            );
+        } else if matches!(id.as_str(), "HOME" | "MORE" | "SETTINGS") {
+            item.insert("showInMore".to_owned(), Value::Bool(false));
+        }
+        if version < 15 {
+            item.insert(
+                "moreDescription".to_owned(),
+                default
+                    .get("moreDescription")
+                    .cloned()
+                    .ok_or_else(|| invalid("Internal nav default is invalid"))?,
+            );
+        }
+        if version < 24 && matches!(id.as_str(), "USAGE" | "STEPS") {
+            item.insert("showInMore".to_owned(), Value::Bool(false));
+        }
+    }
+    let settings_position = nav
+        .iter()
+        .position(|value| value.get("id").and_then(Value::as_str) == Some("SETTINGS"));
+    let mut missing = default_items
+        .into_iter()
+        .filter(|value| {
+            value
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !present.contains(id))
+        })
+        .collect::<Vec<_>>();
+    if let Some(index) = settings_position.filter(|index| *index == nav.len() - 1) {
+        let settings_item = nav.remove(index);
+        nav.append(&mut missing);
+        nav.push(settings_item);
+    } else {
+        nav.append(&mut missing);
+    }
+
+    if version < 16 {
+        let mut order = nav
+            .iter()
+            .filter_map(|item| item.get("id").and_then(Value::as_str))
+            .filter(|id| !matches!(*id, "HOME" | "MORE" | "SETTINGS"))
+            .map(|id| Value::String(id.to_owned()))
+            .collect::<Vec<_>>();
+        append_missing_more_page_ids(&mut order);
+        settings.insert("morePageOrder".to_owned(), Value::Array(order));
+    } else if let Some(order) = settings
+        .get_mut("morePageOrder")
+        .and_then(Value::as_array_mut)
+    {
+        append_missing_more_page_ids(order);
+    }
+    Ok(())
+}
+
+fn append_missing_more_page_ids(order: &mut Vec<Value>) {
+    for id in [
+        "DIARY",
+        "NOTES",
+        "BLOG",
+        "THOUGHT",
+        "DATE",
+        "POETRY",
+        "RSS",
+        "AI_CHAT",
+        "VAULT",
+        "READER",
+        "GAMES",
+        "STATISTICS",
+        "USAGE",
+        "STEPS",
+        "WIDGETS",
+    ] {
+        if !order.iter().any(|item| item.as_str() == Some(id)) {
+            order.push(Value::String(id.to_owned()));
+        }
+    }
+}
+
+fn migrate_legacy_thoughts(root: &mut Map<String, Value>, version: i32) -> Result<(), BackupError> {
+    let thoughts = root
+        .get_mut("thoughts")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| invalid("thoughts must be an array"))?;
+    for (index, value) in thoughts.iter_mut().enumerate() {
+        let item = value
+            .as_object_mut()
+            .ok_or_else(|| invalid(format!("thoughts[{index}] must be an object")))?;
+        if version < 3 {
+            item.insert("categoryId".to_owned(), Value::Null);
+        }
+        if version < 14 {
+            item.insert("highlighted".to_owned(), Value::Bool(false));
+        }
+    }
+    Ok(())
+}
+
+fn migrate_legacy_poems(root: &mut Map<String, Value>, version: i32) -> Result<(), BackupError> {
+    let poems = root
+        .get_mut("poems")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| invalid("poems must be an array"))?;
+    for (index, value) in poems.iter_mut().enumerate() {
+        let item = value
+            .as_object_mut()
+            .ok_or_else(|| invalid(format!("poems[{index}] must be an object")))?;
+        if version < 19 {
+            item.insert("categoryId".to_owned(), Value::Null);
+        }
+        if version < 21 {
+            item.insert("sortOrder".to_owned(), Value::from(0));
+        }
+    }
+    Ok(())
+}
+
+/// Validate and canonicalize an imported Android v27 backup before it becomes
 /// the encrypted compatibility shadow.
 ///
-/// This is the single import-side privacy boundary: known device-local vault,
-/// usage, step and cloud credential fields are removed, while AI API keys,
-/// Android SAF URIs and unknown compatibility fields remain untouched. The
-/// sanitized compact JSON is parsed again so the returned validated model and
-/// source hash describe the exact bytes that callers persist.
+/// This is the single import-side privacy boundary: private fields and cloud
+/// credentials are removed, official Vault/usage containers are emptied, and
+/// game data, the AI API key, Android SAF URIs, and unknown compatibility
+/// fields remain intact. Validated usage rows are returned separately for the
+/// private display-only cache. The sanitized compact JSON is parsed again so
+/// the returned model and source hash describe the exact persisted bytes.
 pub(crate) fn prepare_v18_import_for_shadow(
     json_text: &str,
 ) -> Result<PreparedV18Import, BackupError> {
-    let mut root = parse_v18(json_text)?.root;
+    let parsed = parse_v18(json_text)?;
+    let usage_devices = parsed.usage_devices.clone();
+    let merge_usage_devices = parsed.merge_usage_devices;
+    let mut root = parsed.root;
     let root_object = root
         .as_object_mut()
         .ok_or_else(|| invalid("Backup root must be a JSON object"))?;
@@ -252,6 +851,8 @@ pub(crate) fn prepare_v18_import_for_shadow(
     Ok(PreparedV18Import {
         canonical_bytes,
         backup,
+        usage_devices,
+        merge_usage_devices,
     })
 }
 
@@ -270,7 +871,12 @@ pub fn import_v18_transaction(
         &backup.thoughts,
         &backup.categories,
         &backup.date_records,
+        &backup.poetry_categories,
         &backup.poems,
+        &backup.game_states,
+        &backup.game_statistics,
+        backup.merge_game_states,
+        backup.merge_game_statistics,
         encrypted_shadow,
         &backup.source_sha256,
         imported_at,
@@ -286,9 +892,9 @@ pub fn import_v18_transaction(
     })
 }
 
-/// Merge Windows-managed data into a decrypted v18 compatibility shadow.
+/// Merge Windows-managed data into a decrypted v27 compatibility shadow.
 ///
-/// Passing `None` creates a complete Android-readable v18 document with safe
+/// Passing `None` creates a complete Android-readable v27 document with safe
 /// defaults for postponed modules. Local Windows folder paths are never written
 /// into Android `content://` URI fields.
 #[allow(dead_code)]
@@ -301,14 +907,14 @@ pub fn export_v18_merged(
 }
 
 /// Merge Windows-managed data and optional credential-free cloud metadata into
-/// a decrypted v18 compatibility shadow.
+/// a decrypted v27 compatibility shadow.
 ///
 /// `cloud_sync_configs = None` preserves imported credential-free cloud
 /// metadata and its unknown fields. Passing `Some` makes Windows the owner of
 /// `cloudSyncConfigs`, preserves unknown sibling fields for matching IDs, and
 /// disables Android cloud/usage collection toggles. Both paths unconditionally
-/// remove device-local credentials, vault payloads and usage/step statistics
-/// from the JSON boundary.
+/// remove non-format Windows private fields and device-local cloud credentials,
+/// and emit the required v27 Vault/usage containers only in their empty forms.
 pub fn export_v18_merged_with_cloud_configs(
     database: &Database,
     decrypted_shadow: Option<&[u8]>,
@@ -348,6 +954,7 @@ pub fn export_v18_merged_with_cloud_configs(
             "cloudSyncConfigs",
             serde_json::to_value(configs)?,
         );
+        ensure_v27_cloud_config_defaults(shadow_settings)?;
         shadow_settings.insert("cloudSyncEnabled".to_owned(), Value::Bool(false));
         shadow_settings.insert("usageTrackingEnabled".to_owned(), Value::Bool(false));
         shadow_settings.insert("stepTrackingEnabled".to_owned(), Value::Bool(false));
@@ -372,9 +979,31 @@ pub fn export_v18_merged_with_cloud_configs(
     );
     overlay_managed_root_field(
         root_object,
+        "poetryCategories",
+        serde_json::to_value(database.list_poetry_categories()?)?,
+    );
+    overlay_managed_root_field(
+        root_object,
         "poems",
         serde_json::to_value(database.list_poems()?)?,
     );
+    ensure_v27_poem_defaults(root_object)?;
+    let (game_states, game_statistics) = database.list_game_backup_rows()?;
+    overlay_managed_root_field(
+        root_object,
+        "gameStates",
+        serde_json::to_value(game_states)?,
+    );
+    overlay_managed_root_field(
+        root_object,
+        "gameStatistics",
+        serde_json::to_value(game_statistics)?,
+    );
+
+    // Reassert the private-data boundary after all managed overlays. Android
+    // v27 still sees the required fields, but Windows never emits Vault
+    // ciphertext/metadata or phone-usage samples in application JSON.
+    scrub_excluded_private_backup_fields(root_object)?;
 
     let encoded = serde_json::to_string_pretty(&root)?;
     require_size(encoded.as_bytes())?;
@@ -384,11 +1013,53 @@ pub fn export_v18_merged_with_cloud_configs(
     Ok(encoded)
 }
 
+fn ensure_v27_cloud_config_defaults(settings: &mut Map<String, Value>) -> Result<(), BackupError> {
+    let configs = settings
+        .get_mut("cloudSyncConfigs")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| invalid("cloudSyncConfigs must be an array"))?;
+    for (index, value) in configs.iter_mut().enumerate() {
+        let config = value
+            .as_object_mut()
+            .ok_or_else(|| invalid(format!("cloudSyncConfigs[{index}] must be an object")))?;
+        config
+            .entry("userAgent".to_owned())
+            .or_insert_with(|| Value::String("DeskCubby-Sync/1".to_owned()));
+        config
+            .entry("s3PathStyle".to_owned())
+            .or_insert(Value::Bool(true));
+    }
+    Ok(())
+}
+
+fn ensure_v27_poem_defaults(root: &mut Map<String, Value>) -> Result<(), BackupError> {
+    let poems = root
+        .get_mut("poems")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| invalid("poems must be an array"))?;
+    for (index, value) in poems.iter_mut().enumerate() {
+        let poem = value
+            .as_object_mut()
+            .ok_or_else(|| invalid(format!("poems[{index}] must be an object")))?;
+        poem.entry("sortOrder".to_owned())
+            .or_insert_with(|| Value::from(index as i64));
+        poem.entry("categoryId".to_owned()).or_insert(Value::Null);
+    }
+    Ok(())
+}
+
 pub fn recovery_point_bytes(database: &Database) -> Result<Vec<u8>, BackupError> {
+    let mut snapshot = database.snapshot_core()?;
+    // Compatibility shadows can originate from an older Windows build that
+    // predates the v27 scrub boundary. A recovery point cannot decrypt and
+    // re-sanitize that DPAPI blob, so omit it entirely. Core rows remain
+    // recoverable and restoring the point safely clears any newer shadow.
+    snapshot.encrypted_compatibility_shadow = None;
+    snapshot.compatibility_source_sha256 = None;
     let recovery = RecoveryPoint {
         format: "DeskCubby Windows recovery".to_owned(),
         version: 1,
-        snapshot: database.snapshot_core()?,
+        snapshot,
     };
     let bytes = serde_json::to_vec_pretty(&recovery)?;
     if bytes.len() > MAX_RECOVERY_POINT_BYTES {
@@ -471,6 +1142,63 @@ fn decode_managed_settings(settings: &Map<String, Value>) -> Result<ManagedSetti
             })
         })
         .collect::<Result<Vec<_>, BackupError>>()?;
+    let rss_subscriptions = required_array(settings, "rssSubscriptions")?
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let item = value
+                .as_object()
+                .ok_or_else(|| invalid(format!("rssSubscriptions[{index}] must be an object")))?;
+            Ok(RssSubscription {
+                id: required_string(item, "id")?.to_owned(),
+                title: required_string(item, "title")?.to_owned(),
+                url: required_string(item, "url")?.to_owned(),
+                enabled: required_bool(item, "enabled")?,
+            })
+        })
+        .collect::<Result<Vec<_>, BackupError>>()?;
+    let ai_configs = required_array(settings, "aiConfigs")?
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let item = value
+                .as_object()
+                .ok_or_else(|| invalid(format!("aiConfigs[{index}] must be an object")))?;
+            Ok(AiModelConfig {
+                id: required_string(item, "id")?.to_owned(),
+                name: required_string(item, "name")?.to_owned(),
+                model_type: required_string(item, "type")?.to_owned(),
+                endpoint_url: required_string(item, "endpointUrl")?.to_owned(),
+                model: required_string(item, "model")?.to_owned(),
+                enabled: required_bool(item, "enabled")?,
+                allow_insecure_http: required_bool(item, "allowInsecureHttp")?,
+                temperature: f64::from(required_number(item, "temperature")? as f32)
+                    .clamp(0.0, 2.0),
+                system_prompt: item
+                    .get("systemPrompt")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                api_key: required_string(item, "apiKey")?.to_owned(),
+            })
+        })
+        .collect::<Result<Vec<_>, BackupError>>()?;
+    let markdown_heading_sizes_sp = required_array(settings, "markdownHeadingSizesSp")?
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let number = value.as_number().ok_or_else(|| {
+                invalid(format!("markdownHeadingSizesSp[{index}] must be a number"))
+            })?;
+            let value = number
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| {
+                    invalid(format!("markdownHeadingSizesSp[{index}] must be finite"))
+                })?;
+            Ok(f64::from(value as f32))
+        })
+        .collect::<Result<Vec<_>, BackupError>>()?;
 
     let mut decoded = ManagedSettings {
         visual_style: required_string(settings, "visualStyle")?.to_owned(),
@@ -480,11 +1208,16 @@ fn decode_managed_settings(settings: &Map<String, Value>) -> Result<ManagedSetti
         theme_secondary_colors_argb,
         font_scale: f64::from(required_number(settings, "fontScale")? as f32),
         compact_mode: required_bool(settings, "compactMode")?,
+        background_image_path: None,
+        background_image_opacity: 0.45,
+        background_image_blur_px: 0.0,
+        tutorial_mode_enabled: required_bool(settings, "tutorialModeEnabled")?,
         file_name_pattern: required_string(settings, "fileNamePattern")?.to_owned(),
         markdown_template: required_string(settings, "markdownTemplate")?.to_owned(),
         image_name_pattern: required_string(settings, "imageNamePattern")?.to_owned(),
         image_max_width_dp: required_coerced_i32(settings, "imageMaxWidthDp", 120, 2_400)?,
         image_max_height_dp: required_coerced_i32(settings, "imageMaxHeightDp", 120, 2_400)?,
+        markdown_heading_sizes_sp,
         meal_image_compression_enabled: required_bool(settings, "mealImageCompressionEnabled")?,
         meal_image_compression_quality: required_coerced_i32(
             settings,
@@ -501,6 +1234,7 @@ fn decode_managed_settings(settings: &Map<String, Value>) -> Result<ManagedSetti
             96,
             400,
         )?,
+        vault_row_height_dp: required_coerced_i32(settings, "vaultRowHeightDp", 48, 120)?,
         poetry_font_size_sp: f64::from(required_number(settings, "poetryFontSizeSp")? as f32),
         poetry_line_spacing: f64::from(required_number(settings, "poetryLineSpacing")? as f32),
         poetry_text_alignment: required_string(settings, "poetryTextAlignment")?.to_owned(),
@@ -527,7 +1261,24 @@ fn decode_managed_settings(settings: &Map<String, Value>) -> Result<ManagedSetti
         home_greetings,
         home_widget_borders_enabled: required_bool(settings, "homeWidgetBordersEnabled")?,
         daily_event_templates,
+        rss_subscriptions,
+        rss_max_items_per_feed: required_coerced_i32(settings, "rssMaxItemsPerFeed", 10, 200)?,
+        rss_show_summaries: required_bool(settings, "rssShowSummaries")?,
+        ai_configs,
+        ai_chat_config_id: validate_nullable_string(settings, "aiChatConfigId", 80)?
+            .map(str::to_owned),
+        calorie_estimation_enabled: required_bool(settings, "calorieEstimationEnabled")?,
+        calorie_text_config_id: validate_nullable_string(settings, "calorieTextConfigId", 80)?
+            .map(str::to_owned),
+        calorie_image_config_id: validate_nullable_string(settings, "calorieImageConfigId", 80)?
+            .map(str::to_owned),
+        calorie_vision_prompt: required_string(settings, "calorieVisionPrompt")?.to_owned(),
+        calorie_text_prompt: required_string(settings, "calorieTextPrompt")?.to_owned(),
         home_widgets: string_list(required_array(settings, "homeWidgets")?, "homeWidgets")?,
+        home_game_shortcuts: string_list(
+            required_array(settings, "homeGameShortcuts")?,
+            "homeGameShortcuts",
+        )?,
         home_widget_titles: string_list(
             required_array(settings, "homeWidgetTitles")?,
             "homeWidgetTitles",
@@ -547,6 +1298,15 @@ fn overlay_managed_settings(
         .as_object()
         .ok_or_else(|| invalid("Windows settings serialization failed"))?;
     for (key, value) in managed_object {
+        if matches!(
+            key.as_str(),
+            "backgroundImagePath" | "backgroundImageOpacity" | "backgroundImageBlurPx"
+        ) {
+            // Windows backgrounds are ordinary selected filesystem paths.
+            // They are local-only and must never become Android SAF settings
+            // or unknown compatibility-shadow fields.
+            continue;
+        }
         match target.get_mut(key) {
             Some(existing) => merge_managed_value(existing, value),
             None => {
@@ -567,9 +1327,9 @@ fn overlay_managed_root_field(target: &mut Map<String, Value>, key: &str, manage
     }
 }
 
-/// Android intentionally excludes device-local credentials, encrypted vault
-/// data and usage/step samples from v18. Exact known private keys are removed;
-/// unrelated future fields and AI configuration fields remain untouched.
+/// Exact known private keys are removed while unrelated future fields remain
+/// untouched. Required Android v27 Vault and usage containers are retained in
+/// their canonical empty forms so the document stays schema-compatible.
 fn scrub_excluded_private_backup_fields(root: &mut Map<String, Value>) -> Result<(), BackupError> {
     const PRIVATE_BACKUP_FIELDS: [&str; 5] = [
         "vaultItems",
@@ -582,6 +1342,15 @@ fn scrub_excluded_private_backup_fields(root: &mut Map<String, Value>) -> Result
         root.remove(field);
     }
 
+    let vault = root
+        .get_mut("vault")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| invalid("Backup vault must be an object"))?;
+    vault.insert("active".to_owned(), Value::Null);
+    vault.insert("pending".to_owned(), Value::Null);
+    vault.insert("items".to_owned(), Value::Array(Vec::new()));
+    root.insert("usageDevices".to_owned(), Value::Array(Vec::new()));
+
     let settings_value = root
         .get_mut("settings")
         .ok_or_else(|| invalid("Backup settings must be an object"))?;
@@ -593,18 +1362,40 @@ fn scrub_excluded_private_backup_fields(root: &mut Map<String, Value>) -> Result
             settings.remove(field);
         }
     }
-    scrub_cloud_credential_fields(settings_value);
+    // Repeat recursively across the full compatibility document so an
+    // attacker cannot relocate a known Windows/credential field under an
+    // otherwise unknown object. AI `apiKey` is intentionally not on this
+    // deny-list because Android v12+ defines it as ordinary backup data.
+    for value in root.values_mut() {
+        scrub_cloud_credential_fields(value);
+    }
 
     Ok(())
 }
 
-const CLOUD_CREDENTIAL_FIELDS: [&str; 6] = [
+const CLOUD_CREDENTIAL_FIELDS: [&str; 22] = [
     "cloudSyncCredentials",
     "cloudSyncSecrets",
     "webDavPassword",
     "s3AccessKey",
     "s3SecretKey",
     "s3SessionToken",
+    "dpapiCiphertext",
+    "dpapiPayload",
+    "encryptedCredentials",
+    "credentialCiphertext",
+    "vaultSessionKey",
+    "vaultDerivedKey",
+    "vaultItems",
+    "vaultMetadata",
+    "usageStatistics",
+    "stepStatistics",
+    "usageDevices",
+    "usageSourcePath",
+    "phoneUsageSourcePath",
+    "linkedUsageSourcePath",
+    "backgroundImagePath",
+    "backgroundImageBlurPx",
 ];
 
 fn scrub_cloud_credential_fields(value: &mut Value) {
@@ -899,12 +1690,573 @@ fn decode_poems(items: &[Value]) -> Result<Vec<SavedPoem>, BackupError> {
                 source,
                 created_at,
                 updated_at,
+                sort_order: required_i64(item, "sortOrder")?,
+                category_id: required_nullable_i64(item, "categoryId")?,
             })
         })
         .collect()
 }
 
-fn validate_full_v18_settings(
+fn decode_poetry_categories(items: &[Value]) -> Result<Vec<PoetryCategory>, BackupError> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let item = object_at(value, "poetryCategories", index)?;
+            Ok(PoetryCategory {
+                id: required_i64(item, "id")?,
+                name: required_string(item, "name")?.to_owned(),
+                color_argb: required_i32(item, "colorArgb")?,
+                sort_order: required_i64(item, "sortOrder")?,
+                created_at: required_i64(item, "createdAt")?,
+                updated_at: required_i64(item, "updatedAt")?,
+            })
+        })
+        .collect()
+}
+
+fn validate_poetry_categories(items: &[Value]) -> Result<HashSet<i64>, BackupError> {
+    if items.len() > MAX_POETRY_CATEGORIES {
+        return Err(invalid("Backup contains too many poetry categories"));
+    }
+    let mut ids = HashSet::with_capacity(items.len());
+    let mut names = HashSet::with_capacity(items.len());
+    for (index, value) in items.iter().enumerate() {
+        let item = object_at(value, "poetryCategories", index)?;
+        let id = required_i64(item, "id")?;
+        require_positive_unique(id, &mut ids, "poetry category", index)?;
+        let name = require_string_limit(item, "name", MAX_POETRY_CATEGORY_NAME_CHARS)?;
+        if name.trim().is_empty() || !names.insert(name.to_lowercase()) {
+            return Err(invalid(format!(
+                "poetryCategories[{index}].name is blank or duplicated"
+            )));
+        }
+        required_i32(item, "colorArgb")?;
+        required_i64(item, "sortOrder")?;
+        let created_at = required_i64(item, "createdAt")?;
+        let updated_at = required_i64(item, "updatedAt")?;
+        validate_timestamps(created_at, updated_at, None, "poetryCategories", index)?;
+    }
+    Ok(ids)
+}
+
+fn validate_v27_poem_fields(
+    items: &[Value],
+    poetry_category_ids: &HashSet<i64>,
+) -> Result<(), BackupError> {
+    for (index, value) in items.iter().enumerate() {
+        let item = object_at(value, "poems", index)?;
+        required_i64(item, "sortOrder")?;
+        let category_id = required_nullable_i64(item, "categoryId")?;
+        if category_id.is_some_and(|id| !poetry_category_ids.contains(&id)) {
+            return Err(invalid(format!(
+                "poems[{index}].categoryId references a missing poetry category"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_vault(vault: &Map<String, Value>) -> Result<(), BackupError> {
+    let active = validate_optional_vault_key(vault, "active", false)?;
+    let pending = validate_optional_vault_key(vault, "pending", true)?;
+    let items = required_array(vault, "items")?;
+    if items.len() > MAX_VAULT_ITEMS {
+        return Err(invalid("Backup contains too many Vault rows"));
+    }
+    let mut ids = HashSet::with_capacity(items.len());
+    for (index, value) in items.iter().enumerate() {
+        let item = object_at(value, "vault.items", index)?;
+        let id = required_i64(item, "id")?;
+        if (id <= 0 && id != i64::MIN) || !ids.insert(id) {
+            return Err(invalid(format!(
+                "vault.items[{index}].id is invalid or duplicated"
+            )));
+        }
+        let cipher = require_string_limit(item, "cipherText", MAX_VAULT_CIPHER_CHARS)?;
+        let iv = require_string_limit(item, "iv", MAX_VAULT_IV_CHARS)?;
+        validate_aes_gcm_base64(cipher, iv, &format!("vault.items[{index}]"))?;
+        for field in ["createdAt", "updatedAt", "sortOrder"] {
+            require_nonnegative(
+                required_i64(item, field)?,
+                &format!("vault.items[{index}].{field}"),
+            )?;
+        }
+    }
+    if !active && (pending || !items.is_empty()) {
+        return Err(invalid(
+            "Vault rows or pending metadata exist without active metadata",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_optional_vault_key(
+    vault: &Map<String, Value>,
+    field: &str,
+    generation_required: bool,
+) -> Result<bool, BackupError> {
+    let value = vault
+        .get(field)
+        .ok_or_else(|| invalid(format!("Missing field: {field}")))?;
+    if value.is_null() {
+        return Ok(false);
+    }
+    let key = value
+        .as_object()
+        .ok_or_else(|| invalid(format!("vault.{field} must be an object or null")))?;
+    let salt = require_string_limit(key, "saltBase64", MAX_VAULT_SALT_CHARS)?;
+    let decoded_salt = BASE64_STANDARD
+        .decode(salt)
+        .map_err(|_| invalid(format!("vault.{field}.saltBase64 is invalid")))?;
+    if !(1..=1_024).contains(&decoded_salt.len()) {
+        return Err(invalid(format!(
+            "vault.{field}.saltBase64 has an invalid size"
+        )));
+    }
+    let iterations = required_i32(key, "iterations")?;
+    if !(1..=10_000_000).contains(&iterations) {
+        return Err(invalid(format!("vault.{field}.iterations is invalid")));
+    }
+    let generation = validate_nullable_string(key, "generationId", MAX_VAULT_GENERATION_CHARS)?;
+    if generation_required && generation.is_none() {
+        return Err(invalid("Pending Vault generation is missing"));
+    }
+    if generation.is_some_and(|value| {
+        value.is_empty()
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    }) {
+        return Err(invalid(format!("vault.{field}.generationId is invalid")));
+    }
+    let cipher = require_string_limit(key, "verifierCipher", MAX_VAULT_CIPHER_CHARS)?;
+    let iv = require_string_limit(key, "verifierIv", MAX_VAULT_IV_CHARS)?;
+    validate_aes_gcm_base64(cipher, iv, &format!("vault.{field}.verifier"))?;
+    Ok(true)
+}
+
+fn validate_aes_gcm_base64(cipher: &str, iv: &str, field: &str) -> Result<(), BackupError> {
+    if cipher.trim().is_empty() {
+        return Err(invalid(format!("{field} ciphertext is blank")));
+    }
+    let cipher_bytes = BASE64_STANDARD
+        .decode(cipher)
+        .map_err(|_| invalid(format!("{field} ciphertext is invalid Base64")))?;
+    let iv_bytes = BASE64_STANDARD
+        .decode(iv)
+        .map_err(|_| invalid(format!("{field} IV is invalid Base64")))?;
+    if cipher_bytes.len() < 16 || iv_bytes.len() != 12 {
+        return Err(invalid(format!("{field} has an invalid AES-GCM payload")));
+    }
+    Ok(())
+}
+
+fn validate_game_states(items: &[Value]) -> Result<(), BackupError> {
+    const GAME_IDS: [&str; 7] = [
+        "2048",
+        "2048_5",
+        "2048_6",
+        "snake",
+        "tetris",
+        "minesweeper",
+        "spider",
+    ];
+    if items.len() > MAX_GAME_STATES {
+        return Err(invalid("Backup contains too many game states"));
+    }
+    let mut ids = HashSet::with_capacity(items.len());
+    for (index, value) in items.iter().enumerate() {
+        let item = object_at(value, "gameStates", index)?;
+        let game_id = require_string_limit(item, "gameId", MAX_GAME_ID_CHARS)?;
+        if !GAME_IDS.contains(&game_id) || !ids.insert(game_id) {
+            return Err(invalid(format!(
+                "gameStates[{index}].gameId is unsupported or duplicated"
+            )));
+        }
+        require_nonnegative(
+            i64::from(required_i32(item, "highScore")?),
+            &format!("gameStates[{index}].highScore"),
+        )?;
+        require_nonnegative(
+            required_i64(item, "updatedAt")?,
+            &format!("gameStates[{index}].updatedAt"),
+        )?;
+        if let Some(save) = validate_nullable_string(item, "saveJson", MAX_GAME_SAVE_CHARS)? {
+            if save.trim().is_empty() {
+                return Err(invalid(format!("gameStates[{index}].saveJson is blank")));
+            }
+            let parsed: Value = serde_json::from_str(save)
+                .map_err(|_| invalid(format!("gameStates[{index}].saveJson is invalid JSON")))?;
+            if !parsed.is_object() {
+                return Err(invalid(format!(
+                    "gameStates[{index}].saveJson must be an object"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decode_game_states(items: &[Value]) -> Result<Vec<GameBackupState>, BackupError> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let item = object_at(value, "gameStates", index)?;
+            Ok(GameBackupState {
+                game_id: required_string(item, "gameId")?.to_owned(),
+                high_score: i64::from(required_i32(item, "highScore")?),
+                save_json: validate_nullable_string(item, "saveJson", MAX_GAME_SAVE_CHARS)?
+                    .map(str::to_owned),
+                updated_at: required_i64(item, "updatedAt")?,
+            })
+        })
+        .collect()
+}
+
+fn validate_game_statistics(items: &[Value]) -> Result<(), BackupError> {
+    if items.len() > MAX_GAME_STATISTICS {
+        return Err(invalid("Backup contains too many game statistics"));
+    }
+    let mut keys = HashSet::with_capacity(items.len());
+    for (index, value) in items.iter().enumerate() {
+        let item = object_at(value, "gameStatistics", index)?;
+        let game_id = require_string_limit(item, "gameId", MAX_GAME_ID_CHARS)?;
+        let metric = require_string_limit(item, "metricKey", MAX_GAME_ID_CHARS)?;
+        if !supports_game_statistic(game_id, metric) || !keys.insert(format!("{game_id}\0{metric}"))
+        {
+            return Err(invalid(format!(
+                "gameStatistics[{index}] has an unsupported or duplicated key"
+            )));
+        }
+        require_nonnegative(
+            required_i64(item, "value")?,
+            &format!("gameStatistics[{index}].value"),
+        )?;
+        require_nonnegative(
+            required_i64(item, "updatedAt")?,
+            &format!("gameStatistics[{index}].updatedAt"),
+        )?;
+    }
+    Ok(())
+}
+
+fn decode_game_statistics(items: &[Value]) -> Result<Vec<GameBackupStatistic>, BackupError> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let item = object_at(value, "gameStatistics", index)?;
+            Ok(GameBackupStatistic {
+                game_id: required_string(item, "gameId")?.to_owned(),
+                metric_key: required_string(item, "metricKey")?.to_owned(),
+                value: required_i64(item, "value")?,
+                updated_at: required_i64(item, "updatedAt")?,
+            })
+        })
+        .collect()
+}
+
+fn supports_game_statistic(game_id: &str, metric: &str) -> bool {
+    let outcome = matches!(metric, "wins" | "losses");
+    match game_id {
+        "2048" | "2048_5" | "2048_6" => {
+            outcome || matches!(metric, "effectiveMoves" | "merges" | "highestTile")
+        }
+        "snake" => matches!(metric, "losses" | "foodEaten" | "maxLength"),
+        "tetris" => matches!(
+            metric,
+            "losses" | "piecesLocked" | "linesCleared" | "tetrises"
+        ),
+        "minesweeper" => {
+            outcome || matches!(metric, "minesCellsRevealed" | "minesSwept" | "flagsPlaced")
+        }
+        "spider" => outcome || matches!(metric, "spiderCardMoves" | "spiderDeals" | "spiderUndos"),
+        _ => false,
+    }
+}
+
+fn validate_usage_devices(items: &[Value]) -> Result<(), BackupError> {
+    if items.len() > MAX_USAGE_DEVICES {
+        return Err(invalid("Backup contains too many usage devices"));
+    }
+    let mut ids = HashSet::with_capacity(items.len());
+    for (index, value) in items.iter().enumerate() {
+        let encoded_size = serde_json::to_vec(value)?.len();
+        if encoded_size > MAX_USAGE_DEVICE_JSON_BYTES {
+            return Err(invalid(format!(
+                "usageDevices[{index}] exceeds its per-device size limit"
+            )));
+        }
+        let device = object_at(value, "usageDevices", index)?;
+        require_exact_keys(
+            device,
+            &[
+                "schemaVersion",
+                "deviceId",
+                "deviceName",
+                "platform",
+                "updatedAtEpochMillis",
+                "history",
+            ],
+            &format!("usageDevices[{index}]"),
+        )?;
+        if required_i32(device, "schemaVersion")? != 1 {
+            return Err(invalid(format!(
+                "usageDevices[{index}] has an unsupported schema"
+            )));
+        }
+        let device_id = required_string(device, "deviceId")?;
+        let normalized_id = Uuid::parse_str(device_id)
+            .map_err(|_| invalid(format!("usageDevices[{index}].deviceId is invalid")))?
+            .hyphenated()
+            .to_string();
+        if normalized_id != device_id || !ids.insert(device_id) {
+            return Err(invalid(format!(
+                "usageDevices[{index}].deviceId is noncanonical or duplicated"
+            )));
+        }
+        let name = required_string(device, "deviceName")?;
+        if name.trim() != name
+            || name.is_empty()
+            || name.chars().count() > 80
+            || name.chars().any(char::is_control)
+        {
+            return Err(invalid(format!(
+                "usageDevices[{index}].deviceName is invalid"
+            )));
+        }
+        let platform = required_string(device, "platform")?;
+        if platform.is_empty()
+            || platform.len() > 32
+            || !platform.bytes().enumerate().all(|(offset, byte)| {
+                if offset == 0 {
+                    byte.is_ascii_lowercase()
+                } else {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'-')
+                }
+            })
+        {
+            return Err(invalid(format!(
+                "usageDevices[{index}].platform is invalid"
+            )));
+        }
+        let updated_at = required_i64(device, "updatedAtEpochMillis")?;
+        require_nonnegative(
+            updated_at,
+            &format!("usageDevices[{index}].updatedAtEpochMillis"),
+        )?;
+        let newest = validate_usage_history(
+            required_object(device, "history")?,
+            &format!("usageDevices[{index}].history"),
+        )?;
+        if updated_at < newest {
+            return Err(invalid(format!(
+                "usageDevices[{index}] timestamp predates its history"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_usage_history(history: &Map<String, Value>, field: &str) -> Result<i64, BackupError> {
+    let schema_version = required_i32(history, "schemaVersion")?;
+    match schema_version {
+        1 => require_exact_keys(
+            history,
+            &["schemaVersion", "trackingStartedOn", "days"],
+            field,
+        )?,
+        2..=4 => require_exact_keys(
+            history,
+            &[
+                "schemaVersion",
+                "trackingStartedOn",
+                "backfillCompletedThrough",
+                "days",
+            ],
+            field,
+        )?,
+        _ => return Err(invalid(format!("{field}.schemaVersion is unsupported"))),
+    }
+    let tracking = validate_nullable_iso_date(history, "trackingStartedOn", field)?;
+    if schema_version == 4 {
+        validate_nullable_iso_date(history, "backfillCompletedThrough", field)?;
+    }
+    let days = required_array(history, "days")?;
+    if days.len() > MAX_STATISTICS_DAYS {
+        return Err(invalid(format!("{field}.days contains too many entries")));
+    }
+    let mut dates = HashSet::with_capacity(days.len());
+    let mut newest = 0_i64;
+    for (index, value) in days.iter().enumerate() {
+        let day = object_at(value, &format!("{field}.days"), index)?;
+        require_exact_keys(
+            day,
+            &["date", "zoneId", "state", "collectedAtEpochMillis", "apps"],
+            &format!("{field}.days[{index}]"),
+        )?;
+        let date_text = required_string(day, "date")?;
+        let date = parse_iso_date(date_text, &format!("{field}.days[{index}].date"))?;
+        if !dates.insert(date) || tracking.is_some_and(|start| date < start) {
+            return Err(invalid(format!(
+                "{field}.days[{index}].date is duplicated or predates tracking"
+            )));
+        }
+        let zone = required_string(day, "zoneId")?;
+        if zone.is_empty() || utf16_len(zone) > MAX_ZONE_ID_CHARS || !is_java_zone_id(zone) {
+            return Err(invalid(format!("{field}.days[{index}].zoneId is invalid")));
+        }
+        require_enum(day, "state", &["OPEN", "FINAL"])?;
+        let collected = required_i64(day, "collectedAtEpochMillis")?;
+        require_nonnegative(
+            collected,
+            &format!("{field}.days[{index}].collectedAtEpochMillis"),
+        )?;
+        newest = newest.max(collected);
+        let apps = required_array(day, "apps")?;
+        if apps.len() > MAX_APPS_PER_DAY {
+            return Err(invalid(format!(
+                "{field}.days[{index}].apps contains too many entries"
+            )));
+        }
+        let mut packages = HashSet::with_capacity(apps.len());
+        for (app_index, app_value) in apps.iter().enumerate() {
+            let app = object_at(app_value, &format!("{field}.days[{index}].apps"), app_index)?;
+            require_exact_keys(
+                app,
+                &["packageName", "foregroundMillis"],
+                &format!("{field}.days[{index}].apps[{app_index}]"),
+            )?;
+            let package = required_string(app, "packageName")?;
+            if package.trim().is_empty()
+                || utf16_len(package) > MAX_PACKAGE_NAME_CHARS
+                || package
+                    .chars()
+                    .any(|ch| ch.is_control() || ch.is_whitespace())
+                || !packages.insert(package)
+            {
+                return Err(invalid(format!(
+                    "{field}.days[{index}].apps[{app_index}].packageName is invalid or duplicated"
+                )));
+            }
+            let millis = required_i64(app, "foregroundMillis")?;
+            if !(0..=MAX_FOREGROUND_MILLIS_PER_APP_DAY).contains(&millis) {
+                return Err(invalid(format!(
+                    "{field}.days[{index}].apps[{app_index}].foregroundMillis is out of range"
+                )));
+            }
+        }
+    }
+    if tracking.is_none() && !days.is_empty() {
+        return Err(invalid(format!(
+            "{field}.trackingStartedOn is required when days exist"
+        )));
+    }
+    Ok(newest)
+}
+
+fn is_java_zone_id(value: &str) -> bool {
+    if value.parse::<Tz>().is_ok() || value == "Z" {
+        return true;
+    }
+    let offset = ["UTC", "GMT", "UT"]
+        .into_iter()
+        .find_map(|prefix| value.strip_prefix(prefix))
+        .unwrap_or(value);
+    if offset.is_empty() {
+        return matches!(value, "UTC" | "GMT" | "UT");
+    }
+    is_java_zone_offset(offset)
+}
+
+fn is_java_zone_offset(value: &str) -> bool {
+    let Some(sign) = value.as_bytes().first().copied() else {
+        return false;
+    };
+    if !matches!(sign, b'+' | b'-') {
+        return false;
+    }
+    let digits = &value[1..];
+    let components = if digits.contains(':') {
+        digits.split(':').collect::<Vec<_>>()
+    } else {
+        match digits.len() {
+            1 | 2 => vec![digits],
+            4 => vec![&digits[..2], &digits[2..]],
+            6 => vec![&digits[..2], &digits[2..4], &digits[4..]],
+            _ => return false,
+        }
+    };
+    if components.is_empty()
+        || components.len() > 3
+        || components
+            .iter()
+            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return false;
+    }
+    let Ok(hours) = components[0].parse::<u8>() else {
+        return false;
+    };
+    let minutes = components
+        .get(1)
+        .and_then(|part| part.parse::<u8>().ok())
+        .unwrap_or(0);
+    let seconds = components
+        .get(2)
+        .and_then(|part| part.parse::<u8>().ok())
+        .unwrap_or(0);
+    hours <= 18 && minutes <= 59 && seconds <= 59 && (hours != 18 || minutes + seconds == 0)
+}
+
+fn validate_nullable_iso_date(
+    object: &Map<String, Value>,
+    key: &str,
+    field: &str,
+) -> Result<Option<NaiveDate>, BackupError> {
+    let value = object
+        .get(key)
+        .ok_or_else(|| invalid(format!("{field}.{key} is missing")))?;
+    if value.is_null() {
+        Ok(None)
+    } else {
+        let text = value
+            .as_str()
+            .ok_or_else(|| invalid(format!("{field}.{key} must be a string or null")))?;
+        parse_iso_date(text, &format!("{field}.{key}")).map(Some)
+    }
+}
+
+fn parse_iso_date(value: &str, field: &str) -> Result<NaiveDate, BackupError> {
+    if value.len() != 10 {
+        return Err(invalid(format!("{field} must use yyyy-MM-dd")));
+    }
+    let date = NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map_err(|_| invalid(format!("{field} must be a valid yyyy-MM-dd date")))?;
+    if date.format("%Y-%m-%d").to_string() != value {
+        return Err(invalid(format!("{field} must use canonical yyyy-MM-dd")));
+    }
+    Ok(date)
+}
+
+fn require_exact_keys(
+    object: &Map<String, Value>,
+    expected: &[&str],
+    field: &str,
+) -> Result<(), BackupError> {
+    if object.len() != expected.len() || expected.iter().any(|key| !object.contains_key(*key)) {
+        return Err(invalid(format!(
+            "{field} contains missing or unknown fields"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_full_v27_settings(
     settings: &Map<String, Value>,
 ) -> Result<Vec<CloudSyncConfig>, BackupError> {
     require_enum(
@@ -932,6 +2284,7 @@ fn validate_full_v18_settings(
     )?;
     for field in [
         "compactMode",
+        "tutorialModeEnabled",
         "useChineseLauncherName",
         "cloudSyncEnabled",
         "mealImageCompressionEnabled",
@@ -952,6 +2305,7 @@ fn validate_full_v18_settings(
         "stepTrackingEnabled",
         "bottomNavShowLabels",
         "morePageShowDescriptions",
+        "musicVisualizerEnabled",
     ] {
         required_bool(settings, field)?;
     }
@@ -962,13 +2316,22 @@ fn validate_full_v18_settings(
     )?;
     let cloud_sync_configs =
         decode_cloud_sync_configs(required_array(settings, "cloudSyncConfigs")?)?;
+    if let Some(uri) = validate_nullable_string(settings, "backgroundImageUri", MAX_URL_CHARS)? {
+        if !uri.starts_with("content://") {
+            return Err(invalid("backgroundImageUri must be a content URI"));
+        }
+    }
+    required_android_float_range(settings, "backgroundImageOpacity", 0.0, 1.0)?;
+    required_android_float_range(settings, "backgroundImageBlurDp", 0.0, 40.0)?;
     validate_nullable_string_value(settings, "diaryTreeUri")?;
     validate_nullable_string_value(settings, "mediaTreeUri")?;
+    validate_nullable_string_value(settings, "notesTreeUri")?;
     require_string_limit(settings, "fileNamePattern", 1_024)?;
     require_string_limit(settings, "markdownTemplate", MAX_SETTING_STRING_CHARS)?;
     require_string_limit(settings, "imageNamePattern", 1_024)?;
     required_coerced_i32(settings, "imageMaxWidthDp", 120, 2_400)?;
     required_coerced_i32(settings, "imageMaxHeightDp", 120, 2_400)?;
+    validate_markdown_heading_sizes(required_array(settings, "markdownHeadingSizesSp")?)?;
     required_coerced_i32(settings, "mealImageCompressionQuality", 30, 95)?;
     let browser_home_url = require_string_limit(settings, "browserHomeUrl", MAX_URL_CHARS)?;
     if !is_browser_url(browser_home_url) {
@@ -988,6 +2351,7 @@ fn validate_full_v18_settings(
     require_enum(settings, "thoughtDisplayMode", &["SINGLE_LINE", "FULL"])?;
     required_i32(settings, "thoughtHighlightColorArgb")?;
     required_coerced_i32(settings, "thoughtEditorMaxHeightDp", 96, 400)?;
+    required_coerced_i32(settings, "vaultRowHeightDp", 48, 120)?;
     validate_nullable_string(settings, "poetryFontUri", MAX_URL_CHARS)?;
     require_number_range(settings, "poetryFontSizeSp", 14.0, 36.0)?;
     require_number_range(settings, "poetryLineSpacing", 1.0, 2.0)?;
@@ -1021,12 +2385,181 @@ fn validate_full_v18_settings(
     validate_nav_items(required_array(settings, "navItems")?)?;
     validate_more_page_order(required_array(settings, "morePageOrder")?)?;
     require_enum(settings, "defaultPage", &nav_ids())?;
+    require_enum(
+        settings,
+        "musicVisualizerStyle",
+        &["BARS", "WAVEFORM", "CURVE"],
+    )?;
+    require_enum(
+        settings,
+        "musicVisualizerFrequencyMode",
+        &["ADAPTIVE", "MANUAL"],
+    )?;
+    let minimum_frequency = required_i32(settings, "musicVisualizerMinFrequencyHz")?;
+    if !(20..=19_999).contains(&minimum_frequency) {
+        return Err(invalid("musicVisualizerMinFrequencyHz is out of range"));
+    }
+    let maximum_frequency = required_i32(settings, "musicVisualizerMaxFrequencyHz")?;
+    if maximum_frequency <= minimum_frequency || maximum_frequency > 20_000 {
+        return Err(invalid("musicVisualizerMaxFrequencyHz is out of range"));
+    }
+    require_enum(
+        settings,
+        "game2048AnimationSpeed",
+        &["SLOW", "NORMAL", "FAST"],
+    )?;
     validate_string_list(required_array(settings, "homeWidgets")?, "homeWidgets")?;
+    validate_home_game_shortcuts(required_array(settings, "homeGameShortcuts")?)?;
     validate_string_list(
         required_array(settings, "homeWidgetTitles")?,
         "homeWidgetTitles",
     )?;
+    validate_desktop_widget_configs(required_array(settings, "desktopWidgetConfigs")?)?;
     Ok(cloud_sync_configs)
+}
+
+fn validate_markdown_heading_sizes(items: &[Value]) -> Result<(), BackupError> {
+    if items.len() != 6 {
+        return Err(invalid("markdownHeadingSizesSp must contain six items"));
+    }
+    for (index, item) in items.iter().enumerate() {
+        let value = item
+            .as_number()
+            .and_then(serde_json::Number::as_f64)
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| invalid(format!("markdownHeadingSizesSp[{index}] must be finite")))?;
+        let android_value = f64::from(value as f32);
+        if !(12.0..=48.0).contains(&android_value) {
+            return Err(invalid(format!(
+                "markdownHeadingSizesSp[{index}] is out of range"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_home_game_shortcuts(items: &[Value]) -> Result<(), BackupError> {
+    const GAME_IDS: [&str; 7] = [
+        "2048",
+        "2048_5",
+        "2048_6",
+        "snake",
+        "tetris",
+        "minesweeper",
+        "spider",
+    ];
+    for (index, item) in items.iter().enumerate() {
+        let id = item
+            .as_str()
+            .ok_or_else(|| invalid(format!("homeGameShortcuts[{index}] must be a string")))?;
+        if !GAME_IDS.contains(&id) {
+            return Err(invalid(format!(
+                "homeGameShortcuts[{index}] is unsupported"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_desktop_widget_configs(items: &[Value]) -> Result<(), BackupError> {
+    const HOME_MODULE_IDS: [&str; 16] = [
+        "calendar",
+        "weather",
+        "poem",
+        "today",
+        "date_records",
+        "streak",
+        "month_diaries",
+        "total_words",
+        "recent_diary",
+        "recent_thought",
+        "quick_input",
+        "daily_records",
+        "meal_photos",
+        "random_diary",
+        "year_progress",
+        "website",
+    ];
+    if items.len() > MAX_DESKTOP_WIDGET_CONFIGS {
+        return Err(invalid("Too many desktop widget configurations"));
+    }
+    let mut ids = HashSet::with_capacity(items.len());
+    for (index, value) in items.iter().enumerate() {
+        let item = object_at(value, "desktopWidgetConfigs", index)?;
+        let id = require_string_limit(item, "id", 80)?;
+        if id.is_empty()
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+            || !ids.insert(id)
+        {
+            return Err(invalid(format!(
+                "desktopWidgetConfigs[{index}].id is invalid or duplicated"
+            )));
+        }
+        let name = required_string(item, "name")?;
+        if name.trim().is_empty() || name.chars().count() > 80 {
+            return Err(invalid(format!(
+                "desktopWidgetConfigs[{index}].name is invalid"
+            )));
+        }
+        for field in ["widthCells", "heightCells"] {
+            let cells = required_i32(item, field)?;
+            if !(1..=6).contains(&cells) {
+                return Err(invalid(format!(
+                    "desktopWidgetConfigs[{index}].{field} is invalid"
+                )));
+            }
+        }
+        required_i32(item, "backgroundColorArgb")?;
+        required_i32(item, "textColorArgb")?;
+        if let Some(uri) = validate_nullable_string(item, "backgroundImageUri", MAX_URL_CHARS)? {
+            if !uri.starts_with("content://") {
+                return Err(invalid(format!(
+                    "desktopWidgetConfigs[{index}].backgroundImageUri is invalid"
+                )));
+            }
+        }
+        let content_type = required_string(item, "contentType")?;
+        require_enum(item, "contentType", &["HOME_MODULE", "APP_SHORTCUT"])?;
+        let home_module = required_string(item, "homeModuleId")?;
+        if !HOME_MODULE_IDS.contains(&home_module) {
+            return Err(invalid(format!(
+                "desktopWidgetConfigs[{index}].homeModuleId is invalid"
+            )));
+        }
+        let package = validate_nullable_string(item, "appPackageName", 255)?;
+        let label = validate_nullable_string_value(item, "appLabel")?;
+        if label.is_some_and(|value| value.chars().count() > 100) {
+            return Err(invalid(format!(
+                "desktopWidgetConfigs[{index}].appLabel is too long"
+            )));
+        }
+        if package.is_some_and(|value| !is_android_package_name(value))
+            || (content_type == "APP_SHORTCUT" && package.is_none())
+        {
+            return Err(invalid(format!(
+                "desktopWidgetConfigs[{index}].appPackageName is invalid"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn is_android_package_name(value: &str) -> bool {
+    let mut segments = value.split('.');
+    let mut count = 0usize;
+    for segment in &mut segments {
+        count += 1;
+        if segment.is_empty()
+            || !segment
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return false;
+        }
+    }
+    count >= 2
 }
 
 fn decode_cloud_sync_configs(items: &[Value]) -> Result<Vec<CloudSyncConfig>, BackupError> {
@@ -1047,21 +2580,39 @@ fn decode_cloud_sync_configs(items: &[Value]) -> Result<Vec<CloudSyncConfig>, Ba
                     )));
                 }
             };
-            let selected_contents = required_array(item, "selectedContents")?
-                .iter()
-                .enumerate()
-                .map(|(content_index, content)| match content.as_str() {
-                    Some("DIARIES") => Ok(CloudSyncContent::Diaries),
-                    Some("MEDIA") => Ok(CloudSyncContent::Media),
-                    Some("JSON_BACKUP") => Ok(CloudSyncContent::JsonBackup),
-                    Some(_) => Err(invalid(format!(
-                        "cloudSyncConfigs[{index}].selectedContents[{content_index}] has an unsupported value"
-                    ))),
-                    None => Err(invalid(format!(
+            let contents = required_array(item, "selectedContents")?;
+            if contents.is_empty() {
+                return Err(invalid(format!(
+                    "cloudSyncConfigs[{index}].selectedContents is empty"
+                )));
+            }
+            let mut seen_contents = HashSet::with_capacity(contents.len());
+            let mut selected_contents = Vec::with_capacity(contents.len());
+            for (content_index, content) in contents.iter().enumerate() {
+                let raw = content.as_str().ok_or_else(|| {
+                    invalid(format!(
                         "cloudSyncConfigs[{index}].selectedContents[{content_index}] must be a string"
-                    ))),
-                })
-                .collect::<Result<Vec<_>, BackupError>>()?;
+                    ))
+                })?;
+                if !seen_contents.insert(raw) {
+                    return Err(invalid(format!(
+                        "cloudSyncConfigs[{index}].selectedContents contains a duplicate"
+                    )));
+                }
+                match raw {
+                    "DIARIES" => selected_contents.push(CloudSyncContent::Diaries),
+                    "MEDIA" => selected_contents.push(CloudSyncContent::Media),
+                    "JSON_BACKUP" => selected_contents.push(CloudSyncContent::JsonBackup),
+                    "USAGE_STATISTICS" => {
+                        selected_contents.push(CloudSyncContent::UsageStatistics)
+                    }
+                    _ => {
+                        return Err(invalid(format!(
+                            "cloudSyncConfigs[{index}].selectedContents[{content_index}] has an unsupported value"
+                        )));
+                    }
+                }
+            }
             let direction = match required_string(item, "direction")? {
                 "UPLOAD_ONLY" => CloudSyncDirection::UploadOnly,
                 "TWO_WAY" => CloudSyncDirection::TwoWay,
@@ -1078,23 +2629,29 @@ fn decode_cloud_sync_configs(items: &[Value]) -> Result<Vec<CloudSyncConfig>, Ba
                 service_type,
                 endpoint_url: required_string(item, "endpointUrl")?.to_owned(),
                 remote_path: required_string(item, "remotePath")?.to_owned(),
+                user_agent: required_string(item, "userAgent")?.to_owned(),
                 web_dav_username: required_string(item, "webDavUsername")?.to_owned(),
                 s3_bucket: required_string(item, "s3Bucket")?.to_owned(),
                 s3_region: required_string(item, "s3Region")?.to_owned(),
+                s3_path_style: required_bool(item, "s3PathStyle")?,
                 allow_insecure_http: required_bool(item, "allowInsecureHttp")?,
                 selected_contents,
                 direction,
             })
         })
         .collect::<Result<Vec<_>, BackupError>>()?;
-    validate_cloud_sync_configs(&configs)?;
+    validate_cloud_sync_configs_inner(&configs)?;
     Ok(configs)
 }
 
 /// Validate credential-free cloud metadata before it is persisted or exported.
 ///
-/// The limits and enum set intentionally mirror Android v18.
+/// The limits and enum set intentionally mirror Android v27.
 pub fn validate_cloud_sync_configs(configs: &[CloudSyncConfig]) -> Result<(), BackupError> {
+    validate_cloud_sync_configs_inner(configs)
+}
+
+fn validate_cloud_sync_configs_inner(configs: &[CloudSyncConfig]) -> Result<(), BackupError> {
     if configs.len() > MAX_CLOUD_SYNC_CONFIGS {
         return Err(invalid("Too many cloud sync configurations"));
     }
@@ -1137,6 +2694,16 @@ pub fn validate_cloud_sync_configs(configs: &[CloudSyncConfig]) -> Result<(), Ba
         {
             return Err(invalid(format!(
                 "cloudSyncConfigs[{index}].remotePath is invalid"
+            )));
+        }
+        require_utf16_len(
+            &config.user_agent,
+            512,
+            &format!("cloudSyncConfigs[{index}].userAgent"),
+        )?;
+        if config.user_agent.trim().is_empty() || config.user_agent.chars().any(char::is_control) {
+            return Err(invalid(format!(
+                "cloudSyncConfigs[{index}].userAgent is invalid"
             )));
         }
         require_utf16_len(
@@ -1334,8 +2901,21 @@ fn validate_more_page_order(items: &[Value]) -> Result<(), BackupError> {
         return Err(invalid("morePageOrder contains too many items"));
     }
     let allowed = [
-        "DIARY", "BLOG", "THOUGHT", "DATE", "POETRY", "RSS", "AI_CHAT", "VAULT", "GAMES", "USAGE",
+        "DIARY",
+        "NOTES",
+        "BLOG",
+        "THOUGHT",
+        "DATE",
+        "POETRY",
+        "RSS",
+        "AI_CHAT",
+        "VAULT",
+        "READER",
+        "GAMES",
+        "STATISTICS",
+        "USAGE",
         "STEPS",
+        "WIDGETS",
     ];
     require_unique_enums(items, &allowed, "morePageOrder")
 }
@@ -1353,17 +2933,23 @@ fn default_root(settings: &ManagedSettings, exported_at: i64) -> Value {
         ],
         "fontScale": 1.0,
         "compactMode": false,
+        "backgroundImageUri": null,
+        "backgroundImageOpacity": 0.45,
+        "backgroundImageBlurDp": 0.0,
+        "tutorialModeEnabled": true,
         "useChineseLauncherName": false,
         "launcherIcon": "CURRENT",
         "cloudSyncEnabled": false,
         "cloudSyncConfigs": [],
         "diaryTreeUri": null,
         "mediaTreeUri": null,
+        "notesTreeUri": null,
         "fileNamePattern": "yyyy-MM-dd",
         "markdownTemplate": "# {title}\n\n",
         "imageNamePattern": "{date}_{category}_{seq}",
         "imageMaxWidthDp": 720,
         "imageMaxHeightDp": 640,
+        "markdownHeadingSizesSp": [32.0, 28.0, 24.0, 21.0, 19.0, 17.0],
         "mealImageCompressionEnabled": true,
         "mealImageCompressionQuality": 80,
         "saveOriginalToGallery": false,
@@ -1378,6 +2964,7 @@ fn default_root(settings: &ManagedSettings, exported_at: i64) -> Value {
         "thoughtDisplayMode": "SINGLE_LINE",
         "thoughtHighlightColorArgb": 0xFFF6E3A1u32 as i32,
         "thoughtEditorMaxHeightDp": 168,
+        "vaultRowHeightDp": 56,
         "poetryFontUri": null,
         "poetryFontSizeSp": 18.0,
         "poetryLineSpacing": 1.45,
@@ -1422,14 +3009,34 @@ fn default_root(settings: &ManagedSettings, exported_at: i64) -> Value {
         "stepTrackingEnabled": false,
         "navItems": default_nav_items(),
         "morePageOrder": [
-            "DIARY", "BLOG", "THOUGHT", "DATE", "POETRY", "RSS", "AI_CHAT",
-            "VAULT", "GAMES", "USAGE", "STEPS"
+            "DIARY", "NOTES", "BLOG", "THOUGHT", "DATE", "POETRY", "RSS", "AI_CHAT",
+            "VAULT", "READER", "GAMES", "STATISTICS", "USAGE", "STEPS", "WIDGETS"
         ],
         "defaultPage": "HOME",
         "bottomNavShowLabels": true,
+        "musicVisualizerEnabled": false,
+        "musicVisualizerStyle": "BARS",
+        "musicVisualizerFrequencyMode": "ADAPTIVE",
+        "musicVisualizerMinFrequencyHz": 60,
+        "musicVisualizerMaxFrequencyHz": 16000,
+        "game2048AnimationSpeed": "NORMAL",
         "morePageShowDescriptions": true,
         "homeWidgets": [],
-        "homeWidgetTitles": []
+        "homeGameShortcuts": ["2048", "snake", "minesweeper"],
+        "homeWidgetTitles": [],
+        "desktopWidgetConfigs": [{
+            "id": "default-today",
+            "name": "今天 / Today",
+            "widthCells": 2,
+            "heightCells": 2,
+            "backgroundColorArgb": 0xFF263238u32 as i32,
+            "textColorArgb": -1,
+            "backgroundImageUri": null,
+            "contentType": "HOME_MODULE",
+            "homeModuleId": "today",
+            "appPackageName": null,
+            "appLabel": null
+        }]
     });
     if let Some(object) = settings_value.as_object_mut() {
         // This cannot fail for validated, serializable settings.
@@ -1444,7 +3051,12 @@ fn default_root(settings: &ManagedSettings, exported_at: i64) -> Value {
         "categories": [],
         "favorites": [],
         "dateRecords": [],
-        "poems": []
+        "poetryCategories": [],
+        "poems": [],
+        "vault": {"active": null, "pending": null, "items": []},
+        "gameStates": [],
+        "gameStatistics": [],
+        "usageDevices": []
     })
 }
 
@@ -1452,6 +3064,14 @@ fn default_nav_items() -> Vec<Value> {
     let defaults = [
         ("HOME", "首页", "home", true, false, "今日概览与快捷记录"),
         ("DIARY", "日记", "book", true, false, "浏览、编辑日记与吃历"),
+        (
+            "NOTES",
+            "笔记",
+            "notes",
+            false,
+            true,
+            "按文件夹管理 Obsidian 兼容 Markdown 笔记",
+        ),
         (
             "BLOG",
             "浏览器",
@@ -1495,12 +3115,28 @@ fn default_nav_items() -> Vec<Value> {
         ),
         ("VAULT", "收藏夹", "lock", false, true, "密码保护的私密收藏"),
         (
+            "READER",
+            "阅读",
+            "reader",
+            false,
+            true,
+            "导入并阅读 TXT/PDF 小说",
+        ),
+        (
             "GAMES",
             "小游戏",
             "game",
             false,
             true,
-            "4×4 / 5×5 / 6×6 版 2048、贪吃蛇与俄罗斯方块",
+            "2048、贪吃蛇、俄罗斯方块、扫雷与蜘蛛纸牌",
+        ),
+        (
+            "STATISTICS",
+            "统计",
+            "statistics",
+            false,
+            true,
+            "汇总日记、使用时间、健康、阅读与小游戏数据",
         ),
         (
             "USAGE",
@@ -1512,11 +3148,19 @@ fn default_nav_items() -> Vec<Value> {
         ),
         (
             "STEPS",
-            "步数记录",
+            "健康",
             "steps",
             false,
+            false,
+            "读取并可视化每日步数、距离和活动热量",
+        ),
+        (
+            "WIDGETS",
+            "小卡片",
+            "widgets",
+            false,
             true,
-            "自动读取并可视化每日步数",
+            "设计并添加可缩放的桌面小卡片",
         ),
         ("MORE", "导航", "apps", true, false, "打开收纳的页面"),
         (
@@ -1545,10 +3189,26 @@ fn default_nav_items() -> Vec<Value> {
         .collect()
 }
 
-fn nav_ids() -> [&'static str; 14] {
+fn nav_ids() -> [&'static str; 18] {
     [
-        "HOME", "DIARY", "BLOG", "THOUGHT", "DATE", "POETRY", "RSS", "AI_CHAT", "VAULT", "GAMES",
-        "USAGE", "STEPS", "MORE", "SETTINGS",
+        "HOME",
+        "DIARY",
+        "NOTES",
+        "BLOG",
+        "THOUGHT",
+        "DATE",
+        "POETRY",
+        "RSS",
+        "AI_CHAT",
+        "VAULT",
+        "READER",
+        "GAMES",
+        "STATISTICS",
+        "USAGE",
+        "STEPS",
+        "WIDGETS",
+        "MORE",
+        "SETTINGS",
     ]
 }
 
@@ -1667,7 +3327,7 @@ fn exact_decimal_i64(raw: &str) -> Option<i64> {
         return Some(0);
     }
 
-    // A token is capped by the 10 MiB document limit. Exponents beyond this
+    // A token is capped by the 64 MiB document limit. Exponents beyond this
     // bound cannot affect a nonzero value into the i64 range, so saturation
     // here only classifies a result as overflow/non-integral.
     let exponent = bounded_decimal_exponent(exponent_text.unwrap_or("0"))?;
@@ -2019,7 +3679,7 @@ fn require_size(bytes: &[u8]) -> Result<(), BackupError> {
     if bytes.len() <= MAX_JSON_BYTES {
         Ok(())
     } else {
-        Err(invalid("Backup JSON exceeds the 10 MiB limit"))
+        Err(invalid("Backup JSON exceeds the 64 MiB limit"))
     }
 }
 
@@ -2060,6 +3720,47 @@ mod tests {
         .expect("encode fixture")
     }
 
+    fn empty_fixture_for_version(version: i32) -> String {
+        let mut root: Value = serde_json::from_str(&valid_json()).expect("current fixture");
+        root["version"] = Value::from(version);
+        let settings = root["settings"].as_object_mut().expect("settings");
+        for (introduced, fields) in legacy_setting_introductions() {
+            if version < *introduced {
+                for field in *fields {
+                    settings.remove(*field);
+                }
+            }
+        }
+        if version < 13 {
+            for item in settings["navItems"].as_array_mut().expect("navItems") {
+                item.as_object_mut().expect("nav item").remove("showInMore");
+            }
+        }
+        if version < 15 {
+            for item in settings["navItems"].as_array_mut().expect("navItems") {
+                item.as_object_mut()
+                    .expect("nav item")
+                    .remove("moreDescription");
+            }
+        }
+        let root = root.as_object_mut().expect("root");
+        for (introduced, fields) in [
+            (2, &["dateRecords"][..]),
+            (3, &["categories"][..]),
+            (4, &["poems"][..]),
+            (19, &["poetryCategories"][..]),
+            (20, &["vault", "gameStates", "usageDevices"][..]),
+            (24, &["gameStatistics"][..]),
+        ] {
+            if version < introduced {
+                for field in fields {
+                    root.remove(*field);
+                }
+            }
+        }
+        serde_json::to_string(&root).expect("legacy fixture")
+    }
+
     fn webdav_config(id: &str) -> CloudSyncConfig {
         CloudSyncConfig {
             id: id.to_owned(),
@@ -2068,9 +3769,11 @@ mod tests {
             service_type: CloudSyncServiceType::WebDav,
             endpoint_url: "https://dav.example.com/remote.php/dav/files/alice".to_owned(),
             remote_path: "DeskCubby".to_owned(),
+            user_agent: "DeskCubby-Sync/1".to_owned(),
             web_dav_username: "alice".to_owned(),
             s3_bucket: String::new(),
             s3_region: "us-east-1".to_owned(),
+            s3_path_style: true,
             allow_insecure_http: false,
             selected_contents: vec![
                 CloudSyncContent::Diaries,
@@ -2079,6 +3782,42 @@ mod tests {
             ],
             direction: CloudSyncDirection::TwoWay,
         }
+    }
+
+    fn v27_cloud_config_value(config: CloudSyncConfig) -> Value {
+        let mut value = serde_json::to_value(config).expect("serialize cloud config");
+        let object = value.as_object_mut().expect("cloud config object");
+        object.insert(
+            "userAgent".to_owned(),
+            Value::String("DeskCubby-Sync/1".to_owned()),
+        );
+        object.insert("s3PathStyle".to_owned(), Value::Bool(true));
+        value
+    }
+
+    fn private_usage_device() -> Value {
+        json!({
+            "schemaVersion": 1,
+            "deviceId": "11111111-1111-4111-8111-111111111111",
+            "deviceName": "Private phone",
+            "platform": "android",
+            "updatedAtEpochMillis": 42,
+            "history": {
+                "schemaVersion": 4,
+                "trackingStartedOn": "2026-07-27",
+                "backfillCompletedThrough": "2026-07-27",
+                "days": [{
+                    "date": "2026-07-27",
+                    "zoneId": "Asia/Shanghai",
+                    "state": "FINAL",
+                    "collectedAtEpochMillis": 42,
+                    "apps": [{
+                        "packageName": "com.example.private",
+                        "foregroundMillis": 12_345
+                    }]
+                }]
+            }
+        })
     }
 
     fn private_shadow_root() -> Value {
@@ -2090,9 +3829,11 @@ mod tests {
             "serviceType": "WEBDAV",
             "endpointUrl": "https://dav.example.com",
             "remotePath": "DeskCubby",
+            "userAgent": "DeskCubby-Sync/1",
             "webDavUsername": "alice",
             "s3Bucket": "",
             "s3Region": "us-east-1",
+            "s3PathStyle": true,
             "allowInsecureHttp": false,
             "selectedContents": ["JSON_BACKUP"],
             "direction": "UPLOAD_ONLY",
@@ -2133,8 +3874,34 @@ mod tests {
         root["usageStatistics"] = json!({"private": true});
         root["stepStatistics"] = json!([{"private": true}]);
         root["cloudSyncSecrets"] = json!({"private": true});
+        root["vault"] = json!({
+            "active": {
+                "saltBase64": "AAAAAAAAAAAAAAAAAAAAAA==",
+                "iterations": 120000,
+                "generationId": "active-1",
+                "verifierCipher": "AAAAAAAAAAAAAAAAAAAAAA==",
+                "verifierIv": "AAAAAAAAAAAAAAAA"
+            },
+            "pending": null,
+            "items": [{
+                "id": 1,
+                "cipherText": "AAAAAAAAAAAAAAAAAAAAAA==",
+                "iv": "AAAAAAAAAAAAAAAA",
+                "createdAt": 1,
+                "updatedAt": 2,
+                "sortOrder": 0
+            }],
+            "future": "keep"
+        });
+        root["usageDevices"] = json!([private_usage_device()]);
+        root["futureNested"] = json!({
+            "vaultItems": [{"ciphertext": "relocated-private"}],
+            "vaultMetadata": {"salt": "relocated-private"},
+            "usageDevices": [private_usage_device()],
+            "usageStatistics": {"private": true},
+            "keep": true
+        });
         // Similar but non-designated unknown keys prove the scrub is exact.
-        root["vault"] = json!({"future": "keep"});
         root["usage"] = json!({"future": "keep"});
         root["futureRoot"] = json!({"keep": true});
         root
@@ -2191,20 +3958,39 @@ mod tests {
         );
         assert_eq!(output["settings"]["futureSetting"], json!({"keep": true}));
         assert_eq!(output["futureRoot"], json!({"keep": true}));
-        assert_eq!(output["vault"], json!({"future": "keep"}));
+        assert_eq!(output["vault"]["future"], "keep");
+        assert_eq!(output["vault"]["active"], Value::Null);
+        assert_eq!(output["vault"]["pending"], Value::Null);
+        assert_eq!(output["vault"]["items"], json!([]));
+        assert_eq!(output["usageDevices"], json!([]));
+        assert_eq!(output["futureNested"], json!({"keep": true}));
         assert_eq!(output["usage"], json!({"future": "keep"}));
     }
 
     #[test]
-    fn parses_and_previews_v18() {
+    fn parses_and_previews_v27() {
         let backup = parse_v18(&valid_json()).expect("parse");
-        assert_eq!(backup.preview().format_version, 18);
+        assert_eq!(backup.preview().format_version, 27);
         assert_eq!(backup.preview().thought_count, 0);
     }
 
     #[test]
-    fn android_v18_golden_survives_windows_edit_and_export() {
-        let source = include_str!("../test-data/android-v18-golden.json");
+    fn accepts_and_canonicalizes_every_android_backup_version() {
+        for version in 1..=FORMAT_VERSION {
+            let source = empty_fixture_for_version(version);
+            let parsed = parse_v18(&source)
+                .unwrap_or_else(|error| panic!("Android v{version} failed: {error}"));
+            assert_eq!(parsed.preview().format_version, version);
+            assert_eq!(parsed.root["version"], FORMAT_VERSION);
+            assert!(parsed.root["settings"]["homeGameShortcuts"].is_array());
+            assert!(parsed.root["vault"].is_object());
+            assert!(parsed.root["usageDevices"].is_array());
+        }
+    }
+
+    #[test]
+    fn android_v27_golden_survives_windows_edit_and_export() {
+        let source = include_str!("../test-data/android-v27-golden.json");
         let parsed = parse_v18(source).expect("parse Android golden");
         assert_eq!(parsed.thoughts.len(), 1);
         assert_eq!(parsed.favorite_count, 1);
@@ -2276,12 +4062,12 @@ mod tests {
             output["thoughts"][0]["futureThoughtField"],
             golden["thoughts"][0]["futureThoughtField"]
         );
-        parse_v18(&exported).expect("Android-readable v18 output");
+        parse_v18(&exported).expect("Android-readable v27 output");
     }
 
     #[test]
     fn cloud_overlay_merges_golden_unknown_fields_by_id_and_disables_android_sync() {
-        let source = include_str!("../test-data/android-v18-golden.json");
+        let source = include_str!("../test-data/android-v27-golden.json");
         let parsed = parse_v18(source).expect("parse Android golden");
         let directory = tempfile::tempdir().expect("temp dir");
         let database = Database::open(directory.path().join("deskcubby.db")).expect("database");
@@ -2398,6 +4184,9 @@ mod tests {
             serde_json::from_slice(&prepared.canonical_bytes).expect("canonical JSON");
 
         assert_private_fields_scrubbed(&canonical_root);
+        assert_eq!(prepared.usage_devices, vec![private_usage_device()]);
+        assert!(prepared.merge_usage_devices);
+        assert!(prepared.backup.usage_devices.is_empty());
         assert_eq!(
             canonical_root["settings"]["cloudSyncConfigs"][0]["futureCloudField"],
             json!({"keep": true})
@@ -2444,9 +4233,44 @@ mod tests {
     }
 
     #[test]
+    fn legacy_v18_is_upgraded_to_v27_without_losing_unknown_fields_or_ai_keys() {
+        let source = include_str!("../test-data/android-v18-golden.json");
+        let parsed = parse_v18(source).expect("parse Android v18 golden");
+        assert_eq!(parsed.preview().format_version, 18);
+        assert_eq!(parsed.root["version"], 27);
+        assert_eq!(
+            parsed.root["settings"]["cloudSyncConfigs"][0]["userAgent"],
+            "DeskCubby-Sync/1"
+        );
+        assert_eq!(
+            parsed.root["settings"]["cloudSyncConfigs"][0]["s3PathStyle"],
+            true
+        );
+        assert_eq!(
+            parsed.root["settings"]["aiConfigs"][0]["apiKey"],
+            "sk-text-plain"
+        );
+        assert_eq!(
+            parsed.root["settings"]["futureSetting"],
+            json!({"keep": "android"})
+        );
+        assert_eq!(parsed.root["poems"][0]["sortOrder"], 0);
+        assert_eq!(parsed.root["poems"][0]["categoryId"], Value::Null);
+        assert_eq!(parsed.root["vault"]["items"], json!([]));
+
+        let prepared = prepare_v18_import_for_shadow(source).expect("prepare legacy import");
+        assert_eq!(prepared.backup.preview().format_version, 27);
+        let canonical: Value =
+            serde_json::from_slice(&prepared.canonical_bytes).expect("canonical v27");
+        assert_eq!(canonical["version"], 27);
+        parse_v18(std::str::from_utf8(&prepared.canonical_bytes).expect("UTF-8"))
+            .expect("canonical output is Android-readable");
+    }
+
+    #[test]
     fn cloud_metadata_enforces_enum_uniqueness_and_count_limits() {
         let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
-        let raw = serde_json::to_value(webdav_config("dav")).expect("config");
+        let raw = v27_cloud_config_value(webdav_config("dav"));
         root["settings"]["cloudSyncConfigs"] = Value::Array(vec![raw.clone()]);
 
         root["settings"]["cloudSyncConfigs"][0]["serviceType"] = Value::String("FTP".to_owned());
@@ -2471,12 +4295,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_old_versions_and_duplicate_ids() {
+    fn rejects_out_of_range_versions_and_duplicate_ids() {
         let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
-        root["version"] = Value::from(17);
+        root["version"] = Value::from(0);
         assert!(parse_v18(&root.to_string()).is_err());
 
-        root["version"] = Value::from(18);
+        root["version"] = Value::from(28);
+        assert!(parse_v18(&root.to_string()).is_err());
+
+        root["version"] = Value::from(FORMAT_VERSION);
         let thought = json!({
             "id": 1,
             "content": "same id",
@@ -2602,6 +4429,8 @@ mod tests {
             "source": "张九龄",
             "createdAt": 1,
             "updatedAt": 1,
+            "sortOrder": 0,
+            "categoryId": null,
             "futurePoem": {"keep": true}
         }]);
         let source = serde_json::to_string_pretty(&root).expect("source");
@@ -2702,9 +4531,11 @@ mod tests {
             "serviceType": "S3_COMPATIBLE",
             "endpointUrl": "https://s3.example.com",
             "remotePath": "DeskCubby",
+            "userAgent": "DeskCubby-Sync/1",
             "webDavUsername": "",
             "s3Bucket": "bucket",
             "s3Region": "us-east-1",
+            "s3PathStyle": true,
             "allowInsecureHttp": false,
             "selectedContents": ["JSON_BACKUP"],
             "direction": "UPLOAD_ONLY"
@@ -2843,14 +4674,15 @@ mod tests {
 
     #[test]
     fn fresh_export_defaults_match_current_android_constants() {
-        let root = default_root(&ManagedSettings::default(), 1);
+        let managed = ManagedSettings::default();
+        let root = default_root(&managed, 1);
         assert_eq!(
             root["settings"]["calorieVisionPrompt"],
-            Value::String("识别图片中的所有食物和饮料。只返回 JSON，不要 Markdown：{\"foods\":[{\"name\":\"食物名称\",\"amount\":\"估计份量\",\"unit\":\"单位\",\"confidence\":0.0}],\"notes\":\"必要说明\"}。无法确定时给出合理估计并降低 confidence。".to_owned())
+            Value::String(managed.calorie_vision_prompt.clone())
         );
         assert_eq!(
             root["settings"]["calorieTextPrompt"],
-            Value::String("根据随后提供的食物识别 JSON，估算整张图片中食物的总能量。只返回 JSON，不要 Markdown：{\"energyKj\":整数}。energyKj 使用千焦(kJ)，综合份量并避免重复计算。".to_owned())
+            Value::String(managed.calorie_text_prompt.clone())
         );
         assert_eq!(
             root["settings"]["homeGreetings"]
@@ -2860,13 +4692,13 @@ mod tests {
             24
         );
         let nav = root["settings"]["navItems"].as_array().expect("nav");
-        assert_eq!(nav.len(), 14);
+        assert_eq!(nav.len(), 18);
         assert_eq!(nav[0]["moreDescription"], "今日概览与快捷记录");
         assert_eq!(
-            nav[9]["moreDescription"],
-            "4×4 / 5×5 / 6×6 版 2048、贪吃蛇与俄罗斯方块"
+            nav[11]["moreDescription"],
+            "2048、贪吃蛇、俄罗斯方块、扫雷与蜘蛛纸牌"
         );
-        assert_eq!(nav[13]["moreDescription"], "调整应用与页面设置");
+        assert_eq!(nav[17]["moreDescription"], "调整应用与页面设置");
     }
 
     #[test]
@@ -2903,11 +4735,42 @@ mod tests {
     }
 
     #[test]
-    fn enforces_ten_mib_limit_before_parsing() {
+    fn recovery_point_omits_compatibility_shadow_private_payload() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let database = Database::open(directory.path().join("deskcubby.db")).expect("database");
+        let marker = b"encrypted-vault-and-usage-marker";
+        database
+            .put_compatibility_shadow(marker, &"a".repeat(64), 1)
+            .expect("seed compatibility shadow");
+
+        let recovery = recovery_point_bytes(&database).expect("recovery");
+        assert!(
+            !recovery
+                .windows(marker.len())
+                .any(|window| window == marker)
+        );
+        let decoded: RecoveryPoint = serde_json::from_slice(&recovery).expect("decode recovery");
+        assert!(decoded.snapshot.encrypted_compatibility_shadow.is_none());
+        assert!(decoded.snapshot.compatibility_source_sha256.is_none());
+
+        database
+            .put_compatibility_shadow(b"newer-shadow", &"b".repeat(64), 2)
+            .expect("replace compatibility shadow");
+        restore_recovery_point(&database, &recovery).expect("restore");
+        assert!(
+            database
+                .get_compatibility_shadow()
+                .expect("read shadow")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn enforces_sixty_four_mib_limit_before_parsing() {
         let huge = " ".repeat(MAX_JSON_BYTES + 1);
         assert!(matches!(
             parse_v18(&huge),
-            Err(BackupError::Invalid(message)) if message.contains("10 MiB")
+            Err(BackupError::Invalid(message)) if message.contains("64 MiB")
         ));
     }
 }

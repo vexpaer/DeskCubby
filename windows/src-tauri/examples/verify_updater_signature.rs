@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn decodes_utf8_base64_only() {
-        assert_eq!(decode_utf8_base64("RGVzY0N1YmJ5").unwrap(), "DeskCubby");
+        assert_eq!(decode_utf8_base64("RGVza0N1YmJ5").unwrap(), "DeskCubby");
         assert!(decode_utf8_base64("%%%").is_err());
         assert!(decode_utf8_base64("/w==").is_err());
     }

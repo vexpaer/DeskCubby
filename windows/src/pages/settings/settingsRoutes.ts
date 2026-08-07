@@ -1,14 +1,17 @@
 import {
   ArchiveRestore,
+  Bot,
   BookOpenText,
   Cloud,
   FolderCog,
+  HeartPulse,
   Home,
   Info,
   Languages,
   LayoutDashboard,
   LockKeyhole,
   Palette,
+  Rss,
   Settings2,
   Sparkles,
   Timer,
@@ -24,9 +27,13 @@ export type SettingsPageId =
   | "thoughts"
   | "poetry-meals"
   | "app-data"
+  | "data-usage"
   | "cloud"
   | "vault"
   | "mobile-usage"
+  | "rss"
+  | "ai"
+  | "health"
   | "navigation"
   | "about"
   | "updates";
@@ -63,9 +70,9 @@ export const SETTINGS_DESTINATIONS: readonly SettingsDestination[] = [
     parent: "main",
     chinese: "子页面设置",
     english: "Subpage settings",
-    chineseDescription: "主页、日记、小巧思、诗词、收藏夹与手机数据",
-    englishDescription: "Home, diary, thoughts, poetry, vault and phone data",
-    keywords: "子页面 页面 功能 pages",
+    chineseDescription: "记录、阅读、订阅、AI、娱乐与只读手机数据",
+    englishDescription: "Capture, reading, feeds, AI, games and read-only phone data",
+    keywords: "子页面 页面 功能 阅读 订阅 ai 游戏 健康 统计 pages reader games health",
     icon: Settings2,
   },
   {
@@ -135,6 +142,39 @@ export const SETTINGS_DESTINATIONS: readonly SettingsDestination[] = [
     icon: Timer,
   },
   {
+    id: "rss",
+    path: "/settings/rss",
+    parent: "subpages",
+    chinese: "RSS 订阅",
+    english: "RSS",
+    chineseDescription: "每个订阅的文章数量与摘要显示",
+    englishDescription: "Article limit and summary display for each feed",
+    keywords: "rss 订阅 摘要 文章 数量 feed summary",
+    icon: Rss,
+  },
+  {
+    id: "ai",
+    path: "/settings/ai",
+    parent: "subpages",
+    chinese: "AI 配置",
+    english: "AI configurations",
+    chineseDescription: "兼容接口、模型、系统提示词与 API Key",
+    englishDescription: "Compatible endpoints, models, system prompts and API keys",
+    keywords: "ai 模型 接口 endpoint model api key 提示词 prompt",
+    icon: Bot,
+  },
+  {
+    id: "health",
+    path: "/settings/health",
+    parent: "subpages",
+    chinese: "健康",
+    english: "Health",
+    chineseDescription: "只显示手机健康数据，不在 Windows 采集",
+    englishDescription: "Displays phone health data without Windows collection",
+    keywords: "健康 步数 距离 热量 只读 health steps distance calories",
+    icon: HeartPulse,
+  },
+  {
     id: "app-data",
     path: "/settings/app-data",
     parent: "main",
@@ -155,6 +195,17 @@ export const SETTINGS_DESTINATIONS: readonly SettingsDestination[] = [
     englishDescription: "WebDAV and S3 services, synced content and status",
     keywords: "云端 同步 webdav s3 服务 凭据 cloud sync",
     icon: Cloud,
+  },
+  {
+    id: "data-usage",
+    path: "/settings/data-usage",
+    parent: "app-data",
+    chinese: "数据占用",
+    english: "Storage usage",
+    chineseDescription: "查看本机数据库、缓存与用户所选目录的占用说明",
+    englishDescription: "Review local database, cache and selected-folder storage guidance",
+    keywords: "数据 占用 空间 存储 缓存 数据库 storage usage cache database",
+    icon: FolderCog,
   },
   {
     id: "navigation",
@@ -205,7 +256,10 @@ export const SUBPAGE_DESTINATIONS: readonly SettingsPageId[] = [
   "thoughts",
   "poetry-meals",
   "vault",
+  "rss",
+  "ai",
   "mobile-usage",
+  "health",
 ];
 
 export function destinationFor(id: SettingsPageId): SettingsDestination | undefined {

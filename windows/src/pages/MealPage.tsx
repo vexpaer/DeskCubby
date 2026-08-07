@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Download,
   ImageOff,
@@ -6,11 +6,17 @@ import {
   LoaderCircle,
   MapPin,
   RefreshCw,
+  Sparkles,
   SlidersHorizontal,
   Utensils,
   X,
   Zap,
 } from "lucide-react";
+import {
+  aiApi,
+  createAiRequestToken,
+  type CalorieProgress,
+} from "../lib/aiApi";
 import {
   mealApi,
   readableError,
@@ -21,6 +27,7 @@ import {
   type MealQuery,
 } from "../lib/ipc";
 import { useAppStore } from "../store/appStore";
+import "./MealPage.ai.css";
 
 const CATEGORY_META: Record<
   MealCategory,
@@ -93,6 +100,10 @@ export default function MealPage() {
   const [importDate, setImportDate] = useState(dateToday());
   const [importCategory, setImportCategory] =
     useState<MealCategory>("breakfast");
+  const calorieTokenRef = useRef<string | null>(null);
+  const [estimatingDate, setEstimatingDate] = useState<string | null>(null);
+  const [calorieProgress, setCalorieProgress] =
+    useState<CalorieProgress | null>(null);
 
   const query: MealQuery = useMemo(
     () => ({
@@ -125,6 +136,18 @@ export default function MealPage() {
     const timer = window.setTimeout(() => setNotice(null), 3500);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void aiApi.onCalorieProgress((progress) => {
+      if (progress.requestToken === calorieTokenRef.current) {
+        setCalorieProgress(progress);
+      }
+    }).then((dispose) => {
+      unlisten = dispose;
+    });
+    return () => unlisten?.();
+  }, []);
 
   const grouped = useMemo(() => {
     const map = new Map<string, MealPhoto[]>();
@@ -199,6 +222,63 @@ export default function MealPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function estimateDay(date: string, dayPhotos: MealPhoto[]) {
+    if (estimatingDate) return;
+    const fileNames = [
+      ...new Set(
+        dayPhotos
+          .filter((photo) => !photo.missing)
+          .map((photo) => photo.fileName),
+      ),
+    ];
+    if (!fileNames.length) return;
+    const requestToken = createAiRequestToken();
+    calorieTokenRef.current = requestToken;
+    setEstimatingDate(date);
+    setCalorieProgress({
+      schemaVersion: 1,
+      requestToken,
+      stage: "IMAGE_RECOGNITION",
+      completedImages: 0,
+      totalImages: fileNames.length,
+      photoIndex: null,
+      content: "",
+      reasoning: "",
+    });
+    setError(null);
+    try {
+      const result = await aiApi.estimateMealDay(requestToken, date, fileNames);
+      // The Rust boundary writes every estimate in one dc-media.json v2
+      // transaction. Refresh only after that full command succeeds.
+      await load();
+      setNotice(
+        language === "en"
+          ? `Estimated ${result.estimates.length} photo${result.estimates.length === 1 ? "" : "s"} for ${date}`
+          : `已完成 ${date} 的 ${result.estimates.length} 张图片热量估算`,
+      );
+    } catch (reason) {
+      // Do not refresh here: a failed day must never look partially committed.
+      setError(readableError(reason, language));
+    } finally {
+      calorieTokenRef.current = null;
+      setEstimatingDate(null);
+      setCalorieProgress(null);
+    }
+  }
+
+  function calorieProgressText(progress: CalorieProgress) {
+    if (progress.stage === "TEXT_ESTIMATION") {
+      return t("正在统一计算并避免重复餐食…", "Calculating the whole day and removing duplicates…");
+    }
+    if (progress.stage === "SAVING") {
+      return t("正在原子写入媒体元数据…", "Committing media metadata atomically…");
+    }
+    return t(
+      `正在识别图片 ${progress.completedImages}/${progress.totalImages}（最多 3 张并发）`,
+      `Recognizing ${progress.completedImages}/${progress.totalImages} images (up to 3 concurrently)`,
+    );
   }
 
   return (
@@ -457,13 +537,44 @@ export default function MealPage() {
           {grouped.map(([date, dayPhotos]) => (
             <section className="meal-day" key={date}>
               <header>
-                <h2>{date}</h2>
-                <span className="muted">
-                  {language === "en"
-                    ? `${dayPhotos.length} photo${dayPhotos.length === 1 ? "" : "s"}`
-                    : `${dayPhotos.length} 张`}
-                </span>
+                <div>
+                  <h2>{date}</h2>
+                  <span className="muted">
+                    {language === "en"
+                      ? `${dayPhotos.length} photo${dayPhotos.length === 1 ? "" : "s"}`
+                      : `${dayPhotos.length} 张`}
+                  </span>
+                </div>
+                <button
+                  className="button secondary"
+                  type="button"
+                  disabled={
+                    estimatingDate !== null ||
+                    dayPhotos.every((photo) => photo.missing)
+                  }
+                  onClick={() => void estimateDay(date, dayPhotos)}
+                >
+                  {estimatingDate === date ? (
+                    <LoaderCircle className="spin" aria-hidden="true" />
+                  ) : (
+                    <Sparkles aria-hidden="true" />
+                  )}
+                  {estimatingDate === date
+                    ? t("估算中", "Estimating")
+                    : t("AI 估算热量", "Estimate calories")}
+                </button>
               </header>
+              {estimatingDate === date && calorieProgress ? (
+                <div className="meal-ai-progress" role="status">
+                  <span>{calorieProgressText(calorieProgress)}</span>
+                  {calorieProgress.reasoning ? (
+                    <details>
+                      <summary>{t("查看模型思考", "Show model reasoning")}</summary>
+                      <pre>{calorieProgress.reasoning}</pre>
+                    </details>
+                  ) : null}
+                </div>
+              ) : null}
               <div
                 className={`meal-grid columns-${columns}`}
                 data-count={dayPhotos.length}

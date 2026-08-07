@@ -3,7 +3,11 @@ import { invokeCommand } from "./ipc";
 export const CLOUD_SYNC_DTO_VERSION = 1 as const;
 
 export type CloudServiceType = "WEBDAV" | "S3_COMPATIBLE";
-export type CloudSyncContent = "DIARIES" | "MEDIA" | "JSON_BACKUP";
+export type CloudSyncContent =
+  | "DIARIES"
+  | "MEDIA"
+  | "JSON_BACKUP"
+  | "USAGE_STATISTICS";
 export type CloudSyncDirection = "UPLOAD_ONLY" | "TWO_WAY";
 
 export interface CloudSyncConfigV1 {
@@ -13,9 +17,11 @@ export interface CloudSyncConfigV1 {
   serviceType: CloudServiceType;
   endpointUrl: string;
   remotePath: string;
+  userAgent: string;
   webDavUsername: string;
   s3Bucket: string;
   s3Region: string;
+  s3PathStyle: boolean;
   allowInsecureHttp: boolean;
   selectedContents: CloudSyncContent[];
   direction: CloudSyncDirection;
@@ -44,9 +50,11 @@ export interface CloudSyncConfigDraftV1 {
   serviceType: CloudServiceType;
   endpointUrl: string;
   remotePath: string;
+  userAgent: string;
   webDavUsername: string;
   s3Bucket: string;
   s3Region: string;
+  s3PathStyle: boolean;
   allowInsecureHttp: boolean;
   selectedContents: CloudSyncContent[];
   direction: CloudSyncDirection;
