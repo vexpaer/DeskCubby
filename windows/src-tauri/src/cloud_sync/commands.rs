@@ -21,6 +21,7 @@ use crate::{
         CloudSyncSecretRecord, CloudSyncSettingsRecord, CloudSyncStatusRecord, DataError, Database,
     },
     security::{CommandResult, SecurityErrorDto},
+    usage::{UsageServiceError, UsageStatisticsService},
 };
 
 use super::{
@@ -28,8 +29,9 @@ use super::{
     CloudSyncContent, CloudSyncDirection, CloudSyncEngine, CloudSyncError, CloudSyncErrorCode,
     CloudSyncItemOutcome, CloudSyncLimits, CloudSyncProgress, CloudSyncRunResult,
     CloudSyncServiceType, CloudSyncStateStore, EncryptedCloudCredentials, FileSystemLocalStore,
-    JsonBackupBridge, JsonSnapshot, LocalRoots, PendingJson, ReqwestRemoteStoreFactory,
-    decrypt_credentials, encrypt_credentials, secret_binding_sha256, validate_cloud_sync_config,
+    JsonBackupBridge, JsonSnapshot, LocalRoots, LocalSyncObject, LocalWriteResult, PendingJson,
+    ReqwestRemoteStoreFactory, UsageStatisticsBridge, UsageStatisticsSnapshot, decrypt_credentials,
+    encrypt_credentials, secret_binding_sha256, validate_cloud_sync_config,
 };
 
 const DTO_VERSION: u32 = 1;
@@ -47,6 +49,7 @@ pub(crate) struct CloudSyncService {
     active: Mutex<Option<ActiveRun>>,
     confirmations: Mutex<HashMap<String, PendingConfirmation>>,
     diary_changed: DiaryChangedHook,
+    usage_statistics: Option<Arc<UsageStatisticsService>>,
 }
 
 struct ActiveRun {
@@ -92,10 +95,11 @@ struct PendingConfirmation {
 }
 
 impl CloudSyncService {
-    pub(crate) fn new(
+    pub(crate) fn new_with_usage(
         database: Database,
         private_dir: PathBuf,
         diary_changed: DiaryChangedHook,
+        usage_statistics: Option<Arc<UsageStatisticsService>>,
     ) -> Result<Self, CloudSyncError> {
         // A process cannot resume an in-flight HTTP request. Clear crash-left
         // RUNNING rows so the next manual/background attempt is retryable.
@@ -109,6 +113,7 @@ impl CloudSyncService {
             active: Mutex::new(None),
             confirmations: Mutex::new(HashMap::new()),
             diary_changed,
+            usage_statistics,
         })
     }
 
@@ -265,8 +270,17 @@ impl CloudSyncService {
             let bridge: Arc<dyn JsonBackupBridge> = Arc::new(DatabaseJsonBackupBridge {
                 database: self.database.clone(),
             });
-            let local = match FileSystemLocalStore::new(roots, core_config.id.clone(), Some(bridge))
-            {
+            let usage_bridge = self.usage_statistics.as_ref().map(|service| {
+                Arc::new(ReadOnlyUsageStatisticsBridge {
+                    service: Arc::clone(service),
+                }) as Arc<dyn UsageStatisticsBridge>
+            });
+            let local = match FileSystemLocalStore::new_with_usage(
+                roots,
+                core_config.id.clone(),
+                Some(bridge),
+                usage_bridge,
+            ) {
                 Ok(local) => Arc::new(local),
                 Err(error) => return Err(error),
             };
@@ -605,6 +619,81 @@ impl JsonBackupBridge for DatabaseJsonBackupBridge {
     }
 }
 
+/// Windows is a read-only consumer of Android phone-usage objects. Returning
+/// an empty local inventory is deliberate: exposing cached phone snapshots as
+/// local objects would let the generic reconciler upload them if a remote
+/// object disappeared.
+#[derive(Clone)]
+struct ReadOnlyUsageStatisticsBridge {
+    service: Arc<UsageStatisticsService>,
+}
+
+impl UsageStatisticsBridge for ReadOnlyUsageStatisticsBridge {
+    fn snapshots<'a>(
+        &'a self,
+        _max_objects: usize,
+        _max_object_bytes: u64,
+    ) -> BoxFuture<'a, Result<Vec<UsageStatisticsSnapshot>, CloudSyncError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn merge_remote<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: &'a [u8],
+        content_sha256: &'a str,
+        last_modified_millis: i64,
+        expected_local_sha256: Option<&'a str>,
+        limits: CloudSyncLimits,
+    ) -> BoxFuture<'a, Result<LocalWriteResult, CloudSyncError>> {
+        Box::pin(async move {
+            let limits = limits.validate()?;
+            if expected_local_sha256.is_some()
+                || bytes.is_empty()
+                || bytes.len() as u64 > limits.max_object_bytes
+                || super::encoding::sha256_hex(bytes) != content_sha256
+            {
+                return Err(CloudSyncError::conflict());
+            }
+            let service = Arc::clone(&self.service);
+            let owned_key = key.to_owned();
+            let owned_bytes = bytes.to_vec();
+            let merge_key = owned_key.clone();
+            let now = db::now_millis();
+            tokio::task::spawn_blocking(move || {
+                service.merge_cloud_device_object(&merge_key, &owned_bytes, now)
+            })
+            .await
+            .map_err(|_| CloudSyncError::storage())?
+            .map_err(map_usage_to_cloud)?;
+            Ok(LocalWriteResult::Applied(LocalSyncObject {
+                key: owned_key,
+                content: CloudSyncContent::UsageStatistics,
+                size: bytes.len() as u64,
+                last_modified_millis: last_modified_millis.max(0),
+                sha256: content_sha256.to_owned(),
+                local_token: format!("usage-cloud-{content_sha256}"),
+            }))
+        })
+    }
+}
+
+fn map_usage_to_cloud(error: UsageServiceError) -> CloudSyncError {
+    match error {
+        UsageServiceError::TooLarge => CloudSyncError::limit_exceeded(),
+        UsageServiceError::InvalidJson | UsageServiceError::PathNotAllowed => {
+            CloudSyncError::invalid_input()
+        }
+        UsageServiceError::Storage
+        | UsageServiceError::Crypto
+        | UsageServiceError::CacheCorrupt => CloudSyncError::storage(),
+        UsageServiceError::NotFound
+        | UsageServiceError::SourceChanged
+        | UsageServiceError::NotConfigured
+        | UsageServiceError::NotLinked => CloudSyncError::conflict(),
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CloudSyncConfigV1 {
@@ -614,9 +703,11 @@ pub(crate) struct CloudSyncConfigV1 {
     service_type: CloudSyncServiceType,
     endpoint_url: String,
     remote_path: String,
+    user_agent: String,
     web_dav_username: String,
     s3_bucket: String,
     s3_region: String,
+    s3_path_style: bool,
     allow_insecure_http: bool,
     selected_contents: Vec<CloudSyncContent>,
     direction: CloudSyncDirection,
@@ -651,9 +742,13 @@ pub(crate) struct CloudSyncConfigDraftV1 {
     service_type: CloudSyncServiceType,
     endpoint_url: String,
     remote_path: String,
+    #[serde(default = "default_cloud_user_agent")]
+    user_agent: String,
     web_dav_username: String,
     s3_bucket: String,
     s3_region: String,
+    #[serde(default = "default_true")]
+    s3_path_style: bool,
     allow_insecure_http: bool,
     selected_contents: Vec<CloudSyncContent>,
     direction: CloudSyncDirection,
@@ -706,6 +801,14 @@ pub(crate) struct SaveCloudSyncConfigRequestV1 {
     schema_version: u32,
     config: CloudSyncConfigDraftV1,
     credential_update: CloudCredentialUpdateV1,
+}
+
+fn default_cloud_user_agent() -> String {
+    super::types::DEFAULT_CLOUD_SYNC_USER_AGENT.to_owned()
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -1138,9 +1241,11 @@ pub(crate) fn backup_configs_from_database(
                 },
                 endpoint_url: config.endpoint_url,
                 remote_path: config.remote_path,
+                user_agent: config.user_agent,
                 web_dav_username: config.web_dav_username,
                 s3_bucket: config.s3_bucket,
                 s3_region: config.s3_region,
+                s3_path_style: config.s3_path_style,
                 allow_insecure_http: config.allow_insecure_http,
                 selected_contents: config
                     .selected_contents
@@ -1149,6 +1254,9 @@ pub(crate) fn backup_configs_from_database(
                         CloudSyncContent::Diaries => backup::CloudSyncContent::Diaries,
                         CloudSyncContent::Media => backup::CloudSyncContent::Media,
                         CloudSyncContent::JsonBackup => backup::CloudSyncContent::JsonBackup,
+                        CloudSyncContent::UsageStatistics => {
+                            backup::CloudSyncContent::UsageStatistics
+                        }
                     })
                     .collect(),
                 direction: match config.direction {
@@ -1182,9 +1290,11 @@ fn config_from_draft(
         service_type: draft.service_type,
         endpoint_url: draft.endpoint_url.clone(),
         remote_path: draft.remote_path.clone(),
+        user_agent: draft.user_agent.clone(),
         web_dav_username: draft.web_dav_username.clone(),
         s3_bucket: draft.s3_bucket.clone(),
         s3_region: draft.s3_region.clone(),
+        s3_path_style: draft.s3_path_style,
         allow_insecure_http: draft.allow_insecure_http,
         selected_contents,
         direction: draft.direction,
@@ -1315,9 +1425,11 @@ fn config_from_record(record: &CloudSyncConfigRecord) -> Result<CloudSyncConfig,
         service_type: parse_service(&record.service_type)?,
         endpoint_url: record.endpoint_url.clone(),
         remote_path: record.remote_path.clone(),
+        user_agent: record.user_agent.clone(),
         web_dav_username: record.webdav_username.clone(),
         s3_bucket: record.s3_bucket.clone(),
         s3_region: record.s3_region.clone(),
+        s3_path_style: record.s3_path_style,
         allow_insecure_http: record.allow_insecure_http,
         selected_contents,
         direction: parse_direction(&record.direction)?,
@@ -1345,9 +1457,11 @@ fn record_from_config(
         .to_owned(),
         endpoint_url: config.endpoint_url.clone(),
         remote_path: config.remote_path.clone(),
+        user_agent: config.user_agent.clone(),
         webdav_username: config.web_dav_username.clone(),
         s3_bucket: config.s3_bucket.clone(),
         s3_region: config.s3_region.clone(),
+        s3_path_style: config.s3_path_style,
         allow_insecure_http: config.allow_insecure_http,
         selected_contents_json: serde_json::to_string(
             &config.selected_contents.iter().copied().collect::<Vec<_>>(),
@@ -1384,9 +1498,11 @@ fn config_dto(
         service_type: config.service_type,
         endpoint_url: config.endpoint_url,
         remote_path: config.remote_path,
+        user_agent: config.user_agent,
         web_dav_username: config.web_dav_username,
         s3_bucket: config.s3_bucket,
         s3_region: config.s3_region,
+        s3_path_style: config.s3_path_style,
         allow_insecure_http: config.allow_insecure_http,
         selected_contents: config.selected_contents.into_iter().collect(),
         direction: config.direction,
@@ -1541,9 +1657,11 @@ mod tests {
             service_type: "WEBDAV".to_owned(),
             endpoint_url: "https://example.test/dav".to_owned(),
             remote_path: "DeskCubby".to_owned(),
+            user_agent: "DeskCubby-Sync/1".to_owned(),
             webdav_username: String::new(),
             s3_bucket: String::new(),
             s3_region: "us-east-1".to_owned(),
+            s3_path_style: true,
             allow_insecure_http: false,
             selected_contents_json: r#"["DIARIES","DIARIES"]"#.to_owned(),
             direction: "TWO_WAY".to_owned(),

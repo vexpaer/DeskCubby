@@ -66,7 +66,7 @@ describe("safe IPC error translations", () => {
   it.each([
     ["external_edit_conflict", "重新加载", "Reload"],
     ["backup_invalid", "备份文件无效", "backup is invalid"],
-    ["backup_too_large", "10 MiB", "10 MiB"],
+    ["backup_too_large", "64 MiB", "64 MiB"],
     ["compatibility_shadow_corrupt", "兼容备份数据", "Compatibility backup data"],
     ["ipc_protocol_incompatible", "版本不兼容", "incompatible"],
     ["authentication_failed", "身份验证失败", "authentication failed"],

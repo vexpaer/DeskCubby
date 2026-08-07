@@ -1,6 +1,6 @@
 [package]
 name = "deskcubby-windows"
-version = "0.2.0"
+version = "0.3.0"
 description = "DeskCubby for Windows"
 authors = ["DeskCubby contributors"]
 edition = "2024"
@@ -18,14 +18,16 @@ aes-gcm = "0.10"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
+encoding_rs = "0.8"
 getrandom = "0.3"
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 minisign-verify = "=0.2.5"
 notify = "8"
 pbkdf2 = "0.12"
+quick-xml = { version = "0.38", features = ["encoding", "escape-html"] }
 regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "charset"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "charset", "stream"] }
 # Keep the updater plugin's reqwest major available under an explicit alias so
 # its client-builder hook and bounded installer download share the exact type.
 updater-http = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["stream"] }

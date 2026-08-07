@@ -1,0 +1,387 @@
+.game-catalog {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+  gap: var(--space-4);
+}
+
+.game-catalog-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-4);
+}
+
+.game-catalog-card > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.game-catalog-card h2 {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+}
+
+.game-catalog-card p,
+.game-catalog-card small,
+.game-hint,
+.game-keyboard-hint {
+  color: var(--text-muted);
+}
+
+.game-catalog-icon {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--surface-selected);
+  color: var(--primary);
+}
+
+.game-card-actions {
+  display: flex !important;
+  grid-column: 1 / -1;
+  flex-flow: row wrap;
+  justify-content: flex-end;
+  gap: var(--space-2) !important;
+}
+
+.game-stage {
+  display: grid;
+  width: min(100%, 54rem);
+  justify-self: center;
+  gap: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: clamp(var(--space-3), 2.5vw, var(--space-6));
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
+  color: var(--text);
+}
+
+.game-page.is-wide .game-stage {
+  width: 100%;
+}
+
+.game-score-row {
+  display: flex;
+  flex-flow: row wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.game-score-row strong {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+}
+
+.game-2048-stage {
+  align-content: center;
+  min-height: min(75vh, 48rem);
+}
+
+.game-2048-grid {
+  display: grid;
+  width: min(100%, 36rem);
+  aspect-ratio: 1;
+  grid-template-columns: repeat(var(--board-size), minmax(0, 1fr));
+  gap: clamp(0.25rem, 1vw, 0.7rem);
+  justify-self: center;
+  border-radius: var(--radius-lg);
+  padding: clamp(0.35rem, 1.3vw, 0.85rem);
+  background: color-mix(in srgb, var(--primary) 20%, var(--surface-muted));
+}
+
+.game-2048-cell {
+  display: grid;
+  min-width: 0;
+  aspect-ratio: 1;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) calc(12% + var(--tier, 1) * 4%), var(--surface));
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: clamp(0.72rem, calc(3.2vw / max(1, var(--board-size) - 2)), 1.7rem);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.game-2048-cell[data-tier="1"] { background: color-mix(in srgb, var(--primary) 12%, var(--surface)); }
+.game-2048-cell[data-tier="2"] { background: color-mix(in srgb, var(--primary) 22%, var(--surface)); }
+.game-2048-cell[data-tier="3"] { background: color-mix(in srgb, var(--secondary) 34%, var(--surface)); }
+.game-2048-cell[data-tier="4"] { background: color-mix(in srgb, var(--secondary) 48%, var(--surface)); }
+.game-2048-cell[data-tier="5"] { background: color-mix(in srgb, var(--primary) 58%, var(--surface)); color: var(--primary-on); }
+.game-2048-cell[data-tier="6"],
+.game-2048-cell[data-tier="7"],
+.game-2048-cell[data-tier="8"],
+.game-2048-cell[data-tier="9"],
+.game-2048-cell[data-tier="10"],
+.game-2048-cell[data-tier="11"],
+.game-2048-cell[data-tier="12"] { background: var(--primary); color: var(--primary-on); }
+.game-2048-cell[data-empty="true"] { background: color-mix(in srgb, var(--text) 5%, transparent); }
+
+.game-dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 3rem);
+  grid-template-rows: repeat(2, 3rem);
+  justify-content: center;
+  gap: var(--space-1);
+}
+
+.game-dpad button,
+.tetris-controls button {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.game-dpad button:hover,
+.game-dpad button:focus-visible,
+.tetris-controls button:hover,
+.tetris-controls button:focus-visible {
+  border-color: var(--primary);
+  background: var(--surface-selected);
+  color: var(--primary);
+}
+
+.game-dpad button:first-child { grid-column: 2; }
+.game-dpad button:nth-child(2) { grid-column: 1; grid-row: 2; }
+.game-dpad button:nth-child(3) { grid-column: 2; grid-row: 2; }
+.game-dpad button:nth-child(4) { grid-column: 3; grid-row: 2; }
+
+.snake-grid {
+  display: grid;
+  width: min(100%, 37rem);
+  aspect-ratio: 1;
+  grid-template-columns: repeat(var(--snake-width), minmax(0, 1fr));
+  gap: 1px;
+  justify-self: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--border);
+}
+
+.snake-grid > span { background: var(--surface-muted); }
+.snake-grid > span[data-snake="true"] { background: var(--primary); }
+.snake-grid > span[data-head="true"] { background: var(--secondary); }
+.snake-grid > span[data-food="true"] {
+  border-radius: 50%;
+  background: var(--danger);
+  transform: scale(0.72);
+}
+
+.tetris-layout {
+  grid-template-columns: minmax(13rem, 23rem) minmax(10rem, 14rem);
+  justify-content: center;
+  align-items: start;
+}
+
+.tetris-board {
+  display: grid;
+  width: min(100%, 23rem);
+  aspect-ratio: 1 / 2;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid var(--border);
+  background: var(--border);
+}
+
+.tetris-board > span { background: var(--surface-muted); }
+.tetris-board > span[data-piece="1"] { background: var(--primary); }
+.tetris-board > span[data-piece="2"] { background: var(--secondary); }
+.tetris-board > span[data-piece="3"] { background: color-mix(in srgb, var(--primary) 65%, var(--secondary)); }
+.tetris-board > span[data-piece="4"] { background: var(--success); }
+.tetris-board > span[data-piece="5"] { background: var(--danger); }
+.tetris-board > span[data-piece="6"] { background: color-mix(in srgb, var(--primary) 74%, var(--surface)); }
+.tetris-board > span[data-piece="7"] { background: var(--warning); }
+
+.tetris-sidebar,
+.mines-config {
+  display: grid;
+  gap: var(--space-3);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--surface-muted);
+}
+
+.tetris-controls {
+  display: grid;
+  grid-template-columns: repeat(3, 2.7rem);
+  grid-auto-rows: 2.7rem;
+  gap: var(--space-1);
+}
+
+.tetris-controls button:nth-child(4) { grid-column: 1 / span 2; }
+
+.game-result {
+  grid-column: 1 / -1;
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  color: var(--danger);
+  font-weight: 700;
+  text-align: center;
+}
+
+.game-result.is-win {
+  background: color-mix(in srgb, var(--success) 12%, var(--surface));
+  color: var(--success);
+}
+
+.mines-config {
+  grid-template-columns: repeat(3, minmax(5rem, 1fr)) auto;
+  align-items: end;
+}
+
+.mines-config label {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.mines-config input {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: var(--space-2);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.mines-scroll {
+  max-width: 100%;
+  overflow: auto;
+  border-radius: var(--radius-md);
+}
+
+.mines-grid {
+  display: grid;
+  width: max-content;
+  min-width: min(100%, calc(var(--mines-width) * 2rem));
+  grid-template-columns: repeat(var(--mines-width), minmax(1.75rem, 2.25rem));
+  gap: 1px;
+  margin: auto;
+  background: var(--border);
+}
+
+.mines-grid button {
+  display: grid;
+  aspect-ratio: 1;
+  place-items: center;
+  background: var(--surface-selected);
+  color: var(--text);
+  font-weight: 800;
+}
+
+.mines-grid button[data-revealed="true"] { background: var(--surface-muted); }
+.mines-grid button[data-number="1"] { color: var(--primary); }
+.mines-grid button[data-number="2"] { color: var(--success); }
+.mines-grid button[data-number="3"],
+.mines-grid button[data-number="4"],
+.mines-grid button[data-number="5"],
+.mines-grid button[data-number="6"],
+.mines-grid button[data-number="7"],
+.mines-grid button[data-number="8"] { color: var(--danger); }
+
+.spider-stage {
+  min-height: 38rem;
+  overflow: hidden;
+}
+
+.spider-table {
+  display: grid;
+  min-width: 56rem;
+  height: 33rem;
+  grid-template-columns: repeat(10, minmax(4.6rem, 1fr));
+  gap: clamp(0.2rem, 0.8vw, 0.65rem);
+  overflow-x: auto;
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  background: color-mix(in srgb, var(--primary) 16%, var(--surface-muted));
+}
+
+.spider-column {
+  position: relative;
+  min-width: 0;
+}
+
+.spider-column-target {
+  position: absolute;
+  z-index: 0;
+  inset: 0 0 auto;
+  height: 6rem;
+  border: 1px dashed color-mix(in srgb, var(--text) 26%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+.spider-card {
+  position: absolute;
+  z-index: calc(var(--card-index) + 1);
+  display: flex;
+  width: 100%;
+  height: 6.5rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  top: calc(var(--card-index) * 1.55rem);
+  border: 1px solid color-mix(in srgb, var(--text) 25%, var(--border));
+  border-radius: var(--radius-sm);
+  padding: 0.35rem;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 800;
+  box-shadow: var(--panel-shadow);
+}
+
+.spider-card[data-face-up="false"] {
+  border-color: color-mix(in srgb, var(--primary) 68%, var(--border));
+  background: repeating-linear-gradient(135deg, var(--primary), var(--primary) 0.3rem, var(--secondary) 0.3rem, var(--secondary) 0.6rem);
+}
+
+.spider-card[data-selected="true"] {
+  outline: 3px solid var(--secondary);
+  outline-offset: 1px;
+  transform: translateY(-0.25rem);
+}
+
+.game-keyboard-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-size: 0.76rem;
+  text-align: center;
+}
+
+:root[data-visual-theme="organic-future"] :is(.game-catalog-icon, .game-stage, .game-2048-grid, .snake-grid, .mines-grid, .spider-table) {
+  border-radius: 0;
+  clip-path: polygon(0 0, calc(100% - 0.8rem) 0, 100% 0.8rem, 100% 100%, 0 100%);
+}
+
+@media (max-width: 760px) {
+  .tetris-layout { grid-template-columns: 1fr; }
+  .tetris-board { justify-self: center; }
+  .tetris-sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mines-config { grid-template-columns: repeat(3, 1fr); }
+  .mines-config .button { grid-column: 1 / -1; }
+  .spider-stage { margin-inline: calc(var(--space-3) * -1); }
+  .game-catalog-card { grid-template-columns: auto minmax(0, 1fr); }
+}
+
+@media (max-width: 480px) {
+  .mines-config { grid-template-columns: 1fr; }
+  .mines-config .button { grid-column: auto; }
+  .game-stage { padding: var(--space-3); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spider-card { transition: none; }
+}

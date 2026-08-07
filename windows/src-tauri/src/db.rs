@@ -10,15 +10,20 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::games::{self, GameBackupState, GameBackupStatistic};
 use crate::models::{
     CompatibilityShadow, CoreSnapshot, DateRecord, DateRecordDraft, LocalPaths, ManagedSettings,
-    SavedPoem, SavedPoemDraft, Thought, ThoughtCategory, ThoughtCategoryDraft, ThoughtDraft,
+    PoetryCategory, PoetryCategoryDraft, SavedPoem, SavedPoemDraft, Thought, ThoughtCategory,
+    ThoughtCategoryDraft, ThoughtDraft,
 };
 
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 6;
 const RECOVERY_SNAPSHOT_VERSION: i32 = 1;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_SHADOW_BYTES: usize = 11 * 1024 * 1024;
+// Android v27 accepts backup documents up to 64 MiB. DPAPI ciphertext adds a
+// small envelope, so keep the database boundary slightly above that wire
+// limit while remaining bounded.
+const MAX_SHADOW_BYTES: usize = 65 * 1024 * 1024;
 const MAX_VAULT_CIPHERTEXT_BYTES: usize = 1024 * 1024;
 const MAX_CLOUD_SECRET_BYTES: usize = 64 * 1024;
 const MAX_CLOUD_BASE_ENTRIES: usize = 10_000;
@@ -98,14 +103,14 @@ pub(crate) struct CloudSyncSettingsRecord {
     pub automatic_sync_enabled: bool,
     pub interval_minutes: i64,
     /// False until Windows explicitly creates, edits, copies, or deletes a
-    /// cloud configuration. While false, v18 export preserves Android's
+    /// cloud configuration. While false, v27 export preserves Android's
     /// compatibility-shadow cloud metadata verbatim.
     pub configs_managed: bool,
     pub updated_at: i64,
 }
 
 /// Windows-only sync configuration. This is deliberately separate from
-/// ManagedSettings so Android v18 cloud metadata remains shadow-preserved.
+/// ManagedSettings so Android v27 cloud metadata remains shadow-preserved.
 #[allow(dead_code)]
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct CloudSyncConfigRecord {
@@ -115,9 +120,11 @@ pub(crate) struct CloudSyncConfigRecord {
     pub service_type: String,
     pub endpoint_url: String,
     pub remote_path: String,
+    pub user_agent: String,
     pub webdav_username: String,
     pub s3_bucket: String,
     pub s3_region: String,
+    pub s3_path_style: bool,
     pub allow_insecure_http: bool,
     pub selected_contents_json: String,
     pub direction: String,
@@ -213,10 +220,54 @@ impl Database {
                 1 => Self::migrate_1_to_2(connection)?,
                 2 => Self::migrate_2_to_3(connection)?,
                 3 => Self::migrate_3_to_4(connection)?,
+                4 => Self::migrate_4_to_5(connection)?,
+                5 => Self::migrate_5_to_6(connection)?,
                 _ => return Err(DataError::UnsupportedVersion),
             }
             version = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         }
+        Ok(())
+    }
+
+    /// Adds Android v27 poetry categories and deterministic ordering without
+    /// disturbing any poem created by an earlier Windows release. Every step,
+    /// including the version bump, is committed as one transaction.
+    fn migrate_5_to_6(connection: &mut Connection) -> Result<(), DataError> {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            r#"
+            CREATE TABLE poetry_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL COLLATE NOCASE UNIQUE
+                    CHECK (length(trim(name)) BETWEEN 1 AND 100),
+                color_argb INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL CHECK (sort_order >= 0),
+                created_at INTEGER NOT NULL CHECK (created_at >= 0),
+                updated_at INTEGER NOT NULL CHECK (updated_at >= created_at)
+            );
+            CREATE INDEX poetry_categories_order_idx
+                ON poetry_categories(sort_order, created_at, id);
+
+            ALTER TABLE saved_poems
+                ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0);
+            ALTER TABLE saved_poems
+                ADD COLUMN category_id INTEGER DEFAULT NULL
+                    REFERENCES poetry_categories(id) ON DELETE SET NULL;
+
+            UPDATE saved_poems AS poem
+            SET sort_order = (
+                SELECT COUNT(*)
+                FROM saved_poems AS preceding
+                WHERE preceding.updated_at > poem.updated_at
+                   OR (preceding.updated_at = poem.updated_at AND preceding.id > poem.id)
+            );
+            CREATE INDEX saved_poems_category_idx ON saved_poems(category_id);
+            CREATE INDEX saved_poems_order_idx
+                ON saved_poems(sort_order, created_at DESC, id DESC);
+            "#,
+        )?;
+        transaction.pragma_update(None, "user_version", 6)?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -452,7 +503,7 @@ impl Database {
     }
 
     /// Records whether Windows has taken ownership of the credential-free
-    /// `cloudSyncConfigs` field in v18 backups. The default deliberately keeps
+    /// `cloudSyncConfigs` field in v27 backups. The default deliberately keeps
     /// imported Android metadata shadow-owned until the user edits cloud
     /// configuration on Windows.
     fn migrate_2_to_3(connection: &mut Connection) -> Result<(), DataError> {
@@ -482,6 +533,27 @@ impl Database {
             "#,
         )?;
         transaction.pragma_update(None, "user_version", 4)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Adds Windows-private feature tables in one transaction. Additional v5
+    /// fragments are kept here so any failure leaves the v4 database and its
+    /// `user_version` untouched.
+    fn migrate_4_to_5(connection: &mut Connection) -> Result<(), DataError> {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "ALTER TABLE cloud_sync_configs
+                 ADD COLUMN user_agent TEXT NOT NULL DEFAULT 'DeskCubby-Sync/1'
+                     CHECK(length(user_agent) BETWEEN 1 AND 512);
+             ALTER TABLE cloud_sync_configs
+                 ADD COLUMN s3_path_style INTEGER NOT NULL DEFAULT 1
+                     CHECK(s3_path_style IN (0, 1));",
+        )?;
+        crate::notes::migrate(&transaction)?;
+        crate::ai::migrate(&transaction)?;
+        crate::games::migrate(&transaction)?;
+        transaction.pragma_update(None, "user_version", 5)?;
         transaction.commit()?;
         Ok(())
     }
@@ -546,6 +618,17 @@ impl Database {
     pub fn get_local_paths(&self) -> Result<LocalPaths, DataError> {
         let connection = self.connect()?;
         get_local_paths_from(&connection)
+    }
+
+    pub fn get_notes_root_path(&self) -> Result<Option<String>, DataError> {
+        let connection = self.connect()?;
+        Ok(crate::notes::get_root_path(&connection)?)
+    }
+
+    pub fn set_notes_root_path(&self, root_path: Option<&str>) -> Result<(), DataError> {
+        let connection = self.connect()?;
+        crate::notes::set_root_path(&connection, root_path, now_millis())?;
+        Ok(())
     }
 
     pub fn put_local_paths(&self, paths: &LocalPaths) -> Result<(), DataError> {
@@ -825,6 +908,84 @@ impl Database {
         list_poems_from(&connection)
     }
 
+    pub fn list_poetry_categories(&self) -> Result<Vec<PoetryCategory>, DataError> {
+        let connection = self.connect()?;
+        list_poetry_categories_from(&connection)
+    }
+
+    pub fn save_poetry_category(
+        &self,
+        mut draft: PoetryCategoryDraft,
+    ) -> Result<PoetryCategory, DataError> {
+        draft.name = normalize_poetry_category_name(&draft.name);
+        validate_poetry_category_draft(&draft)?;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        if let Some(id) = draft.id {
+            require_positive_id(id, "poetryCategory.id")?;
+            let changed = transaction.execute(
+                "UPDATE poetry_categories
+                 SET name = ?1, color_argb = ?2, updated_at = MAX(updated_at, ?3)
+                 WHERE id = ?4",
+                params![draft.name, draft.color_argb, now_millis(), id],
+            )?;
+            if changed == 0 {
+                return Err(DataError::NotFound);
+            }
+        } else {
+            let timestamp = now_millis();
+            let sort_order: i64 = transaction.query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM poetry_categories",
+                [],
+                |row| row.get(0),
+            )?;
+            transaction.execute(
+                "INSERT INTO poetry_categories(
+                    name, color_argb, sort_order, created_at, updated_at
+                 ) VALUES(?1, ?2, ?3, ?4, ?4)",
+                params![draft.name, draft.color_argb, sort_order, timestamp],
+            )?;
+        }
+        let id = draft.id.unwrap_or_else(|| transaction.last_insert_rowid());
+        let category = get_poetry_category_from(&transaction, id)?;
+        transaction.commit()?;
+        Ok(category)
+    }
+
+    pub fn delete_poetry_category(&self, id: i64, delete_poems: bool) -> Result<(), DataError> {
+        require_positive_id(id, "poetryCategory.id")?;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        if delete_poems {
+            transaction.execute(
+                "DELETE FROM saved_poems WHERE category_id = ?1",
+                params![id],
+            )?;
+        } else {
+            transaction.execute(
+                "UPDATE saved_poems SET category_id = NULL WHERE category_id = ?1",
+                params![id],
+            )?;
+        }
+        require_changed(
+            transaction.execute("DELETE FROM poetry_categories WHERE id = ?1", params![id])?,
+        )?;
+        normalize_poetry_category_order(&transaction)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn move_poetry_category(&self, id: i64, target_index: usize) -> Result<(), DataError> {
+        require_positive_id(id, "poetryCategory.id")?;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        let mut ids = list_poetry_category_ids(&transaction)?;
+        move_id_to_index(&mut ids, id, target_index)?;
+        replace_poetry_category_order(&transaction, &ids)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn save_poem(&self, draft: SavedPoemDraft) -> Result<SavedPoem, DataError> {
         validate_poem_draft(&draft)?;
         let mut connection = self.connect()?;
@@ -832,20 +993,38 @@ impl Database {
         if let Some(id) = draft.id {
             require_positive_id(id, "poem.id")?;
             let changed = transaction.execute(
-                "UPDATE saved_poems SET content = ?1, source = ?2,
-                     updated_at = MAX(updated_at, ?3)
-                 WHERE id = ?4",
-                params![draft.content, draft.source, now_millis(), id],
+                "UPDATE saved_poems SET content = ?1, source = ?2, category_id = ?3,
+                     updated_at = MAX(updated_at, ?4)
+                 WHERE id = ?5",
+                params![
+                    draft.content,
+                    draft.source,
+                    draft.category_id,
+                    now_millis(),
+                    id
+                ],
             )?;
             if changed == 0 {
                 return Err(DataError::NotFound);
             }
         } else {
             let timestamp = now_millis();
+            let sort_order: i64 = transaction.query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM saved_poems",
+                [],
+                |row| row.get(0),
+            )?;
             transaction.execute(
-                "INSERT INTO saved_poems(content, source, created_at, updated_at)
-                 VALUES(?1, ?2, ?3, ?3)",
-                params![draft.content, draft.source, timestamp],
+                "INSERT INTO saved_poems(
+                    content, source, created_at, updated_at, sort_order, category_id
+                 ) VALUES(?1, ?2, ?3, ?3, ?4, ?5)",
+                params![
+                    draft.content,
+                    draft.source,
+                    timestamp,
+                    sort_order,
+                    draft.category_id
+                ],
             )?;
         }
         let id = draft.id.unwrap_or_else(|| transaction.last_insert_rowid());
@@ -856,8 +1035,144 @@ impl Database {
 
     pub fn delete_poem(&self, id: i64) -> Result<(), DataError> {
         require_positive_id(id, "poem.id")?;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        require_changed(
+            transaction.execute("DELETE FROM saved_poems WHERE id = ?1", params![id])?,
+        )?;
+        normalize_poem_order(&transaction)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn set_poem_category(&self, id: i64, category_id: Option<i64>) -> Result<(), DataError> {
+        require_positive_id(id, "poem.id")?;
+        if let Some(category_id) = category_id {
+            require_positive_id(category_id, "poem.categoryId")?;
+        }
         let connection = self.connect()?;
-        require_changed(connection.execute("DELETE FROM saved_poems WHERE id = ?1", params![id])?)
+        require_changed(connection.execute(
+            "UPDATE saved_poems
+             SET category_id = ?1, updated_at = MAX(updated_at, ?2)
+             WHERE id = ?3",
+            params![category_id, now_millis(), id],
+        )?)
+    }
+
+    /// Reorders a poem globally, within uncategorized poems, or inside one
+    /// category while preserving the global slots occupied by other poems.
+    pub fn move_poem(
+        &self,
+        id: i64,
+        target_index: usize,
+        category_scope: Option<Option<i64>>,
+    ) -> Result<(), DataError> {
+        require_positive_id(id, "poem.id")?;
+        if let Some(Some(category_id)) = category_scope {
+            require_positive_id(category_id, "poem.categoryId")?;
+        }
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        let all_ids = list_poem_ids(&transaction, None)?;
+        let mut moving_ids = match category_scope {
+            None => all_ids.clone(),
+            Some(category_id) => list_poem_ids(&transaction, Some(category_id))?,
+        };
+        move_id_to_index(&mut moving_ids, id, target_index)?;
+        let reordered = if category_scope.is_none() {
+            moving_ids
+        } else {
+            replace_subset_order(&all_ids, &moving_ids)?
+        };
+        replace_poem_order(&transaction, &reordered)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn import_poetry_preset(
+        &self,
+        name: &str,
+        color_argb: i32,
+        poems: &[(String, String)],
+    ) -> Result<(i64, usize, usize), DataError> {
+        let name = normalize_poetry_category_name(name);
+        validate_poetry_category_draft(&PoetryCategoryDraft {
+            id: None,
+            name: name.clone(),
+            color_argb,
+        })?;
+        if poems.is_empty() || poems.len() > 128 {
+            return Err(DataError::Validation(
+                "Poetry preset item count is invalid".to_owned(),
+            ));
+        }
+        for (content, source) in poems {
+            validate_poem_draft(&SavedPoemDraft {
+                id: None,
+                content: content.clone(),
+                source: source.clone(),
+                category_id: None,
+            })?;
+        }
+
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        let existing_id: Option<i64> = transaction
+            .query_row(
+                "SELECT id FROM poetry_categories WHERE name = ?1 COLLATE NOCASE LIMIT 1",
+                params![name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let category_id = if let Some(id) = existing_id {
+            id
+        } else {
+            let timestamp = now_millis();
+            let sort_order: i64 = transaction.query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM poetry_categories",
+                [],
+                |row| row.get(0),
+            )?;
+            transaction.execute(
+                "INSERT INTO poetry_categories(
+                    name, color_argb, sort_order, created_at, updated_at
+                 ) VALUES(?1, ?2, ?3, ?4, ?4)",
+                params![name, color_argb, sort_order, timestamp],
+            )?;
+            transaction.last_insert_rowid()
+        };
+
+        let timestamp = now_millis();
+        let mut next_sort_order: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM saved_poems",
+            [],
+            |row| row.get(0),
+        )?;
+        let mut added = 0_usize;
+        for (index, (content, source)) in poems.iter().enumerate() {
+            let duplicate: bool = transaction.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM saved_poems
+                    WHERE category_id = ?1 AND content = ?2 AND source = ?3
+                 )",
+                params![category_id, content, source],
+                |row| row.get(0),
+            )?;
+            if duplicate {
+                continue;
+            }
+            let row_timestamp = timestamp.saturating_sub(index as i64);
+            transaction.execute(
+                "INSERT INTO saved_poems(
+                    content, source, created_at, updated_at, sort_order, category_id
+                 ) VALUES(?1, ?2, ?3, ?3, ?4, ?5)",
+                params![content, source, row_timestamp, next_sort_order, category_id],
+            )?;
+            next_sort_order += 1;
+            added += 1;
+        }
+        transaction.commit()?;
+        Ok((category_id, added, poems.len() - added))
     }
 
     pub fn get_compatibility_shadow(&self) -> Result<Option<CompatibilityShadow>, DataError> {
@@ -888,6 +1203,7 @@ impl Database {
         let mut connection = self.connect()?;
         let transaction = connection.transaction()?;
         let shadow = get_compatibility_shadow_from(&transaction)?;
+        let (game_states, game_statistics) = games::list_backup_rows(&transaction)?;
         let snapshot = CoreSnapshot {
             // This serialized field predates database v2. It is a recovery
             // payload format version, not SQLite's `user_version`.
@@ -897,7 +1213,10 @@ impl Database {
             thoughts: list_thoughts_from(&transaction, true)?,
             categories: list_categories_from(&transaction)?,
             date_records: list_date_records_from(&transaction)?,
+            poetry_categories: list_poetry_categories_from(&transaction)?,
             poems: list_poems_from(&transaction)?,
+            game_states: Some(game_states),
+            game_statistics: Some(game_statistics),
             local_paths: get_local_paths_from(&transaction)?,
             encrypted_compatibility_shadow: shadow.as_ref().map(|item| item.ciphertext.clone()),
             compatibility_source_sha256: shadow.map(|item| item.source_sha256),
@@ -918,6 +1237,7 @@ impl Database {
             &snapshot.thoughts,
             &snapshot.categories,
             &snapshot.date_records,
+            &snapshot.poetry_categories,
             &snapshot.poems,
         )?;
         validate_local_path_value("diaryPath", snapshot.local_paths.diary_path.as_deref())?;
@@ -937,6 +1257,14 @@ impl Database {
                 ));
             }
         }
+        match (&snapshot.game_states, &snapshot.game_statistics) {
+            (Some(_), Some(_)) | (None, None) => {}
+            _ => {
+                return Err(DataError::Validation(
+                    "Recovery game collections are incomplete".to_owned(),
+                ));
+            }
+        }
         let mut connection = self.connect()?;
         let transaction = connection.transaction()?;
         replace_core_rows(
@@ -945,8 +1273,13 @@ impl Database {
             &snapshot.thoughts,
             &snapshot.categories,
             &snapshot.date_records,
+            &snapshot.poetry_categories,
             &snapshot.poems,
         )?;
+        if let (Some(states), Some(statistics)) = (&snapshot.game_states, &snapshot.game_statistics)
+        {
+            games::replace_backup_rows(&transaction, states, statistics)?;
+        }
         transaction.execute(
             "UPDATE local_paths SET diary_path = ?1, media_path = ?2, backup_path = ?3
              WHERE id = 1",
@@ -979,7 +1312,12 @@ impl Database {
         thoughts: &[Thought],
         categories: &[ThoughtCategory],
         date_records: &[DateRecord],
+        poetry_categories: &[PoetryCategory],
         poems: &[SavedPoem],
+        game_states: &[GameBackupState],
+        game_statistics: &[GameBackupStatistic],
+        merge_game_states: bool,
+        merge_game_statistics: bool,
         encrypted_shadow: Option<&[u8]>,
         source_sha256: &str,
         imported_at: i64,
@@ -987,7 +1325,7 @@ impl Database {
         let mut settings = settings.clone();
         settings.normalize_android_compatible();
         settings.validate().map_err(DataError::Validation)?;
-        validate_imported_core(thoughts, categories, date_records, poems)?;
+        validate_imported_core(thoughts, categories, date_records, poetry_categories, poems)?;
         require_nonnegative_timestamp(imported_at, "importedAt")?;
         if let Some(ciphertext) = encrypted_shadow {
             validate_shadow(ciphertext, source_sha256, imported_at)?;
@@ -1001,7 +1339,15 @@ impl Database {
             thoughts,
             categories,
             date_records,
+            poetry_categories,
             poems,
+        )?;
+        games::merge_backup_rows(
+            &transaction,
+            game_states,
+            game_statistics,
+            merge_game_states,
+            merge_game_statistics,
         )?;
         if let Some(ciphertext) = encrypted_shadow {
             transaction.execute(
@@ -1020,6 +1366,13 @@ impl Database {
         }
         transaction.commit()?;
         Ok(())
+    }
+
+    pub(crate) fn list_game_backup_rows(
+        &self,
+    ) -> Result<(Vec<GameBackupState>, Vec<GameBackupStatistic>), DataError> {
+        let connection = self.connect()?;
+        games::list_backup_rows(&connection)
     }
 }
 
@@ -1382,7 +1735,8 @@ impl Database {
         let connection = self.connect()?;
         let mut statement = connection.prepare(
             "SELECT id, name, enabled, service_type, endpoint_url, remote_path,
-                    webdav_username, s3_bucket, s3_region, allow_insecure_http,
+                    user_agent, webdav_username, s3_bucket, s3_region, s3_path_style,
+                    allow_insecure_http,
                     selected_contents_json, direction, sort_order, updated_at
              FROM cloud_sync_configs ORDER BY sort_order, id",
         )?;
@@ -1399,7 +1753,8 @@ impl Database {
         connection
             .query_row(
                 "SELECT id, name, enabled, service_type, endpoint_url, remote_path,
-                        webdav_username, s3_bucket, s3_region, allow_insecure_http,
+                        user_agent, webdav_username, s3_bucket, s3_region, s3_path_style,
+                        allow_insecure_http,
                         selected_contents_json, direction, sort_order, updated_at
                  FROM cloud_sync_configs WHERE id = ?1",
                 params![id],
@@ -1432,10 +1787,11 @@ impl Database {
         transaction.execute(
             "INSERT INTO cloud_sync_configs(
                 id, name, enabled, service_type, endpoint_url, remote_path,
-                webdav_username, s3_bucket, s3_region, allow_insecure_http,
+                user_agent, webdav_username, s3_bucket, s3_region, s3_path_style,
+                allow_insecure_http,
                 selected_contents_json, direction, sort_order, updated_at
              ) VALUES(
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
              )
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
@@ -1443,9 +1799,11 @@ impl Database {
                 service_type = excluded.service_type,
                 endpoint_url = excluded.endpoint_url,
                 remote_path = excluded.remote_path,
+                user_agent = excluded.user_agent,
                 webdav_username = excluded.webdav_username,
                 s3_bucket = excluded.s3_bucket,
                 s3_region = excluded.s3_region,
+                s3_path_style = excluded.s3_path_style,
                 allow_insecure_http = excluded.allow_insecure_http,
                 selected_contents_json = excluded.selected_contents_json,
                 direction = excluded.direction,
@@ -1458,9 +1816,11 @@ impl Database {
                 config.service_type,
                 config.endpoint_url,
                 config.remote_path,
+                config.user_agent,
                 config.webdav_username,
                 config.s3_bucket,
                 config.s3_region,
+                config.s3_path_style,
                 config.allow_insecure_http,
                 config.selected_contents_json,
                 config.direction,
@@ -1985,14 +2345,16 @@ fn cloud_sync_config_from_row(row: &Row<'_>) -> rusqlite::Result<CloudSyncConfig
         service_type: row.get(3)?,
         endpoint_url: row.get(4)?,
         remote_path: row.get(5)?,
-        webdav_username: row.get(6)?,
-        s3_bucket: row.get(7)?,
-        s3_region: row.get(8)?,
-        allow_insecure_http: row.get(9)?,
-        selected_contents_json: row.get(10)?,
-        direction: row.get(11)?,
-        sort_order: row.get(12)?,
-        updated_at: row.get(13)?,
+        user_agent: row.get(6)?,
+        webdav_username: row.get(7)?,
+        s3_bucket: row.get(8)?,
+        s3_region: row.get(9)?,
+        s3_path_style: row.get(10)?,
+        allow_insecure_http: row.get(11)?,
+        selected_contents_json: row.get(12)?,
+        direction: row.get(13)?,
+        sort_order: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
@@ -2043,12 +2405,14 @@ fn replace_core_rows(
     thoughts: &[Thought],
     categories: &[ThoughtCategory],
     date_records: &[DateRecord],
+    poetry_categories: &[PoetryCategory],
     poems: &[SavedPoem],
 ) -> Result<(), DataError> {
     transaction.execute("DELETE FROM thoughts", [])?;
     transaction.execute("DELETE FROM thought_categories", [])?;
     transaction.execute("DELETE FROM date_records", [])?;
     transaction.execute("DELETE FROM saved_poems", [])?;
+    transaction.execute("DELETE FROM poetry_categories", [])?;
 
     for category in categories {
         transaction.execute(
@@ -2098,16 +2462,34 @@ fn replace_core_rows(
             ],
         )?;
     }
+    for category in poetry_categories {
+        transaction.execute(
+            "INSERT INTO poetry_categories(
+                id, name, color_argb, sort_order, created_at, updated_at
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                category.id,
+                category.name,
+                category.color_argb,
+                category.sort_order,
+                category.created_at,
+                category.updated_at
+            ],
+        )?;
+    }
     for poem in poems {
         transaction.execute(
-            "INSERT INTO saved_poems(id, content, source, created_at, updated_at)
-             VALUES(?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO saved_poems(
+                id, content, source, created_at, updated_at, sort_order, category_id
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 poem.id,
                 poem.content,
                 poem.source,
                 poem.created_at,
-                poem.updated_at
+                poem.updated_at,
+                poem.sort_order,
+                poem.category_id
             ],
         )?;
     }
@@ -2123,11 +2505,13 @@ fn validate_imported_core(
     thoughts: &[Thought],
     categories: &[ThoughtCategory],
     date_records: &[DateRecord],
+    poetry_categories: &[PoetryCategory],
     poems: &[SavedPoem],
 ) -> Result<(), DataError> {
     if thoughts.len() > 50_000
         || categories.len() > 10_000
         || date_records.len() > 50_000
+        || poetry_categories.len() > 10_000
         || poems.len() > 50_000
     {
         return Err(DataError::Validation(
@@ -2190,6 +2574,24 @@ fn validate_imported_core(
         }
     }
 
+    let mut poetry_category_ids = HashSet::new();
+    let mut poetry_category_names = HashSet::new();
+    for category in poetry_categories {
+        require_positive_id(category.id, "poetryCategory.id")?;
+        if !poetry_category_ids.insert(category.id)
+            || !poetry_category_names.insert(category.name.to_lowercase())
+            || category.name.trim().is_empty()
+            || utf16_len(&category.name) > 100
+            || category.sort_order < 0
+            || category.created_at < 0
+            || category.updated_at < category.created_at
+        {
+            return Err(DataError::Validation(
+                "Imported poetry category is invalid or duplicated".to_owned(),
+            ));
+        }
+    }
+
     let mut poem_ids = HashSet::new();
     for poem in poems {
         require_positive_id(poem.id, "poem.id")?;
@@ -2197,6 +2599,10 @@ fn validate_imported_core(
             || poem.content.trim().is_empty()
             || utf16_len(&poem.content) > 100_000
             || utf16_len(&poem.source) > 4_096
+            || poem.sort_order < 0
+            || poem
+                .category_id
+                .is_some_and(|category_id| !poetry_category_ids.contains(&category_id))
             || poem.created_at < 0
             || poem.updated_at < poem.created_at
         {
@@ -2278,11 +2684,22 @@ fn list_date_records_from(connection: &Connection) -> Result<Vec<DateRecord>, Da
 
 fn list_poems_from(connection: &Connection) -> Result<Vec<SavedPoem>, DataError> {
     let mut statement = connection.prepare(
-        "SELECT id, content, source, created_at, updated_at
-         FROM saved_poems ORDER BY updated_at DESC, id DESC",
+        "SELECT id, content, source, created_at, updated_at, sort_order, category_id
+         FROM saved_poems ORDER BY sort_order, created_at DESC, id DESC",
     )?;
     statement
         .query_map([], map_poem)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(DataError::from)
+}
+
+fn list_poetry_categories_from(connection: &Connection) -> Result<Vec<PoetryCategory>, DataError> {
+    let mut statement = connection.prepare(
+        "SELECT id, name, color_argb, sort_order, created_at, updated_at
+         FROM poetry_categories ORDER BY sort_order, created_at, id",
+    )?;
+    statement
+        .query_map([], map_poetry_category)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(DataError::from)
 }
@@ -2350,6 +2767,19 @@ fn map_poem(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedPoem> {
         source: row.get(2)?,
         created_at: row.get(3)?,
         updated_at: row.get(4)?,
+        sort_order: row.get(5)?,
+        category_id: row.get(6)?,
+    })
+}
+
+fn map_poetry_category(row: &rusqlite::Row<'_>) -> rusqlite::Result<PoetryCategory> {
+    Ok(PoetryCategory {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        color_argb: row.get(2)?,
+        sort_order: row.get(3)?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
     })
 }
 
@@ -2393,10 +2823,25 @@ fn get_date_record_from(transaction: &Transaction<'_>, id: i64) -> Result<DateRe
 fn get_poem_from(transaction: &Transaction<'_>, id: i64) -> Result<SavedPoem, DataError> {
     transaction
         .query_row(
-            "SELECT id, content, source, created_at, updated_at
+            "SELECT id, content, source, created_at, updated_at, sort_order, category_id
              FROM saved_poems WHERE id = ?1",
             params![id],
             map_poem,
+        )
+        .optional()?
+        .ok_or(DataError::NotFound)
+}
+
+fn get_poetry_category_from(
+    transaction: &Transaction<'_>,
+    id: i64,
+) -> Result<PoetryCategory, DataError> {
+    transaction
+        .query_row(
+            "SELECT id, name, color_argb, sort_order, created_at, updated_at
+             FROM poetry_categories WHERE id = ?1",
+            params![id],
+            map_poetry_category,
         )
         .optional()?
         .ok_or(DataError::NotFound)
@@ -2494,6 +2939,9 @@ fn validate_cloud_sync_config(config: &CloudSyncConfigRecord) -> Result<(), Data
         || config.name.chars().any(char::is_control)
         || config.endpoint_url.encode_utf16().count() > 4_096
         || config.remote_path.len() > 1_024
+        || config.user_agent.trim().is_empty()
+        || config.user_agent.encode_utf16().count() > 512
+        || config.user_agent != config.user_agent.trim()
         || config.webdav_username.encode_utf16().count() > 512
         || config.s3_bucket.len() > 255
         || config.s3_region.len() > 128
@@ -2506,6 +2954,7 @@ fn validate_cloud_sync_config(config: &CloudSyncConfigRecord) -> Result<(), Data
     for value in [
         &config.endpoint_url,
         &config.remote_path,
+        &config.user_agent,
         &config.webdav_username,
         &config.s3_bucket,
         &config.s3_region,
@@ -2565,9 +3014,12 @@ fn validate_cloud_sync_config(config: &CloudSyncConfigRecord) -> Result<(), Data
     let selected: Vec<String> = serde_json::from_str(&config.selected_contents_json)?;
     let mut unique = HashSet::with_capacity(selected.len());
     if selected.is_empty()
-        || selected.len() > 3
+        || selected.len() > 4
         || selected.iter().any(|value| {
-            !matches!(value.as_str(), "DIARIES" | "MEDIA" | "JSON_BACKUP") || !unique.insert(value)
+            !matches!(
+                value.as_str(),
+                "DIARIES" | "MEDIA" | "JSON_BACKUP" | "USAGE_STATISTICS"
+            ) || !unique.insert(value)
         })
     {
         return Err(DataError::Validation(
@@ -2770,7 +3222,133 @@ fn validate_poem_draft(draft: &SavedPoemDraft) -> Result<(), DataError> {
             "Poem source exceeds 4,096 characters".to_owned(),
         ));
     }
+    if let Some(category_id) = draft.category_id {
+        require_positive_id(category_id, "poem.categoryId")?;
+    }
     Ok(())
+}
+
+fn normalize_poetry_category_name(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn validate_poetry_category_draft(draft: &PoetryCategoryDraft) -> Result<(), DataError> {
+    if let Some(id) = draft.id {
+        require_positive_id(id, "poetryCategory.id")?;
+    }
+    if draft.name.trim().is_empty() || utf16_len(&draft.name) > 100 {
+        return Err(DataError::Validation(
+            "Poetry category name must be 1 to 100 characters".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn list_poetry_category_ids(connection: &Connection) -> Result<Vec<i64>, DataError> {
+    let mut statement = connection
+        .prepare("SELECT id FROM poetry_categories ORDER BY sort_order, created_at, id")?;
+    statement
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(DataError::from)
+}
+
+fn replace_poetry_category_order(
+    transaction: &Transaction<'_>,
+    ids: &[i64],
+) -> Result<(), DataError> {
+    for (index, id) in ids.iter().copied().enumerate() {
+        require_changed(transaction.execute(
+            "UPDATE poetry_categories SET sort_order = ?1 WHERE id = ?2",
+            params![index as i64, id],
+        )?)?;
+    }
+    Ok(())
+}
+
+fn normalize_poetry_category_order(transaction: &Transaction<'_>) -> Result<(), DataError> {
+    let ids = list_poetry_category_ids(transaction)?;
+    replace_poetry_category_order(transaction, &ids)
+}
+
+fn list_poem_ids(
+    connection: &Connection,
+    category_scope: Option<Option<i64>>,
+) -> Result<Vec<i64>, DataError> {
+    let sql = match category_scope {
+        None => {
+            "SELECT id FROM saved_poems
+             ORDER BY sort_order, created_at DESC, id DESC"
+        }
+        Some(Some(_)) => {
+            "SELECT id FROM saved_poems WHERE category_id = ?1
+             ORDER BY sort_order, created_at DESC, id DESC"
+        }
+        Some(None) => {
+            "SELECT id FROM saved_poems WHERE category_id IS NULL
+             ORDER BY sort_order, created_at DESC, id DESC"
+        }
+    };
+    let mut statement = connection.prepare(sql)?;
+    match category_scope {
+        Some(Some(category_id)) => statement
+            .query_map(params![category_id], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DataError::from),
+        _ => statement
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DataError::from),
+    }
+}
+
+fn replace_poem_order(transaction: &Transaction<'_>, ids: &[i64]) -> Result<(), DataError> {
+    for (index, id) in ids.iter().copied().enumerate() {
+        require_changed(transaction.execute(
+            "UPDATE saved_poems SET sort_order = ?1 WHERE id = ?2",
+            params![index as i64, id],
+        )?)?;
+    }
+    Ok(())
+}
+
+fn normalize_poem_order(transaction: &Transaction<'_>) -> Result<(), DataError> {
+    let ids = list_poem_ids(transaction, None)?;
+    replace_poem_order(transaction, &ids)
+}
+
+fn move_id_to_index(ids: &mut Vec<i64>, id: i64, target_index: usize) -> Result<(), DataError> {
+    let current = ids
+        .iter()
+        .position(|candidate| *candidate == id)
+        .ok_or(DataError::NotFound)?;
+    let value = ids.remove(current);
+    let target = target_index.min(ids.len());
+    ids.insert(target, value);
+    Ok(())
+}
+
+fn replace_subset_order(all_ids: &[i64], subset_ids: &[i64]) -> Result<Vec<i64>, DataError> {
+    let subset = subset_ids.iter().copied().collect::<HashSet<_>>();
+    if subset.len() != subset_ids.len()
+        || all_ids.iter().filter(|id| subset.contains(id)).count() != subset_ids.len()
+    {
+        return Err(DataError::Validation(
+            "Poem subset order is inconsistent".to_owned(),
+        ));
+    }
+    let mut replacements = subset_ids.iter().copied();
+    Ok(all_ids
+        .iter()
+        .copied()
+        .map(|id| {
+            if subset.contains(&id) {
+                replacements.next().unwrap_or(id)
+            } else {
+                id
+            }
+        })
+        .collect())
 }
 
 fn validate_shadow(
@@ -2922,6 +3500,27 @@ mod tests {
             .expect("v1 shadow");
     }
 
+    fn create_v5_fixture(path: &Path) {
+        create_v1_fixture(path);
+        let mut connection = Connection::open(path).expect("open v1 fixture");
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .expect("foreign keys");
+        Database::migrate_1_to_2(&mut connection).expect("create v2 schema");
+        Database::migrate_2_to_3(&mut connection).expect("create v3 schema");
+        Database::migrate_3_to_4(&mut connection).expect("create v4 schema");
+        Database::migrate_4_to_5(&mut connection).expect("create v5 schema");
+        connection
+            .execute_batch(
+                "INSERT INTO saved_poems(
+                    id, content, source, created_at, updated_at
+                 ) VALUES
+                    (12, 'newer poem', 'source two', 3, 5),
+                    (13, 'newest tie', 'source three', 4, 5);",
+            )
+            .expect("additional v5 poems");
+    }
+
     fn table_exists(connection: &Connection, name: &str) -> bool {
         connection
             .query_row(
@@ -2956,9 +3555,11 @@ mod tests {
             service_type: "WEBDAV".to_owned(),
             endpoint_url: "https://cloud.example.com/dav".to_owned(),
             remote_path: "DeskCubby".to_owned(),
+            user_agent: "DeskCubby-Sync/1".to_owned(),
             webdav_username: "user".to_owned(),
             s3_bucket: String::new(),
             s3_region: "us-east-1".to_owned(),
+            s3_path_style: true,
             allow_insecure_http: false,
             selected_contents_json: r#"["DIARIES","MEDIA","JSON_BACKUP"]"#.to_owned(),
             direction: "TWO_WAY".to_owned(),
@@ -2986,7 +3587,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_database_uses_schema_v4_and_has_no_update_attempt() {
+    fn fresh_database_uses_latest_schema_and_has_no_update_attempt() {
         let (_directory, database) = database();
         let version: i32 = database
             .connect()
@@ -2995,7 +3596,7 @@ mod tests {
             .expect("user version");
         let update_settings = database.get_update_settings().expect("update defaults");
 
-        assert_eq!(version, 4);
+        assert_eq!(version, SCHEMA_VERSION);
         assert!(update_settings.automatic_checks_enabled);
         assert_eq!(update_settings.last_attempted_at, None);
     }
@@ -3155,6 +3756,11 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                &[],
+                &[],
+                &[],
+                false,
+                false,
                 None,
                 &source_sha256,
                 2,
@@ -3257,7 +3863,7 @@ mod tests {
         let version: i32 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("user version");
-        assert_eq!(version, 4);
+        assert_eq!(version, SCHEMA_VERSION);
         for table in [
             "vault_metadata",
             "vault_items",
@@ -3267,6 +3873,13 @@ mod tests {
             "cloud_sync_base",
             "cloud_sync_status",
             "update_settings",
+            "windows_notes_settings",
+            "ai_conversations",
+            "ai_messages",
+            "game_states",
+            "game_statistics",
+            "game_engagement_times",
+            "poetry_categories",
         ] {
             assert!(table_exists(&connection, table), "missing table {table}");
         }
@@ -3383,7 +3996,7 @@ mod tests {
             .expect("connection")
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("version");
-        assert_eq!(version, 4);
+        assert_eq!(version, SCHEMA_VERSION);
     }
 
     #[test]
@@ -3430,7 +4043,7 @@ mod tests {
     }
 
     #[test]
-    fn migrates_v3_fixture_to_v4_preserving_update_preference() {
+    fn migrates_v3_fixture_to_latest_preserving_update_preference() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("deskcubby.db");
         create_v1_fixture(&path);
@@ -3448,7 +4061,7 @@ mod tests {
                 .expect("v3 update settings");
         }
 
-        let database = Database::open(&path).expect("migrate v3 to v4");
+        let database = Database::open(&path).expect("migrate v3 to latest");
         let settings = database
             .get_update_settings()
             .expect("migrated update settings");
@@ -3458,7 +4071,7 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("version");
 
-        assert_eq!(version, 4);
+        assert_eq!(version, SCHEMA_VERSION);
         assert!(!settings.automatic_checks_enabled);
         assert_eq!(settings.last_attempted_at, None);
         assert_eq!(settings.updated_at, 23);
@@ -3507,6 +4120,166 @@ mod tests {
 
         assert_eq!(version, 3);
         assert_eq!(values, (false, 29));
+    }
+
+    #[test]
+    fn migrates_v5_poems_with_stable_order_and_enforced_category_foreign_key() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("deskcubby.db");
+        create_v5_fixture(&path);
+
+        let database = Database::open(&path).expect("migrate v5 to v6");
+        let connection = database.connect().expect("open migrated database");
+        let version: i32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("user version");
+        assert_eq!(version, 6);
+        assert!(table_exists(&connection, "poetry_categories"));
+
+        let poems = database.list_poems().expect("migrated poems");
+        assert_eq!(
+            poems.iter().map(|poem| poem.id).collect::<Vec<_>>(),
+            vec![13, 12, 11]
+        );
+        assert_eq!(
+            poems.iter().map(|poem| poem.sort_order).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert!(poems.iter().all(|poem| poem.category_id.is_none()));
+
+        let category = database
+            .save_poetry_category(PoetryCategoryDraft {
+                id: None,
+                name: "Migration category".to_owned(),
+                color_argb: -1,
+            })
+            .expect("save poetry category");
+        database
+            .set_poem_category(13, Some(category.id))
+            .expect("assign migrated poem");
+        assert!(matches!(
+            database.set_poem_category(12, Some(category.id + 10_000)),
+            Err(DataError::Sqlite(_))
+        ));
+
+        connection
+            .execute(
+                "DELETE FROM poetry_categories WHERE id = ?1",
+                params![category.id],
+            )
+            .expect("delete category through foreign key");
+        let category_id: Option<i64> = connection
+            .query_row(
+                "SELECT category_id FROM saved_poems WHERE id = 13",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read cleared category");
+        assert_eq!(category_id, None);
+    }
+
+    #[test]
+    fn failed_v5_to_v6_migration_rolls_back_columns_tables_order_and_version() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("deskcubby.db");
+        create_v5_fixture(&path);
+        {
+            let connection = Connection::open(&path).expect("open v5 fixture");
+            // The migration reaches this index only after creating the category
+            // table and adding both poem columns. A global index-name collision
+            // therefore verifies that all earlier DDL and data rewrites roll back.
+            connection
+                .execute_batch(
+                    "CREATE TABLE migration_collision(value INTEGER);
+                     CREATE INDEX saved_poems_order_idx
+                         ON migration_collision(value);",
+                )
+                .expect("create late migration collision");
+        }
+
+        assert!(matches!(Database::open(&path), Err(DataError::Sqlite(_))));
+        let connection = Connection::open(&path).expect("inspect rolled-back v5 database");
+        let version: i32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("user version");
+        assert_eq!(version, 5);
+        assert!(!table_exists(&connection, "poetry_categories"));
+
+        let columns = connection
+            .prepare("PRAGMA table_info(saved_poems)")
+            .expect("prepare column query")
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query columns")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect columns");
+        assert!(!columns.iter().any(|column| column == "sort_order"));
+        assert!(!columns.iter().any(|column| column == "category_id"));
+
+        let poems: Vec<(i64, String)> = connection
+            .prepare("SELECT id, content FROM saved_poems ORDER BY id")
+            .expect("prepare preserved poems")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("query preserved poems")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect preserved poems");
+        assert_eq!(
+            poems,
+            vec![
+                (11, "v1 poem".to_owned()),
+                (12, "newer poem".to_owned()),
+                (13, "newest tie".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn poetry_presets_are_idempotent_and_category_scoped_order_is_stable() {
+        let (_directory, database) = database();
+        let preset = vec![
+            ("first poem".to_owned(), "Author《First》".to_owned()),
+            ("second poem".to_owned(), "Author《Second》".to_owned()),
+        ];
+
+        let (category_id, added, existing) = database
+            .import_poetry_preset("Textbook volume", -12_345, &preset)
+            .expect("first preset import");
+        assert_eq!((added, existing), (2, 0));
+        let (same_category_id, added, existing) = database
+            .import_poetry_preset("  Textbook   volume  ", -12_345, &preset)
+            .expect("repeat preset import");
+        assert_eq!(same_category_id, category_id);
+        assert_eq!((added, existing), (0, 2));
+
+        let poems = database.list_poems().expect("list imported poems");
+        assert_eq!(
+            poems
+                .iter()
+                .map(|poem| poem.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first poem", "second poem"]
+        );
+        database
+            .move_poem(poems[0].id, 1, Some(Some(category_id)))
+            .expect("move inside category");
+        let reordered = database.list_poems().expect("list reordered poems");
+        assert_eq!(
+            reordered
+                .iter()
+                .map(|poem| poem.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["second poem", "first poem"]
+        );
+
+        database
+            .delete_poetry_category(category_id, false)
+            .expect("delete category and retain poems");
+        assert!(
+            database
+                .list_poems()
+                .expect("retained poems")
+                .iter()
+                .all(|poem| poem.category_id.is_none())
+        );
     }
 
     #[test]

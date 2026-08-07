@@ -4,8 +4,9 @@ use crate::db::{self, DataError};
 use crate::diary::{self, SaveDiaryOutcome};
 use crate::media;
 use crate::models::{
-    DailyEventTemplate, DateRecord, DateRecordDraft, LocalPaths, ManagedSettings, MealPhotoFilter,
-    SavedPoem, SavedPoemDraft, Thought, ThoughtCategory, ThoughtCategoryDraft, ThoughtDraft,
+    DailyEventTemplate, DateRecord, DateRecordDraft, HomeGreeting, LocalPaths, ManagedSettings,
+    MealPhotoFilter, PoetryCategory, PoetryCategoryDraft, SavedPoem, SavedPoemDraft, Thought,
+    ThoughtCategory, ThoughtCategoryDraft, ThoughtDraft,
 };
 use crate::poetry;
 use crate::security::{
@@ -26,9 +27,10 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-static SETTINGS_UPDATE_MUTEX: Mutex<()> = Mutex::new(());
+pub(crate) static SETTINGS_UPDATE_MUTEX: Mutex<()> = Mutex::new(());
 static BACKUP_MUTATION_MUTEX: Mutex<()> = Mutex::new(());
 const MAX_TEXT_EXPORT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_BACKGROUND_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 
 pub fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
@@ -75,10 +77,61 @@ pub fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + 
         create_poem,
         update_poem,
         delete_poem,
+        list_poetry_categories,
+        create_poetry_category,
+        update_poetry_category,
+        delete_poetry_category,
+        move_poetry_category,
+        set_poem_category,
+        move_poem,
+        list_poetry_presets,
+        import_poetry_preset,
+        crate::notes::get_notes_root,
+        crate::notes::select_notes_root,
+        crate::notes::forget_notes_root,
+        crate::notes::list_note_folder,
+        crate::notes::create_note_folder,
+        crate::notes::create_note,
+        crate::notes::open_note,
+        crate::notes::rename_note_entry,
+        crate::notes::delete_note_entry,
+        crate::notes::save_note,
+        crate::notes::select_and_import_note_media,
+        crate::notes::resolve_note_media,
+        crate::rss::get_rss_page,
+        crate::rss::save_rss_subscription,
+        crate::rss::delete_rss_subscription,
+        crate::rss::set_rss_subscription_enabled,
+        crate::rss::set_rss_preferences,
+        crate::rss::refresh_rss,
+        crate::rss::open_rss_article,
+        crate::reader::get_reader_library,
+        crate::reader::choose_reader_book,
+        crate::reader::open_reader_book,
+        crate::reader::save_reader_progress,
+        crate::reader::save_reader_preferences,
+        crate::reader::remove_reader_book,
+        crate::reader::record_reader_time,
+        crate::ai::get_ai_settings,
+        crate::ai::save_ai_settings,
+        crate::ai::list_ai_conversations,
+        crate::ai::list_ai_messages,
+        crate::ai::rename_ai_conversation,
+        crate::ai::delete_ai_conversation,
+        crate::ai::set_ai_conversation_model,
+        crate::ai::list_ai_context_candidates,
+        crate::ai::pick_ai_image,
+        crate::ai::cancel_ai_image,
+        crate::ai::send_ai_message,
+        crate::ai::estimate_meal_day,
+        crate::games::get_games_snapshot,
+        crate::games::apply_game_action,
+        crate::games::add_game_play_time,
         get_windows_settings,
         get_default_windows_settings,
         update_windows_settings,
         select_directory,
+        select_background_image,
         choose_and_preview_backup,
         import_backup,
         export_backup,
@@ -107,9 +160,13 @@ pub fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + 
         change_vault_password,
         copy_vault_item,
         open_vault_item_url,
+        open_external_link,
         get_usage_page,
         choose_usage_statistics_source,
         refresh_usage_statistics,
+        get_health_page,
+        choose_health_statistics_source,
+        refresh_health_statistics,
         get_update_state,
         set_automatic_update_checks,
         check_for_updates,
@@ -907,6 +964,8 @@ struct SavedPoemDto {
     source: String,
     created_at: String,
     updated_at: String,
+    sort_order: String,
+    category_id: Option<String>,
 }
 
 impl From<SavedPoem> for SavedPoemDto {
@@ -917,6 +976,8 @@ impl From<SavedPoem> for SavedPoemDto {
             source: value.source,
             created_at: value.created_at.to_string(),
             updated_at: value.updated_at.to_string(),
+            sort_order: value.sort_order.to_string(),
+            category_id: value.category_id.map(|id| id.to_string()),
         }
     }
 }
@@ -929,6 +990,8 @@ struct SavedPoemDraftDto {
     content: String,
     #[serde(default)]
     source: String,
+    #[serde(default)]
+    category_id: Option<String>,
 }
 
 impl SavedPoemDraftDto {
@@ -937,8 +1000,95 @@ impl SavedPoemDraftDto {
             id: parse_optional_positive_ipc_id(self.id)?,
             content: self.content,
             source: self.source,
+            category_id: parse_optional_positive_ipc_id(self.category_id)?,
         })
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PoetryCategoryDto {
+    id: String,
+    name: String,
+    color_argb: i32,
+    sort_order: String,
+    created_at: String,
+    updated_at: String,
+}
+
+impl From<PoetryCategory> for PoetryCategoryDto {
+    fn from(value: PoetryCategory) -> Self {
+        Self {
+            id: value.id.to_string(),
+            name: value.name,
+            color_argb: value.color_argb,
+            sort_order: value.sort_order.to_string(),
+            created_at: value.created_at.to_string(),
+            updated_at: value.updated_at.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PoetryCategoryDraftDto {
+    #[serde(default)]
+    id: Option<String>,
+    name: String,
+    color_argb: i32,
+}
+
+impl PoetryCategoryDraftDto {
+    fn into_internal(self) -> CommandResult<PoetryCategoryDraft> {
+        Ok(PoetryCategoryDraft {
+            id: parse_optional_positive_ipc_id(self.id)?,
+            name: self.name,
+            color_argb: self.color_argb,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PoetryPresetSummaryDto {
+    id: String,
+    name_zh: String,
+    name_en: String,
+    color_argb: i32,
+    item_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PoetryPresetImportDto {
+    category_id: String,
+    added_count: usize,
+    existing_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PoetryPresetAsset {
+    version: u32,
+    categories: Vec<PoetryPresetCategoryAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PoetryPresetCategoryAsset {
+    id: String,
+    name_zh: String,
+    name_en: String,
+    color_argb: i32,
+    items: Vec<PoetryPresetItemAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PoetryPresetItemAsset {
+    title: String,
+    #[serde(default)]
+    author: String,
+    content: String,
 }
 
 #[tauri::command]
@@ -1230,6 +1380,221 @@ fn delete_poem(id: String, state: State<'_, AppState>) -> CommandResult<()> {
     state.database.delete_poem(id).map_err(map_data_error)
 }
 
+#[tauri::command]
+fn list_poetry_categories(state: State<'_, AppState>) -> CommandResult<Vec<PoetryCategoryDto>> {
+    state
+        .database
+        .list_poetry_categories()
+        .map(|categories| {
+            categories
+                .into_iter()
+                .map(PoetryCategoryDto::from)
+                .collect()
+        })
+        .map_err(map_data_error)
+}
+
+#[tauri::command]
+fn create_poetry_category(
+    draft: PoetryCategoryDraftDto,
+    state: State<'_, AppState>,
+) -> CommandResult<PoetryCategoryDto> {
+    let mut draft = draft.into_internal()?;
+    draft.id = None;
+    state
+        .database
+        .save_poetry_category(draft)
+        .map(PoetryCategoryDto::from)
+        .map_err(map_data_error)
+}
+
+#[tauri::command]
+fn update_poetry_category(
+    id: String,
+    draft: PoetryCategoryDraftDto,
+    state: State<'_, AppState>,
+) -> CommandResult<PoetryCategoryDto> {
+    let id = parse_positive_ipc_id(&id)?;
+    let mut draft = draft.into_internal()?;
+    draft.id = Some(id);
+    state
+        .database
+        .save_poetry_category(draft)
+        .map(PoetryCategoryDto::from)
+        .map_err(map_data_error)
+}
+
+#[tauri::command]
+fn delete_poetry_category(
+    id: String,
+    delete_poems: Option<bool>,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let id = parse_positive_ipc_id(&id)?;
+    state
+        .database
+        .delete_poetry_category(id, delete_poems.unwrap_or(false))
+        .map_err(map_data_error)
+}
+
+#[tauri::command]
+fn move_poetry_category(
+    id: String,
+    target_index: usize,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let id = parse_positive_ipc_id(&id)?;
+    state
+        .database
+        .move_poetry_category(id, target_index)
+        .map_err(map_data_error)
+}
+
+#[tauri::command]
+fn set_poem_category(
+    id: String,
+    category_id: Option<String>,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let id = parse_positive_ipc_id(&id)?;
+    let category_id = parse_optional_positive_ipc_id(category_id)?;
+    state
+        .database
+        .set_poem_category(id, category_id)
+        .map_err(map_data_error)
+}
+
+#[tauri::command]
+fn move_poem(
+    id: String,
+    target_index: usize,
+    scope: String,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let id = parse_positive_ipc_id(&id)?;
+    let category_scope = match scope.as_str() {
+        "all" => None,
+        "uncategorized" => Some(None),
+        value => Some(Some(parse_positive_ipc_id(value)?)),
+    };
+    state
+        .database
+        .move_poem(id, target_index, category_scope)
+        .map_err(map_data_error)
+}
+
+#[tauri::command]
+fn list_poetry_presets() -> CommandResult<Vec<PoetryPresetSummaryDto>> {
+    let catalog = decode_poetry_preset_asset()?;
+    Ok(catalog
+        .categories
+        .into_iter()
+        .map(|category| PoetryPresetSummaryDto {
+            id: category.id,
+            name_zh: category.name_zh.trim().to_owned(),
+            name_en: category.name_en.trim().to_owned(),
+            color_argb: category.color_argb | (0xff00_0000_u32 as i32),
+            item_count: category.items.len(),
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn import_poetry_preset(
+    preset_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<PoetryPresetImportDto> {
+    let catalog = decode_poetry_preset_asset()?;
+    let preset = catalog
+        .categories
+        .into_iter()
+        .find(|category| category.id == preset_id)
+        .ok_or_else(SecurityErrorDto::not_found)?;
+    let poems = preset
+        .items
+        .into_iter()
+        .map(|item| {
+            let title = item.title.trim();
+            let author = item.author.trim();
+            let source = if author.is_empty() {
+                format!("《{title}》")
+            } else {
+                format!("{author}《{title}》")
+            };
+            (item.content.trim().to_owned(), source)
+        })
+        .collect::<Vec<_>>();
+    state
+        .database
+        .import_poetry_preset(
+            preset.name_zh.trim(),
+            preset.color_argb | (0xff00_0000_u32 as i32),
+            &poems,
+        )
+        .map(
+            |(category_id, added_count, existing_count)| PoetryPresetImportDto {
+                category_id: category_id.to_string(),
+                added_count,
+                existing_count,
+            },
+        )
+        .map_err(map_data_error)
+}
+
+fn decode_poetry_preset_asset() -> CommandResult<PoetryPresetAsset> {
+    const ASSET: &str = include_str!("../../../android/app/src/main/assets/poetry_presets.json");
+    if ASSET.len() > 1024 * 1024 {
+        return Err(SecurityErrorDto::operation_failed());
+    }
+    let catalog: PoetryPresetAsset =
+        serde_json::from_str(ASSET).map_err(|_| SecurityErrorDto::operation_failed())?;
+    if catalog.version != 1 || catalog.categories.is_empty() || catalog.categories.len() > 32 {
+        return Err(SecurityErrorDto::operation_failed());
+    }
+    let mut ids = std::collections::HashSet::new();
+    let mut total_items = 0_usize;
+    for category in &catalog.categories {
+        let valid_id = !category.id.is_empty()
+            && category.id.len() <= 64
+            && category
+                .id
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        let valid_names = !category.name_zh.trim().is_empty()
+            && category.name_zh.chars().count() <= 100
+            && !category.name_en.trim().is_empty()
+            && category.name_en.chars().count() <= 100;
+        if !valid_id
+            || !ids.insert(category.id.as_str())
+            || !valid_names
+            || category.items.is_empty()
+            || category.items.len() > 128
+        {
+            return Err(SecurityErrorDto::operation_failed());
+        }
+        total_items += category.items.len();
+        if total_items > 512 {
+            return Err(SecurityErrorDto::operation_failed());
+        }
+        for item in &category.items {
+            let title = item.title.trim();
+            let author = item.author.trim();
+            let content = item.content.trim();
+            let source_chars = title.chars().count() + author.chars().count() + 2;
+            if title.is_empty()
+                || title.chars().count() > 200
+                || author.chars().count() > 100
+                || content.is_empty()
+                || content.chars().count() > 4_000
+                || source_chars > 512
+            {
+                return Err(SecurityErrorDto::operation_failed());
+            }
+        }
+    }
+    Ok(catalog)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DailyPoemDto {
@@ -1495,6 +1860,10 @@ struct WindowsSettingsDto {
     theme_secondary_colors_argb: Vec<i32>,
     font_scale: f64,
     compact_mode: bool,
+    background_image_path: Option<String>,
+    background_image_opacity: f64,
+    background_image_blur_px: f64,
+    tutorial_mode_enabled: bool,
     diary_directory: Option<String>,
     media_directory: Option<String>,
     backup_directory: Option<String>,
@@ -1503,12 +1872,14 @@ struct WindowsSettingsDto {
     image_name_pattern: String,
     image_max_width_px: i32,
     image_max_height_px: i32,
+    markdown_heading_sizes_sp: Vec<f64>,
     meal_image_compression_enabled: bool,
     meal_image_compression_quality: i32,
     photo_location_enabled: bool,
     thought_display_mode: String,
     thought_highlight_color_argb: i32,
     thought_editor_max_height_px: i32,
+    vault_row_height_dp: i32,
     poetry_font_size_px: f64,
     poetry_line_spacing: f64,
     poetry_text_alignment: String,
@@ -1519,6 +1890,14 @@ struct WindowsSettingsDto {
     meal_calendar_show_captions: bool,
     meal_calendar_wrap_enabled: bool,
     meal_calendar_photos_per_row: String,
+    meal_buttons_use_icons: bool,
+    meal_button_icons: Vec<String>,
+    user_name: String,
+    home_greetings: Vec<HomeGreeting>,
+    home_widget_borders_enabled: bool,
+    home_widgets: Vec<String>,
+    home_game_shortcuts: Vec<String>,
+    home_widget_titles: Vec<String>,
 }
 
 impl WindowsSettingsDto {
@@ -1531,6 +1910,10 @@ impl WindowsSettingsDto {
             theme_secondary_colors_argb: settings.theme_secondary_colors_argb,
             font_scale: settings.font_scale,
             compact_mode: settings.compact_mode,
+            background_image_path: settings.background_image_path,
+            background_image_opacity: settings.background_image_opacity,
+            background_image_blur_px: settings.background_image_blur_px,
+            tutorial_mode_enabled: settings.tutorial_mode_enabled,
             diary_directory: paths.diary_path,
             media_directory: paths.media_path,
             backup_directory: paths.backup_path,
@@ -1539,12 +1922,14 @@ impl WindowsSettingsDto {
             image_name_pattern: settings.image_name_pattern,
             image_max_width_px: settings.image_max_width_dp,
             image_max_height_px: settings.image_max_height_dp,
+            markdown_heading_sizes_sp: settings.markdown_heading_sizes_sp,
             meal_image_compression_enabled: settings.meal_image_compression_enabled,
             meal_image_compression_quality: settings.meal_image_compression_quality,
             photo_location_enabled: settings.photo_location_enabled,
             thought_display_mode: settings.thought_display_mode,
             thought_highlight_color_argb: settings.thought_highlight_color_argb,
             thought_editor_max_height_px: settings.thought_editor_max_height_dp,
+            vault_row_height_dp: settings.vault_row_height_dp,
             poetry_font_size_px: settings.poetry_font_size_sp,
             poetry_line_spacing: settings.poetry_line_spacing,
             poetry_text_alignment: settings.poetry_text_alignment,
@@ -1555,6 +1940,14 @@ impl WindowsSettingsDto {
             meal_calendar_show_captions: settings.meal_calendar_show_captions,
             meal_calendar_wrap_enabled: settings.meal_calendar_wrap_enabled,
             meal_calendar_photos_per_row: settings.meal_calendar_photos_per_row,
+            meal_buttons_use_icons: settings.meal_buttons_use_icons,
+            meal_button_icons: settings.meal_button_icons,
+            user_name: settings.user_name,
+            home_greetings: settings.home_greetings,
+            home_widget_borders_enabled: settings.home_widget_borders_enabled,
+            home_widgets: settings.home_widgets,
+            home_game_shortcuts: settings.home_game_shortcuts,
+            home_widget_titles: settings.home_widget_titles,
         }
     }
 
@@ -1566,17 +1959,23 @@ impl WindowsSettingsDto {
         settings.theme_secondary_colors_argb = self.theme_secondary_colors_argb;
         settings.font_scale = self.font_scale;
         settings.compact_mode = self.compact_mode;
+        settings.background_image_path = self.background_image_path;
+        settings.background_image_opacity = self.background_image_opacity;
+        settings.background_image_blur_px = self.background_image_blur_px;
+        settings.tutorial_mode_enabled = self.tutorial_mode_enabled;
         settings.file_name_pattern = self.file_name_pattern;
         settings.markdown_template = self.markdown_template;
         settings.image_name_pattern = self.image_name_pattern;
         settings.image_max_width_dp = self.image_max_width_px;
         settings.image_max_height_dp = self.image_max_height_px;
+        settings.markdown_heading_sizes_sp = self.markdown_heading_sizes_sp;
         settings.meal_image_compression_enabled = self.meal_image_compression_enabled;
         settings.meal_image_compression_quality = self.meal_image_compression_quality;
         settings.photo_location_enabled = self.photo_location_enabled;
         settings.thought_display_mode = self.thought_display_mode;
         settings.thought_highlight_color_argb = self.thought_highlight_color_argb;
         settings.thought_editor_max_height_dp = self.thought_editor_max_height_px;
+        settings.vault_row_height_dp = self.vault_row_height_dp;
         settings.poetry_font_size_sp = self.poetry_font_size_px;
         settings.poetry_line_spacing = self.poetry_line_spacing;
         settings.poetry_text_alignment = self.poetry_text_alignment;
@@ -1587,6 +1986,14 @@ impl WindowsSettingsDto {
         settings.meal_calendar_show_captions = self.meal_calendar_show_captions;
         settings.meal_calendar_wrap_enabled = self.meal_calendar_wrap_enabled;
         settings.meal_calendar_photos_per_row = self.meal_calendar_photos_per_row;
+        settings.meal_buttons_use_icons = self.meal_buttons_use_icons;
+        settings.meal_button_icons = self.meal_button_icons;
+        settings.user_name = self.user_name;
+        settings.home_greetings = self.home_greetings;
+        settings.home_widget_borders_enabled = self.home_widget_borders_enabled;
+        settings.home_widgets = self.home_widgets;
+        settings.home_game_shortcuts = self.home_game_shortcuts;
+        settings.home_widget_titles = self.home_widget_titles;
         LocalPaths {
             diary_path: self.diary_directory,
             media_path: self.media_directory,
@@ -1624,7 +2031,18 @@ fn update_windows_settings<R: Runtime>(
         .database
         .get_managed_settings()
         .map_err(map_data_error)?;
+    let requested_background = settings.background_image_path.clone();
+    let validated_background = if requested_background == managed.background_image_path {
+        requested_background
+    } else {
+        requested_background
+            .as_deref()
+            .map(|path| validate_background_image(Path::new(path)))
+            .transpose()?
+            .map(|path| path.to_string_lossy().into_owned())
+    };
     let paths = settings.apply_to(&mut managed);
+    managed.background_image_path = validated_background;
     managed
         .validate()
         .map_err(|_| SecurityErrorDto::invalid_input())?;
@@ -1678,6 +2096,59 @@ fn select_directory<R: Runtime>(
         .map_err(|_| SecurityErrorDto::path_not_allowed())?;
     let selected = diary::validate_directory(&selected).map_err(map_diary_error)?;
     Ok(Some(selected.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn select_background_image<R: Runtime>(
+    current_path: Option<String>,
+    app: AppHandle<R>,
+) -> CommandResult<Option<String>> {
+    let mut picker = app
+        .dialog()
+        .file()
+        .add_filter("Image", &["png", "jpg", "jpeg", "webp", "bmp"]);
+    if let Some(current) = current_path {
+        if let Ok(current) = validate_background_image(Path::new(&current))
+            && let Some(parent) = current.parent()
+        {
+            picker = picker.set_directory(parent);
+        }
+    }
+    let Some(selected) = picker.blocking_pick_file() else {
+        return Ok(None);
+    };
+    let selected = selected
+        .into_path()
+        .map_err(|_| SecurityErrorDto::path_not_allowed())?;
+    let selected = validate_background_image(&selected)?;
+    Ok(Some(selected.to_string_lossy().into_owned()))
+}
+
+fn validate_background_image(path: &Path) -> CommandResult<PathBuf> {
+    if !path.is_absolute()
+        || !path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "png" | "jpg" | "jpeg" | "webp" | "bmp"
+                )
+            })
+    {
+        return Err(SecurityErrorDto::path_not_allowed());
+    }
+    reject_reparse_point(path).map_err(SecurityErrorDto::from)?;
+    let canonical = fs::canonicalize(path).map_err(|_| SecurityErrorDto::path_not_allowed())?;
+    reject_reparse_point(&canonical).map_err(SecurityErrorDto::from)?;
+    let file = open_regular_file_no_reparse(&canonical).map_err(SecurityErrorDto::from)?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| SecurityErrorDto::storage_unavailable())?;
+    if metadata.len() == 0 || metadata.len() > MAX_BACKGROUND_IMAGE_BYTES {
+        return Err(SecurityErrorDto::invalid_input());
+    }
+    Ok(canonical)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2498,6 +2969,7 @@ struct ImportResultDto {
     category_count: usize,
     date_record_count: usize,
     poem_count: usize,
+    usage_devices_merged: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2612,6 +3084,15 @@ fn import_backup(token: String, state: State<'_, AppState>) -> CommandResult<Imp
     let receipt =
         backup::import_v18_transaction(&state.database, &prepared.backup, Some(&encrypted_shadow))
             .map_err(map_backup_error)?;
+    // The core database transaction above is the durable import boundary. The
+    // usage cache is a separate DPAPI-private, display-only projection: keep
+    // its last valid snapshot on a cache failure rather than reporting the
+    // already committed core import as failed.
+    let usage_devices_merged = !prepared.merge_usage_devices
+        || state
+            .usage_statistics
+            .merge_backup_device_values(&prepared.usage_devices, receipt.imported_at)
+            .is_ok();
     drop(prepared);
     // A staged selection is ephemeral and contains a copy of the user-selected
     // file. It is removed only after the database transaction commits.
@@ -2624,6 +3105,7 @@ fn import_backup(token: String, state: State<'_, AppState>) -> CommandResult<Imp
         category_count: receipt.category_count,
         date_record_count: receipt.date_record_count,
         poem_count: receipt.poem_count,
+        usage_devices_merged,
     })
 }
 
@@ -2864,8 +3346,7 @@ fn build_backup_bytes_from_database(database: &db::Database) -> CommandResult<Ve
         db::now_millis(),
         cloud_configs.as_deref(),
     );
-    let json = exported.map_err(map_backup_error)?;
-    Ok(json.into_bytes())
+    exported.map(String::into_bytes).map_err(map_backup_error)
 }
 
 /// Cloud JSON snapshots share the same serialization lock as manual/automatic
@@ -2886,9 +3367,19 @@ pub(crate) fn restore_cloud_backup_bytes(state: &AppState, bytes: &[u8]) -> Comm
     create_restore_point_unlocked(state)?;
     let encrypted_shadow =
         dpapi_protect(&prepared.canonical_bytes).map_err(SecurityErrorDto::from)?;
-    backup::import_v18_transaction(&state.database, &prepared.backup, Some(&encrypted_shadow))
-        .map(|_| ())
-        .map_err(map_backup_error)
+    let receipt =
+        backup::import_v18_transaction(&state.database, &prepared.backup, Some(&encrypted_shadow))
+            .map_err(map_backup_error)?;
+    if prepared.merge_usage_devices {
+        // The structured cloud restore has committed. Usage is deliberately a
+        // separate, read-only private projection, so a cache write failure
+        // preserves its previous valid snapshot and must not misreport the
+        // successful core restore as a failure.
+        let _ = state
+            .usage_statistics
+            .merge_backup_device_values(&prepared.usage_devices, receipt.imported_at);
+    }
+    Ok(())
 }
 
 fn read_bounded_file(path: &Path, limit: usize) -> CommandResult<Vec<u8>> {
@@ -3362,7 +3853,9 @@ fn choose_usage_statistics_source<R: Runtime>(
     request: ChooseUsageSourceRequest,
     state: State<'_, AppState>,
 ) -> CommandResult<Option<crate::usage::UsageSnapshotDto>> {
-    if request.dto_version != 1 {
+    if request.dto_version != crate::usage::USAGE_DTO_VERSION
+        || request.mode == crate::usage::UsageSourceModeDto::CloudSync
+    {
         return Err(SecurityErrorDto::invalid_input());
     }
     let Some(selected) = app
@@ -3383,6 +3876,9 @@ fn choose_usage_statistics_source<R: Runtime>(
         crate::usage::UsageSourceModeDto::LinkedFile => state
             .usage_statistics
             .link_file(&selected, db::now_millis()),
+        crate::usage::UsageSourceModeDto::CloudSync => {
+            return Err(SecurityErrorDto::invalid_input());
+        }
     }
     .map_err(map_usage_error)?;
     state
@@ -3404,6 +3900,78 @@ fn refresh_usage_statistics(
         .usage_statistics
         .snapshot(&query)
         .map_err(map_usage_error)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChooseHealthSourceRequest {
+    dto_version: u32,
+    mode: crate::health::HealthSourceModeDto,
+}
+
+fn map_health_error(error: crate::health::HealthServiceError) -> SecurityErrorDto {
+    SecurityErrorDto::new(error.code(), "Health data could not be read.", true)
+}
+
+#[tauri::command]
+fn get_health_page(
+    query: crate::health::HealthQueryDto,
+    state: State<'_, AppState>,
+) -> CommandResult<Option<crate::health::HealthSnapshotDto>> {
+    state
+        .health_statistics
+        .snapshot(&query)
+        .map_err(map_health_error)
+}
+
+#[tauri::command]
+fn choose_health_statistics_source<R: Runtime>(
+    app: AppHandle<R>,
+    request: ChooseHealthSourceRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<Option<crate::health::HealthSnapshotDto>> {
+    if request.dto_version != crate::health::HEALTH_DTO_VERSION {
+        return Err(SecurityErrorDto::invalid_input());
+    }
+    let Some(selected) = app
+        .dialog()
+        .file()
+        .add_filter("Android health statistics", &["json"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let selected = selected
+        .into_path()
+        .map_err(|_| SecurityErrorDto::path_not_allowed())?;
+    match request.mode {
+        crate::health::HealthSourceModeDto::Snapshot => state
+            .health_statistics
+            .import_snapshot(&selected, db::now_millis()),
+        crate::health::HealthSourceModeDto::LinkedFile => state
+            .health_statistics
+            .link_file(&selected, db::now_millis()),
+    }
+    .map_err(map_health_error)?;
+    state
+        .health_statistics
+        .snapshot(&crate::health::HealthQueryDto::default())
+        .map_err(map_health_error)
+}
+
+#[tauri::command]
+fn refresh_health_statistics(
+    query: crate::health::HealthQueryDto,
+    state: State<'_, AppState>,
+) -> CommandResult<Option<crate::health::HealthSnapshotDto>> {
+    state
+        .health_statistics
+        .refresh_linked(db::now_millis())
+        .map_err(map_health_error)?;
+    state
+        .health_statistics
+        .snapshot(&query)
+        .map_err(map_health_error)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3460,6 +4028,13 @@ enum OfficialLinkTarget {
 struct OpenOfficialLinkRequest {
     schema_version: u32,
     target: OfficialLinkTarget,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OpenExternalLinkRequest {
+    schema_version: u32,
+    url: String,
 }
 
 fn map_update_error(error: updater::UpdateError) -> SecurityErrorDto {
@@ -3568,6 +4143,14 @@ fn open_official_link(request: OpenOfficialLinkRequest) -> CommandResult<()> {
     open_fixed_https_url(url)
 }
 
+#[tauri::command]
+fn open_external_link(request: OpenExternalLinkRequest) -> CommandResult<()> {
+    if request.schema_version != 1 {
+        return Err(SecurityErrorDto::invalid_input());
+    }
+    open_external_http_url(&request.url)
+}
+
 #[cfg(windows)]
 fn open_fixed_https_url(url: &'static str) -> CommandResult<()> {
     if !url.starts_with("https://") {
@@ -3580,6 +4163,24 @@ fn open_fixed_https_url(url: &'static str) -> CommandResult<()> {
 fn open_external_http_url(url: &str) -> CommandResult<()> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    validate_external_http_url(url)?;
+    std::process::Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", url])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| SecurityErrorDto::new("open_failed", "The link could not be opened.", true))
+}
+
+fn validate_external_http_url(url: &str) -> CommandResult<()> {
+    const MAX_EXTERNAL_URL_UTF16_UNITS: usize = 8_192;
+    if url.is_empty()
+        || url.trim() != url
+        || url.encode_utf16().count() > MAX_EXTERNAL_URL_UTF16_UNITS
+        || url.chars().any(char::is_control)
+    {
+        return Err(SecurityErrorDto::invalid_input());
+    }
     let parsed = reqwest::Url::parse(url).map_err(|_| SecurityErrorDto::invalid_input())?;
     if !matches!(parsed.scheme(), "http" | "https")
         || parsed.host_str().is_none()
@@ -3588,12 +4189,7 @@ fn open_external_http_url(url: &str) -> CommandResult<()> {
     {
         return Err(SecurityErrorDto::invalid_input());
     }
-    std::process::Command::new("rundll32.exe")
-        .args(["url.dll,FileProtocolHandler", url])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| SecurityErrorDto::new("open_failed", "The link could not be opened.", true))
+    Ok(())
 }
 
 #[cfg(not(windows))]
@@ -3753,6 +4349,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn windows_settings_dto_round_trips_home_configuration() {
+        let managed = ManagedSettings {
+            user_name: "Desk user".to_owned(),
+            home_greetings: vec![HomeGreeting {
+                chinese: "你好，{name}".to_owned(),
+                english: "Hello, {name}".to_owned(),
+            }],
+            home_widget_borders_enabled: false,
+            home_widgets: vec![
+                "notes".to_owned(),
+                "game_shortcuts".to_owned(),
+                "record_overview".to_owned(),
+            ],
+            home_widget_titles: vec!["game_shortcuts".to_owned()],
+            home_game_shortcuts: vec!["spider".to_owned(), "2048_6".to_owned()],
+            meal_buttons_use_icons: true,
+            meal_button_icons: vec![
+                "A".to_owned(),
+                "B".to_owned(),
+                "C".to_owned(),
+                "D".to_owned(),
+                "E".to_owned(),
+                "F".to_owned(),
+            ],
+            ..ManagedSettings::default()
+        };
+
+        let dto = WindowsSettingsDto::from_parts(managed.clone(), LocalPaths::default());
+        let serialized = serde_json::to_value(&dto).expect("serialize Windows settings");
+        assert_eq!(serialized["homeWidgets"][0], "notes");
+        assert_eq!(serialized["homeWidgetTitles"][0], "game_shortcuts");
+        assert_eq!(serialized["homeWidgetBordersEnabled"], false);
+        assert_eq!(serialized["homeGameShortcuts"][0], "spider");
+        assert_eq!(serialized["mealButtonsUseIcons"], true);
+
+        let mut restored = ManagedSettings::default();
+        dto.apply_to(&mut restored);
+        assert_eq!(restored.user_name, managed.user_name);
+        assert_eq!(restored.home_greetings, managed.home_greetings);
+        assert_eq!(restored.home_widgets, managed.home_widgets);
+        assert_eq!(restored.home_widget_titles, managed.home_widget_titles);
+        assert_eq!(restored.home_game_shortcuts, managed.home_game_shortcuts);
+        assert_eq!(
+            restored.home_widget_borders_enabled,
+            managed.home_widget_borders_enabled
+        );
+        assert_eq!(restored.meal_button_icons, managed.meal_button_icons);
+        assert_eq!(
+            restored.meal_buttons_use_icons,
+            managed.meal_buttons_use_icons
+        );
+    }
+
+    #[test]
+    fn background_picker_accepts_only_bounded_regular_image_files() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let image = directory.path().join("background.PNG");
+        fs::write(&image, b"not-decoded-at-selection-time").expect("write image candidate");
+        assert_eq!(
+            validate_background_image(&image).expect("valid image path"),
+            fs::canonicalize(&image).expect("canonical image")
+        );
+
+        let wrong_extension = directory.path().join("background.txt");
+        fs::write(&wrong_extension, b"content").expect("write wrong extension");
+        assert!(validate_background_image(&wrong_extension).is_err());
+
+        let empty = directory.path().join("empty.jpg");
+        fs::write(&empty, []).expect("write empty image");
+        assert!(validate_background_image(&empty).is_err());
+    }
+
+    #[test]
     fn default_meal_filter_percentages_map_to_identity() {
         let filter =
             meal_filter_from_percentages(100.0, 100.0, 100.0, 0.0, 0.0).expect("valid filter");
@@ -3783,6 +4452,19 @@ mod tests {
         assert!(meal_filter_from_percentages(f64::NAN, 100.0, 100.0, 0.0, 0.0).is_err());
         assert!(meal_filter_from_percentages(100.0, 151.0, 100.0, 0.0, 0.0).is_err());
         assert!(meal_filter_from_percentages(100.0, 100.0, 201.0, 0.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn external_links_accept_only_bounded_credential_free_http_urls() {
+        assert!(validate_external_http_url("https://example.test/path?q=1").is_ok());
+        assert!(validate_external_http_url("http://example.test").is_ok());
+        assert!(validate_external_http_url("mailto:user@example.test").is_err());
+        assert!(validate_external_http_url("https://user@example.test").is_err());
+        assert!(validate_external_http_url("https://example.test\nnext").is_err());
+        assert!(
+            validate_external_http_url(&format!("https://example.test/{}", "a".repeat(8_192)))
+                .is_err()
+        );
     }
 
     #[test]
@@ -3839,6 +4521,8 @@ mod tests {
             source: "source".to_owned(),
             created_at: i64::MAX - 1,
             updated_at: i64::MAX,
+            sort_order: i64::MAX - 2,
+            category_id: None,
         }))
         .expect("serialize poem");
         assert_eq!(poem["id"], i64::MAX.to_string());

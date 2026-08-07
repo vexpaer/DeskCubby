@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub const DEFAULT_CLOUD_SYNC_USER_AGENT: &str = "DeskCubby-Sync/1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -24,6 +25,7 @@ pub enum CloudSyncContent {
     Diaries,
     Media,
     JsonBackup,
+    UsageStatistics,
 }
 
 impl CloudSyncContent {
@@ -32,6 +34,7 @@ impl CloudSyncContent {
             Self::Diaries => "diaries",
             Self::Media => "media",
             Self::JsonBackup => "json",
+            Self::UsageStatistics => "usage/v1",
         }
     }
 }
@@ -44,7 +47,7 @@ pub enum CloudSyncDirection {
 }
 
 /// Non-secret metadata. Secret material is always supplied separately through
-/// [`CloudCredentials`] and must never be serialized into Android v18 backup
+/// [`CloudCredentials`] and must never be serialized into Android v27 backup
 /// settings.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,9 +58,11 @@ pub struct CloudSyncConfig {
     pub service_type: CloudSyncServiceType,
     pub endpoint_url: String,
     pub remote_path: String,
+    pub user_agent: String,
     pub web_dav_username: String,
     pub s3_bucket: String,
     pub s3_region: String,
+    pub s3_path_style: bool,
     pub allow_insecure_http: bool,
     pub selected_contents: BTreeSet<CloudSyncContent>,
     pub direction: CloudSyncDirection,
@@ -80,6 +85,7 @@ impl fmt::Debug for CloudSyncConfig {
                 },
             )
             .field("remote_path", &self.remote_path)
+            .field("user_agent", &self.user_agent)
             .field(
                 "web_dav_username",
                 &if self.web_dav_username.is_empty() {
@@ -90,6 +96,7 @@ impl fmt::Debug for CloudSyncConfig {
             )
             .field("s3_bucket", &self.s3_bucket)
             .field("s3_region", &self.s3_region)
+            .field("s3_path_style", &self.s3_path_style)
             .field("allow_insecure_http", &self.allow_insecure_http)
             .field("selected_contents", &self.selected_contents)
             .field("direction", &self.direction)
@@ -106,14 +113,17 @@ impl Default for CloudSyncConfig {
             service_type: CloudSyncServiceType::Webdav,
             endpoint_url: String::new(),
             remote_path: "DeskCubby".to_owned(),
+            user_agent: DEFAULT_CLOUD_SYNC_USER_AGENT.to_owned(),
             web_dav_username: String::new(),
             s3_bucket: String::new(),
             s3_region: "us-east-1".to_owned(),
+            s3_path_style: true,
             allow_insecure_http: false,
             selected_contents: [
                 CloudSyncContent::Diaries,
                 CloudSyncContent::Media,
                 CloudSyncContent::JsonBackup,
+                CloudSyncContent::UsageStatistics,
             ]
             .into_iter()
             .collect(),

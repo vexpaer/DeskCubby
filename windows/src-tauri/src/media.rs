@@ -19,6 +19,16 @@ use uuid::Uuid;
 const MEDIA_META_FILE_NAME: &str = "dc-media.json";
 const LEGACY_MEDIA_META_FILE_NAME: &str = "deskcubby-media.json";
 const MAX_MEDIA_META_BYTES: u64 = 2 * 1024 * 1024;
+const MEDIA_META_VERSION: i64 = 2;
+const MAX_MEDIA_META_ENTRIES: usize = 20_000;
+const MAX_MEAL_DAY_ENTRIES: usize = 10_000;
+const MAX_MEDIA_META_KEY_CHARS: usize = 1_024;
+const MAX_MEAL_FOODS: usize = 64;
+const MAX_MEAL_FOOD_NAME_CHARS: usize = 200;
+const MAX_MEAL_AMOUNT_CHARS: usize = 80;
+const MAX_MEAL_UNIT_CHARS: usize = 40;
+const MAX_MEAL_NOTE_CHARS: usize = 4_000;
+const MAX_MEAL_ENERGY_KJ: i64 = 1_000_000;
 const MAX_SOURCE_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SOURCE_IMAGE_PIXELS: u64 = 100_000_000;
 const MAX_COMPRESSED_EDGE: u32 = 2_560;
@@ -111,6 +121,36 @@ pub struct MediaMetaEntry {
     pub longitude: Option<f64>,
     #[serde(default)]
     pub place: Option<String>,
+    #[serde(default)]
+    pub foods: Vec<MealFoodEnergy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MealFoodEnergy {
+    pub name: String,
+    #[serde(default)]
+    pub amount: Option<String>,
+    #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
+    pub energy_kj: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MealDayDetails {
+    #[serde(default)]
+    pub total_energy_kj_override: Option<i64>,
+    #[serde(default)]
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MealEnergyUpdate {
+    pub file_name: String,
+    pub energy_kj: i64,
+    pub foods: Vec<MealFoodEnergy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -355,6 +395,7 @@ pub fn import_image(
             latitude: Some(latitude),
             longitude: Some(longitude),
             place: None,
+            foods: Vec::new(),
         })
     } else {
         None
@@ -429,6 +470,146 @@ pub fn set_media_metadata(
         .map_err(|_| MediaError::new("MEDIA_LOCK_POISONED", "Media writer lock is unavailable."))?;
     let root = validate_media_directory(media_root)?;
     set_media_metadata_unlocked(&root, file_name, entry)
+}
+
+/// Reads the date-scoped meal note without treating a damaged sidecar as empty.
+///
+/// Calorie estimation sends this note to the text model only after the whole v2 document has
+/// passed the same bounded validation used by the write path.
+pub fn read_meal_day_details(
+    media_root: &Path,
+    date_iso: &str,
+) -> Result<MealDayDetails, MediaError> {
+    NaiveDate::parse_from_str(date_iso, "%Y-%m-%d")
+        .map_err(|_| MediaError::new("MEAL_DATE_INVALID", "Meal dates must use YYYY-MM-DD."))?;
+    let _guard = MEDIA_MUTEX
+        .lock()
+        .map_err(|_| MediaError::new("MEDIA_LOCK_POISONED", "Media reader lock is unavailable."))?;
+    let root = validate_media_directory(media_root)?;
+    let value = read_media_meta_value(&root)?;
+    validate_media_meta_for_update(&value)?;
+    let item = value
+        .get("mealDays")
+        .and_then(Value::as_object)
+        .and_then(|days| days.get(date_iso))
+        .and_then(Value::as_object);
+    Ok(MealDayDetails {
+        total_energy_kj_override: item
+            .and_then(|value| value.get("totalEnergyKjOverride"))
+            .and_then(parse_energy_value),
+        note: item
+            .and_then(|value| value.get("note"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_owned(),
+    })
+}
+
+/// Atomically updates every estimated photo for one completed date-scoped AI run.
+///
+/// All rows are validated before the media mutex is acquired. The existing sidecar is then read
+/// once, strictly validated, updated in memory, safely replaced, and read back. A failed image
+/// recognition, text calculation, validation, or write therefore cannot leave a subset of that
+/// day's photos committed.
+pub fn set_meal_energy_batch(
+    media_root: &Path,
+    updates: &[MealEnergyUpdate],
+) -> Result<(), MediaError> {
+    if updates.is_empty() {
+        return Err(MediaError::new(
+            "MEAL_ENERGY_EMPTY",
+            "At least one meal photo is required.",
+        ));
+    }
+    let mut normalized_names = HashSet::with_capacity(updates.len());
+    for update in updates {
+        validate_leaf_name(&update.file_name)?;
+        if !normalized_names.insert(update.file_name.to_lowercase()) {
+            return Err(MediaError::new(
+                "MEAL_ENERGY_DUPLICATE",
+                "Meal photo names must be unique.",
+            ));
+        }
+        validate_energy(update.energy_kj)?;
+        validate_foods(&update.foods)?;
+    }
+
+    let _guard = MEDIA_MUTEX
+        .lock()
+        .map_err(|_| MediaError::new("MEDIA_LOCK_POISONED", "Media writer lock is unavailable."))?;
+    let root = validate_media_directory(media_root)?;
+    let mut root_value = read_media_meta_value(&root)?;
+    validate_media_meta_for_update(&root_value)?;
+    let root_object = root_value
+        .as_object_mut()
+        .expect("strict media metadata validation established an object");
+    let previous_version = root_object
+        .get("version")
+        .and_then(Value::as_i64)
+        .unwrap_or(1);
+    root_object.insert(
+        "version".to_owned(),
+        Value::from(previous_version.max(MEDIA_META_VERSION)),
+    );
+    if !root_object.get("entries").is_some_and(Value::is_object) {
+        root_object.insert("entries".to_owned(), Value::Object(Map::new()));
+    }
+    let entries = root_object
+        .get_mut("entries")
+        .and_then(Value::as_object_mut)
+        .expect("entries object established immediately above");
+
+    for update in updates {
+        let normalized = update.file_name.to_lowercase();
+        let matching = entries
+            .keys()
+            .filter(|key| key.eq_ignore_ascii_case(&normalized))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut item = matching
+            .iter()
+            .find_map(|key| entries.get(key).and_then(Value::as_object).cloned())
+            .unwrap_or_default();
+        for key in matching {
+            entries.remove(&key);
+        }
+        item.insert("energyKj".to_owned(), Value::from(update.energy_kj));
+        if update.foods.is_empty() {
+            item.remove("foods");
+        } else {
+            item.insert(
+                "foods".to_owned(),
+                Value::Array(update.foods.iter().map(encode_food).collect()),
+            );
+        }
+        entries.insert(normalized, Value::Object(item));
+    }
+
+    let encoded = serde_json::to_vec_pretty(&root_value)
+        .map_err(|_| MediaError::new("MEDIA_METADATA_INVALID", "Media metadata is invalid."))?;
+    if encoded.len() as u64 > MAX_MEDIA_META_BYTES {
+        return Err(MediaError::new(
+            "MEDIA_METADATA_TOO_LARGE",
+            "Media metadata exceeds its size limit.",
+        ));
+    }
+    let target = root.join(MEDIA_META_FILE_NAME);
+    atomic_write_replace(&target, &encoded)?;
+    let reread = read_bounded(&target, MAX_MEDIA_META_BYTES)?;
+    let decoded: Value = serde_json::from_slice(&reread).map_err(|_| {
+        MediaError::new(
+            "MEDIA_METADATA_VERIFY_FAILED",
+            "Media metadata failed read-back validation.",
+        )
+    })?;
+    if decoded != root_value {
+        return Err(MediaError::new(
+            "MEDIA_METADATA_VERIFY_FAILED",
+            "Media metadata changed during write-back verification.",
+        ));
+    }
+    Ok(())
 }
 
 pub fn scan_meal_calendar(
@@ -836,6 +1017,17 @@ fn read_media_metadata_unlocked(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned);
+        let foods = item
+            .get("foods")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .take(MAX_MEAL_FOODS)
+                    .filter_map(decode_food)
+                    .collect()
+            })
+            .unwrap_or_default();
         result.insert(
             key.to_lowercase(),
             MediaMetaEntry {
@@ -843,6 +1035,7 @@ fn read_media_metadata_unlocked(
                 latitude,
                 longitude,
                 place,
+                foods,
             },
         );
     }
@@ -864,7 +1057,11 @@ fn set_media_metadata_unlocked(
     let root_object = root_value
         .as_object_mut()
         .expect("object established immediately above");
-    root_object.insert("version".to_owned(), Value::from(1));
+    let previous_version = root_object
+        .get("version")
+        .and_then(Value::as_i64)
+        .unwrap_or(1);
+    root_object.insert("version".to_owned(), Value::from(previous_version.max(1)));
     if !root_object
         .get("entries")
         .is_some_and(serde_json::Value::is_object)
@@ -953,6 +1150,235 @@ fn read_media_meta_value(root: &Path) -> Result<Value, MediaError> {
     let bytes = read_bounded(&canonical, MAX_MEDIA_META_BYTES)?;
     serde_json::from_slice(&bytes)
         .map_err(|error| MediaError::new("MEDIA_METADATA_INVALID", error.to_string()))
+}
+
+fn validate_media_meta_for_update(value: &Value) -> Result<(), MediaError> {
+    let root = value.as_object().ok_or_else(|| {
+        MediaError::new(
+            "MEDIA_METADATA_INVALID",
+            "Media metadata root must be a JSON object.",
+        )
+    })?;
+    if let Some(version) = root.get("version")
+        && version.as_i64().is_none()
+    {
+        return Err(MediaError::new(
+            "MEDIA_METADATA_INVALID",
+            "Media metadata version is invalid.",
+        ));
+    }
+    if let Some(raw_entries) = root.get("entries") {
+        let entries = raw_entries.as_object().ok_or_else(|| {
+            MediaError::new(
+                "MEDIA_METADATA_INVALID",
+                "Media metadata entries must be an object.",
+            )
+        })?;
+        if entries.len() > MAX_MEDIA_META_ENTRIES {
+            return Err(MediaError::new(
+                "MEDIA_METADATA_TOO_LARGE",
+                "Media metadata contains too many entries.",
+            ));
+        }
+        for (key, raw_item) in entries {
+            if key.chars().count() > MAX_MEDIA_META_KEY_CHARS {
+                return Err(MediaError::new(
+                    "MEDIA_METADATA_INVALID",
+                    "A media metadata key is too long.",
+                ));
+            }
+            let item = raw_item.as_object().ok_or_else(|| {
+                MediaError::new(
+                    "MEDIA_METADATA_INVALID",
+                    "A media metadata entry is invalid.",
+                )
+            })?;
+            if let Some(energy) = item.get("energyKj") {
+                parse_energy_value(energy).ok_or_else(|| {
+                    MediaError::new("MEDIA_METADATA_INVALID", "A media energy value is invalid.")
+                })?;
+            }
+            if let Some(raw_foods) = item.get("foods") {
+                let foods = raw_foods.as_array().ok_or_else(|| {
+                    MediaError::new("MEDIA_METADATA_INVALID", "Media foods must be an array.")
+                })?;
+                if foods.len() > MAX_MEAL_FOODS
+                    || foods.iter().any(|food| decode_food(food).is_none())
+                {
+                    return Err(MediaError::new(
+                        "MEDIA_METADATA_INVALID",
+                        "A media food entry is invalid.",
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(raw_days) = root.get("mealDays") {
+        let days = raw_days.as_object().ok_or_else(|| {
+            MediaError::new(
+                "MEDIA_METADATA_INVALID",
+                "Meal day metadata must be an object.",
+            )
+        })?;
+        if days.len() > MAX_MEAL_DAY_ENTRIES {
+            return Err(MediaError::new(
+                "MEDIA_METADATA_TOO_LARGE",
+                "Media metadata contains too many meal days.",
+            ));
+        }
+        for (date, raw_day) in days {
+            if NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
+                return Err(MediaError::new(
+                    "MEDIA_METADATA_INVALID",
+                    "A meal day key is invalid.",
+                ));
+            }
+            let day = raw_day.as_object().ok_or_else(|| {
+                MediaError::new("MEDIA_METADATA_INVALID", "A meal day entry is invalid.")
+            })?;
+            if let Some(value) = day.get("totalEnergyKjOverride") {
+                parse_energy_value(value).ok_or_else(|| {
+                    MediaError::new(
+                        "MEDIA_METADATA_INVALID",
+                        "A meal day energy override is invalid.",
+                    )
+                })?;
+            }
+            if let Some(note) = day.get("note")
+                && note
+                    .as_str()
+                    .is_none_or(|value| value.chars().count() > MAX_MEAL_NOTE_CHARS)
+            {
+                return Err(MediaError::new(
+                    "MEDIA_METADATA_INVALID",
+                    "A meal day note is invalid.",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_energy_value(value: &Value) -> Option<i64> {
+    let numeric = value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| {
+            value
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .map(|value| value.round() as i64)
+        })
+        .or_else(|| {
+            value
+                .as_str()?
+                .parse::<f64>()
+                .ok()
+                .and_then(|value| value.is_finite().then(|| value.round() as i64))
+        })?;
+    (0..=MAX_MEAL_ENERGY_KJ)
+        .contains(&numeric)
+        .then_some(numeric)
+}
+
+fn decode_food(value: &Value) -> Option<MealFoodEnergy> {
+    let item = value.as_object()?;
+    let name = item.get("name")?.as_str()?.trim();
+    if name.is_empty() || name.chars().count() > MAX_MEAL_FOOD_NAME_CHARS {
+        return None;
+    }
+    let amount = bounded_scalar(item.get("amount"), MAX_MEAL_AMOUNT_CHARS)?;
+    let unit = bounded_string(item.get("unit"), MAX_MEAL_UNIT_CHARS)?;
+    let energy_kj = match item.get("energyKj") {
+        Some(value) => Some(parse_energy_value(value)?),
+        None => None,
+    };
+    Some(MealFoodEnergy {
+        name: name.to_owned(),
+        amount,
+        unit,
+        energy_kj,
+    })
+}
+
+fn bounded_string(value: Option<&Value>, maximum: usize) -> Option<Option<String>> {
+    let Some(value) = value else {
+        return Some(None);
+    };
+    if value.is_null() {
+        return Some(None);
+    }
+    let value = value.as_str()?.trim();
+    (value.chars().count() <= maximum).then(|| (!value.is_empty()).then(|| value.to_owned()))
+}
+
+fn bounded_scalar(value: Option<&Value>, maximum: usize) -> Option<Option<String>> {
+    let Some(value) = value else {
+        return Some(None);
+    };
+    if value.is_null() {
+        return Some(None);
+    }
+    if value.is_array() || value.is_object() {
+        return None;
+    }
+    let value = match value {
+        Value::String(value) => value.clone(),
+        _ => value.to_string(),
+    };
+    let value = value.trim();
+    (value.chars().count() <= maximum).then(|| (!value.is_empty()).then(|| value.to_owned()))
+}
+
+fn validate_energy(value: i64) -> Result<(), MediaError> {
+    if (0..=MAX_MEAL_ENERGY_KJ).contains(&value) {
+        Ok(())
+    } else {
+        Err(MediaError::new(
+            "MEDIA_METADATA_ENERGY_INVALID",
+            "Energy is outside the supported range.",
+        ))
+    }
+}
+
+fn validate_foods(foods: &[MealFoodEnergy]) -> Result<(), MediaError> {
+    if foods.len() > MAX_MEAL_FOODS
+        || foods
+            .iter()
+            .any(|food| decode_food(&encode_food(food)).is_none())
+    {
+        Err(MediaError::new(
+            "MEDIA_METADATA_FOODS_INVALID",
+            "Meal food details are invalid.",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn encode_food(food: &MealFoodEnergy) -> Value {
+    let mut item = Map::new();
+    item.insert("name".to_owned(), Value::from(food.name.trim()));
+    if let Some(amount) = food
+        .amount
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        item.insert("amount".to_owned(), Value::from(amount));
+    }
+    if let Some(unit) = food
+        .unit
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        item.insert("unit".to_owned(), Value::from(unit));
+    }
+    if let Some(energy_kj) = food.energy_kj {
+        item.insert("energyKj".to_owned(), Value::from(energy_kj));
+    }
+    Value::Object(item)
 }
 
 fn media_name_map(root: &Path) -> Result<HashMap<String, String>, MediaError> {
@@ -1856,6 +2282,7 @@ mod tests {
                 latitude: Some(31.2),
                 longitude: Some(121.5),
                 place: Some("Shanghai".to_owned()),
+                foods: Vec::new(),
             },
         )
         .expect("update");
@@ -1978,6 +2405,109 @@ mod tests {
                 Some(100 + index)
             );
         }
+    }
+
+    #[test]
+    fn meal_energy_batch_is_one_v2_update_and_preserves_unknown_fields() {
+        let root = tempdir().expect("media directory");
+        fs::write(
+            root.path().join(MEDIA_META_FILE_NAME),
+            r#"{
+              "version": 1,
+              "futureRoot": {"keep": true},
+              "mealDays": {"2026-08-07": {"note": "shared meal", "futureDay": 9}},
+              "entries": {
+                "FIRST.JPG": {"energyKj": 10, "futureEntry": "keep"},
+                "second.jpg": {"lat": 31.2, "lng": 121.5}
+              }
+            }"#,
+        )
+        .expect("sidecar");
+
+        set_meal_energy_batch(
+            root.path(),
+            &[
+                MealEnergyUpdate {
+                    file_name: "first.jpg".to_owned(),
+                    energy_kj: 800,
+                    foods: vec![MealFoodEnergy {
+                        name: "rice".to_owned(),
+                        amount: Some("150".to_owned()),
+                        unit: Some("g".to_owned()),
+                        energy_kj: Some(780),
+                    }],
+                },
+                MealEnergyUpdate {
+                    file_name: "SECOND.JPG".to_owned(),
+                    energy_kj: 0,
+                    foods: Vec::new(),
+                },
+            ],
+        )
+        .expect("batch update");
+
+        let value: Value = serde_json::from_slice(
+            &fs::read(root.path().join(MEDIA_META_FILE_NAME)).expect("sidecar"),
+        )
+        .expect("valid JSON");
+        assert_eq!(value["version"], Value::from(2));
+        assert_eq!(value["futureRoot"]["keep"], Value::Bool(true));
+        assert_eq!(value["mealDays"]["2026-08-07"]["note"], "shared meal");
+        assert_eq!(value["entries"]["first.jpg"]["futureEntry"], "keep");
+        assert!(value["entries"].get("FIRST.JPG").is_none());
+        assert_eq!(value["entries"]["first.jpg"]["energyKj"], 800);
+        assert_eq!(value["entries"]["first.jpg"]["foods"][0]["name"], "rice");
+        assert_eq!(value["entries"]["second.jpg"]["energyKj"], 0);
+        assert_eq!(value["entries"]["second.jpg"]["lat"], 31.2);
+    }
+
+    #[test]
+    fn meal_energy_batch_validates_every_result_before_writing() {
+        let root = tempdir().expect("media directory");
+        let original = br#"{"version":2,"entries":{"meal.jpg":{"energyKj":500}}}"#;
+        fs::write(root.path().join(MEDIA_META_FILE_NAME), original).expect("sidecar");
+        let error = set_meal_energy_batch(
+            root.path(),
+            &[
+                MealEnergyUpdate {
+                    file_name: "meal.jpg".to_owned(),
+                    energy_kj: 900,
+                    foods: Vec::new(),
+                },
+                MealEnergyUpdate {
+                    file_name: "other.jpg".to_owned(),
+                    energy_kj: MAX_MEAL_ENERGY_KJ + 1,
+                    foods: Vec::new(),
+                },
+            ],
+        )
+        .expect_err("invalid second result must reject whole batch");
+        assert_eq!(error.code, "MEDIA_METADATA_ENERGY_INVALID");
+        assert_eq!(
+            fs::read(root.path().join(MEDIA_META_FILE_NAME)).expect("unchanged sidecar"),
+            original
+        );
+    }
+
+    #[test]
+    fn damaged_sidecar_is_never_treated_as_empty_by_ai_update() {
+        let root = tempdir().expect("media directory");
+        let original = br#"{"version":2,"entries":[]}"#;
+        fs::write(root.path().join(MEDIA_META_FILE_NAME), original).expect("sidecar");
+        let error = set_meal_energy_batch(
+            root.path(),
+            &[MealEnergyUpdate {
+                file_name: "meal.jpg".to_owned(),
+                energy_kj: 900,
+                foods: Vec::new(),
+            }],
+        )
+        .expect_err("damaged document must be preserved");
+        assert_eq!(error.code, "MEDIA_METADATA_INVALID");
+        assert_eq!(
+            fs::read(root.path().join(MEDIA_META_FILE_NAME)).expect("unchanged sidecar"),
+            original
+        );
     }
 
     #[test]

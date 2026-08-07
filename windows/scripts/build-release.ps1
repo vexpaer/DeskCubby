@@ -20,6 +20,9 @@ $version = [string]$configuration.version
 $releaseDirectory = Join-Path (
     $windowsRoot
 ) "src-tauri\target\$targetTriple\release"
+$nsisDirectory = Join-Path $releaseDirectory "bundle\nsis"
+$bundledInstaller = Join-Path $nsisDirectory "DeskCubby_${version}_x64-setup.exe"
+$bundledInstallerSignature = "$bundledInstaller.sig"
 $artifactDirectory = Join-Path $windowsRoot "artifacts"
 $temporaryReleaseConfig = $null
 
@@ -102,7 +105,6 @@ Push-Location $windowsRoot
 try {
     if (-not $SkipChecks) {
         & (Join-Path $PSScriptRoot "verify.ps1")
-        Assert-LastExitCode "Verification"
     }
 
     $buildArguments = @(
@@ -126,7 +128,6 @@ try {
         )
         & (Join-Path $PSScriptRoot "new-release-config.ps1") `
             -OutputPath $temporaryReleaseConfig
-        Assert-LastExitCode "Signed release configuration"
         $buildArguments += @("--config", $temporaryReleaseConfig)
     }
     else {
@@ -140,18 +141,21 @@ try {
     # Release builds must never silently resolve a different Rust dependency set.
     $buildArguments += @("--", "--locked")
 
+    # Refuse to mistake a stale installer from an earlier attempt for this build.
+    foreach ($staleBundle in @($bundledInstaller, $bundledInstallerSignature)) {
+        if ([IO.File]::Exists($staleBundle)) {
+            Remove-Item -LiteralPath $staleBundle -Force
+        }
+    }
+
     Invoke-Pnpm @buildArguments
     Assert-LastExitCode "Tauri release build"
 
     node .\scripts\copy-portable.mjs
     Assert-LastExitCode "Portable artifact copy"
 
-    $nsisDirectory = Join-Path $releaseDirectory "bundle\nsis"
-    $installer = Get-ChildItem -LiteralPath $nsisDirectory -Filter *.exe -File |
-        Sort-Object LastWriteTimeUtc -Descending |
-        Select-Object -First 1
-    if ($null -eq $installer) {
-        throw "No NSIS installer was produced in $nsisDirectory."
+    if (-not [IO.File]::Exists($bundledInstaller)) {
+        throw "Tauri did not produce the expected versioned NSIS installer."
     }
 
     [IO.Directory]::CreateDirectory($artifactDirectory) | Out-Null
@@ -164,40 +168,32 @@ try {
             Remove-Item -LiteralPath $stalePath -Force
         }
     }
-    Copy-Item -LiteralPath $installer.FullName -Destination $artifactInstaller
+    Copy-Item -LiteralPath $bundledInstaller -Destination $artifactInstaller
 
     if ($Mode -eq "SignedRelease") {
-        $sourceSignature = "$($installer.FullName).sig"
         if (
-            -not [IO.File]::Exists($sourceSignature) -or
-            (Get-Item -LiteralPath $sourceSignature).Length -le 0
+            -not [IO.File]::Exists($bundledInstallerSignature) -or
+            (Get-Item -LiteralPath $bundledInstallerSignature).Length -le 0
         ) {
             throw "Tauri did not produce the required updater signature."
         }
-        Copy-Item -LiteralPath $sourceSignature -Destination $artifactSignature
-
-        & cargo run `
-            --locked `
-            --quiet `
-            --manifest-path .\src-tauri\Cargo.toml `
-            --example verify_updater_signature `
-            --release `
-            --target $targetTriple `
-            -- `
-            $artifactInstaller `
-            $artifactSignature
-        Assert-LastExitCode "Tauri updater signature verification"
+        Copy-Item `
+            -LiteralPath $bundledInstallerSignature `
+            -Destination $artifactSignature
     }
 
-    $releaseFiles = Get-ChildItem -LiteralPath $artifactDirectory -File |
-        Where-Object {
-            $_.Name -like "DeskCubby-$version-windows-x64-*.exe" -or
-            $_.Name -like "DeskCubby-$version-windows-x64-*.exe.sig"
-        } |
-        Sort-Object Name
-    $checksumLines = foreach ($file in $releaseFiles) {
-        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
-        "$($hash.ToLowerInvariant())  $($file.Name)"
+    $portableName = "DeskCubby-$version-windows-x64-portable.exe"
+    $portablePath = Join-Path $artifactDirectory $portableName
+    $checksumPaths = @($portablePath, $artifactInstaller)
+    if ($Mode -eq "SignedRelease") {
+        $checksumPaths += $artifactSignature
+    }
+    $checksumLines = foreach ($path in ($checksumPaths | Sort-Object)) {
+        if (-not [IO.File]::Exists($path) -or (Get-Item -LiteralPath $path).Length -le 0) {
+            throw "A required checksum input is missing or empty."
+        }
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash
+        "$($hash.ToLowerInvariant())  $([IO.Path]::GetFileName($path))"
     }
     [IO.File]::WriteAllLines(
         (Join-Path $artifactDirectory "SHA256SUMS.txt"),
@@ -211,24 +207,29 @@ try {
             -Version $version `
             -Tag $ReleaseTag `
             -Repository $Repository
-        Assert-LastExitCode "Updater manifest generation"
     }
 
-    & (Join-Path $PSScriptRoot "inspect-artifacts.ps1") `
-        -ArtifactDirectory $artifactDirectory `
-        -Version $version `
-        -Mode $Mode `
-        -ExpectedCertificateThumbprint (
-            [Environment]::GetEnvironmentVariable(
-                "DESKCUBBY_WINDOWS_CERTIFICATE_THUMBPRINT"
-            )
-        ) `
-        -ExpectedSignerSubject (
-            [Environment]::GetEnvironmentVariable(
-                "DESKCUBBY_WINDOWS_SIGNER_SUBJECT"
-            )
-        )
-    Assert-LastExitCode "Artifact inspection"
+    $expectedThumbprint = [Environment]::GetEnvironmentVariable(
+        "DESKCUBBY_WINDOWS_CERTIFICATE_THUMBPRINT"
+    )
+    $expectedSubject = [Environment]::GetEnvironmentVariable(
+        "DESKCUBBY_WINDOWS_SIGNER_SUBJECT"
+    )
+    if ($Mode -eq "SignedRelease") {
+        & (Join-Path $PSScriptRoot "verify-release-candidate.ps1") `
+            -ArtifactDirectory $artifactDirectory `
+            -Version $version `
+            -Tag $ReleaseTag `
+            -Repository $Repository `
+            -ExpectedCertificateThumbprint $expectedThumbprint `
+            -ExpectedSignerSubject $expectedSubject
+    }
+    else {
+        & (Join-Path $PSScriptRoot "inspect-artifacts.ps1") `
+            -ArtifactDirectory $artifactDirectory `
+            -Version $version `
+            -Mode $Mode
+    }
 
     if ($Mode -eq "SignedRelease") {
         Write-Host (

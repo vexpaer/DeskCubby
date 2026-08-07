@@ -124,6 +124,11 @@ export type MealPhotosPerRow = "TWO" | "THREE" | "SMART";
 export type ThoughtDisplayMode = "SINGLE_LINE" | "FULL";
 export type DirectoryKind = "diary" | "media" | "backup";
 
+export interface WindowsHomeGreeting {
+  chinese: string;
+  english: string;
+}
+
 export interface WindowsSettings {
   visualStyle: WindowsVisualStyle;
   darkMode: WindowsDarkMode;
@@ -132,6 +137,10 @@ export interface WindowsSettings {
   themeSecondaryColorsArgb: number[];
   fontScale: number;
   compactMode: boolean;
+  backgroundImagePath: string | null;
+  backgroundImageOpacity: number;
+  backgroundImageBlurPx: number;
+  tutorialModeEnabled: boolean;
   diaryDirectory: string | null;
   mediaDirectory: string | null;
   backupDirectory: string | null;
@@ -140,12 +149,14 @@ export interface WindowsSettings {
   imageNamePattern: string;
   imageMaxWidthPx: number;
   imageMaxHeightPx: number;
+  markdownHeadingSizesSp: number[];
   mealImageCompressionEnabled: boolean;
   mealImageCompressionQuality: number;
   photoLocationEnabled: boolean;
   thoughtDisplayMode: ThoughtDisplayMode;
   thoughtHighlightColorArgb: number;
   thoughtEditorMaxHeightPx: number;
+  vaultRowHeightDp: number;
   poetryFontSizePx: number;
   poetryLineSpacing: number;
   poetryTextAlignment: PoetryTextAlignment;
@@ -156,6 +167,14 @@ export interface WindowsSettings {
   mealCalendarShowCaptions: boolean;
   mealCalendarWrapEnabled: boolean;
   mealCalendarPhotosPerRow: MealPhotosPerRow;
+  mealButtonsUseIcons: boolean;
+  mealButtonIcons: string[];
+  userName: string;
+  homeGreetings: WindowsHomeGreeting[];
+  homeWidgetBordersEnabled: boolean;
+  homeWidgets: string[];
+  homeGameShortcuts: string[];
+  homeWidgetTitles: string[];
 }
 
 // Transient navigation context only. The backend still validates the relative
@@ -371,13 +390,47 @@ export interface SavedPoem {
   source: string;
   createdAt: DecimalI64;
   updatedAt: DecimalI64;
+  sortOrder: DecimalI64;
+  categoryId: DecimalI64 | null;
 }
 
 export interface SavedPoemDraft {
   id?: DecimalI64;
   content: string;
   source: string;
+  categoryId?: DecimalI64 | null;
 }
+
+export interface PoetryCategory {
+  id: DecimalI64;
+  name: string;
+  colorArgb: number;
+  sortOrder: DecimalI64;
+  createdAt: DecimalI64;
+  updatedAt: DecimalI64;
+}
+
+export interface PoetryCategoryDraft {
+  id?: DecimalI64;
+  name: string;
+  colorArgb: number;
+}
+
+export interface PoetryPresetSummary {
+  id: string;
+  nameZh: string;
+  nameEn: string;
+  colorArgb: number;
+  itemCount: number;
+}
+
+export interface PoetryPresetImportResult {
+  categoryId: DecimalI64;
+  addedCount: number;
+  existingCount: number;
+}
+
+export type PoetryMoveScope = "all" | "uncategorized" | DecimalI64;
 
 export interface ThoughtSummary {
   id: DecimalI64;
@@ -615,11 +668,54 @@ export const poetryApi = {
   delete(id: DecimalI64): Promise<void> {
     return call("delete_poem", { id });
   },
+
+  listCategories(): Promise<PoetryCategory[]> {
+    return call("list_poetry_categories");
+  },
+
+  createCategory(draft: PoetryCategoryDraft): Promise<PoetryCategory> {
+    return call("create_poetry_category", { draft });
+  },
+
+  updateCategory(
+    id: DecimalI64,
+    draft: PoetryCategoryDraft,
+  ): Promise<PoetryCategory> {
+    return call("update_poetry_category", { id, draft });
+  },
+
+  deleteCategory(id: DecimalI64, deletePoems = false): Promise<void> {
+    return call("delete_poetry_category", { id, deletePoems });
+  },
+
+  moveCategory(id: DecimalI64, targetIndex: number): Promise<void> {
+    return call("move_poetry_category", { id, targetIndex });
+  },
+
+  setCategory(id: DecimalI64, categoryId: DecimalI64 | null): Promise<void> {
+    return call("set_poem_category", { id, categoryId });
+  },
+
+  move(id: DecimalI64, targetIndex: number, scope: PoetryMoveScope): Promise<void> {
+    return call("move_poem", { id, targetIndex, scope });
+  },
+
+  listPresets(): Promise<PoetryPresetSummary[]> {
+    return call("list_poetry_presets");
+  },
+
+  importPreset(presetId: string): Promise<PoetryPresetImportResult> {
+    return call("import_poetry_preset", { presetId });
+  },
 };
 
 export const homeApi = {
   snapshot(): Promise<HomeSnapshot> {
     return call("get_home_snapshot");
+  },
+
+  settings(): Promise<WindowsSettings> {
+    return call("get_windows_settings");
   },
 
   createThought(content: string): Promise<Thought> {
@@ -658,12 +754,12 @@ export function readableError(
     path_not_allowed: "所选路径不在允许的目录中。",
     operation_failed: "操作没有完成，请重试。",
     network_unavailable: "网络暂时不可用，已保留本地内容。",
-    json_too_large: "备份文件超过 10 MiB 上限。",
-    backup_too_large: "备份文件超过 10 MiB 上限。",
-    backup_invalid: "备份文件无效或不符合 Android v18 格式。",
-    backup_version_unsupported: "仅支持 Android v18 备份。",
+    json_too_large: "备份文件超过 64 MiB 上限。",
+    backup_too_large: "备份文件超过 64 MiB 上限。",
+    backup_invalid: "备份文件无效或不符合 Android v1–v27 格式。",
+    backup_version_unsupported: "仅支持 Android v1–v27 备份。",
     compatibility_shadow_corrupt:
-      "兼容备份数据已损坏，无法安全保留未实现字段，请重新导入有效的 v18 备份。",
+      "兼容备份数据已损坏，无法安全保留未知字段，请重新导入有效的 v1–v27 备份。",
     ipc_protocol_incompatible:
       "Windows 界面与本机后端版本不兼容，请安装匹配版本的 DeskCubby。",
     database_busy: "本地数据库正忙，请稍后重试。",
@@ -694,7 +790,7 @@ export function readableError(
     vault_url_not_safe: "这条收藏不是可安全打开的 HTTP(S) 链接。",
     vault_open_failed: "无法使用系统浏览器打开这条收藏。",
     vault_clipboard_failed: "无法把收藏正文复制到剪贴板。",
-    usage_statistics_invalid: "手机使用时间文件无效，仅支持 Android v4 统计文件。",
+    usage_statistics_invalid: "手机使用时间文件无效，仅支持 Android v4 统计文件或含 usageDevices 的 v27 备份。",
     usage_statistics_too_large: "手机使用时间文件超过安全大小上限。",
     usage_statistics_source_missing: "手机统计源文件已丢失，请重新选择。",
     usage_statistics_source_changed: "读取时手机统计源文件发生变化，请重试。",
@@ -730,12 +826,12 @@ export function readableError(
     operation_failed: "The operation did not complete. Please try again.",
     network_unavailable:
       "The network is unavailable. Local content has been preserved.",
-    json_too_large: "The backup exceeds the 10 MiB limit.",
-    backup_too_large: "The backup exceeds the 10 MiB limit.",
-    backup_invalid: "The backup is invalid or is not an Android v18 backup.",
-    backup_version_unsupported: "Only Android v18 backups are supported.",
+    json_too_large: "The backup exceeds the 64 MiB limit.",
+    backup_too_large: "The backup exceeds the 64 MiB limit.",
+    backup_invalid: "The backup is invalid or is not an Android v1–v27 backup.",
+    backup_version_unsupported: "Only Android v1–v27 backups are supported.",
     compatibility_shadow_corrupt:
-      "Compatibility backup data is corrupt, so postponed fields cannot be preserved safely. Import a valid v18 backup again.",
+      "Compatibility backup data is corrupt, so unknown fields cannot be preserved safely. Import a valid v1–v27 backup again.",
     ipc_protocol_incompatible:
       "The Windows interface and local backend are incompatible. Install matching DeskCubby versions.",
     database_busy: "The local database is busy. Try again shortly.",
@@ -779,7 +875,7 @@ export function readableError(
     vault_open_failed: "The vault item could not be opened in the system browser.",
     vault_clipboard_failed: "The vault content could not be copied to the clipboard.",
     usage_statistics_invalid:
-      "The phone screen-time file is invalid. Only Android v4 statistics are supported.",
+      "The phone screen-time file is invalid. Use Android v4 statistics or a v27 backup containing usageDevices.",
     usage_statistics_too_large:
       "The phone screen-time file exceeds the safety size limit.",
     usage_statistics_source_missing:

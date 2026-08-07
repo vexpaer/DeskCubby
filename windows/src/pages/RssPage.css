@@ -1,0 +1,107 @@
+.rss-feed-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+}
+
+.rss-feed-card,
+.rss-section,
+.rss-article-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.rss-feed-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.rss-feed-heading > div {
+  min-width: 0;
+}
+
+.rss-feed-heading :is(h3, p) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rss-feed-heading p,
+.rss-section-detail,
+.rss-article-meta,
+.rss-last-updated {
+  color: var(--text-faint);
+  font-size: 0.76rem;
+}
+
+.rss-feed-actions,
+.rss-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.rss-feed-error {
+  color: var(--danger);
+  font-size: 0.76rem;
+}
+
+.rss-article-card {
+  display: grid;
+  width: 100%;
+  gap: var(--space-2);
+  border: var(--panel-border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text);
+  text-align: left;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.rss-article-card:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: var(--surface-selected);
+  transform: translateY(-1px);
+}
+
+.rss-article-card:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.rss-article-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.rss-article-title-row svg {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.rss-article-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-muted);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  white-space: pre-wrap;
+}
+
+.rss-preferences-grid {
+  display: grid;
+  gap: var(--space-4);
+}
+
+@media (max-width: 600px) {
+  .rss-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

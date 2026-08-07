@@ -1,15 +1,17 @@
 //! Read-only Android phone-usage statistics for the Windows client.
 //!
-//! Android deliberately keeps `usage-statistics.json` outside the v18 app
-//! backup.  This module therefore accepts only a file explicitly selected by
-//! the user.  A snapshot import copies a canonical v4 payload into the private
-//! app directory; a linked import additionally remembers the selected file so
-//! that a later refresh can read it again.  Refresh never opens a source for
-//! writing and never removes, renames, or otherwise modifies it.
+//! Android 0.9.3 carries per-device usage history in the v27 `usageDevices`
+//! array and in cloud objects named `usage/v1/{deviceId}.json`.  This module
+//! accepts either of those formats, while retaining import compatibility with
+//! the old canonical v4 history file.  Every source must be explicitly chosen
+//! by the user. A snapshot import copies only a canonical usage projection into
+//! the private app directory; a linked import additionally remembers the
+//! selected file so a later refresh can read it again. Refresh never opens a
+//! source for writing and never removes, renames, or otherwise modifies it.
 //!
 //! The WebView receives aggregated DTOs, not the source path or raw JSON.  The
 //! private state is one atomically replaced container containing two
-//! purpose-bound DPAPI payloads: source metadata and the canonical v4 snapshot.
+//! purpose-bound DPAPI payloads: source metadata and the canonical dataset.
 
 use crate::security::{
     SecurityError, dpapi_protect_scoped, dpapi_unprotect_scoped, open_regular_file_no_reparse,
@@ -31,13 +33,20 @@ use uuid::Uuid;
 
 pub(crate) const ANDROID_USAGE_SCHEMA_VERSION: i64 = 4;
 pub(crate) const MAX_USAGE_JSON_BYTES: usize = 10 * 1024 * 1024;
+/// Android application backups are allowed to grow to 64 MiB.  Only the
+/// bounded `usageDevices` projection is retained in the Windows private
+/// cache; unrelated v27 fields never cross the usage IPC boundary.
+pub(crate) const MAX_USAGE_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const MAX_USAGE_DAYS: usize = 36_600;
 pub(crate) const MAX_APPS_PER_DAY: usize = 4_096;
+pub(crate) const MAX_USAGE_DEVICES: usize = 64;
+pub(crate) const MAX_USAGE_DEVICE_NAME_CODE_POINTS: usize = 80;
+pub(crate) const MAX_USAGE_DEVICE_JSON_BYTES: usize = MAX_USAGE_JSON_BYTES + 64 * 1024;
 pub(crate) const MAX_PACKAGE_NAME_UTF16_UNITS: usize = 255;
 pub(crate) const MAX_ZONE_ID_UTF16_UNITS: usize = 128;
 pub(crate) const MAX_FOREGROUND_MILLIS_PER_APP_DAY: i64 = 26 * 60 * 60 * 1_000;
 pub(crate) const MAX_USAGE_APP_CHOICES: usize = 512;
-pub(crate) const USAGE_DTO_VERSION: u32 = 1;
+pub(crate) const USAGE_DTO_VERSION: u32 = 2;
 
 const STATE_FILE_NAME: &str = "phone-usage-state.dcus";
 const STATE_CONTAINER_MAGIC: &[u8; 8] = b"DCUSGV1\0";
@@ -46,10 +55,15 @@ const SOURCE_PURPOSE: &str = "DeskCubby.Windows.PhoneUsage.Source.v1";
 const SOURCE_RECORD_TYPE: &str = "phoneUsageSourceV1";
 const MAX_SOURCE_METADATA_BYTES: usize = 256 * 1024;
 const MAX_SOURCE_PATH_UTF16_UNITS: usize = 32_767;
-const MAX_PROTECTED_SNAPSHOT_BYTES: usize = MAX_USAGE_JSON_BYTES + 2 * 1024 * 1024;
+const MAX_PROTECTED_SNAPSHOT_BYTES: usize = MAX_USAGE_SOURCE_BYTES + 2 * 1024 * 1024;
 const MAX_PROTECTED_SOURCE_BYTES: usize = MAX_SOURCE_METADATA_BYTES + 1024 * 1024;
 const MAX_STATE_CONTAINER_BYTES: usize =
     MAX_PROTECTED_SNAPSHOT_BYTES + MAX_PROTECTED_SOURCE_BYTES + 64;
+const STORED_DATASET_VERSION: u32 = 1;
+const LEGACY_USAGE_DEVICE_ID: &str = "00000000-0000-0000-0000-000000000000";
+const LEGACY_USAGE_DEVICE_NAME: &str = "Legacy Android v4";
+const ANDROID_BACKUP_FORMAT_VERSION: i64 = 27;
+const USAGE_DEVICE_SCHEMA_VERSION: i64 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum UsageServiceError {
@@ -114,15 +128,15 @@ pub(crate) enum UsageDayState {
     Final,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct UsageAppDuration {
     pub(crate) package_name: String,
     pub(crate) foreground_millis: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct UsageDay {
     pub(crate) date: String,
     pub(crate) zone_id: String,
@@ -131,11 +145,35 @@ pub(crate) struct UsageDay {
     pub(crate) apps: Vec<UsageAppDuration>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct UsageHistory {
     pub(crate) tracking_started_on: Option<String>,
     pub(crate) backfill_completed_through: Option<String>,
     pub(crate) days: Vec<UsageDay>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct UsageDeviceRecord {
+    pub(crate) schema_version: i64,
+    pub(crate) device_id: String,
+    pub(crate) device_name: String,
+    pub(crate) platform: String,
+    pub(crate) updated_at_epoch_millis: i64,
+    pub(crate) history: UsageHistory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UsageDataset {
+    pub(crate) devices: Vec<UsageDeviceRecord>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredUsageDataset {
+    storage_version: u32,
+    devices: Vec<UsageDeviceRecord>,
 }
 
 #[derive(Serialize)]
@@ -145,6 +183,59 @@ struct CanonicalUsageHistory<'a> {
     tracking_started_on: Option<&'a str>,
     backfill_completed_through: Option<&'a str>,
     days: &'a [UsageDay],
+}
+
+#[allow(dead_code)]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StrictUsageFile {
+    schema_version: i64,
+    tracking_started_on: RequiredNullableString,
+    backfill_completed_through: RequiredNullableString,
+    days: Vec<StrictUsageDay>,
+}
+
+#[allow(dead_code)]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StrictUsageDay {
+    date: String,
+    zone_id: String,
+    state: String,
+    collected_at_epoch_millis: i64,
+    apps: Vec<StrictUsageApp>,
+}
+
+#[allow(dead_code)]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StrictUsageApp {
+    package_name: String,
+    foreground_millis: i64,
+}
+
+#[allow(dead_code)]
+#[derive(Serialize, Deserialize)]
+struct RequiredNullableString(Option<String>);
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StrictUsageDeviceFile {
+    schema_version: i64,
+    device_id: String,
+    device_name: String,
+    platform: String,
+    updated_at_epoch_millis: i64,
+    history: StrictUsageFile,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidBackupUsageEnvelope {
+    version: i64,
+    usage_devices: Vec<StrictUsageDeviceFile>,
+    #[serde(flatten)]
+    _other: HashMap<String, Value>,
 }
 
 /// Parse an Android `usage-statistics.json` v4 payload with the same structural
@@ -186,7 +277,7 @@ pub(crate) fn parse_android_usage_v4(bytes: &[u8]) -> Result<UsageHistory, Usage
             return Err(UsageServiceError::InvalidJson);
         }
         if let Some(started) = tracking_started_on.as_deref()
-            && parse_date(&date)? < parse_date(started)?
+            && parse_android_date(&date)? < parse_android_date(started)?
         {
             return Err(UsageServiceError::InvalidJson);
         }
@@ -255,47 +346,6 @@ pub(crate) fn parse_android_usage_v4(bytes: &[u8]) -> Result<UsageHistory, Usage
 /// whose first key is serde_json's private number marker directly into `Value`
 /// can otherwise make the object look like a number.
 fn parse_json_without_duplicate_keys(bytes: &[u8]) -> Result<Value, UsageServiceError> {
-    #[allow(dead_code)]
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct StrictUsageFile {
-        schema_version: i64,
-        tracking_started_on: RequiredNullableString,
-        backfill_completed_through: RequiredNullableString,
-        days: Vec<StrictUsageDay>,
-    }
-
-    #[allow(dead_code)]
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct StrictUsageDay {
-        date: String,
-        zone_id: String,
-        state: String,
-        collected_at_epoch_millis: i64,
-        apps: Vec<StrictUsageApp>,
-    }
-
-    #[allow(dead_code)]
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct StrictUsageApp {
-        package_name: String,
-        foreground_millis: i64,
-    }
-
-    #[allow(dead_code)]
-    struct RequiredNullableString(Option<String>);
-
-    impl<'de> Deserialize<'de> for RequiredNullableString {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            Option::<String>::deserialize(deserializer).map(Self)
-        }
-    }
-
     serde_json::from_slice::<StrictUsageFile>(bytes).map_err(|_| UsageServiceError::InvalidJson)?;
     serde_json::from_slice(bytes).map_err(|_| UsageServiceError::InvalidJson)
 }
@@ -325,17 +375,321 @@ pub(crate) fn canonical_android_usage_v4(
     Ok(bytes)
 }
 
+/// Decode the per-device object used by Android cloud objects at
+/// `usage/v1/{deviceId}.json` and by the v27 `usageDevices` array.
+pub(crate) fn parse_android_usage_device_v1(
+    bytes: &[u8],
+) -> Result<UsageDeviceRecord, UsageServiceError> {
+    if bytes.len() > MAX_USAGE_DEVICE_JSON_BYTES {
+        return Err(UsageServiceError::TooLarge);
+    }
+    let strict: StrictUsageDeviceFile =
+        serde_json::from_slice(bytes).map_err(|_| UsageServiceError::InvalidJson)?;
+    usage_device_from_strict(strict)
+}
+
+/// Project only the Android-owned multi-device usage payload from a v27 app
+/// backup.  The full backup is validated by the backup subsystem when it is
+/// restored; this read-only view independently validates every usage record
+/// and never exposes unrelated backup fields to the WebView.
+pub(crate) fn parse_android_v27_usage_devices(
+    bytes: &[u8],
+) -> Result<UsageDataset, UsageServiceError> {
+    if bytes.len() > MAX_USAGE_SOURCE_BYTES {
+        return Err(UsageServiceError::TooLarge);
+    }
+    let envelope: AndroidBackupUsageEnvelope =
+        serde_json::from_slice(bytes).map_err(|_| UsageServiceError::InvalidJson)?;
+    if envelope.version != ANDROID_BACKUP_FORMAT_VERSION
+        || envelope.usage_devices.len() > MAX_USAGE_DEVICES
+    {
+        return Err(UsageServiceError::InvalidJson);
+    }
+    dataset_from_strict_devices(envelope.usage_devices)
+}
+
+fn usage_device_from_strict(
+    strict: StrictUsageDeviceFile,
+) -> Result<UsageDeviceRecord, UsageServiceError> {
+    if strict.schema_version != USAGE_DEVICE_SCHEMA_VERSION {
+        return Err(UsageServiceError::InvalidJson);
+    }
+    let history_bytes =
+        serde_json::to_vec(&strict.history).map_err(|_| UsageServiceError::InvalidJson)?;
+    let history = parse_android_usage_v4(&history_bytes)?;
+    let record = UsageDeviceRecord {
+        schema_version: USAGE_DEVICE_SCHEMA_VERSION,
+        device_id: normalize_usage_device_id(&strict.device_id)?,
+        device_name: normalize_usage_device_name(&strict.device_name)?,
+        platform: normalize_usage_device_platform(&strict.platform)?,
+        updated_at_epoch_millis: strict.updated_at_epoch_millis,
+        history,
+    };
+    validate_usage_device(&record)?;
+    Ok(record)
+}
+
+fn dataset_from_strict_devices(
+    devices: Vec<StrictUsageDeviceFile>,
+) -> Result<UsageDataset, UsageServiceError> {
+    if devices.len() > MAX_USAGE_DEVICES {
+        return Err(UsageServiceError::InvalidJson);
+    }
+    let mut ids = HashSet::with_capacity(devices.len());
+    let mut records = Vec::with_capacity(devices.len());
+    for device in devices {
+        let record = usage_device_from_strict(device)?;
+        if !ids.insert(record.device_id.clone()) {
+            return Err(UsageServiceError::InvalidJson);
+        }
+        records.push(record);
+    }
+    records.sort_by(|left, right| left.device_id.cmp(&right.device_id));
+    Ok(UsageDataset { devices: records })
+}
+
+fn legacy_usage_dataset(history: UsageHistory) -> UsageDataset {
+    let updated_at_epoch_millis = history
+        .days
+        .iter()
+        .map(|day| day.collected_at_epoch_millis)
+        .max()
+        .unwrap_or(0);
+    UsageDataset {
+        devices: vec![UsageDeviceRecord {
+            schema_version: USAGE_DEVICE_SCHEMA_VERSION,
+            device_id: LEGACY_USAGE_DEVICE_ID.to_owned(),
+            device_name: LEGACY_USAGE_DEVICE_NAME.to_owned(),
+            platform: "android".to_owned(),
+            updated_at_epoch_millis,
+            history,
+        }],
+    }
+}
+
+fn parse_usage_source(bytes: &[u8]) -> Result<UsageDataset, UsageServiceError> {
+    if bytes.len() > MAX_USAGE_SOURCE_BYTES {
+        return Err(UsageServiceError::TooLarge);
+    }
+    let probe: Value = serde_json::from_slice(bytes).map_err(|_| UsageServiceError::InvalidJson)?;
+    let root = probe.as_object().ok_or(UsageServiceError::InvalidJson)?;
+    if root.get("version").is_some() {
+        return parse_android_v27_usage_devices(bytes);
+    }
+    match root.get("schemaVersion").and_then(Value::as_i64) {
+        Some(ANDROID_USAGE_SCHEMA_VERSION) if root.contains_key("days") => {
+            parse_android_usage_v4(bytes).map(legacy_usage_dataset)
+        }
+        Some(USAGE_DEVICE_SCHEMA_VERSION) if root.contains_key("deviceId") => {
+            parse_android_usage_device_v1(bytes).map(|record| UsageDataset {
+                devices: vec![record],
+            })
+        }
+        _ => Err(UsageServiceError::InvalidJson),
+    }
+}
+
+fn canonical_stored_dataset(dataset: &UsageDataset) -> Result<Vec<u8>, UsageServiceError> {
+    validate_usage_dataset(dataset)?;
+    let mut devices = dataset.devices.clone();
+    devices.sort_by(|left, right| left.device_id.cmp(&right.device_id));
+    for record in &mut devices {
+        record
+            .history
+            .days
+            .sort_by(|left, right| left.date.cmp(&right.date));
+        for day in &mut record.history.days {
+            day.apps
+                .sort_by(|left, right| left.package_name.cmp(&right.package_name));
+        }
+    }
+    let bytes = serde_json::to_vec(&StoredUsageDataset {
+        storage_version: STORED_DATASET_VERSION,
+        devices,
+    })
+    .map_err(|_| UsageServiceError::InvalidJson)?;
+    if bytes.len() > MAX_USAGE_SOURCE_BYTES {
+        return Err(UsageServiceError::TooLarge);
+    }
+    Ok(bytes)
+}
+
+fn parse_stored_dataset(bytes: &[u8]) -> Result<UsageDataset, UsageServiceError> {
+    // Backward-compatible migration of the Windows 0.2.0 private v4 cache.
+    if let Ok(history) = parse_android_usage_v4(bytes) {
+        return Ok(legacy_usage_dataset(history));
+    }
+    let stored: StoredUsageDataset =
+        serde_json::from_slice(bytes).map_err(|_| UsageServiceError::CacheCorrupt)?;
+    if stored.storage_version != STORED_DATASET_VERSION {
+        return Err(UsageServiceError::CacheCorrupt);
+    }
+    let dataset = UsageDataset {
+        devices: stored.devices,
+    };
+    validate_usage_dataset(&dataset).map_err(|_| UsageServiceError::CacheCorrupt)?;
+    Ok(dataset)
+}
+
+fn validate_usage_dataset(dataset: &UsageDataset) -> Result<(), UsageServiceError> {
+    if dataset.devices.len() > MAX_USAGE_DEVICES {
+        return Err(UsageServiceError::InvalidJson);
+    }
+    let mut ids = HashSet::with_capacity(dataset.devices.len());
+    for record in &dataset.devices {
+        validate_usage_device(record)?;
+        if !ids.insert(record.device_id.as_str()) {
+            return Err(UsageServiceError::InvalidJson);
+        }
+    }
+    Ok(())
+}
+
+fn validate_usage_device(record: &UsageDeviceRecord) -> Result<(), UsageServiceError> {
+    if record.schema_version != USAGE_DEVICE_SCHEMA_VERSION
+        || normalize_usage_device_id(&record.device_id)? != record.device_id
+        || normalize_usage_device_name(&record.device_name)? != record.device_name
+        || normalize_usage_device_platform(&record.platform)? != record.platform
+        || record.updated_at_epoch_millis < 0
+        || record.updated_at_epoch_millis
+            < record
+                .history
+                .days
+                .iter()
+                .map(|day| day.collected_at_epoch_millis)
+                .max()
+                .unwrap_or(0)
+    {
+        return Err(UsageServiceError::InvalidJson);
+    }
+    validate_history(&record.history)
+}
+
+/// Android's `UsageDeviceRepository.mergeBackup`/`mergeIncoming` rule: for
+/// one device, keep one row per calendar date; FINAL beats OPEN and otherwise
+/// the newer collection timestamp wins. Equal day versions retain the current
+/// cached row, while equal record timestamps use the incoming metadata.
+fn merge_usage_device_records(
+    current: &UsageDeviceRecord,
+    incoming: &UsageDeviceRecord,
+) -> Result<UsageDeviceRecord, UsageServiceError> {
+    if current.device_id != incoming.device_id {
+        return Err(UsageServiceError::InvalidJson);
+    }
+    validate_usage_device(current)?;
+    validate_usage_device(incoming)?;
+
+    let mut days = current
+        .history
+        .days
+        .iter()
+        .cloned()
+        .map(|day| (day.date.clone(), day))
+        .collect::<HashMap<_, _>>();
+    for candidate in &incoming.history.days {
+        match days.get(&candidate.date) {
+            Some(existing) if !usage_day_is_newer(candidate, existing) => {}
+            _ => {
+                days.insert(candidate.date.clone(), candidate.clone());
+            }
+        }
+    }
+    let mut days = days.into_values().collect::<Vec<_>>();
+    days.sort_by(|left, right| left.date.cmp(&right.date));
+
+    let tracking_started_on = current
+        .history
+        .tracking_started_on
+        .iter()
+        .chain(incoming.history.tracking_started_on.iter())
+        .chain(days.first().map(|day| &day.date))
+        .min()
+        .cloned();
+    let backfill_completed_through = current
+        .history
+        .backfill_completed_through
+        .iter()
+        .chain(incoming.history.backfill_completed_through.iter())
+        .max()
+        .cloned();
+    let newest_metadata = if incoming.updated_at_epoch_millis >= current.updated_at_epoch_millis {
+        incoming
+    } else {
+        current
+    };
+    let merged = UsageDeviceRecord {
+        schema_version: USAGE_DEVICE_SCHEMA_VERSION,
+        device_id: current.device_id.clone(),
+        device_name: newest_metadata.device_name.clone(),
+        platform: newest_metadata.platform.clone(),
+        updated_at_epoch_millis: current
+            .updated_at_epoch_millis
+            .max(incoming.updated_at_epoch_millis),
+        history: UsageHistory {
+            tracking_started_on,
+            backfill_completed_through,
+            days,
+        },
+    };
+    validate_usage_device(&merged)?;
+    Ok(merged)
+}
+
+fn usage_day_is_newer(candidate: &UsageDay, current: &UsageDay) -> bool {
+    let candidate_priority = i32::from(candidate.state == UsageDayState::Final);
+    let current_priority = i32::from(current.state == UsageDayState::Final);
+    (candidate_priority, candidate.collected_at_epoch_millis)
+        > (current_priority, current.collected_at_epoch_millis)
+}
+
+fn normalize_usage_device_id(value: &str) -> Result<String, UsageServiceError> {
+    let trimmed = value.trim();
+    let parsed = Uuid::parse_str(trimmed).map_err(|_| UsageServiceError::InvalidJson)?;
+    let normalized = parsed.to_string();
+    if normalized.len() != 36 {
+        return Err(UsageServiceError::InvalidJson);
+    }
+    Ok(normalized)
+}
+
+fn normalize_usage_device_name(value: &str) -> Result<String, UsageServiceError> {
+    let normalized = value.trim();
+    if normalized.is_empty()
+        || normalized.chars().count() > MAX_USAGE_DEVICE_NAME_CODE_POINTS
+        || normalized.chars().any(is_iso_control)
+    {
+        return Err(UsageServiceError::InvalidJson);
+    }
+    Ok(normalized.to_owned())
+}
+
+fn normalize_usage_device_platform(value: &str) -> Result<String, UsageServiceError> {
+    let normalized = value.trim().to_ascii_lowercase();
+    let mut characters = normalized.chars();
+    if normalized.len() > 32
+        || !characters
+            .next()
+            .is_some_and(|value| value.is_ascii_lowercase())
+        || !characters.all(|value| {
+            value.is_ascii_lowercase() || value.is_ascii_digit() || matches!(value, '_' | '-')
+        })
+    {
+        return Err(UsageServiceError::InvalidJson);
+    }
+    Ok(normalized)
+}
+
 fn validate_history(history: &UsageHistory) -> Result<(), UsageServiceError> {
     if history.days.len() > MAX_USAGE_DAYS {
         return Err(UsageServiceError::InvalidJson);
     }
     if let Some(value) = history.tracking_started_on.as_deref() {
-        parse_date(value)?;
+        parse_android_date(value)?;
     }
     if let Some(value) = history.backfill_completed_through.as_deref() {
         // Android validates this as a date but intentionally does not constrain
         // it relative to trackingStartedOn or the day rows.
-        parse_date(value)?;
+        parse_android_date(value)?;
     }
     if !history.days.is_empty() && history.tracking_started_on.is_none() {
         return Err(UsageServiceError::InvalidJson);
@@ -343,11 +697,11 @@ fn validate_history(history: &UsageHistory) -> Result<(), UsageServiceError> {
     let tracking_started = history
         .tracking_started_on
         .as_deref()
-        .map(parse_date)
+        .map(parse_android_date)
         .transpose()?;
     let mut dates = HashSet::with_capacity(history.days.len());
     for day in &history.days {
-        let date = parse_date(&day.date)?;
+        let date = parse_android_date(&day.date)?;
         if !dates.insert(day.date.as_str()) || tracking_started.is_some_and(|start| date < start) {
             return Err(UsageServiceError::InvalidJson);
         }
@@ -430,7 +784,7 @@ fn required_i64(
 
 fn required_date(object: &Map<String, Value>, key: &str) -> Result<String, UsageServiceError> {
     let value = required_string(object, key, 10)?;
-    parse_date(&value)?;
+    parse_android_date(&value)?;
     Ok(value)
 }
 
@@ -441,14 +795,14 @@ fn required_nullable_date(
     match object.get(key) {
         Some(Value::Null) => Ok(None),
         Some(Value::String(value)) if value.encode_utf16().count() <= 10 => {
-            parse_date(value)?;
+            parse_android_date(value)?;
             Ok(Some(value.clone()))
         }
         _ => Err(UsageServiceError::InvalidJson),
     }
 }
 
-fn parse_date(value: &str) -> Result<NaiveDate, UsageServiceError> {
+pub(crate) fn parse_android_date(value: &str) -> Result<NaiveDate, UsageServiceError> {
     if value.len() != 10 {
         return Err(UsageServiceError::InvalidJson);
     }
@@ -476,7 +830,7 @@ fn is_iso_control(character: char) -> bool {
     matches!(character as u32, 0x0000..=0x001f | 0x007f..=0x009f)
 }
 
-fn validate_android_zone_id(value: &str) -> Result<(), UsageServiceError> {
+pub(crate) fn validate_android_zone_id(value: &str) -> Result<(), UsageServiceError> {
     if value.is_empty()
         || value.encode_utf16().count() > MAX_ZONE_ID_UTF16_UNITS
         || value
@@ -554,6 +908,7 @@ fn parse_java_offset_components(digits: &str) -> Option<(u32, u32, u32)> {
 pub(crate) enum UsageSourceModeDto {
     Snapshot,
     LinkedFile,
+    CloudSync,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -600,6 +955,9 @@ pub(crate) struct UsageQueryDto {
     pub(crate) range: UsageRangeDto,
     #[serde(default)]
     pub(crate) package_name: Option<String>,
+    /// Null selects the Android-compatible all-device projection.
+    #[serde(default)]
+    pub(crate) device_id: Option<String>,
 }
 
 fn deserialize_usage_dto_version<'de, D>(deserializer: D) -> Result<u32, D::Error>
@@ -622,8 +980,19 @@ impl Default for UsageQueryDto {
             dto_version: USAGE_DTO_VERSION,
             range: UsageRangeDto::default(),
             package_name: None,
+            device_id: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UsageDeviceChoiceDto {
+    pub(crate) device_id: String,
+    pub(crate) device_name: String,
+    pub(crate) platform: String,
+    pub(crate) updated_at_epoch_millis: String,
+    pub(crate) recorded_days: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -663,20 +1032,40 @@ pub(crate) struct UsageSnapshotDto {
     pub(crate) tracking_started_on: Option<String>,
     pub(crate) backfill_completed_through: Option<String>,
     pub(crate) anchor_date: Option<String>,
+    pub(crate) selected_device_id: Option<String>,
     pub(crate) selected_package_name: Option<String>,
+    pub(crate) device_choices: Vec<UsageDeviceChoiceDto>,
     pub(crate) overview: UsageOverviewDto,
     pub(crate) app_choices: Vec<UsageAppChoiceDto>,
     pub(crate) points: Vec<UsagePointDto>,
 }
 
 pub(crate) fn aggregate_usage_snapshot(
-    history: &UsageHistory,
+    dataset: &UsageDataset,
     source: UsageSourceStatusDto,
     query: &UsageQueryDto,
 ) -> Result<UsageSnapshotDto, UsageServiceError> {
     if query.dto_version != USAGE_DTO_VERSION {
         return Err(UsageServiceError::InvalidJson);
     }
+    validate_usage_dataset(dataset)?;
+    let selected_records = if let Some(device_id) = query.device_id.as_deref() {
+        let normalized = normalize_usage_device_id(device_id)?;
+        let record = dataset
+            .devices
+            .iter()
+            .find(|record| record.device_id == normalized)
+            .ok_or(UsageServiceError::InvalidJson)?;
+        vec![record]
+    } else {
+        dataset.devices.iter().collect::<Vec<_>>()
+    };
+    let selected_device_id = query
+        .device_id
+        .as_ref()
+        .and_then(|_| selected_records.first())
+        .map(|record| record.device_id.clone());
+    let history = combine_usage_device_histories(&selected_records)?;
     if let Some(package_name) = query.package_name.as_deref() {
         validate_package_name(package_name)?;
         if !history
@@ -691,7 +1080,7 @@ pub(crate) fn aggregate_usage_snapshot(
     let anchor = history
         .days
         .last()
-        .map(|day| parse_date(&day.date))
+        .map(|day| parse_android_date(&day.date))
         .transpose()?;
     let range_start = match (anchor, query.range) {
         (Some(anchor), UsageRangeDto::Last7Days) => Some(
@@ -716,7 +1105,7 @@ pub(crate) fn aggregate_usage_snapshot(
         .iter()
         .filter(|day| {
             range_start.is_none_or(|start| {
-                parse_date(&day.date)
+                parse_android_date(&day.date)
                     .map(|date| date >= start)
                     .unwrap_or(false)
             })
@@ -766,7 +1155,7 @@ pub(crate) fn aggregate_usage_snapshot(
         .iter()
         .filter(|day| {
             last_seven_start.is_none_or(|start| {
-                parse_date(&day.date)
+                parse_android_date(&day.date)
                     .map(|date| date >= start)
                     .unwrap_or(false)
             })
@@ -781,14 +1170,30 @@ pub(crate) fn aggregate_usage_snapshot(
             / i64::try_from(last_seven_values.len()).map_err(|_| UsageServiceError::InvalidJson)?
     };
 
-    let app_choices = rank_app_choices(history, &ranged, selected)?;
+    let app_choices = rank_app_choices(&history, &ranged, selected)?;
+    let device_choices = dataset
+        .devices
+        .iter()
+        .map(|record| {
+            Ok(UsageDeviceChoiceDto {
+                device_id: record.device_id.clone(),
+                device_name: record.device_name.clone(),
+                platform: record.platform.clone(),
+                updated_at_epoch_millis: record.updated_at_epoch_millis.to_string(),
+                recorded_days: u32::try_from(record.history.days.len())
+                    .map_err(|_| UsageServiceError::InvalidJson)?,
+            })
+        })
+        .collect::<Result<Vec<_>, UsageServiceError>>()?;
     Ok(UsageSnapshotDto {
         dto_version: USAGE_DTO_VERSION,
         source,
         tracking_started_on: history.tracking_started_on.clone(),
         backfill_completed_through: history.backfill_completed_through.clone(),
         anchor_date: anchor.map(|date| date.format("%Y-%m-%d").to_string()),
+        selected_device_id,
         selected_package_name: query.package_name.clone(),
+        device_choices,
         overview: UsageOverviewDto {
             range_started_on: ranged.first().map(|day| day.date.clone()),
             recorded_days: u32::try_from(ranged.len())
@@ -800,6 +1205,84 @@ pub(crate) fn aggregate_usage_snapshot(
         },
         app_choices,
         points,
+    })
+}
+
+/// Match Android's presentation-only all-device projection: sum matching apps
+/// by civil date, keep the newest zone/timestamp, and call a day FINAL only
+/// when every contributing device reports it FINAL.
+fn combine_usage_device_histories(
+    records: &[&UsageDeviceRecord],
+) -> Result<UsageHistory, UsageServiceError> {
+    if records.is_empty() {
+        return Ok(UsageHistory {
+            tracking_started_on: None,
+            backfill_completed_through: None,
+            days: Vec::new(),
+        });
+    }
+    let mut dates = HashMap::<String, Vec<&UsageDay>>::new();
+    for record in records {
+        for day in &record.history.days {
+            dates.entry(day.date.clone()).or_default().push(day);
+        }
+    }
+    let mut days = Vec::with_capacity(dates.len());
+    for (date, source_days) in dates {
+        let newest = source_days
+            .iter()
+            .copied()
+            .max_by_key(|day| day.collected_at_epoch_millis)
+            .ok_or(UsageServiceError::InvalidJson)?;
+        let mut apps = HashMap::<String, i64>::new();
+        for day in &source_days {
+            for app in &day.apps {
+                let current = apps.entry(app.package_name.clone()).or_default();
+                *current = current.saturating_add(app.foreground_millis);
+            }
+        }
+        let mut apps = apps
+            .into_iter()
+            .map(|(package_name, foreground_millis)| UsageAppDuration {
+                package_name,
+                foreground_millis,
+            })
+            .collect::<Vec<_>>();
+        apps.sort_by(|left, right| left.package_name.cmp(&right.package_name));
+        days.push(UsageDay {
+            date,
+            zone_id: newest.zone_id.clone(),
+            state: if source_days
+                .iter()
+                .all(|day| day.state == UsageDayState::Final)
+            {
+                UsageDayState::Final
+            } else {
+                UsageDayState::Open
+            },
+            collected_at_epoch_millis: newest.collected_at_epoch_millis,
+            apps,
+        });
+    }
+    days.sort_by(|left, right| left.date.cmp(&right.date));
+    let tracking_started_on = records
+        .iter()
+        .filter_map(|record| record.history.tracking_started_on.as_ref())
+        .min()
+        .cloned();
+    let watermarks = records
+        .iter()
+        .map(|record| record.history.backfill_completed_through.as_ref())
+        .collect::<Vec<_>>();
+    let backfill_completed_through = if watermarks.iter().all(|value| value.is_some()) {
+        watermarks.into_iter().flatten().min().cloned()
+    } else {
+        None
+    };
+    Ok(UsageHistory {
+        tracking_started_on,
+        backfill_completed_through,
+        days,
     })
 }
 
@@ -972,7 +1455,7 @@ struct StoredSourceMetadata {
 
 struct StoredState {
     metadata: StoredSourceMetadata,
-    history: UsageHistory,
+    dataset: UsageDataset,
     canonical: Vec<u8>,
 }
 
@@ -1105,6 +1588,105 @@ impl UsageStatisticsService {
         }
     }
 
+    /// Merge the already validated v27 `usageDevices` array after backup
+    /// confirmation. This independently revalidates every value against the
+    /// exact device-v1 codec, rejects duplicates, and performs one atomic
+    /// private-cache replacement for the whole batch.
+    pub(crate) fn merge_backup_device_values(
+        &self,
+        values: &[Value],
+        now_ms: i64,
+    ) -> Result<(), UsageServiceError> {
+        if values.len() > MAX_USAGE_DEVICES {
+            return Err(UsageServiceError::InvalidJson);
+        }
+        let mut incoming = Vec::with_capacity(values.len());
+        let mut incoming_ids = HashSet::with_capacity(values.len());
+        for value in values {
+            let bytes = serde_json::to_vec(value).map_err(|_| UsageServiceError::InvalidJson)?;
+            let record = parse_android_usage_device_v1(&bytes)?;
+            if !incoming_ids.insert(record.device_id.clone()) {
+                return Err(UsageServiceError::InvalidJson);
+            }
+            incoming.push(record);
+        }
+        if incoming.is_empty() {
+            return Ok(());
+        }
+
+        let _guard = self.lock()?;
+        let current = self.read_state()?;
+        let previous_metadata = current.as_ref().map(|state| state.metadata.clone());
+        let mut dataset = current
+            .map(|state| state.dataset)
+            .unwrap_or(UsageDataset { devices: vec![] });
+        for record in incoming {
+            if let Some(existing) = dataset
+                .devices
+                .iter_mut()
+                .find(|existing| existing.device_id == record.device_id)
+            {
+                *existing = merge_usage_device_records(existing, &record)?;
+            } else {
+                if dataset.devices.len() >= MAX_USAGE_DEVICES {
+                    return Err(UsageServiceError::InvalidJson);
+                }
+                dataset.devices.push(record);
+            }
+        }
+        dataset
+            .devices
+            .sort_by(|left, right| left.device_id.cmp(&right.device_id));
+        let canonical = canonical_stored_dataset(&dataset)?;
+        let metadata = metadata_for_backup_dataset(&canonical, previous_metadata.as_ref(), now_ms);
+        self.write_state(&metadata, &canonical)
+    }
+
+    /// Merge one Android-owned cloud usage object into the private read-only
+    /// projection. Windows never produces or uploads these objects: the cloud
+    /// bridge calls this only after downloading `usage/v1/{deviceId}.json`.
+    ///
+    /// The object is parsed and the full merged cache is canonicalized before
+    /// the atomic replacement starts, so an invalid key, invalid payload, or
+    /// failed write leaves the previous valid snapshot untouched. Cloud state
+    /// deliberately has no linked source path.
+    pub(crate) fn merge_cloud_device_object(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        now_ms: i64,
+    ) -> Result<(), UsageServiceError> {
+        let key_device_id = usage_device_id_from_cloud_key(key)?;
+        let record = parse_android_usage_device_v1(bytes)?;
+        if record.device_id != key_device_id {
+            return Err(UsageServiceError::InvalidJson);
+        }
+
+        let _guard = self.lock()?;
+        let (previous_metadata, mut dataset) = match self.read_state()? {
+            Some(state) => (Some(state.metadata), state.dataset),
+            None => (None, UsageDataset { devices: vec![] }),
+        };
+        if let Some(existing) = dataset
+            .devices
+            .iter_mut()
+            .find(|existing| existing.device_id == record.device_id)
+        {
+            *existing = merge_usage_device_records(existing, &record)?;
+        } else {
+            if dataset.devices.len() >= MAX_USAGE_DEVICES {
+                return Err(UsageServiceError::InvalidJson);
+            }
+            dataset.devices.push(record);
+        }
+        dataset
+            .devices
+            .sort_by(|left, right| left.device_id.cmp(&right.device_id));
+        let canonical = canonical_stored_dataset(&dataset)?;
+        let metadata = metadata_for_cloud_dataset(&canonical, previous_metadata.as_ref(), now_ms);
+        self.write_state(&metadata, &canonical)
+    }
+
     pub(crate) fn snapshot(
         &self,
         query: &UsageQueryDto,
@@ -1114,7 +1696,7 @@ impl UsageStatisticsService {
             return Ok(None);
         };
         Ok(Some(aggregate_usage_snapshot(
-            &stored.history,
+            &stored.dataset,
             source_status(&stored.metadata),
             query,
         )?))
@@ -1136,7 +1718,7 @@ impl UsageStatisticsService {
         metadata: &StoredSourceMetadata,
         canonical: &[u8],
     ) -> Result<(), UsageServiceError> {
-        if canonical.len() > MAX_USAGE_JSON_BYTES {
+        if canonical.len() > MAX_USAGE_SOURCE_BYTES {
             return Err(UsageServiceError::TooLarge);
         }
         let metadata_bytes =
@@ -1171,14 +1753,14 @@ impl UsageStatisticsService {
             self.protector.as_ref(),
             SNAPSHOT_PURPOSE,
             protected_snapshot,
-            MAX_USAGE_JSON_BYTES,
+            MAX_USAGE_SOURCE_BYTES,
         )?;
         let metadata: StoredSourceMetadata =
             serde_json::from_slice(&metadata_bytes).map_err(|_| UsageServiceError::CacheCorrupt)?;
         metadata_bytes.fill(0);
         validate_stored_metadata(&metadata)?;
-        let history = match parse_android_usage_v4(&canonical) {
-            Ok(history) => history,
+        let dataset = match parse_stored_dataset(&canonical) {
+            Ok(dataset) => dataset,
             Err(error) => {
                 canonical.fill(0);
                 return Err(match error {
@@ -1193,7 +1775,7 @@ impl UsageStatisticsService {
         }
         Ok(Some(StoredState {
             metadata,
-            history,
+            dataset,
             canonical,
         }))
     }
@@ -1221,6 +1803,77 @@ fn metadata_for_source(
     }
 }
 
+fn metadata_for_cloud_dataset(
+    canonical: &[u8],
+    previous: Option<&StoredSourceMetadata>,
+    now_ms: i64,
+) -> StoredSourceMetadata {
+    let read_at_ms = previous
+        .map(|metadata| {
+            now_ms
+                .max(0)
+                .max(metadata.last_successful_read_at_ms)
+                .max(metadata.last_attempt_at_ms)
+        })
+        .unwrap_or_else(|| now_ms.max(0));
+    let digest = sha256_hex(canonical);
+    StoredSourceMetadata {
+        record_type: SOURCE_RECORD_TYPE.to_owned(),
+        mode: UsageSourceModeDto::CloudSync,
+        state: UsageSourceStateDto::Ready,
+        display_name: "Android cloud usage".to_owned(),
+        linked_path: None,
+        last_successful_read_at_ms: read_at_ms,
+        last_attempt_at_ms: read_at_ms,
+        source_modified_at_ms: None,
+        source_size: canonical.len() as u64,
+        source_sha256: digest.clone(),
+        snapshot_sha256: digest,
+    }
+}
+
+fn metadata_for_backup_dataset(
+    canonical: &[u8],
+    previous: Option<&StoredSourceMetadata>,
+    now_ms: i64,
+) -> StoredSourceMetadata {
+    let read_at_ms = previous
+        .map(|metadata| {
+            now_ms
+                .max(0)
+                .max(metadata.last_successful_read_at_ms)
+                .max(metadata.last_attempt_at_ms)
+        })
+        .unwrap_or_else(|| now_ms.max(0));
+    let digest = sha256_hex(canonical);
+    StoredSourceMetadata {
+        record_type: SOURCE_RECORD_TYPE.to_owned(),
+        mode: UsageSourceModeDto::Snapshot,
+        state: UsageSourceStateDto::Ready,
+        display_name: "Android backup usage".to_owned(),
+        linked_path: None,
+        last_successful_read_at_ms: read_at_ms,
+        last_attempt_at_ms: read_at_ms,
+        source_modified_at_ms: None,
+        source_size: canonical.len() as u64,
+        source_sha256: digest.clone(),
+        snapshot_sha256: digest,
+    }
+}
+
+fn usage_device_id_from_cloud_key(key: &str) -> Result<String, UsageServiceError> {
+    let raw_device_id = key
+        .strip_prefix("usage/v1/")
+        .and_then(|value| value.strip_suffix(".json"))
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+        .ok_or(UsageServiceError::InvalidJson)?;
+    let normalized = normalize_usage_device_id(raw_device_id)?;
+    if normalized != raw_device_id {
+        return Err(UsageServiceError::InvalidJson);
+    }
+    Ok(normalized)
+}
+
 fn validate_stored_metadata(metadata: &StoredSourceMetadata) -> Result<(), UsageServiceError> {
     if metadata.record_type != SOURCE_RECORD_TYPE
         || !valid_source_display_name(&metadata.display_name)
@@ -1231,7 +1884,7 @@ fn validate_stored_metadata(metadata: &StoredSourceMetadata) -> Result<(), Usage
             .source_modified_at_ms
             .is_some_and(|value| value < 0)
         || metadata.source_size == 0
-        || metadata.source_size > MAX_USAGE_JSON_BYTES as u64
+        || metadata.source_size > MAX_USAGE_SOURCE_BYTES as u64
         || !is_sha256_hex(&metadata.source_sha256)
         || !is_sha256_hex(&metadata.snapshot_sha256)
     {
@@ -1259,6 +1912,17 @@ fn validate_stored_metadata(metadata: &StoredSourceMetadata) -> Result<(), Usage
                 Err(UsageServiceError::CacheCorrupt)
             } else {
                 Ok(())
+            }
+        }
+        UsageSourceModeDto::CloudSync => {
+            if metadata.linked_path.is_none()
+                && metadata.state == UsageSourceStateDto::Ready
+                && metadata.last_attempt_at_ms == metadata.last_successful_read_at_ms
+                && metadata.source_modified_at_ms.is_none()
+            {
+                Ok(())
+            } else {
+                Err(UsageServiceError::CacheCorrupt)
             }
         }
         _ => Ok(()),
@@ -1314,12 +1978,12 @@ fn read_stable_source(path: &Path) -> Result<StableSource, UsageServiceError> {
     if !before.is_file() {
         return Err(UsageServiceError::PathNotAllowed);
     }
-    if before.len() > MAX_USAGE_JSON_BYTES as u64 {
+    if before.len() > MAX_USAGE_SOURCE_BYTES as u64 {
         return Err(UsageServiceError::TooLarge);
     }
-    let first = read_open_file_bounded(&mut file, MAX_USAGE_JSON_BYTES)?;
+    let first = read_open_file_bounded(&mut file, MAX_USAGE_SOURCE_BYTES)?;
     file.seek(SeekFrom::Start(0)).map_err(map_source_io_error)?;
-    let second = read_open_file_bounded(&mut file, MAX_USAGE_JSON_BYTES)?;
+    let second = read_open_file_bounded(&mut file, MAX_USAGE_SOURCE_BYTES)?;
     let after = file.metadata().map_err(map_source_io_error)?;
     if first != second
         || before.len() != after.len()
@@ -1333,7 +1997,7 @@ fn read_stable_source(path: &Path) -> Result<StableSource, UsageServiceError> {
     }
     let mut current_file =
         open_regular_file_no_reparse(&canonical_path).map_err(UsageServiceError::from)?;
-    let current = read_open_file_bounded(&mut current_file, MAX_USAGE_JSON_BYTES)?;
+    let current = read_open_file_bounded(&mut current_file, MAX_USAGE_SOURCE_BYTES)?;
     let current_metadata = current_file.metadata().map_err(map_source_io_error)?;
     if current != first
         || current_metadata.len() != after.len()
@@ -1345,8 +2009,8 @@ fn read_stable_source(path: &Path) -> Result<StableSource, UsageServiceError> {
     if fs::canonicalize(path).map_err(map_source_io_error)? != canonical_path {
         return Err(UsageServiceError::SourceChanged);
     }
-    let history = parse_android_usage_v4(&first)?;
-    let canonical = canonical_android_usage_v4(&history)?;
+    let dataset = parse_usage_source(&first)?;
+    let canonical = canonical_stored_dataset(&dataset)?;
     let display_name = canonical_path
         .file_name()
         .and_then(|value| value.to_str())
@@ -1560,8 +2224,8 @@ fn decode_state_container(bytes: &[u8]) -> Result<(&[u8], &[u8]), UsageServiceEr
 }
 
 /// Protect feature data with a purpose-specific DPAPI entropy value.  The
-/// security module authenticates the purpose and accepts a full 10 MiB
-/// plaintext, so a maximum-sized Android payload does not need truncation.
+/// security module authenticates the purpose and accepts the full bounded v27
+/// usage projection, so a maximum-sized Android payload is never truncated.
 fn protect_for_purpose(
     protector: &dyn RawProtector,
     purpose: &str,
@@ -1569,7 +2233,7 @@ fn protect_for_purpose(
 ) -> Result<Vec<u8>, UsageServiceError> {
     validate_purpose(purpose)?;
     let maximum = match purpose {
-        SNAPSHOT_PURPOSE => MAX_USAGE_JSON_BYTES,
+        SNAPSHOT_PURPOSE => MAX_USAGE_SOURCE_BYTES,
         SOURCE_PURPOSE => MAX_SOURCE_METADATA_BYTES,
         _ => return Err(UsageServiceError::Crypto),
     };
@@ -1691,6 +2355,41 @@ mod tests {
         .to_vec()
     }
 
+    fn valid_device_json(
+        device_id: &str,
+        device_name: &str,
+        foreground_millis: i64,
+        collected_at_epoch_millis: i64,
+        state: &str,
+    ) -> Value {
+        serde_json::json!({
+            "schemaVersion": 1,
+            "deviceId": device_id,
+            "deviceName": device_name,
+            "platform": "android",
+            "updatedAtEpochMillis": collected_at_epoch_millis,
+            "history": {
+                "schemaVersion": 4,
+                "trackingStartedOn": "2026-07-27",
+                "backfillCompletedThrough": if state == "FINAL" {
+                    Value::String("2026-07-27".to_owned())
+                } else {
+                    Value::Null
+                },
+                "days": [{
+                    "date": "2026-07-27",
+                    "zoneId": "Asia/Shanghai",
+                    "state": state,
+                    "collectedAtEpochMillis": collected_at_epoch_millis,
+                    "apps": [{
+                        "packageName": "com.example.app",
+                        "foregroundMillis": foreground_millis
+                    }]
+                }]
+            }
+        })
+    }
+
     fn service(path: &Path) -> UsageStatisticsService {
         UsageStatisticsService::with_protector(path.to_owned(), Arc::new(TestRawProtector))
             .expect("create service")
@@ -1705,6 +2404,120 @@ mod tests {
         let text = String::from_utf8(canonical).expect("utf8");
         assert!(text.starts_with(r#"{"schemaVersion":4,"trackingStartedOn":"2026-07-27""#));
         assert_eq!(decoded.days[0].apps[0].package_name, "com.example.music");
+    }
+
+    #[test]
+    fn device_v1_and_backup_v27_use_the_android_contract() {
+        let first = valid_device_json(
+            "11111111-1111-4111-8111-111111111111",
+            "A phone",
+            100,
+            10,
+            "FINAL",
+        );
+        let second = valid_device_json(
+            "22222222-2222-4222-8222-222222222222",
+            "B phone",
+            25,
+            20,
+            "OPEN",
+        );
+        let direct =
+            parse_android_usage_device_v1(&serde_json::to_vec(&first).expect("encode device"))
+                .expect("parse device");
+        assert_eq!(direct.device_name, "A phone");
+
+        let backup = serde_json::json!({
+            "version": 27,
+            "exportedAt": 123,
+            "settings": {"unrelated": true},
+            "usageDevices": [first, second]
+        });
+        let dataset =
+            parse_android_v27_usage_devices(&serde_json::to_vec(&backup).expect("encode backup"))
+                .expect("parse backup projection");
+        assert_eq!(dataset.devices.len(), 2);
+        assert_eq!(dataset.devices[0].device_name, "A phone");
+    }
+
+    #[test]
+    fn all_devices_sum_by_date_and_single_device_filter_is_exact() {
+        let backup = serde_json::json!({
+            "version": 27,
+            "usageDevices": [
+                valid_device_json(
+                    "11111111-1111-4111-8111-111111111111",
+                    "A phone",
+                    100,
+                    10,
+                    "FINAL",
+                ),
+                valid_device_json(
+                    "22222222-2222-4222-8222-222222222222",
+                    "B phone",
+                    25,
+                    20,
+                    "OPEN",
+                )
+            ]
+        });
+        let dataset =
+            parse_android_v27_usage_devices(&serde_json::to_vec(&backup).expect("encode backup"))
+                .expect("parse backup");
+        let source = UsageSourceStatusDto {
+            dto_version: USAGE_DTO_VERSION,
+            mode: UsageSourceModeDto::Snapshot,
+            state: UsageSourceStateDto::Ready,
+            display_name: "DC.json".to_owned(),
+            can_refresh: false,
+            last_successful_read_at_ms: "0".to_owned(),
+            last_attempt_at_ms: "0".to_owned(),
+            source_modified_at_ms: None,
+        };
+        let all = aggregate_usage_snapshot(&dataset, source.clone(), &UsageQueryDto::default())
+            .expect("aggregate all");
+        assert_eq!(all.overview.total_millis, "125");
+        assert_eq!(all.points[0].state, UsageDayState::Open);
+        assert_eq!(all.device_choices.len(), 2);
+
+        let one = aggregate_usage_snapshot(
+            &dataset,
+            source,
+            &UsageQueryDto {
+                device_id: Some("11111111-1111-4111-8111-111111111111".to_owned()),
+                ..UsageQueryDto::default()
+            },
+        )
+        .expect("aggregate one");
+        assert_eq!(one.overview.total_millis, "100");
+        assert_eq!(
+            one.selected_device_id.as_deref(),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
+    }
+
+    #[test]
+    fn v27_projection_rejects_duplicate_devices_and_health_is_not_inferred() {
+        let device = valid_device_json(
+            "11111111-1111-4111-8111-111111111111",
+            "A phone",
+            100,
+            10,
+            "FINAL",
+        );
+        let duplicate = serde_json::json!({
+            "version": 27,
+            "usageDevices": [device.clone(), device],
+            // v27 intentionally has no Health Connect history field. Unknown
+            // compatibility data must never be interpreted as daily health.
+            "stepStatistics": {"steps": 0}
+        });
+        assert_eq!(
+            parse_android_v27_usage_devices(
+                &serde_json::to_vec(&duplicate).expect("encode duplicate")
+            ),
+            Err(UsageServiceError::InvalidJson)
+        );
     }
 
     #[test]
@@ -1932,7 +2745,7 @@ mod tests {
     }
 
     #[test]
-    fn usage_query_requires_and_validates_dto_version_one() {
+    fn usage_query_requires_and_validates_dto_version_two() {
         assert!(
             serde_json::from_value::<UsageQueryDto>(serde_json::json!({
                 "range": "LAST_30_DAYS",
@@ -1942,31 +2755,31 @@ mod tests {
         );
         assert!(
             serde_json::from_value::<UsageQueryDto>(serde_json::json!({
-                "dtoVersion": 1,
+                "dtoVersion": 2,
                 "unexpected": true
             }))
             .is_err()
         );
         assert!(
             serde_json::from_value::<UsageQueryDto>(serde_json::json!({
-                "dtoVersion": 2
+                "dtoVersion": 1
             }))
             .is_err()
         );
         let defaulted = serde_json::from_value::<UsageQueryDto>(serde_json::json!({
-            "dtoVersion": 1
+            "dtoVersion": 2
         }))
         .expect("versioned query");
         assert_eq!(defaulted, UsageQueryDto::default());
 
-        let history = parse_android_usage_v4(&valid_json()).expect("parse");
+        let dataset = legacy_usage_dataset(parse_android_usage_v4(&valid_json()).expect("parse"));
         let wrong_version = UsageQueryDto {
-            dto_version: 2,
+            dto_version: 1,
             ..UsageQueryDto::default()
         };
         assert_eq!(
             aggregate_usage_snapshot(
-                &history,
+                &dataset,
                 UsageSourceStatusDto {
                     dto_version: USAGE_DTO_VERSION,
                     mode: UsageSourceModeDto::Snapshot,
@@ -1985,9 +2798,9 @@ mod tests {
 
     #[test]
     fn aggregate_anchors_ranges_to_latest_phone_date_and_uses_decimal_strings() {
-        let history = parse_android_usage_v4(&valid_json()).expect("parse");
+        let dataset = legacy_usage_dataset(parse_android_usage_v4(&valid_json()).expect("parse"));
         let snapshot = aggregate_usage_snapshot(
-            &history,
+            &dataset,
             UsageSourceStatusDto {
                 dto_version: USAGE_DTO_VERSION,
                 mode: UsageSourceModeDto::Snapshot,
@@ -2002,6 +2815,7 @@ mod tests {
                 dto_version: USAGE_DTO_VERSION,
                 range: UsageRangeDto::Last7Days,
                 package_name: None,
+                device_id: None,
             },
         )
         .expect("aggregate");
@@ -2054,6 +2868,145 @@ mod tests {
             .expect("snapshot")
             .expect("configured");
         assert_eq!(snapshot.points.len(), 2);
+    }
+
+    #[test]
+    fn cloud_device_objects_merge_by_id_without_creating_an_upload_surface() {
+        let directory = tempdir().expect("temp");
+        let service = service(&directory.path().join("private"));
+        let first_id = "11111111-1111-4111-8111-111111111111";
+        let second_id = "22222222-2222-4222-8222-222222222222";
+        let first = serde_json::to_vec(&valid_device_json(first_id, "A phone", 100, 10, "FINAL"))
+            .expect("encode first");
+        let second = serde_json::to_vec(&valid_device_json(second_id, "B phone", 25, 20, "OPEN"))
+            .expect("encode second");
+
+        service
+            .merge_cloud_device_object(&format!("usage/v1/{first_id}.json"), &first, 100)
+            .expect("merge first");
+        service
+            .merge_cloud_device_object(&format!("usage/v1/{second_id}.json"), &second, 200)
+            .expect("merge second");
+
+        let snapshot = service
+            .snapshot(&UsageQueryDto::default())
+            .expect("snapshot")
+            .expect("configured");
+        assert_eq!(snapshot.source.mode, UsageSourceModeDto::CloudSync);
+        assert!(!snapshot.source.can_refresh);
+        assert_eq!(snapshot.source.last_successful_read_at_ms, "200");
+        assert_eq!(snapshot.device_choices.len(), 2);
+        assert_eq!(snapshot.overview.total_millis, "125");
+
+        let stored = service.read_state().expect("read state").expect("stored");
+        assert_eq!(stored.metadata.linked_path, None);
+        assert_eq!(stored.dataset.devices.len(), 2);
+
+        let replacement = serde_json::to_vec(&valid_device_json(
+            first_id,
+            "A phone renamed",
+            300,
+            30,
+            "FINAL",
+        ))
+        .expect("encode replacement");
+        service
+            .merge_cloud_device_object(&format!("usage/v1/{first_id}.json"), &replacement, 300)
+            .expect("replace first");
+        let replaced = service
+            .snapshot(&UsageQueryDto::default())
+            .expect("snapshot")
+            .expect("configured");
+        assert_eq!(replaced.device_choices.len(), 2);
+        assert_eq!(replaced.overview.total_millis, "325");
+    }
+
+    #[test]
+    fn backup_devices_merge_atomically_with_android_day_precedence() {
+        let directory = tempdir().expect("temp");
+        let service = service(&directory.path().join("private"));
+        let first_id = "11111111-1111-4111-8111-111111111111";
+        let second_id = "22222222-2222-4222-8222-222222222222";
+        let first = valid_device_json(first_id, "A phone", 100, 30, "FINAL");
+        service
+            .merge_backup_device_values(std::slice::from_ref(&first), 100)
+            .expect("initial backup merge");
+
+        // FINAL wins over a newer OPEN row for the same calendar day, while
+        // the newer record timestamp still supplies device metadata.
+        let incoming = vec![
+            valid_device_json(first_id, "A phone renamed", 999, 50, "OPEN"),
+            valid_device_json(second_id, "B phone", 25, 20, "FINAL"),
+        ];
+        service
+            .merge_backup_device_values(&incoming, 200)
+            .expect("merge backup batch");
+        let snapshot = service
+            .snapshot(&UsageQueryDto::default())
+            .expect("snapshot")
+            .expect("configured");
+        assert_eq!(snapshot.overview.total_millis, "125");
+        assert_eq!(snapshot.device_choices.len(), 2);
+        assert_eq!(snapshot.device_choices[0].device_name, "A phone renamed");
+        assert_eq!(snapshot.source.mode, UsageSourceModeDto::Snapshot);
+        assert!(!snapshot.source.can_refresh);
+
+        let before = service
+            .snapshot(&UsageQueryDto::default())
+            .expect("snapshot")
+            .expect("configured");
+        assert_eq!(
+            service.merge_backup_device_values(&[first.clone(), first], 300),
+            Err(UsageServiceError::InvalidJson)
+        );
+        let after = service
+            .snapshot(&UsageQueryDto::default())
+            .expect("snapshot")
+            .expect("configured");
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn cloud_device_object_rejects_noncanonical_or_mismatched_keys_and_keeps_cache() {
+        let directory = tempdir().expect("temp");
+        let service = service(&directory.path().join("private"));
+        let device_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let payload =
+            serde_json::to_vec(&valid_device_json(device_id, "A phone", 100, 10, "FINAL"))
+                .expect("encode device");
+        service
+            .merge_cloud_device_object(&format!("usage/v1/{device_id}.json"), &payload, 100)
+            .expect("initial merge");
+        let before = service
+            .snapshot(&UsageQueryDto::default())
+            .expect("snapshot")
+            .expect("configured");
+
+        for key in [
+            format!("/usage/v1/{device_id}.json"),
+            format!("usage/v1/{}.json", device_id.to_ascii_uppercase()),
+            "usage/v1/22222222-2222-4222-8222-222222222222.json".to_owned(),
+            format!("usage/v1/{device_id}/extra.json"),
+        ] {
+            assert_eq!(
+                service.merge_cloud_device_object(&key, &payload, 200),
+                Err(UsageServiceError::InvalidJson)
+            );
+        }
+        assert_eq!(
+            service.merge_cloud_device_object(
+                &format!("usage/v1/{device_id}.json"),
+                b"{invalid",
+                200,
+            ),
+            Err(UsageServiceError::InvalidJson)
+        );
+
+        let after = service
+            .snapshot(&UsageQueryDto::default())
+            .expect("snapshot")
+            .expect("configured");
+        assert_eq!(after, before);
     }
 
     #[test]

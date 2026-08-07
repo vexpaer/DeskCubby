@@ -69,14 +69,17 @@ function configDraft(config?: CloudSyncConfigV1): CloudSyncConfigDraftV1 {
     serviceType: config?.serviceType ?? "WEBDAV",
     endpointUrl: config?.endpointUrl ?? "",
     remotePath: config?.remotePath ?? "DeskCubby",
+    userAgent: config?.userAgent ?? "DeskCubby-Sync/1",
     webDavUsername: config?.webDavUsername ?? "",
     s3Bucket: config?.s3Bucket ?? "",
     s3Region: config?.s3Region ?? "us-east-1",
+    s3PathStyle: config?.s3PathStyle ?? true,
     allowInsecureHttp: config?.allowInsecureHttp ?? false,
     selectedContents: config?.selectedContents ?? [
       "DIARIES",
       "MEDIA",
       "JSON_BACKUP",
+      "USAGE_STATISTICS",
     ],
     direction: config?.direction ?? "TWO_WAY",
   };
@@ -108,6 +111,11 @@ function validRemotePath(value: string): boolean {
   );
 }
 
+function isHttpControlCharacter(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+  return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+}
+
 function configDraftsEqual(
   left: CloudSyncConfigDraftV1,
   right: CloudSyncConfigDraftV1,
@@ -119,9 +127,11 @@ function configDraftsEqual(
     left.serviceType === right.serviceType &&
     left.endpointUrl === right.endpointUrl &&
     left.remotePath === right.remotePath &&
+    left.userAgent === right.userAgent &&
     left.webDavUsername === right.webDavUsername &&
     left.s3Bucket === right.s3Bucket &&
     left.s3Region === right.s3Region &&
+    left.s3PathStyle === right.s3PathStyle &&
     left.allowInsecureHttp === right.allowInsecureHttp &&
     left.direction === right.direction &&
     left.selectedContents.length === right.selectedContents.length &&
@@ -211,6 +221,9 @@ function ConfigDialog({
   const valid =
     draft.name.trim().length > 0 &&
     draft.endpointUrl.length <= 4_096 &&
+    draft.userAgent.trim().length > 0 &&
+    draft.userAgent.length <= 512 &&
+    !Array.from(draft.userAgent).some(isHttpControlCharacter) &&
     endpoint !== "invalid" &&
     validRemotePath(draft.remotePath) &&
     draft.selectedContents.length > 0 &&
@@ -267,6 +280,7 @@ function ConfigDialog({
       name: draft.name.trim(),
       endpointUrl: draft.endpointUrl.trim(),
       remotePath: draft.remotePath.trim() || "DeskCubby",
+      userAgent: draft.userAgent.trim(),
       webDavUsername: draft.webDavUsername.trim(),
       s3Bucket: draft.s3Bucket.trim(),
       s3Region: draft.s3Region.trim(),
@@ -413,6 +427,25 @@ function ConfigDialog({
                     </small>
                   ) : null}
                 </label>
+                <label className="field full-width">
+                  <span className="field-label">User-Agent</span>
+                  <input
+                    maxLength={512}
+                    value={draft.userAgent}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        userAgent: event.target.value,
+                      }))
+                    }
+                  />
+                  <small className="form-hint">
+                    {copy(
+                      "与 Android v27 使用相同的可配置请求标识；不能为空或包含控制字符。",
+                      "Uses the same configurable request identifier as Android v27; it cannot be blank or contain control characters.",
+                    )}
+                  </small>
+                </label>
                 <label className="check-control full-width">
                   <input
                     type="checkbox"
@@ -436,6 +469,7 @@ function ConfigDialog({
                       ["DIARIES", copy("日记", "Diaries")],
                       ["MEDIA", copy("媒体", "Media")],
                       ["JSON_BACKUP", copy("应用 JSON", "App JSON")],
+                      ["USAGE_STATISTICS", copy("手机使用时间", "Phone screen time")],
                     ] as Array<[CloudSyncContent, string]>
                   ).map(([content, label]) => (
                     <label className="check-control" key={content}>
@@ -460,6 +494,17 @@ function ConfigDialog({
                       {copy(
                         "应用 JSON 可能包含 AI 配置中的明文 API Key；远端对象没有端到端加密。",
                         "App JSON can contain plaintext API keys from AI configurations; remote objects are not end-to-end encrypted.",
+                      )}
+                    </span>
+                  </div>
+                ) : null}
+                {draft.selectedContents.includes("USAGE_STATISTICS") ? (
+                  <div className="cloud-sensitive-warning" role="note">
+                    <ShieldAlert aria-hidden="true" size={18} />
+                    <span>
+                      {copy(
+                        "Windows 只下载并显示 Android 的 usage/v1 设备对象，绝不会采集或上传这台电脑的使用时间；“仅上传”模式会跳过这些对象。",
+                        "Windows only downloads and displays Android usage/v1 device objects. It never collects or uploads PC usage; upload-only mode skips these objects.",
                       )}
                     </span>
                   </div>
@@ -534,6 +579,22 @@ function ConfigDialog({
                         setDraft((current) => ({ ...current, s3Region: event.target.value }))
                       }
                     />
+                  </label>
+                  <label className="check-control full-width">
+                    <input
+                      type="checkbox"
+                      checked={draft.s3PathStyle}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          s3PathStyle: event.target.checked,
+                        }))
+                      }
+                    />
+                    {copy(
+                      "使用 Path-style 地址（兼容多数自建 S3 服务）",
+                      "Use path-style addressing (recommended for most self-hosted S3 services)",
+                    )}
                   </label>
                 </div>
               )}
@@ -611,7 +672,7 @@ function ConfigDialog({
                     <input
                       autoComplete="new-password"
                       id="cloud-webdav-password"
-                      maxLength={2_048}
+                      maxLength={8_192}
                       type="password"
                       value={secrets.webDavPassword}
                       onChange={(event) =>
@@ -639,7 +700,7 @@ function ConfigDialog({
                       <span className="field-label">Access Key ID</span>
                       <input
                         autoComplete="off"
-                        maxLength={2_048}
+                        maxLength={8_192}
                         type="password"
                         value={secrets.s3AccessKey}
                         onChange={(event) =>
@@ -654,7 +715,7 @@ function ConfigDialog({
                       <span className="field-label">Secret Access Key</span>
                       <input
                         autoComplete="new-password"
-                        maxLength={2_048}
+                        maxLength={8_192}
                         type="password"
                         value={secrets.s3SecretKey}
                         onChange={(event) =>
@@ -671,7 +732,7 @@ function ConfigDialog({
                       </span>
                       <input
                         autoComplete="off"
-                        maxLength={2_048}
+                        maxLength={8_192}
                         type="password"
                         value={secrets.s3SessionToken}
                         onChange={(event) =>
@@ -932,8 +993,8 @@ export default function CloudSyncPage() {
       eyebrow={copy("设置 → 应用数据", "Settings → App data")}
       title={copy("WebDAV / S3 云同步", "WebDAV / S3 cloud sync")}
       description={copy(
-        "同步日记、媒体与 Android v18 应用 JSON；本地文件仍是最终来源。",
-        "Sync diaries, media and Android v18 app JSON while local files remain the source of truth.",
+        "同步日记、媒体与 Android v27 应用 JSON；手机使用时间仅按需从 Android usage 对象下载并显示。本地文件仍是最终来源。",
+        "Sync diaries, media and Android v27 app JSON; phone screen time is downloaded from Android usage objects only when selected. Local files remain the source of truth.",
       )}
       actions={
         <>
@@ -1071,7 +1132,9 @@ export default function CloudSyncPage() {
                                 ? copy("日记", "Diaries")
                                 : content === "MEDIA"
                                   ? copy("媒体", "Media")
-                                  : "JSON",
+                                  : content === "JSON_BACKUP"
+                                    ? "JSON"
+                                    : copy("手机使用时间", "Phone screen time"),
                             )
                             .join(language === "en" ? ", " : "、")}
                         </dd>

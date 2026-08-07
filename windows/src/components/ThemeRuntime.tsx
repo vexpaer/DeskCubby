@@ -17,7 +17,12 @@ type WindowsAppearanceSettings = Pick<
   | "themeSecondaryColorsArgb"
   | "fontScale"
   | "compactMode"
+  | "backgroundImagePath"
+  | "backgroundImageOpacity"
+  | "backgroundImageBlurPx"
 >;
+
+let backgroundRevision = 0;
 
 function argbToHex(argb: number): string {
   return `#${((argb >>> 0) & 0xffffff).toString(16).padStart(6, "0")}`;
@@ -50,6 +55,34 @@ function appearanceFromWindowsSettings(
   appearance.fontScale = settings.fontScale;
   appearance.compactMode = settings.compactMode;
   return appearance;
+}
+
+function applyGlobalBackground(
+  root: HTMLElement,
+  settings: WindowsAppearanceSettings,
+) {
+  if (!settings.backgroundImagePath) {
+    delete root.dataset.hasGlobalBackground;
+    root.style.removeProperty("--global-background-image");
+    root.style.removeProperty("--global-background-opacity");
+    root.style.removeProperty("--global-background-blur");
+    return;
+  }
+
+  backgroundRevision += 1;
+  const opacity = Number.isFinite(settings.backgroundImageOpacity)
+    ? Math.min(1, Math.max(0, settings.backgroundImageOpacity))
+    : 0.45;
+  const blur = Number.isFinite(settings.backgroundImageBlurPx)
+    ? Math.min(40, Math.max(0, settings.backgroundImageBlurPx))
+    : 0;
+  root.dataset.hasGlobalBackground = "true";
+  root.style.setProperty(
+    "--global-background-image",
+    `url("http://background.localhost/current?rev=${backgroundRevision}")`,
+  );
+  root.style.setProperty("--global-background-opacity", String(opacity));
+  root.style.setProperty("--global-background-blur", `${blur}px`);
 }
 
 function useSystemDarkMode(): boolean {
@@ -101,6 +134,7 @@ export function ThemeRuntime({ children }: PropsWithChildren) {
       if (!settings) return;
       applyAppearance(appearanceFromWindowsSettings(settings));
       const root = document.documentElement;
+      applyGlobalBackground(root, settings);
       if (typeof settings.themeColorArgb === "number") {
         const primary = argbToHex(settings.themeColorArgb);
         root.style.setProperty("--primary", primary);

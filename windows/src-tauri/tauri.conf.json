@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DeskCubby",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "com.deskcubby.windows",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -28,7 +28,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: media: http://media.localhost; connect-src ipc: http://ipc.localhost",
+      "csp": "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src reader: http://reader.localhost; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: background: http://background.localhost media: http://media.localhost; connect-src ipc: http://ipc.localhost",
       "capabilities": ["main-window"],
       "assetProtocol": {
         "enable": false,
@@ -43,7 +43,7 @@
     "publisher": "DeskCubby",
     "category": "Productivity",
     "shortDescription": "Local-first diary and personal records for Windows.",
-    "longDescription": "DeskCubby is a local-first Markdown diary, media, meal calendar, thought, date record, and poetry application for Windows.",
+    "longDescription": "DeskCubby is a local-first diary, notes, reader, RSS, AI, media, meal calendar, records, games, and read-only phone insights application for Windows.",
     "copyright": "Copyright © 2026 DeskCubby contributors",
     "icon": [
       "icons/32x32.png",

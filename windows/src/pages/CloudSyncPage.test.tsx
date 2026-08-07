@@ -14,9 +14,11 @@ const CONFIG = {
   serviceType: "WEBDAV",
   endpointUrl: "https://dav.example.com/",
   remotePath: "DeskCubby",
+  userAgent: "DeskCubby-Sync/1",
   webDavUsername: "alice",
   s3Bucket: "",
   s3Region: "us-east-1",
+  s3PathStyle: true,
   allowInsecureHttp: false,
   selectedContents: ["DIARIES", "MEDIA"],
   direction: "TWO_WAY",
@@ -360,7 +362,7 @@ describe("CloudSyncPage", () => {
 
     await user.click(screen.getByRole("button", { name: "替换" }));
     const password = screen.getByLabelText("密码");
-    expect(password).toHaveAttribute("maxlength", "2048");
+    expect(password).toHaveAttribute("maxlength", "8192");
     await user.type(password, "new-local-secret");
     await user.click(screen.getByRole("button", { name: "保存配置" }));
 

@@ -50,6 +50,7 @@ interface ImportResult {
   categoryCount: number;
   dateRecordCount: number;
   poemCount: number;
+  usageDevicesMerged: boolean;
 }
 
 interface BackupWriteResult {
@@ -69,6 +70,17 @@ interface RestorePoint {
 }
 
 type Language = "zh" | "en";
+
+const MIN_SUPPORTED_BACKUP_VERSION = 1;
+const MAX_SUPPORTED_BACKUP_VERSION = 27;
+
+function isSupportedBackupVersion(version: number): boolean {
+  return (
+    Number.isInteger(version) &&
+    version >= MIN_SUPPORTED_BACKUP_VERSION &&
+    version <= MAX_SUPPORTED_BACKUP_VERSION
+  );
+}
 
 function useDocumentLanguage(): Language {
   const read = () =>
@@ -120,6 +132,8 @@ export default function BackupPage() {
   );
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const preview = selection ? selectionPreview(selection) : null;
+  const canImportPreview = preview ? isSupportedBackupVersion(preview.formatVersion) : false;
 
   const loadRestorePoints = useCallback(async () => {
     setLoadingRestorePoints(true);
@@ -179,8 +193,12 @@ export default function BackupPage() {
       setConfirmReplace(false);
       setNotice(
         tr(
-          `导入完成：${result.thoughtCount} 条小巧思、${result.dateRecordCount} 条日期记录、${result.poemCount} 首诗词。`,
-          `Import complete: ${result.thoughtCount} thoughts, ${result.dateRecordCount} dates and ${result.poemCount} poems.`,
+          result.usageDevicesMerged
+            ? `导入完成：${result.thoughtCount} 条小巧思、${result.dateRecordCount} 条日期记录、${result.poemCount} 首诗词。`
+            : `核心数据已导入：${result.thoughtCount} 条小巧思、${result.dateRecordCount} 条日期记录、${result.poemCount} 首诗词。手机使用时间缓存未更新；请稍后重新导入该备份。`,
+          result.usageDevicesMerged
+            ? `Import complete: ${result.thoughtCount} thoughts, ${result.dateRecordCount} dates and ${result.poemCount} poems.`
+            : `Core data imported: ${result.thoughtCount} thoughts, ${result.dateRecordCount} dates and ${result.poemCount} poems. The phone-usage cache was not updated; import this backup again later.`,
         ),
       );
       await loadRestorePoints();
@@ -257,14 +275,13 @@ export default function BackupPage() {
     }
   };
 
-  const preview = selection ? selectionPreview(selection) : null;
   const locale = language === "zh" ? "zh-CN" : "en-US";
 
   return (
     <main className="page-shell backup-page" aria-labelledby="backup-title">
       <header className="page-header">
         <div>
-          <p className="eyebrow">{tr("Android v18 双向兼容", "Bidirectional Android v18 compatibility")}</p>
+          <p className="eyebrow">{tr("Android v27 双向兼容", "Bidirectional Android v27 compatibility")}</p>
           <h1 id="backup-title">{tr("设置与备份", "Settings & backup")}</h1>
         </div>
       </header>
@@ -293,8 +310,8 @@ export default function BackupPage() {
             <h2>{tr("导入 Android 备份", "Import Android backup")}</h2>
             <p>
               {tr(
-                "只接受当前 v18 JSON，最大 10 MiB。应用会先严格校验并展示统计，不会直接覆盖。",
-                "Accepts current v18 JSON up to 10 MiB. It is validated and previewed before anything changes.",
+                "支持 Android v1–v27 JSON，最大 64 MiB；旧格式会安全升级为 v27。应用会先严格校验并展示统计，不会直接覆盖。",
+                "Accepts Android v1–v27 JSON up to 64 MiB and safely upgrades older formats to v27. It is validated and previewed before anything changes.",
               )}
             </p>
           </div>
@@ -455,7 +472,7 @@ export default function BackupPage() {
             </div>
 
             <div className="preview-version">
-              {preview.formatVersion === 18 ? (
+              {canImportPreview ? (
                 <CheckCircle2 size={20} aria-hidden="true" />
               ) : (
                 <X size={20} aria-hidden="true" />
@@ -509,7 +526,7 @@ export default function BackupPage() {
               <input
                 type="checkbox"
                 checked={confirmReplace}
-                disabled={preview.formatVersion !== 18 || busy === "import"}
+                disabled={!canImportPreview || busy === "import"}
                 onChange={(event) => setConfirmReplace(event.target.checked)}
               />
               {tr(
@@ -533,7 +550,7 @@ export default function BackupPage() {
               <button
                 className="button-primary"
                 type="button"
-                disabled={!confirmReplace || preview.formatVersion !== 18 || busy === "import"}
+                disabled={!confirmReplace || !canImportPreview || busy === "import"}
                 onClick={() => void importBackup()}
               >
                 <RotateCcw size={17} />

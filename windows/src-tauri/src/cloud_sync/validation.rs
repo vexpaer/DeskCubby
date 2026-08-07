@@ -14,8 +14,9 @@ const MAX_CONFIG_NAME_CHARS: usize = 200;
 const MAX_ENDPOINT_CHARS: usize = 4_096;
 const MAX_REMOTE_PATH_CHARS: usize = 1_024;
 const MAX_USERNAME_CHARS: usize = 512;
-const MAX_CREDENTIAL_CHARS: usize = 2_048;
+const MAX_CREDENTIAL_CHARS: usize = 8_192;
 const MAX_KEY_CHARS: usize = 2_048;
+const MAX_USER_AGENT_CHARS: usize = 512;
 
 #[derive(Clone)]
 pub struct ValidatedCloudSyncConfig {
@@ -49,6 +50,9 @@ pub fn validate_cloud_sync_config(
         || contains_control(&config.name)
         || !config.enabled
         || config.selected_contents.is_empty()
+        || config.user_agent.trim().is_empty()
+        || utf16_len(&config.user_agent) > MAX_USER_AGENT_CHARS
+        || contains_control(&config.user_agent)
     {
         return Err(CloudSyncError::invalid_configuration());
     }
@@ -92,6 +96,9 @@ pub fn validate_cloud_sync_config(
                     .chars()
                     .any(|value| value == '/' || value == '\\' || value.is_control())
                 || !valid_region(&config.s3_region)
+                || (!config.s3_path_style
+                    && (!valid_virtual_host_bucket(&config.s3_bucket)
+                        || endpoint.host_str().is_some_and(|host| host.contains(':'))))
                 || credentials.s3_access_key.is_empty()
                 || credentials.s3_secret_key.is_empty()
                 || credentials.s3_access_key.contains(['/', ','])
@@ -115,6 +122,12 @@ pub fn validate_cloud_sync_config(
             scope.push_str(config.s3_bucket.trim());
             scope.push('\n');
             scope.push_str(config.s3_region.trim());
+            scope.push('\n');
+            scope.push_str(if config.s3_path_style {
+                "true"
+            } else {
+                "false"
+            });
             scope.push('\n');
             // Only the digest is persisted. Including account identity prevents
             // ancestry from one S3 account being reused after credentials change.
@@ -173,7 +186,9 @@ pub(crate) fn selected_prefixes(selected: &BTreeSet<CloudSyncContent>) -> BTreeS
 
 pub(crate) fn collection_url(config: &ValidatedCloudSyncConfig) -> Result<Url, CloudSyncError> {
     let mut segments = Vec::new();
-    if config.source.service_type == CloudSyncServiceType::S3Compatible {
+    if config.source.service_type == CloudSyncServiceType::S3Compatible
+        && config.source.s3_path_style
+    {
         segments.push(config.source.s3_bucket.trim());
     }
     segments.extend(
@@ -183,7 +198,25 @@ pub(crate) fn collection_url(config: &ValidatedCloudSyncConfig) -> Result<Url, C
             .filter(|value| !value.is_empty()),
     );
 
-    let mut collection = endpoint_origin_and_path(&config.endpoint);
+    let mut endpoint = config.endpoint.clone();
+    if config.source.service_type == CloudSyncServiceType::S3Compatible
+        && !config.source.s3_path_style
+    {
+        let bucket = config.source.s3_bucket.trim();
+        let endpoint_host = endpoint
+            .host_str()
+            .ok_or_else(CloudSyncError::invalid_configuration)?;
+        if !endpoint_host
+            .to_ascii_lowercase()
+            .starts_with(&format!("{}.", bucket.to_ascii_lowercase()))
+        {
+            endpoint
+                .set_host(Some(&format!("{bucket}.{endpoint_host}")))
+                .map_err(|_| CloudSyncError::invalid_configuration())?;
+        }
+    }
+
+    let mut collection = endpoint_origin_and_path(&endpoint);
     if !collection.ends_with('/') {
         collection.push('/');
     }
@@ -266,6 +299,17 @@ fn valid_region(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(byte))
 }
 
+fn valid_virtual_host_bucket(value: &str) -> bool {
+    let value = value.as_bytes();
+    !value.is_empty()
+        && value.len() <= 63
+        && value.first().is_some_and(u8::is_ascii_alphanumeric)
+        && value.last().is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-".contains(byte))
+}
+
 fn contains_control(value: &str) -> bool {
     value.chars().any(char::is_control)
 }
@@ -303,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn s3_collection_is_path_style() {
+    fn s3_collection_supports_path_and_virtual_host_styles() {
         let value = CloudSyncConfig {
             service_type: CloudSyncServiceType::S3Compatible,
             s3_bucket: "archive".to_owned(),
@@ -320,6 +364,16 @@ mod tests {
         assert_eq!(
             collection_url(&validated).unwrap().as_str(),
             "https://cloud.example/dav/archive/DeskCubby/"
+        );
+
+        let virtual_host = CloudSyncConfig {
+            s3_path_style: false,
+            ..value
+        };
+        let validated = validate_cloud_sync_config(&virtual_host, &credentials).unwrap();
+        assert_eq!(
+            collection_url(&validated).unwrap().as_str(),
+            "https://archive.cloud.example/dav/DeskCubby/"
         );
     }
 

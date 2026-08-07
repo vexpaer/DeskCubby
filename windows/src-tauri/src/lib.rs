@@ -1,14 +1,32 @@
 #![recursion_limit = "512"]
 
+// `tao` imports TaskDialogIndirect, which is supplied by Common Controls v6.
+// Tauri embeds that activation manifest for application binaries, while
+// Cargo's lib-unit-test executable does not. Put a linker directive directly
+// in the test-only COFF object so it cannot duplicate the binary resource.
+#[cfg(all(test, target_env = "msvc"))]
+#[used]
+#[unsafe(link_section = ".drectve")]
+static COMMON_CONTROLS_V6_TEST_MANIFEST: [u8;
+    b"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"".len()] =
+    *b"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"";
+
+mod ai;
+mod background_protocol;
 mod backup;
 mod cloud_sync;
 mod commands;
 mod db;
 mod diary;
+mod games;
+mod health;
 mod media;
 mod media_protocol;
 mod models;
+mod notes;
 mod poetry;
+mod reader;
+mod rss;
 mod security;
 pub mod updater;
 mod usage;
@@ -30,6 +48,8 @@ pub struct AppState {
     pub private_dir: PathBuf,
     pub diary_watcher: watcher::DiaryWatcher,
     pub usage_statistics: Arc<usage::UsageStatisticsService>,
+    pub health_statistics: Arc<health::HealthStatisticsService>,
+    pub rss: Arc<rss::RssService>,
     pub vault: Arc<vault::VaultService>,
     pub(crate) cloud_sync: Arc<cloud_sync::commands::CloudSyncService>,
 }
@@ -37,7 +57,9 @@ pub struct AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .register_uri_scheme_protocol("background", background_protocol::handle)
         .register_uri_scheme_protocol("media", media_protocol::handle)
+        .register_uri_scheme_protocol("reader", reader::handle_protocol)
         .plugin(tauri_plugin_dialog::init())
         .plugin(updater::plugin())
         .setup(|app| {
@@ -50,6 +72,10 @@ pub fn run() {
             let usage_statistics = Arc::new(usage::UsageStatisticsService::new(
                 private_dir.join("phone-usage"),
             )?);
+            let health_statistics = Arc::new(health::HealthStatisticsService::new(
+                private_dir.join("health-statistics"),
+            )?);
+            let rss = Arc::new(rss::RssService::new());
             let vault = Arc::new(vault::VaultService::new(
                 vault_persistence::DatabaseVaultStore::new(database.clone()),
             ));
@@ -60,12 +86,13 @@ pub fn run() {
                 .and_then(|paths| paths.diary_path);
             diary_watcher.set_directory(app.handle().clone(), diary_path.as_deref());
             let cloud_event_app = app.handle().clone();
-            let cloud_sync = Arc::new(cloud_sync::commands::CloudSyncService::new(
+            let cloud_sync = Arc::new(cloud_sync::commands::CloudSyncService::new_with_usage(
                 database.clone(),
                 private_dir.clone(),
                 Arc::new(move || {
                     let _ = cloud_event_app.emit("diary-index-changed", ());
                 }),
+                Some(Arc::clone(&usage_statistics)),
             )?);
             cloud_sync.start_scheduler();
             let automatic_update_store = database.clone();
@@ -74,6 +101,8 @@ pub fn run() {
                 private_dir,
                 diary_watcher,
                 usage_statistics,
+                health_statistics,
+                rss,
                 vault,
                 cloud_sync,
             });

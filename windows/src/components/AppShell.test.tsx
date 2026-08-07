@@ -41,11 +41,19 @@ describe("AppShell", () => {
 
     expect(screen.getByRole("link", { name: "日记" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "诗词本" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "笔记" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "阅读" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "RSS 订阅" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "AI 聊天" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "收藏夹" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "小游戏" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "统计" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "手机使用时间" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "健康" })).toBeInTheDocument();
     expect(screen.getByText("本地优先")).toBeInTheDocument();
     expect(screen.queryByText("离线可用")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "浏览器" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "桌面小卡片" })).not.toBeInTheDocument();
   });
 
   it("collapses the desktop sidebar", () => {

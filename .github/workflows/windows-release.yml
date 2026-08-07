@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Existing protected release tag, for example windows-v0.2.0"
+        description: "Existing protected release tag, for example windows-v0.3.0"
         required: true
         type: string
 
@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-release-${{ github.ref }}
+  group: windows-release-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -65,6 +65,10 @@ jobs:
             throw "The requested release tag does not exist."
           }
           $tagCommit = (git rev-list -n 1 "refs/tags/$tag").Trim()
+          $checkedOutCommit = (git rev-parse HEAD).Trim()
+          if ($checkedOutCommit -ne $tagCommit) {
+            throw "The checked-out source does not match the release tag."
+          }
           git merge-base --is-ancestor $tagCommit "origin/main"
           if ($LASTEXITCODE -ne 0) {
             throw "The Windows release tag must point to an origin/main ancestor."
@@ -75,6 +79,8 @@ jobs:
             throw "Tag and Tauri version do not match."
           }
           "DESKCUBBY_RELEASE_TAG=$tag" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "DESKCUBBY_RELEASE_COMMIT=$tagCommit" |
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Set up Node.js
@@ -106,23 +112,46 @@ jobs:
           cargo test --locked --manifest-path .\src-tauri\Cargo.toml
           .\scripts\verify-packaging.ps1
 
-      - name: Fail closed when updater signing secrets are missing
+      - name: Fail closed when production signing inputs are missing
         shell: pwsh
         working-directory: windows
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          DESKCUBBY_WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
         run: |
           $required = @{
             DESKCUBBY_UPDATER_PUBLIC_KEY = $env:DESKCUBBY_UPDATER_PUBLIC_KEY
             DESKCUBBY_UPDATER_ENDPOINT = $env:DESKCUBBY_UPDATER_ENDPOINT
             DESKCUBBY_WINDOWS_PUBLISHER = $env:DESKCUBBY_WINDOWS_PUBLISHER
+            DESKCUBBY_WINDOWS_SIGNER_SUBJECT = $env:DESKCUBBY_WINDOWS_SIGNER_SUBJECT
             TAURI_SIGNING_PRIVATE_KEY = $env:TAURI_SIGNING_PRIVATE_KEY
             TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           }
           foreach ($entry in $required.GetEnumerator()) {
             if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
               throw "Required protected release input '$($entry.Key)' is missing."
+            }
+          }
+          $hasPfx = -not [string]::IsNullOrWhiteSpace(
+            $env:WINDOWS_CERTIFICATE_BASE64
+          )
+          $hasSignCommand = -not [string]::IsNullOrWhiteSpace(
+            $env:DESKCUBBY_WINDOWS_SIGN_COMMAND
+          )
+          if ($hasPfx -eq $hasSignCommand) {
+            throw "Configure exactly one Authenticode signing mechanism."
+          }
+          if ($hasPfx) {
+            if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+              throw "WINDOWS_CERTIFICATE_PASSWORD is required for PFX signing."
+            }
+            if ([string]::IsNullOrWhiteSpace(
+              $env:DESKCUBBY_WINDOWS_TIMESTAMP_URL
+            )) {
+              throw "WINDOWS_TIMESTAMP_URL is required for PFX signing."
             }
           }
 
@@ -169,6 +198,7 @@ jobs:
             -ArtifactDirectory .\artifacts `
             -Version $config.version `
             -Tag $env:DESKCUBBY_RELEASE_TAG `
+            -ExpectedCommit $env:DESKCUBBY_RELEASE_COMMIT `
             -Repository "${{ github.repository }}"
 
       - name: Remove imported certificate from the runner

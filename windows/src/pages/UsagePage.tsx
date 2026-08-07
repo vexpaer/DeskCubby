@@ -1,6 +1,7 @@
 import {
   AppWindow,
   BarChart3,
+  Cloud,
   FileDown,
   FileSymlink,
   Link2,
@@ -17,10 +18,10 @@ import {
   PHONE_USAGE_DTO_VERSION,
   usageApi,
   type DecimalI64,
-  type PhoneUsageSnapshotV1,
+  type PhoneUsageSnapshotV2,
   type UsagePointV1,
   type UsageRange,
-  type UsageSourceMode,
+  type UsageSelectableSourceMode,
 } from "../lib/usageApi";
 import { useAppStore } from "../store/appStore";
 
@@ -128,8 +129,9 @@ export default function UsagePage() {
     [language],
   );
   const [range, setRange] = useState<UsageRange>("LAST_7_DAYS");
+  const [deviceId, setDeviceId] = useState<string | null>(null);
   const [packageName, setPackageName] = useState<string | null>(null);
-  const [snapshot, setSnapshot] = useState<PhoneUsageSnapshotV1 | null>(null);
+  const [snapshot, setSnapshot] = useState<PhoneUsageSnapshotV2 | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -145,6 +147,7 @@ export default function UsagePage() {
         dtoVersion: PHONE_USAGE_DTO_VERSION,
         range,
         packageName,
+        deviceId,
       });
       if (sequence === loadSequence.current) setSnapshot(next);
     } catch (reason) {
@@ -154,13 +157,13 @@ export default function UsagePage() {
     } finally {
       if (sequence === loadSequence.current) setLoading(false);
     }
-  }, [language, packageName, range]);
+  }, [deviceId, language, packageName, range]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  async function chooseSource(mode: UsageSourceMode) {
+  async function chooseSource(mode: UsageSelectableSourceMode) {
     ++loadSequence.current;
     setBusy(mode);
     setLoading(false);
@@ -169,24 +172,19 @@ export default function UsagePage() {
     try {
       const chosen = await usageApi.chooseSource(mode);
       if (chosen) {
-        setSnapshot(chosen);
+        const filtered = await usageApi.page({
+          dtoVersion: PHONE_USAGE_DTO_VERSION,
+          range,
+          packageName: null,
+          deviceId: null,
+        });
+        setSnapshot(filtered ?? chosen);
         setNotice(
           mode === "snapshot"
             ? copy("手机统计快照已导入。", "Phone statistics snapshot imported.")
             : copy("已建立只读链接；源文件不会被 Windows 修改。", "Read-only link created; Windows will not modify the source file."),
         );
-        if (packageName === null) {
-          try {
-            const filtered = await usageApi.page({
-              dtoVersion: PHONE_USAGE_DTO_VERSION,
-              range,
-              packageName: null,
-            });
-            if (filtered) setSnapshot(filtered);
-          } catch (reason) {
-            setError(readableError(reason, language));
-          }
-        }
+        setDeviceId(null);
         setPackageName(null);
       }
     } catch (reason) {
@@ -207,6 +205,7 @@ export default function UsagePage() {
         dtoVersion: PHONE_USAGE_DTO_VERSION,
         range,
         packageName,
+        deviceId,
       });
       setSnapshot(next);
       if (next) setNotice(copy("手机统计已刷新。", "Phone statistics refreshed."));
@@ -226,6 +225,13 @@ export default function UsagePage() {
       }),
     [snapshot],
   );
+  const sortedDevices = useMemo(
+    () =>
+      [...(snapshot?.deviceChoices ?? [])].sort((left, right) =>
+        left.deviceName.localeCompare(right.deviceName, language === "en" ? "en" : "zh-CN"),
+      ),
+    [language, snapshot],
+  );
 
   if (loading && !snapshot) {
     return (
@@ -244,8 +250,8 @@ export default function UsagePage() {
         eyebrow={copy("只读显示 · 不采集 Windows", "Read only · No Windows tracking")}
         title={copy("手机使用时间", "Phone screen time")}
         description={copy(
-          "只显示 Android 导入或只读链接的数据。",
-          "Displays Android data from an import or read-only link.",
+          "只显示 Android v27、设备云对象或旧 v4 的导入/只读链接数据。",
+          "Displays imported or read-only linked Android v27, device-cloud or legacy v4 data.",
         )}
       >
         <div className="panel">
@@ -265,8 +271,8 @@ export default function UsagePage() {
       eyebrow={copy("只读显示 · 不采集 Windows", "Read only · No Windows tracking")}
       title={copy("手机使用时间", "Phone screen time")}
       description={copy(
-        "只显示 Android 导入或只读链接的数据；DeskCubby 不会统计这台电脑的应用使用时间。",
-        "Displays Android data from an import or read-only link. DeskCubby does not track app usage on this PC.",
+        "只显示 Android v27、usage/v1 设备对象或旧 v4 数据；DeskCubby 不会统计这台电脑的应用使用时间。",
+        "Displays Android v27, usage/v1 device objects or legacy v4 data. DeskCubby does not track app usage on this PC.",
       )}
       actions={
         <>
@@ -315,8 +321,8 @@ export default function UsagePage() {
           <h2>{copy("数据边界", "Data boundary")}</h2>
           <p>
             {copy(
-              "Windows 只读取 Android v4 统计数据，不申请系统使用权限、不采集电脑应用，也不改写源文件。",
-              "Windows only reads Android v4 statistics. It requests no usage permission, tracks no PC apps and never rewrites the source.",
+              "Windows 只读取 Android v27/usage-v1/旧 v4 统计数据，不申请系统使用权限、不采集电脑应用，也不改写源文件。",
+              "Windows only reads Android v27, usage-v1 or legacy v4 statistics. It requests no usage permission, tracks no PC apps and never rewrites the source.",
             )}
           </p>
         </div>
@@ -331,8 +337,8 @@ export default function UsagePage() {
           <EmptyState
             title={copy("还没有手机统计数据", "No phone statistics yet")}
             description={copy(
-              "从 Android 端导出的统计快照导入一次，或链接一个会持续更新的只读统计文件。",
-              "Import an Android statistics snapshot, or link a read-only statistics file that can be refreshed.",
+              "选择 Android v27 备份、usage/v1 设备对象或旧 v4 文件导入一次，也可建立手动刷新的只读链接。",
+              "Choose an Android v27 backup, usage/v1 device object or legacy v4 file, or create a manually refreshed read-only link.",
             )}
             icon={Timer}
             action={
@@ -357,13 +363,21 @@ export default function UsagePage() {
           >
             <div>
               <span className="usage-source-icon" aria-hidden="true">
-                {snapshot.source.mode === "snapshot" ? <FileDown /> : <FileSymlink />}
+                {snapshot.source.mode === "snapshot" ? (
+                  <FileDown />
+                ) : snapshot.source.mode === "linkedFile" ? (
+                  <FileSymlink />
+                ) : (
+                  <Cloud />
+                )}
               </span>
               <div>
                 <h2 id="usage-source-title">
                   {snapshot.source.mode === "snapshot"
                     ? copy("导入快照", "Imported snapshot")
-                    : copy("只读链接", "Read-only link")}
+                    : snapshot.source.mode === "linkedFile"
+                      ? copy("只读链接", "Read-only link")
+                      : copy("云端手机数据", "Cloud phone data")}
                 </h2>
                 <p>{snapshot.source.displayName}</p>
               </div>
@@ -414,6 +428,24 @@ export default function UsagePage() {
                 ),
               )}
             </div>
+            <label className="usage-app-filter">
+              <span>{copy("设备", "Device")}</span>
+              <select
+                value={deviceId ?? ""}
+                disabled={loading || !!busy}
+                onChange={(event) => {
+                  setDeviceId(event.target.value || null);
+                  setPackageName(null);
+                }}
+              >
+                <option value="">{copy("全部设备", "All devices")}</option>
+                {sortedDevices.map((device) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.deviceName}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="usage-app-filter">
               <span>{copy("应用", "App")}</span>
               <select
@@ -480,8 +512,8 @@ export default function UsagePage() {
                 <h2 id="usage-apps-title">{copy("应用排行", "App ranking")}</h2>
                 <p>
                   {copy(
-                    "Android v4 文件不包含可靠应用名称或图标，因此只显示包名。",
-                    "Android v4 data has no reliable app names or icons, so only package names are shown.",
+                    "Android 的规范统计对象不包含可靠应用名称或图标，因此只显示包名。",
+                    "Android's canonical statistics objects contain no reliable app names or icons, so only package names are shown.",
                   )}
                 </p>
               </div>
