@@ -1,8 +1,9 @@
 import { listen, type Event as TauriEvent } from "@tauri-apps/api/event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDefaultDesktopNavigationPreferences } from "./desktopNavigation";
 import { useAppStore } from "../store/appStore";
 import { AppShell } from "./AppShell";
 
@@ -13,13 +14,14 @@ function renderShell(initialPath = "/") {
       element: <AppShell>page content</AppShell>,
     },
   ], { initialEntries: [initialPath] });
-  return render(<RouterProvider router={router} />);
+  return { ...render(<RouterProvider router={router} />), router };
 }
 
 describe("AppShell", () => {
   const listenMock = vi.mocked(listen);
 
   beforeEach(() => {
+    window.localStorage.clear();
     listenMock.mockReset();
     listenMock.mockResolvedValue(vi.fn());
     useAppStore.setState({
@@ -31,6 +33,8 @@ describe("AppShell", () => {
         compactMode: false,
       },
       sidebarCollapsed: false,
+      desktopNavigation: createDefaultDesktopNavigationPreferences(),
+      collapsedNavigationCategoryIds: [],
       mobileNavigationOpen: false,
       toasts: [],
     });
@@ -67,6 +71,33 @@ describe("AppShell", () => {
     expect(screen.getByTitle("日记")).toBeInTheDocument();
   });
 
+  it("traps the narrow-window drawer and restores focus after Escape", async () => {
+    const user = userEvent.setup();
+    const { container } = renderShell();
+    const menuButton = screen.getByRole("button", { name: "展开侧栏" });
+
+    await user.click(menuButton);
+    expect(container.querySelector(".app-layout")).toHaveClass(
+      "mobile-navigation-is-open",
+    );
+    expect(
+      screen.getByRole("dialog", { name: "DeskCubby 页面导航" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "收起分类：记录" }));
+    expect(screen.queryByRole("link", { name: "日记" })).not.toBeInTheDocument();
+    const settingsLink = screen.getByRole("link", { name: "设置" });
+    settingsLink.focus();
+    await user.tab();
+    expect(screen.getByRole("link", { name: "DeskCubby" })).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(menuButton).toHaveFocus());
+    expect(container.querySelector(".app-layout")).not.toHaveClass(
+      "mobile-navigation-is-open",
+    );
+  });
+
   it("switches every sidebar destination to English", () => {
     useAppStore.setState((state) => ({
       appearance: { ...state.appearance, language: "en" },
@@ -82,6 +113,95 @@ describe("AppShell", () => {
     expect(screen.getByRole("link", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByText("Local first")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Browser" })).not.toBeInTheDocument();
+  });
+
+  it("collapses a category without leaving its links in the tab order", async () => {
+    const user = userEvent.setup();
+    renderShell();
+
+    const toggle = screen.getByRole("button", { name: "收起分类：记录" });
+    await user.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("link", { name: "日记" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "设置" })).toBeInTheDocument();
+    expect(useAppStore.getState().collapsedNavigationCategoryIds).toContain(
+      "capture",
+    );
+    const persisted = JSON.parse(
+      window.localStorage.getItem("deskcubby-window-preferences") ?? "{}",
+    ) as { state?: { collapsedNavigationCategoryIds?: string[] } };
+    expect(persisted.state?.collapsedNavigationCategoryIds).toContain("capture");
+
+    await user.click(screen.getByRole("button", { name: "展开分类：记录" }));
+    expect(screen.getByRole("link", { name: "日记" })).toBeInTheDocument();
+  });
+
+  it("honors custom category order and hidden pages while keeping settings", () => {
+    const preferences = createDefaultDesktopNavigationPreferences();
+    preferences.categories[0].itemIds = ["daily", "home", "diary", "meals"];
+    preferences.categories.unshift({
+      id: "empty",
+      chinese: "空分类",
+      english: "Empty category",
+      itemIds: [],
+    });
+    preferences.hiddenItemIds = ["poetry"];
+    useAppStore.setState({ desktopNavigation: preferences });
+
+    renderShell();
+
+    const daily = screen.getByRole("link", { name: "日常记录" });
+    const home = screen.getByRole("link", { name: "首页" });
+    expect(
+      daily.compareDocumentPosition(home) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "诗词本" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "空分类" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "设置" })).toBeInTheDocument();
+  });
+
+  it("moves away safely when a preference update hides the active route", async () => {
+    const { router } = renderShell("/diary");
+    const preferences = createDefaultDesktopNavigationPreferences();
+    preferences.hiddenItemIds = ["diary"];
+
+    act(() => {
+      useAppStore.getState().setDesktopNavigation(preferences);
+    });
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+  });
+
+  it("keeps settings reachable when every configurable page is hidden", () => {
+    const preferences = createDefaultDesktopNavigationPreferences();
+    preferences.hiddenItemIds = preferences.categories.flatMap(
+      (category) => category.itemIds,
+    );
+    useAppStore.setState({ desktopNavigation: preferences });
+
+    renderShell("/settings");
+
+    expect(screen.getByRole("link", { name: "设置" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("navigation", { name: "DeskCubby 页面导航" }),
+    ).toBeEmptyDOMElement();
+  });
+
+  it("falls back to settings if hiding the active page leaves no visible page", async () => {
+    const { router } = renderShell("/diary");
+    const preferences = createDefaultDesktopNavigationPreferences();
+    preferences.hiddenItemIds = preferences.categories.flatMap(
+      (category) => category.itemIds,
+    );
+
+    act(() => {
+      useAppStore.getState().setDesktopNavigation(preferences);
+    });
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/settings"),
+    );
   });
 
   it("labels nested cloud and About routes in the window toolbar", () => {

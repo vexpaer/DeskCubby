@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("Current", "MagicBook")]
-    [string]$Variant = "Current",
+    [ValidateSet("PixelArt", "Current", "MagicBook")]
+    [string]$Variant = "PixelArt",
     [string]$Source
 )
 
@@ -19,10 +19,21 @@ $frontendAssetDirectory = [System.IO.Path]::GetFullPath(
     (Join-Path $windowsRoot "src\assets")
 )
 
-if ($Variant -eq "MagicBook") {
+if ($Variant -eq "PixelArt") {
+    # Keep the canonical Windows artwork in the repository so regenerating an
+    # installer never depends on a developer's desktop. PixelArt preserves the
+    # transparent canvas and source palette; smaller outputs use nearest-neighbor
+    # sampling without a generated background, rounded mask, or smoothing.
+    $defaultSourceName = $null
+    $backgroundColor = [System.Drawing.Color]::Transparent
+    $sourceInsetFraction = 0.0
+    $preservePixelArt = $true
+}
+elseif ($Variant -eq "MagicBook") {
     $defaultSourceName = "ic_launcher_book_foreground.png"
     $backgroundColor = [System.Drawing.Color]::FromArgb(255, 255, 253, 248)
     $sourceInsetFraction = 0.0
+    $preservePixelArt = $false
 }
 else {
     # Mirrors mipmap-anydpi/ic_launcher.xml: a black adaptive background plus
@@ -30,12 +41,18 @@ else {
     $defaultSourceName = "ic_launcher_art.png"
     $backgroundColor = [System.Drawing.Color]::Black
     $sourceInsetFraction = 0.2
+    $preservePixelArt = $false
 }
 
 if ([string]::IsNullOrWhiteSpace($Source)) {
-    $Source = Join-Path $repositoryRoot (
-        "android\app\src\main\res\drawable-nodpi\" + $defaultSourceName
-    )
+    if ($Variant -eq "PixelArt") {
+        $Source = Join-Path $windowsRoot "app-icon.png"
+    }
+    else {
+        $Source = Join-Path $repositoryRoot (
+            "android\app\src\main\res\drawable-nodpi\" + $defaultSourceName
+        )
+    }
 }
 
 $resolvedSource = (Resolve-Path -LiteralPath $Source).Path
@@ -51,7 +68,9 @@ function New-DeskCubbyBitmap {
         [Parameter(Mandatory)]
         [System.Drawing.Color]$BackgroundColor,
         [Parameter(Mandatory)]
-        [double]$SourceInsetFraction
+        [double]$SourceInsetFraction,
+        [Parameter(Mandatory)]
+        [bool]$PreservePixelArt
     )
 
     $bitmap = [System.Drawing.Bitmap]::new(
@@ -62,6 +81,53 @@ function New-DeskCubbyBitmap {
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     try {
         $graphics.Clear([System.Drawing.Color]::Transparent)
+        if ($PreservePixelArt) {
+            $graphics.CompositingMode = (
+                [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
+            )
+            $graphics.CompositingQuality = (
+                [System.Drawing.Drawing2D.CompositingQuality]::HighSpeed
+            )
+            $graphics.InterpolationMode = (
+                [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+            )
+            $graphics.PixelOffsetMode = (
+                [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+            )
+            $graphics.SmoothingMode = (
+                [System.Drawing.Drawing2D.SmoothingMode]::None
+            )
+
+            $scale = [Math]::Min(
+                $Size / [double]$SourceImage.Width,
+                $Size / [double]$SourceImage.Height
+            )
+            $destinationWidth = [Math]::Max(
+                1,
+                [int][Math]::Round($SourceImage.Width * $scale)
+            )
+            $destinationHeight = [Math]::Max(
+                1,
+                [int][Math]::Round($SourceImage.Height * $scale)
+            )
+            $destination = [System.Drawing.Rectangle]::new(
+                [int][Math]::Floor(($Size - $destinationWidth) / 2),
+                [int][Math]::Floor(($Size - $destinationHeight) / 2),
+                $destinationWidth,
+                $destinationHeight
+            )
+            $graphics.DrawImage(
+                $SourceImage,
+                $destination,
+                0,
+                0,
+                $SourceImage.Width,
+                $SourceImage.Height,
+                [System.Drawing.GraphicsUnit]::Pixel
+            )
+            return $bitmap
+        }
+
         $graphics.CompositingQuality = (
             [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
         )
@@ -173,13 +239,26 @@ try {
     }
 
     foreach ($entry in $pngOutputs.GetEnumerator()) {
+        $path = Join-Path $outputDirectory $entry.Key
+        if (
+            $preservePixelArt -and
+            $sourceImage.Width -eq $entry.Value -and
+            $sourceImage.Height -eq $entry.Value
+        ) {
+            # Preserve the canonical 512 px PNG byte-for-byte when it already
+            # has the requested dimensions. This avoids an unnecessary codec
+            # round trip while retaining identical pixels and metadata.
+            Copy-Item -LiteralPath $resolvedSource -Destination $path -Force
+            continue
+        }
+
         $bitmap = New-DeskCubbyBitmap `
             -SourceImage $sourceImage `
             -Size $entry.Value `
             -BackgroundColor $backgroundColor `
-            -SourceInsetFraction $sourceInsetFraction
+            -SourceInsetFraction $sourceInsetFraction `
+            -PreservePixelArt $preservePixelArt
         try {
-            $path = Join-Path $outputDirectory $entry.Key
             $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
         }
         finally {
@@ -196,7 +275,8 @@ try {
             -SourceImage $sourceImage `
             -Size $size `
             -BackgroundColor $backgroundColor `
-            -SourceInsetFraction $sourceInsetFraction
+            -SourceInsetFraction $sourceInsetFraction `
+            -PreservePixelArt $preservePixelArt
         try {
             [pscustomobject]@{
                 Size = $size

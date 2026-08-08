@@ -6,7 +6,6 @@ import {
   Cloud,
   HeartPulse,
   Info,
-  LayoutDashboard,
   Rss,
   RotateCcw,
   Save,
@@ -17,13 +16,20 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { UnsavedChangesGuard } from "../components";
+import {
+  cloneDesktopNavigationPreferences,
+  createDefaultDesktopNavigationPreferences,
+  normalizeDesktopNavigationPreferences,
+  UnsavedChangesGuard,
+} from "../components";
 import {
   invokeCommand,
   readableError,
   type DirectoryKind,
   type WindowsSettings,
 } from "../lib/ipc";
+import { useAppStore } from "../store/appStore";
+import { DesktopNavigationSettings } from "./settings/DesktopNavigationSettings";
 import {
   AppDataSettings,
   AppearanceSettings,
@@ -292,6 +298,15 @@ export default function SettingsPage() {
   const [choosingBackground, setChoosingBackground] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const setDesktopNavigation = useAppStore(
+    (state) => state.setDesktopNavigation,
+  );
+  const [originalNavigation, setOriginalNavigation] = useState(() =>
+    cloneDesktopNavigationPreferences(useAppStore.getState().desktopNavigation),
+  );
+  const [navigationDraft, setNavigationDraft] = useState(() =>
+    cloneDesktopNavigationPreferences(useAppStore.getState().desktopNavigation),
+  );
 
   const language = draft.appLanguage === "ENGLISH" ? "en" : "zh";
   const errorLanguage = language === "en" ? "en" : "zh-CN";
@@ -299,12 +314,17 @@ export default function SettingsPage() {
     (chinese: string, english: string) => (language === "zh" ? chinese : english),
     [language],
   );
-  const dirty = useMemo(
+  const settingsDirty = useMemo(
     () => original !== null && JSON.stringify(original) !== JSON.stringify(draft),
     [draft, original],
   );
+  const navigationDirty = useMemo(
+    () => JSON.stringify(originalNavigation) !== JSON.stringify(navigationDraft),
+    [navigationDraft, originalNavigation],
+  );
+  const dirty = settingsDirty || navigationDirty;
   const editableFields = EDITABLE_FIELDS[page as keyof typeof EDITABLE_FIELDS];
-  const editable = Boolean(editableFields);
+  const editable = Boolean(editableFields) || page === "navigation";
 
   useEffect(() => {
     let active = true;
@@ -351,24 +371,44 @@ export default function SettingsPage() {
     setError("");
     setNotice("");
     try {
-      const saved = normalizeSettings(
-        await invokeCommand<WindowsSettings>("update_windows_settings", {
-          settings: draft,
-        }),
-      );
-      setOriginal(saved);
-      setDraft(saved);
-      applyAppearance(saved);
-      window.dispatchEvent(
-        new CustomEvent("deskcubby:settings-changed", { detail: saved }),
-      );
+      if (settingsDirty) {
+        const saved = normalizeSettings(
+          await invokeCommand<WindowsSettings>("update_windows_settings", {
+            settings: draft,
+          }),
+        );
+        setOriginal(saved);
+        setDraft(saved);
+        applyAppearance(saved);
+        window.dispatchEvent(
+          new CustomEvent("deskcubby:settings-changed", { detail: saved }),
+        );
+      }
+      if (navigationDirty) {
+        const savedNavigation = normalizeDesktopNavigationPreferences(
+          navigationDraft,
+        );
+        setDesktopNavigation(savedNavigation);
+        setOriginalNavigation(
+          cloneDesktopNavigationPreferences(savedNavigation),
+        );
+        setNavigationDraft(cloneDesktopNavigationPreferences(savedNavigation));
+      }
       setNotice(tr("设置已保存。", "Settings saved."));
     } catch (reason) {
       setError(readableError(reason, errorLanguage));
     } finally {
       setSaving(false);
     }
-  }, [draft, errorLanguage, tr]);
+  }, [
+    draft,
+    errorLanguage,
+    navigationDraft,
+    navigationDirty,
+    setDesktopNavigation,
+    settingsDirty,
+    tr,
+  ]);
 
   useEffect(() => {
     const saveShortcut = (event: KeyboardEvent) => {
@@ -382,7 +422,7 @@ export default function SettingsPage() {
   }, [dirty, editable, persistSettings, saving]);
 
   const restoreDefaults = async () => {
-    if (!editableFields) return;
+    if (!editableFields && page !== "navigation") return;
     if (
       !window.confirm(
         tr(
@@ -393,6 +433,17 @@ export default function SettingsPage() {
     ) {
       return;
     }
+    if (page === "navigation") {
+      setNavigationDraft(createDefaultDesktopNavigationPreferences());
+      setNotice(
+        tr(
+          "本页默认值已放入草稿，点击保存后生效。",
+          "Defaults for this page are in the draft; save to apply.",
+        ),
+      );
+      return;
+    }
+    if (!editableFields) return;
     let defaults = DEFAULT_SETTINGS;
     try {
       defaults = normalizeSettings(
@@ -602,13 +653,11 @@ export default function SettingsPage() {
         );
       case "navigation":
         return (
-          <SettingsInfoPage
-            icon={LayoutDashboard}
-            title={tr("桌面导航", "Desktop navigation")}
-            description={tr(
-              "Windows 使用可折叠侧栏；窄窗口会自动切换为菜单，不会显示尚未实现功能的入口。",
-              "Windows uses a collapsible sidebar that becomes a menu in narrow windows and hides unavailable features.",
-            )}
+          <DesktopNavigationSettings
+            draft={navigationDraft}
+            setDraft={setNavigationDraft}
+            language={language === "en" ? "en" : "zh-CN"}
+            tr={tr}
           />
         );
       case "about":
@@ -618,8 +667,8 @@ export default function SettingsPage() {
               icon={Info}
               title="DeskCubby"
               description={tr(
-                "本地优先的跨平台日记与个人记录应用。Windows 版本 0.3.0。",
-                "A local-first cross-platform diary and personal records app. Windows version 0.3.0.",
+                "本地优先的跨平台日记与个人记录应用。Windows 版本 0.4.0。",
+                "A local-first cross-platform diary and personal records app. Windows version 0.4.0.",
               )}
             >
               <button
@@ -660,6 +709,9 @@ export default function SettingsPage() {
         scope="settings"
         onDiscard={() => {
           if (original) setDraft(original);
+          setNavigationDraft(
+            cloneDesktopNavigationPreferences(originalNavigation),
+          );
         }}
       />
       <header className="page-header sticky-page-header settings-page-header">

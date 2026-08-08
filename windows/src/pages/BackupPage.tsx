@@ -23,6 +23,7 @@ interface BackupPreview {
   favoriteCount: number;
   dateRecordCount: number;
   poemCount: number;
+  readerProgressCount: number;
   preservedTopLevelKeys: string[];
 }
 
@@ -39,6 +40,7 @@ interface BackupSelection {
   favoriteCount?: number;
   dateRecordCount?: number;
   poemCount?: number;
+  readerProgressCount?: number;
   preservedTopLevelKeys?: string[];
 }
 
@@ -72,7 +74,7 @@ interface RestorePoint {
 type Language = "zh" | "en";
 
 const MIN_SUPPORTED_BACKUP_VERSION = 1;
-const MAX_SUPPORTED_BACKUP_VERSION = 27;
+const MAX_SUPPORTED_BACKUP_VERSION = 28;
 
 function isSupportedBackupVersion(version: number): boolean {
   return (
@@ -112,6 +114,7 @@ function selectionPreview(selection: BackupSelection): BackupPreview {
     favoriteCount: selection.favoriteCount ?? 0,
     dateRecordCount: selection.dateRecordCount ?? 0,
     poemCount: selection.poemCount ?? 0,
+    readerProgressCount: selection.readerProgressCount ?? 0,
     preservedTopLevelKeys: selection.preservedTopLevelKeys ?? [],
   };
 }
@@ -281,7 +284,7 @@ export default function BackupPage() {
     <main className="page-shell backup-page" aria-labelledby="backup-title">
       <header className="page-header">
         <div>
-          <p className="eyebrow">{tr("Android v27 双向兼容", "Bidirectional Android v27 compatibility")}</p>
+          <p className="eyebrow">{tr("Android v28 双向兼容", "Bidirectional Android v28 compatibility")}</p>
           <h1 id="backup-title">{tr("设置与备份", "Settings & backup")}</h1>
         </div>
       </header>
@@ -310,8 +313,8 @@ export default function BackupPage() {
             <h2>{tr("导入 Android 备份", "Import Android backup")}</h2>
             <p>
               {tr(
-                "支持 Android v1–v27 JSON，最大 64 MiB；旧格式会安全升级为 v27。应用会先严格校验并展示统计，不会直接覆盖。",
-                "Accepts Android v1–v27 JSON up to 64 MiB and safely upgrades older formats to v27. It is validated and previewed before anything changes.",
+                "支持 Android v1–v28 JSON，最大 64 MiB；旧格式会安全升级为 v28。应用会先严格校验并展示统计，不会直接覆盖。",
+                "Accepts Android v1–v28 JSON up to 64 MiB and safely upgrades older formats to v28. It is validated and previewed before anything changes.",
               )}
             </p>
           </div>
@@ -512,6 +515,10 @@ export default function BackupPage() {
               <div>
                 <dt>{tr("浏览收藏（仅保留）", "Browser favorites (preserved)")}</dt>
                 <dd>{preview.favoriteCount}</dd>
+              </div>
+              <div>
+                <dt>{tr("阅读进度", "Reader progress")}</dt>
+                <dd>{preview.readerProgressCount}</dd>
               </div>
             </dl>
 

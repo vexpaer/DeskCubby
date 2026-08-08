@@ -62,3 +62,4 @@ jobs:
           cargo clippy --locked --manifest-path .\src-tauri\Cargo.toml --all-targets -- -D warnings
           cargo test --locked --manifest-path .\src-tauri\Cargo.toml
           .\scripts\verify-packaging.ps1
+          .\scripts\test-release-policy.ps1

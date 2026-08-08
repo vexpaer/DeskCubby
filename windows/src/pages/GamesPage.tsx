@@ -681,7 +681,7 @@ export default function GamesPage() {
 
   if (!active) {
     return (
-      <PageFrame title={tr(language, "小游戏", "Mini games")} description={tr(language, "七种玩法共享 Android v27 存档与特色战绩；游玩时长只保存在这台电脑。", "Seven variants share Android v27 saves and lifetime metrics; play time stays private to this PC.")}>
+      <PageFrame title={tr(language, "小游戏", "Mini games")} description={tr(language, "七种玩法共享 Android v28 存档与特色战绩；游玩时长只保存在这台电脑。", "Seven variants share Android v28 saves and lifetime metrics; play time stays private to this PC.")}>
         {error ? <p className="form-error" role="alert">{error}</p> : null}
         <GameCatalog snapshot={snapshot} language={language} onLaunch={launch} />
       </PageFrame>
@@ -704,7 +704,11 @@ export default function GamesPage() {
           language={language}
           onMove={(direction) => {
             const result = move2048(active.state, direction);
-            if (result.changed) update({ id: active.id, state: result.state }, result.metrics, result.terminal);
+            update(
+              { id: active.id, state: result.state },
+              result.metrics,
+              result.changed && result.terminal,
+            );
           }}
           onUndo={() => {
             const next = undo2048(active.state);

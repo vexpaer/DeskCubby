@@ -25,6 +25,7 @@ $bundledInstaller = Join-Path $nsisDirectory "DeskCubby_${version}_x64-setup.exe
 $bundledInstallerSignature = "$bundledInstaller.sig"
 $artifactDirectory = Join-Path $windowsRoot "artifacts"
 $temporaryReleaseConfig = $null
+$authenticodePolicy = "Absent"
 
 function Assert-LastExitCode {
     param([string]$Step)
@@ -82,6 +83,11 @@ function Assert-SignedReleaseInputs {
         ) {
             throw "The updater private key must be stored outside the repository."
         }
+        # Tauri's CLI consumes the canonical TAURI_SIGNING_PRIVATE_KEY
+        # variable and accepts either key text or a filesystem path. Keep the
+        # repository-specific *_PATH input out of command-line arguments while
+        # forwarding the validated external path to the CLI.
+        $env:TAURI_SIGNING_PRIVATE_KEY = $resolvedKeyPath
         $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $resolvedKeyPath
     }
     $privateKeyPassword = [Environment]::GetEnvironmentVariable(
@@ -101,6 +107,24 @@ function Assert-SignedReleaseInputs {
     }
 }
 
+function Get-AuthenticodePolicy {
+    $thumbprint = [Environment]::GetEnvironmentVariable(
+        "DESKCUBBY_WINDOWS_CERTIFICATE_THUMBPRINT"
+    )
+    $signCommand = [Environment]::GetEnvironmentVariable(
+        "DESKCUBBY_WINDOWS_SIGN_COMMAND"
+    )
+    $hasThumbprint = -not [string]::IsNullOrWhiteSpace($thumbprint)
+    $hasSignCommand = -not [string]::IsNullOrWhiteSpace($signCommand)
+    if ($hasThumbprint -and $hasSignCommand) {
+        throw "Configure at most one Authenticode signing mechanism."
+    }
+    if ($hasThumbprint -or $hasSignCommand) {
+        return "Required"
+    }
+    return "Absent"
+}
+
 Push-Location $windowsRoot
 try {
     if (-not $SkipChecks) {
@@ -118,6 +142,7 @@ try {
     )
     if ($Mode -eq "SignedRelease") {
         Assert-SignedReleaseInputs
+        $authenticodePolicy = Get-AuthenticodePolicy
         $temporaryRoot = [Environment]::GetEnvironmentVariable("RUNNER_TEMP")
         if ([string]::IsNullOrWhiteSpace($temporaryRoot)) {
             $temporaryRoot = [IO.Path]::GetTempPath()
@@ -221,6 +246,7 @@ try {
             -Version $version `
             -Tag $ReleaseTag `
             -Repository $Repository `
+            -AuthenticodePolicy $authenticodePolicy `
             -ExpectedCertificateThumbprint $expectedThumbprint `
             -ExpectedSignerSubject $expectedSubject
     }
@@ -233,8 +259,8 @@ try {
 
     if ($Mode -eq "SignedRelease") {
         Write-Host (
-            "Signed release candidate created. Review latest.json and all " +
-            "signatures before publishing."
+            "Production release candidate created. Tauri updater signing was " +
+            "verified; Authenticode policy: $authenticodePolicy."
         )
     }
     else {

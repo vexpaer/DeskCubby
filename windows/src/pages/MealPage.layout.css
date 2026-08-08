@@ -1,0 +1,48 @@
+.meal-page .meal-days {
+  min-width: 0;
+  align-items: start;
+}
+
+.meal-page .meal-days.layout-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--space-6);
+}
+
+.meal-day-column {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: var(--space-8);
+}
+
+.meal-page .meal-day {
+  min-width: 0;
+}
+
+.meal-page .meal-grid:not(.no-wrap) .meal-card {
+  width: 100%;
+  max-width: var(--meal-card-max-width, 166px);
+  justify-self: center;
+}
+
+.meal-page .meal-grid.no-wrap {
+  display: flex;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  padding-block-end: var(--space-2);
+  scroll-snap-type: inline proximity;
+  scrollbar-gutter: stable;
+}
+
+.meal-page .meal-grid.no-wrap .meal-card {
+  width: min(var(--meal-card-max-width, 166px), 78vw);
+  max-width: none;
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+}
+
+@media (max-width: 980px) {
+  .meal-page .meal-days.layout-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

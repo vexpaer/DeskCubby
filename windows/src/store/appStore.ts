@@ -1,5 +1,10 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import {
+  createDefaultDesktopNavigationPreferences,
+  normalizeDesktopNavigationPreferences,
+  type DesktopNavigationPreferences,
+} from "../components/desktopNavigationModel";
 import type {
   AppearanceSettings,
   AppLanguage,
@@ -16,9 +21,13 @@ const DEFAULT_APPEARANCE: AppearanceSettings = {
   compactMode: false,
 };
 
+const DEFAULT_DESKTOP_NAVIGATION = createDefaultDesktopNavigationPreferences();
+
 interface AppState {
   appearance: AppearanceSettings;
   sidebarCollapsed: boolean;
+  desktopNavigation: DesktopNavigationPreferences;
+  collapsedNavigationCategoryIds: string[];
   mobileNavigationOpen: boolean;
   dirtyScopes: string[];
   toasts: ToastMessage[];
@@ -30,6 +39,8 @@ interface AppState {
   applyAppearance: (appearance: Partial<AppearanceSettings>) => void;
   resetAppearance: () => void;
   toggleSidebar: () => void;
+  setDesktopNavigation: (preferences: DesktopNavigationPreferences) => void;
+  toggleNavigationCategory: (categoryId: string) => void;
   setMobileNavigationOpen: (open: boolean) => void;
   markDirty: (scope: string, dirty: boolean) => void;
   addToast: (toast: Omit<ToastMessage, "id" | "createdAt">) => string;
@@ -55,6 +66,8 @@ export const useAppStore = create<AppState>()(
     (set, get) => ({
       appearance: DEFAULT_APPEARANCE,
       sidebarCollapsed: false,
+      desktopNavigation: DEFAULT_DESKTOP_NAVIGATION,
+      collapsedNavigationCategoryIds: [],
       mobileNavigationOpen: false,
       dirtyScopes: [],
       toasts: [],
@@ -83,6 +96,34 @@ export const useAppStore = create<AppState>()(
       resetAppearance: () => set({ appearance: DEFAULT_APPEARANCE }),
       toggleSidebar: () =>
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+      setDesktopNavigation: (preferences) =>
+        set((state) => {
+          const desktopNavigation = normalizeDesktopNavigationPreferences(preferences);
+          const categoryIds = new Set(
+            desktopNavigation.categories.map((category) => category.id),
+          );
+          return {
+            desktopNavigation,
+            collapsedNavigationCategoryIds:
+              state.collapsedNavigationCategoryIds.filter((id) =>
+                categoryIds.has(id),
+              ),
+          };
+        }),
+      toggleNavigationCategory: (categoryId) =>
+        set((state) => {
+          if (
+            !state.desktopNavigation.categories.some(
+              (category) => category.id === categoryId,
+            )
+          ) {
+            return {};
+          }
+          const collapsed = new Set(state.collapsedNavigationCategoryIds);
+          if (collapsed.has(categoryId)) collapsed.delete(categoryId);
+          else collapsed.add(categoryId);
+          return { collapsedNavigationCategoryIds: [...collapsed] };
+        }),
       setMobileNavigationOpen: (mobileNavigationOpen) =>
         set({ mobileNavigationOpen }),
       markDirty: (scope, dirty) =>
@@ -122,9 +163,43 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         appearance: state.appearance,
         sidebarCollapsed: state.sidebarCollapsed,
+        desktopNavigation: state.desktopNavigation,
+        collapsedNavigationCategoryIds: state.collapsedNavigationCategoryIds,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<AppState>;
+        const desktopNavigation = normalizeDesktopNavigationPreferences(
+          persisted.desktopNavigation,
+        );
+        const categoryIds = new Set(
+          desktopNavigation.categories.map((category) => category.id),
+        );
+        return {
+          ...currentState,
+          appearance: {
+            ...currentState.appearance,
+            ...(persisted.appearance ?? {}),
+          },
+          sidebarCollapsed:
+            typeof persisted.sidebarCollapsed === "boolean"
+              ? persisted.sidebarCollapsed
+              : currentState.sidebarCollapsed,
+          desktopNavigation,
+          collapsedNavigationCategoryIds: Array.isArray(
+            persisted.collapsedNavigationCategoryIds,
+          )
+            ? persisted.collapsedNavigationCategoryIds.filter(
+                (id): id is string =>
+                  typeof id === "string" && categoryIds.has(id),
+              )
+            : [],
+          mobileNavigationOpen: false,
+          dirtyScopes: [],
+          toasts: [],
+        };
+      },
     },
   ),
 );
 
-export { DEFAULT_APPEARANCE };
+export { DEFAULT_APPEARANCE, DEFAULT_DESKTOP_NAVIGATION };

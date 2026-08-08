@@ -325,7 +325,7 @@ function ReaderSettings({
       <div className="panel-header reader-settings-header">
         <div>
           <h2 id="reader-settings-title">{copy("阅读设置", "Reader settings")}</h2>
-          <p>{copy("仅保存在这台电脑，不进入 v27 或云同步。", "Stored only on this PC; excluded from v27 and cloud sync.")}</p>
+          <p>{copy("阅读设置仅保存在这台电脑；无路径、无书名的阅读进度可进入 v28 备份，并可通过已启用的阅读进度对象同步。", "Reader settings stay on this PC. Path-free, title-free progress can enter v28 backups and sync through the enabled reader-progress object.")}</p>
         </div>
         <div className="row">
           <button className="button-ghost" type="button" disabled={busy} onClick={onReset}>
@@ -745,7 +745,7 @@ export default function ReaderPage() {
           ? activeDocument.kind === "txt"
             ? copy(`第 ${pageIndex + 1} / ${currentTextPageCount} 逻辑页 · ${progressPercent}%`, `Logical page ${pageIndex + 1} of ${currentTextPageCount} · ${progressPercent}%`)
             : copy(`已保存到第 ${pageIndex + 1} 页`, `Saved at page ${pageIndex + 1}`)
-          : copy("显式打开本机 TXT/PDF；书库、设置、进度和时长不进入 v27 或云同步。", "Explicitly open local TXT/PDF files. Library, settings, progress and time stay outside v27 and cloud sync.")
+          : copy("显式打开本机 TXT/PDF；书架路径、阅读设置和时长保持本机私有，无路径、无书名的进度可进入 v28 备份及可选云同步。", "Explicitly open local TXT/PDF files. Library paths, settings, and reading time remain private; path-free, title-free progress can enter v28 backups and optional cloud sync.")
       }
       actions={
         activeDocument ? (

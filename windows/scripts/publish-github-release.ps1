@@ -8,7 +8,9 @@ param(
     [string]$Tag,
     [Parameter(Mandatory)]
     [string]$ExpectedCommit,
-    [string]$Repository = "vexpaer/DeskCubby"
+    [string]$Repository = "vexpaer/DeskCubby",
+    [ValidateSet("Required", "Absent")]
+    [string]$AuthenticodePolicy = "Absent"
 )
 
 $ErrorActionPreference = "Stop"
@@ -200,6 +202,7 @@ foreach ($name in $requiredNames) {
     -Version $Version `
     -Tag $Tag `
     -Repository $Repository `
+    -AuthenticodePolicy $AuthenticodePolicy `
     -ExpectedCertificateThumbprint $env:DESKCUBBY_WINDOWS_CERTIFICATE_THUMBPRINT `
     -ExpectedSignerSubject $env:DESKCUBBY_WINDOWS_SIGNER_SUBJECT
 
@@ -232,6 +235,21 @@ if ($null -ne $release) {
 
 $assetPaths = @($requiredNames | ForEach-Object { $localAssets[$_] })
 if ($null -eq $release) {
+    $releaseNotes = if ($AuthenticodePolicy -eq "Required") {
+        (
+            "Tauri-updater-signed and Authenticode-signed DeskCubby " +
+            "Windows $Version release candidate. Verify signatures, " +
+            "checksums, and latest.json before publishing."
+        )
+    }
+    else {
+        (
+            "Tauri-updater-signed DeskCubby Windows $Version release " +
+            "candidate. Authenticode is not configured, so Windows may " +
+            "display an unknown publisher. Verify the updater signature, " +
+            "checksums, and latest.json before publishing."
+        )
+    }
     $createArguments = @(
         "release",
         "create",
@@ -244,10 +262,7 @@ if ($null -eq $release) {
         "--title",
         "DeskCubby Windows $Version",
         "--notes",
-        (
-            "Signed DeskCubby Windows $Version release candidate. " +
-            "Verify Authenticode, updater signatures, checksums, and latest.json before publishing."
-        )
+        $releaseNotes
     )
     $creation = Invoke-GhCapture -Arguments $createArguments
     $release = Get-ReleaseView

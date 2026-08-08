@@ -8,7 +8,6 @@ import {
   LoaderCircle,
   RefreshCw,
   ShieldCheck,
-  Sparkles,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -23,6 +22,8 @@ import {
   type UpdateStateV1,
 } from "../lib/updateApi";
 import { useAppStore } from "../store/appStore";
+
+const brandIcon = new URL("../assets/deskcubby.png", import.meta.url).href;
 
 function formatPublishedDate(value: string | null, locale: string): string | null {
   if (!value) return null;
@@ -221,7 +222,7 @@ export default function AboutPage() {
 
       <section className="about-hero panel">
         <span className="about-app-mark" aria-hidden="true">
-          <Sparkles />
+          <img src={brandIcon} alt="" />
         </span>
         <div>
           <h2>DeskCubby</h2>

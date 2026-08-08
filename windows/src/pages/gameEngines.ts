@@ -203,7 +203,12 @@ export function move2048(
     }
   }
   if (next.every((value, index) => value === state.cells[index])) {
-    return { state, changed: false, terminal: !has2048Move(state.cells, state.size) };
+    return {
+      state,
+      changed: false,
+      terminal: !has2048Move(state.cells, state.size),
+      metrics: { increments: { moveAttempts: 1 } },
+    };
   }
   const before = { cells: [...state.cells], score: state.score };
   spawn2048(next);
@@ -223,7 +228,10 @@ export function move2048(
       lossRecorded: state.lossRecorded || losses === 1,
     },
     metrics: {
-      increments: { effectiveMoves: 1, merges, wins, losses },
+      // Every accepted direction input counts, even when another input would
+      // leave the board unchanged. Legacy 2048 losses remain readable at the
+      // backup boundary but are no longer written by current gameplay.
+      increments: { moveAttempts: 1, effectiveMoves: 1, merges, wins },
       maxima: { highestTile },
     },
   };

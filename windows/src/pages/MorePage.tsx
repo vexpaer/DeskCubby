@@ -2,7 +2,8 @@ import { Settings } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import {
-  DESKTOP_NAVIGATION_SECTIONS,
+  buildDesktopNavigationSections,
+  desktopNavigationCategoryName,
   PageFrame,
 } from "../components";
 import { translate } from "../i18n";
@@ -10,6 +11,8 @@ import { useAppStore } from "../store/appStore";
 
 export default function MorePage() {
   const language = useAppStore((state) => state.appearance.language);
+  const navigation = useAppStore((state) => state.desktopNavigation);
+  const sections = buildDesktopNavigationSections(navigation, true);
 
   return (
     <PageFrame
@@ -19,12 +22,12 @@ export default function MorePage() {
       description={translate(language, "more.description")}
     >
       <div className="more-navigation-sections">
-        {DESKTOP_NAVIGATION_SECTIONS.map((section) => {
+        {sections.map((section) => {
           const items = section.items.filter((item) => item.id !== "more");
           if (items.length === 0) return null;
           return (
-            <section className="more-navigation-section" key={section.label}>
-              <h2>{translate(language, section.label)}</h2>
+            <section className="more-navigation-section" key={section.id}>
+              <h2>{desktopNavigationCategoryName(section, language)}</h2>
               <div className="settings-menu-grid">
                 {items.map(({ id, to, label, icon: Icon }) => (
                   <Link className="panel settings-menu-card" key={id} to={to}>
@@ -33,7 +36,7 @@ export default function MorePage() {
                     </span>
                     <span className="settings-menu-copy">
                       <strong>{translate(language, label)}</strong>
-                      <small>{translate(language, section.label)}</small>
+                      <small>{desktopNavigationCategoryName(section, language)}</small>
                     </span>
                     <span className="settings-menu-chevron" aria-hidden="true">
                       ›

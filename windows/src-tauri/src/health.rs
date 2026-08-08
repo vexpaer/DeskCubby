@@ -1,6 +1,6 @@
 //! Read-only Android Health Connect daily aggregates for Windows.
 //!
-//! Android 0.9.3 deliberately excludes health history from its v27 backup and
+//! Android 0.10.0 deliberately excludes health history from its v28 backup and
 //! from cloud sync.  Consequently this boundary only accepts a statistics JSON
 //! file explicitly selected by the user (schema v1-v3, with v3 carrying steps,
 //! distance and active calories).  Windows never calls an activity, health or
@@ -1381,7 +1381,7 @@ mod tests {
             Err(HealthServiceError::InvalidJson)
         );
 
-        // Android v27 intentionally excludes Health Connect history. Never
+        // Android v28 intentionally excludes Health Connect history. Never
         // manufacture a zero-valued history from its settings toggles.
         let backup = br#"{"version":27,"settings":{"stepTrackingEnabled":true}}"#;
         assert_eq!(

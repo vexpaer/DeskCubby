@@ -38,7 +38,7 @@ const GAME_IDS: [&str; 7] = [
 
 static GAME_WRITE_MUTEX: Mutex<()> = Mutex::new(());
 
-/// Android v27-compatible game-state row used only at the backup boundary.
+/// Android v28-compatible game-state row used only at the backup boundary.
 /// Windows-private engagement time is intentionally absent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -49,7 +49,7 @@ pub struct GameBackupState {
     pub updated_at: i64,
 }
 
-/// Android v27-compatible lifetime game statistic used only at the backup boundary.
+/// Android v28-compatible lifetime game statistic used only at the backup boundary.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GameBackupStatistic {
@@ -91,7 +91,7 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
             PRIMARY KEY (game_id, metric_key)
         ) WITHOUT ROWID;
 
-        -- Deliberately Windows-private. It must never be copied into v27, recovery points,
+        -- Deliberately Windows-private. It must never be copied into v28, recovery points,
         -- automatic application JSON or cloud application JSON.
         CREATE TABLE game_engagement_times (
             game_id TEXT PRIMARY KEY CHECK (
@@ -104,7 +104,7 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
     )
 }
 
-/// Reads the two Android-compatible collections for v27 export or a recovery point.
+/// Reads the two Android-compatible collections for v28 export or a recovery point.
 /// This query never reads `game_engagement_times`.
 pub(crate) fn list_backup_rows(
     connection: &Connection,
@@ -400,12 +400,12 @@ fn validate_action(request: &GameActionRequestV1) -> CommandResult<()> {
         || !is_game_id(&request.game_id)
         || !(0..=MAX_SCORE).contains(&request.score)
         || request.increments.keys().any(|metric| {
-            !supports_metric(&request.game_id, metric) || request.maxima.contains_key(metric)
+            !is_active_metric(&request.game_id, metric) || request.maxima.contains_key(metric)
         })
         || request
             .maxima
             .keys()
-            .any(|metric| !supports_metric(&request.game_id, metric))
+            .any(|metric| !is_active_metric(&request.game_id, metric))
     {
         return Err(SecurityErrorDto::invalid_input());
     }
@@ -470,7 +470,7 @@ fn supports_metric(game_id: &str, metric: &str) -> bool {
     match game_id {
         "2048" | "2048_5" | "2048_6" => {
             common.contains(&metric)
-                || ["effectiveMoves", "merges", "highestTile"].contains(&metric)
+                || ["moveAttempts", "effectiveMoves", "merges", "highestTile"].contains(&metric)
         }
         "snake" => ["losses", "foodEaten", "maxLength"].contains(&metric),
         "tetris" => ["losses", "piecesLocked", "linesCleared", "tetrises"].contains(&metric),
@@ -484,6 +484,11 @@ fn supports_metric(game_id: &str, metric: &str) -> bool {
         }
         _ => false,
     }
+}
+
+fn is_active_metric(game_id: &str, metric: &str) -> bool {
+    supports_metric(game_id, metric)
+        && !(matches!(game_id, "2048" | "2048_5" | "2048_6") && metric == "losses")
 }
 
 fn apply_action(database: &Database, request: GameActionRequestV1) -> Result<(), DataError> {
@@ -698,7 +703,11 @@ mod tests {
             "2048",
             r#"{"size":4,"cells":[2],"score":4}"#,
             4,
-            &[("effectiveMoves", "1"), ("merges", "1")],
+            &[
+                ("moveAttempts", "1"),
+                ("effectiveMoves", "1"),
+                ("merges", "1"),
+            ],
         );
         request.maxima.insert("highestTile".into(), "4".into());
         validate_action(&request).expect("valid action");
@@ -712,7 +721,37 @@ mod tests {
             .expect("2048 state");
         assert_eq!(game.high_score, 4);
         assert!(game.save_json.is_some());
-        assert_eq!(snapshot.statistics.len(), 3);
+        assert_eq!(snapshot.statistics.len(), 4);
+    }
+
+    #[test]
+    fn move_attempts_are_active_but_legacy_2048_losses_are_backup_only() {
+        let (_directory, database) = database_with_games();
+        let attempt = action(
+            "2048",
+            r#"{"size":4,"cells":[2],"score":0}"#,
+            0,
+            &[("moveAttempts", "1")],
+        );
+        validate_action(&attempt).expect("move attempt is active");
+        apply_action(&database, attempt).expect("record attempt");
+
+        let loss = action(
+            "2048",
+            r#"{"size":4,"cells":[2],"score":0}"#,
+            0,
+            &[("losses", "1")],
+        );
+        assert!(validate_action(&loss).is_err());
+        assert!(
+            validate_backup_statistics(&[GameBackupStatistic {
+                game_id: "2048".to_owned(),
+                metric_key: "losses".to_owned(),
+                value: 3,
+                updated_at: 1,
+            }])
+            .is_ok()
+        );
     }
 
     #[test]

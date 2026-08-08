@@ -21,6 +21,9 @@ use super::{
     },
 };
 
+const READER_PROGRESS_SYNC_KEY: &str = "reading/v1/progress.json";
+const MAX_READER_PROGRESS_BYTES: u64 = 512 * 1024;
+
 pub struct CloudSyncEngine {
     local: Arc<dyn CloudLocalStore>,
     remote_factory: Arc<dyn CloudRemoteStoreFactory>,
@@ -373,6 +376,11 @@ fn validate_inventory(
         if !prefixes.iter().any(|prefix| key.starts_with(prefix)) || !valid_hash(hash) {
             return Err(CloudSyncError::invalid_input());
         }
+        if key.starts_with("reading/v1/")
+            && (key != READER_PROGRESS_SYNC_KEY || size > MAX_READER_PROGRESS_BYTES)
+        {
+            return Err(CloudSyncError::invalid_input());
+        }
         require_object_size(size, limits)?;
     }
     Ok(())
@@ -490,6 +498,55 @@ mod tests {
         assert_eq!(
             remote.read_count.load(std::sync::atomic::Ordering::SeqCst),
             0
+        );
+    }
+
+    #[test]
+    fn reader_inventory_accepts_only_the_single_bounded_v1_object() {
+        let prefixes = BTreeSet::from(["reading/v1/".to_owned()]);
+        let limits = CloudSyncLimits {
+            max_object_bytes: 1024 * 1024,
+            ..CloudSyncLimits::default()
+        };
+        let remote = |key: &str, size: u64| RemoteSyncObject {
+            key: key.to_owned(),
+            size,
+            last_modified_millis: 1,
+            sha256: "a".repeat(64),
+            version: RemoteVersion {
+                content_sha256: "a".repeat(64),
+                blob_etag: "etag".to_owned(),
+                storage_name: "object".to_owned(),
+            },
+        };
+
+        validate_inventory(
+            &[],
+            &[remote(READER_PROGRESS_SYNC_KEY, MAX_READER_PROGRESS_BYTES)],
+            &prefixes,
+            limits,
+        )
+        .expect("canonical progress object");
+        assert!(
+            validate_inventory(
+                &[],
+                &[remote("reading/v1/other.json", 1)],
+                &prefixes,
+                limits,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_inventory(
+                &[],
+                &[remote(
+                    READER_PROGRESS_SYNC_KEY,
+                    MAX_READER_PROGRESS_BYTES + 1,
+                )],
+                &prefixes,
+                limits,
+            )
+            .is_err()
         );
     }
 

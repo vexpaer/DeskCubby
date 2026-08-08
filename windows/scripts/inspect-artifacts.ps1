@@ -5,6 +5,8 @@ param(
     [Parameter(Mandatory)]
     [ValidateSet("SignedRelease", "AllowUnsignedTestBuild")]
     [string]$Mode,
+    [ValidateSet("Required", "Absent")]
+    [string]$AuthenticodePolicy = "Absent",
     [string]$ExpectedCertificateThumbprint,
     [string]$ExpectedSignerSubject
 )
@@ -33,6 +35,16 @@ $installer = Join-Path (
     $resolvedArtifacts
 ) "DeskCubby-$Version-windows-x64-setup.exe"
 $updaterSignature = "$installer.sig"
+$authenticodeRequired = (
+    $Mode -eq "SignedRelease" -and $AuthenticodePolicy -eq "Required"
+)
+if (
+    $authenticodeRequired -and
+    [string]::IsNullOrWhiteSpace($ExpectedCertificateThumbprint) -and
+    [string]::IsNullOrWhiteSpace($ExpectedSignerSubject)
+) {
+    throw "Configured Authenticode signing requires a pinned signer identity."
+}
 
 foreach ($path in @($portable, $installer)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -68,13 +80,7 @@ if ($machine -ne 0x8664) {
 $results = foreach ($path in @($portable, $installer)) {
     $file = Get-Item -LiteralPath $path
     $signature = Get-AuthenticodeSignature -LiteralPath $path
-    if ($Mode -eq "SignedRelease") {
-        if (
-            [string]::IsNullOrWhiteSpace($ExpectedCertificateThumbprint) -and
-            [string]::IsNullOrWhiteSpace($ExpectedSignerSubject)
-        ) {
-            throw "SignedRelease requires an expected Authenticode identity."
-        }
+    if ($authenticodeRequired) {
         if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
             throw "Authenticode verification failed for $($file.Name): $($signature.Status)."
         }
@@ -97,6 +103,15 @@ $results = foreach ($path in @($portable, $installer)) {
         ) {
             throw "The artifact signer subject does not match the expected publisher identity."
         }
+    }
+    elseif (
+        $Mode -eq "SignedRelease" -and
+        $signature.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned
+    ) {
+        throw (
+            "Authenticode is disabled for this release, but $($file.Name) " +
+            "has unexpected signature status $($signature.Status)."
+        )
     }
     [pscustomobject]@{
         Artifact = $file.Name
@@ -127,20 +142,28 @@ if ($Mode -eq "SignedRelease") {
         throw "The Tauri updater signature is unexpectedly large."
     }
 
-    $signTool = Get-Command signtool.exe -ErrorAction SilentlyContinue
-    if ($null -eq $signTool) {
-        throw (
-            "SignedRelease requires signtool.exe so certificate-chain and " +
-            "trusted-timestamp verification cannot be skipped."
+    if ($authenticodeRequired) {
+        $signTool = Get-Command signtool.exe -ErrorAction SilentlyContinue
+        if ($null -eq $signTool) {
+            throw (
+                "Configured Authenticode signing requires signtool.exe so " +
+                "certificate-chain and trusted-timestamp verification cannot be skipped."
+            )
+        }
+        foreach ($path in @($portable, $installer)) {
+            & $signTool.Source verify /pa /all /v /tw $path
+            if ($LASTEXITCODE -ne 0) {
+                throw "SignTool verification failed for $path."
+            }
+        }
+        Write-Host "Authenticode and Tauri updater signature presence checks passed."
+    }
+    else {
+        Write-Host (
+            "Authenticode was not configured; both Windows artifacts are " +
+            "unsigned and the Tauri updater signature is present."
         )
     }
-    foreach ($path in @($portable, $installer)) {
-        & $signTool.Source verify /pa /all /v /tw $path
-        if ($LASTEXITCODE -ne 0) {
-            throw "SignTool verification failed for $path."
-        }
-    }
-    Write-Host "Authenticode and Tauri updater signature checks passed."
 }
 else {
     Write-Warning (

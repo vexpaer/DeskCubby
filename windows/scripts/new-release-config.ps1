@@ -95,10 +95,6 @@ $endpoint = Test-AbsoluteWebUri `
     -Value (Get-RequiredEnvironmentValue -Name "DESKCUBBY_UPDATER_ENDPOINT" -MaximumLength 2048) `
     -AllowedSchemes @("https") `
     -Name "DESKCUBBY_UPDATER_ENDPOINT"
-$publisher = Get-RequiredEnvironmentValue `
-    -Name "DESKCUBBY_WINDOWS_PUBLISHER" `
-    -MaximumLength 256
-
 $thumbprint = [Environment]::GetEnvironmentVariable(
     "DESKCUBBY_WINDOWS_CERTIFICATE_THUMBPRINT"
 )
@@ -107,9 +103,9 @@ $signCommand = [Environment]::GetEnvironmentVariable(
 )
 $hasThumbprint = -not [string]::IsNullOrWhiteSpace($thumbprint)
 $hasSignCommand = -not [string]::IsNullOrWhiteSpace($signCommand)
-if ($hasThumbprint -eq $hasSignCommand) {
+if ($hasThumbprint -and $hasSignCommand) {
     throw (
-        "SignedRelease requires exactly one Authenticode identity: " +
+        "SignedRelease accepts at most one Authenticode identity: " +
         "DESKCUBBY_WINDOWS_CERTIFICATE_THUMBPRINT or " +
         "DESKCUBBY_WINDOWS_SIGN_COMMAND."
     )
@@ -163,7 +159,7 @@ if ($hasThumbprint) {
     $windowsConfig.timestampUrl = $timestampUrl
     $windowsConfig.tsp = $useTsp
 }
-else {
+elseif ($hasSignCommand) {
     if ($signCommand.Length -gt 4096 -or $signCommand -match "[`r`n]") {
         throw "DESKCUBBY_WINDOWS_SIGN_COMMAND must be one line and at most 4096 characters."
     }
@@ -176,11 +172,16 @@ else {
         Out-Null
     $windowsConfig.signCommand = $signCommand
 }
+else {
+    Write-Warning (
+        "Authenticode is not configured. The production artifacts will be " +
+        "Tauri-updater-signed but Windows may display an unknown publisher."
+    )
+}
 
 $configuration = [ordered]@{
     bundle = [ordered]@{
         createUpdaterArtifacts = $true
-        publisher = $publisher
         windows = $windowsConfig
     }
     plugins = [ordered]@{
@@ -207,4 +208,4 @@ $json = $configuration | ConvertTo-Json -Depth 10
     $json,
     [Text.UTF8Encoding]::new($false)
 )
-Write-Host "Created temporary signed-release Tauri configuration."
+Write-Host "Created temporary production-release Tauri configuration."

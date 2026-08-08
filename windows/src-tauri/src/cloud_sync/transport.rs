@@ -9,6 +9,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use md5::{Digest as _, Md5};
 use quick_xml::{
     Reader,
     events::{BytesRef, Event},
@@ -40,6 +41,7 @@ use super::{
 const MAX_ERROR_RESPONSE_BYTES: u64 = 64 * 1024;
 const MAX_DAV_PROPERTIES_BYTES: u64 = 64 * 1024;
 const MAX_ETAG_CHARS: usize = 4_096;
+const MAX_S3_ETAG_CANDIDATES: usize = 8;
 const MAX_DAV_TEXT_CHARS: usize = 8_192;
 const DAV_PROPFIND_BODY: &[u8] = br#"<?xml version="1.0" encoding="utf-8"?>
 <D:propfind xmlns:D="DAV:"><D:prop><D:getetag/></D:prop></D:propfind>"#;
@@ -143,6 +145,7 @@ impl ReqwestBlobTransport {
             return Err(CloudSyncError::invalid_input());
         }
         let url = append_storage_name(&self.collection, storage_name)?;
+        let is_head = method == Method::HEAD;
         let mut plain_headers = Vec::<(String, String)>::new();
         if method.as_str() == "PROPFIND" {
             plain_headers.push((
@@ -211,10 +214,11 @@ impl ReqwestBlobTransport {
             .await
             .map_err(|_| CloudSyncError::network())?;
         let status = response.status().as_u16();
-        let metadata = response_metadata(&response)?;
+        let metadata = response_metadata(&response, self.is_webdav())?;
         let body =
             read_response_bounded(response, max_response_bytes, &self.transfer_budget).await?;
-        if let Some(declared) = metadata_declared_size(&metadata, &body)
+        if !is_head
+            && let Some(declared) = metadata_declared_size(&metadata, &body)
             && declared != body.len() as u64
         {
             return Err(CloudSyncError::conflict());
@@ -224,6 +228,103 @@ impl ReqwestBlobTransport {
 
     fn is_webdav(&self) -> bool {
         matches!(self.authentication, Authentication::WebDavBasic(_))
+    }
+
+    async fn resolve_s3_read_etag(
+        &self,
+        storage_name: &str,
+        metadata: &ResponseMetadata,
+        bytes: &[u8],
+        expected_etag: Option<&str>,
+    ) -> Result<String, CloudSyncError> {
+        let expected = expected_etag.map(require_safe_etag).transpose()?;
+        if let Some(expected) = expected {
+            if let Some(returned) = metadata.strong_etag.as_deref() {
+                if returned != expected {
+                    return Err(CloudSyncError::conflict());
+                }
+                return Ok(expected.to_owned());
+            }
+            return self
+                .verify_s3_conditional_version(storage_name, &[expected.to_owned()], bytes)
+                .await;
+        }
+        if let Some(etag) = metadata.strong_etag.as_ref() {
+            return Ok(etag.clone());
+        }
+
+        let mut candidates = metadata.s3_probe_candidates.clone();
+        let derived = s3_single_part_etag(bytes);
+        if !candidates.contains(&derived) {
+            candidates.push(derived);
+        }
+        self.verify_s3_conditional_version(storage_name, &candidates, bytes)
+            .await
+    }
+
+    async fn verify_s3_conditional_version(
+        &self,
+        storage_name: &str,
+        candidates: &[String],
+        expected_bytes: &[u8],
+    ) -> Result<String, CloudSyncError> {
+        if candidates.is_empty() || candidates.len() > MAX_S3_ETAG_CANDIDATES {
+            return Err(unsupported_s3_etag());
+        }
+
+        // A matching confirmation alone is insufficient: a gateway that ignores If-Match would
+        // also return 200. First require a deliberately impossible validator to fail on the same
+        // GET method used for candidate confirmation, then bind one candidate to the exact bytes.
+        let probe = BlobWriteCondition::MustMatch(build_non_matching_s3_probe(
+            &self.collection,
+            storage_name,
+            candidates,
+        ));
+        let (status, _, _) = self
+            .request(
+                Method::GET,
+                storage_name,
+                None,
+                None,
+                Some(&probe),
+                MAX_ERROR_RESPONSE_BYTES,
+            )
+            .await?;
+        match status {
+            412 => {}
+            200 | 204 => return Err(ignored_s3_condition()),
+            _ => return Err(status_error(status)),
+        }
+
+        let maximum = (expected_bytes.len() as u64).max(1);
+        let expected_hash = sha256_hex(expected_bytes);
+        for candidate in candidates {
+            let condition = BlobWriteCondition::MustMatch(candidate.clone());
+            let (status, _, confirmation) = self
+                .request(
+                    Method::GET,
+                    storage_name,
+                    None,
+                    None,
+                    Some(&condition),
+                    maximum,
+                )
+                .await?;
+            match status {
+                200 => {
+                    if confirmation.as_slice() != expected_bytes
+                        || sha256_hex(&confirmation) != expected_hash
+                    {
+                        return Err(CloudSyncError::conflict());
+                    }
+                    return Ok(candidate.clone());
+                }
+                409 | 412 => {}
+                404 => return Err(CloudSyncError::conflict()),
+                _ => return Err(status_error(status)),
+            }
+        }
+        Err(CloudSyncError::conflict())
     }
 
     async fn webdav_strong_etag(&self, storage_name: &str) -> Result<String, CloudSyncError> {
@@ -278,46 +379,51 @@ impl ConditionalBlobTransport for ReqwestBlobTransport {
                 200 => {}
                 _ => return Err(status_error(status)),
             }
-            let etag = match metadata.strong_etag {
-                Some(etag) => etag,
-                None => {
-                    let property_etag = self.webdav_strong_etag(storage_name).await?;
-                    if let Some(expected) = expected_etag
-                        && property_etag != expected
-                    {
-                        return Err(CloudSyncError::conflict());
+            let etag = if self.is_webdav() {
+                match metadata.strong_etag.as_ref() {
+                    Some(etag) => etag.clone(),
+                    None => {
+                        let property_etag = self.webdav_strong_etag(storage_name).await?;
+                        if let Some(expected) = expected_etag
+                            && property_etag != expected
+                        {
+                            return Err(CloudSyncError::conflict());
+                        }
+                        // Bind the property response back to the exact bytes. A
+                        // standalone PROPFIND is metadata-only and races with a
+                        // writer unless the body is re-read conditionally.
+                        let condition = BlobWriteCondition::MustMatch(property_etag.clone());
+                        let (confirmation_status, confirmation_metadata, confirmation_bytes) = self
+                            .request(
+                                Method::GET,
+                                storage_name,
+                                None,
+                                None,
+                                Some(&condition),
+                                max_bytes,
+                            )
+                            .await?;
+                        match confirmation_status {
+                            200 => {}
+                            404 | 409 | 412 => return Err(CloudSyncError::conflict()),
+                            _ => return Err(status_error(confirmation_status)),
+                        }
+                        if confirmation_bytes != bytes
+                            || sha256_hex(&confirmation_bytes) != sha256_hex(&bytes)
+                        {
+                            return Err(CloudSyncError::conflict());
+                        }
+                        if let Some(confirmation_etag) = confirmation_metadata.strong_etag
+                            && confirmation_etag != property_etag
+                        {
+                            return Err(CloudSyncError::conflict());
+                        }
+                        property_etag
                     }
-                    // Bind the property response back to the exact bytes. A
-                    // standalone PROPFIND is metadata-only and races with a
-                    // writer unless the body is re-read conditionally.
-                    let condition = BlobWriteCondition::MustMatch(property_etag.clone());
-                    let (confirmation_status, confirmation_metadata, confirmation_bytes) = self
-                        .request(
-                            Method::GET,
-                            storage_name,
-                            None,
-                            None,
-                            Some(&condition),
-                            max_bytes,
-                        )
-                        .await?;
-                    match confirmation_status {
-                        200 => {}
-                        404 | 409 | 412 => return Err(CloudSyncError::conflict()),
-                        _ => return Err(status_error(confirmation_status)),
-                    }
-                    if confirmation_bytes != bytes
-                        || sha256_hex(&confirmation_bytes) != sha256_hex(&bytes)
-                    {
-                        return Err(CloudSyncError::conflict());
-                    }
-                    if let Some(confirmation_etag) = confirmation_metadata.strong_etag
-                        && confirmation_etag != property_etag
-                    {
-                        return Err(CloudSyncError::conflict());
-                    }
-                    property_etag
                 }
+            } else {
+                self.resolve_s3_read_etag(storage_name, &metadata, &bytes, expected_etag)
+                    .await?
             };
             if let Some(expected) = expected_etag
                 && etag != expected
@@ -394,12 +500,21 @@ fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) -> Result<(),
 #[derive(Debug)]
 struct ResponseMetadata {
     strong_etag: Option<String>,
+    s3_probe_candidates: Vec<String>,
     size: u64,
     last_modified_millis: i64,
 }
 
-fn response_metadata(response: &Response) -> Result<ResponseMetadata, CloudSyncError> {
-    let strong_etag = response_strong_etag(response.headers())?;
+fn response_metadata(
+    response: &Response,
+    strict_webdav_etag: bool,
+) -> Result<ResponseMetadata, CloudSyncError> {
+    let (strong_etag, s3_probe_candidates) = if strict_webdav_etag {
+        (response_strong_etag(response.headers())?, Vec::new())
+    } else {
+        let resolution = s3_entity_tag_resolution(response.headers())?;
+        (resolution.trusted, resolution.candidates)
+    };
     let last_modified_millis = response
         .headers()
         .get(LAST_MODIFIED)
@@ -416,6 +531,7 @@ fn response_metadata(response: &Response) -> Result<ResponseMetadata, CloudSyncE
         .unwrap_or(0);
     Ok(ResponseMetadata {
         strong_etag,
+        s3_probe_candidates,
         size,
         last_modified_millis,
     })
@@ -505,6 +621,130 @@ fn response_strong_etag(headers: &HeaderMap) -> Result<Option<String>, CloudSync
     parse_strong_entity_tag(value)
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct S3EntityTagResolution {
+    trusted: Option<String>,
+    candidates: Vec<String>,
+}
+
+/// S3-compatible gateways sometimes remove quotes, weaken, duplicate, or combine ETag fields.
+/// Only one normal quoted strong field is trusted immediately. Every repaired/multi-value result
+/// remains merely a probe candidate until the conditional protocol binds it to the response body.
+fn s3_entity_tag_resolution(headers: &HeaderMap) -> Result<S3EntityTagResolution, CloudSyncError> {
+    let raw_values = headers
+        .get_all(ETAG)
+        .iter()
+        .map(|value| value.to_str().map_err(|_| unsupported_etag()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if raw_values.len() > MAX_S3_ETAG_CANDIDATES {
+        return Err(unsupported_etag());
+    }
+
+    let mut parsed = Vec::new();
+    for raw in raw_values {
+        parsed.extend(split_s3_entity_tag_header(raw)?);
+        if parsed.len() > MAX_S3_ETAG_CANDIDATES {
+            return Err(unsupported_etag());
+        }
+    }
+    if parsed.iter().any(|value| value.trim().is_empty()) {
+        return Err(unsupported_etag());
+    }
+
+    let parsed = parsed
+        .into_iter()
+        .map(parse_s3_entity_tag_candidate)
+        .collect::<Result<Vec<_>, _>>()?;
+    let trusted = match parsed.as_slice() {
+        [(value, true)] => Some(value.clone()),
+        _ => None,
+    };
+    let mut candidates = Vec::new();
+    for (candidate, _) in parsed {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    Ok(S3EntityTagResolution {
+        trusted,
+        candidates,
+    })
+}
+
+fn split_s3_entity_tag_header(raw: &str) -> Result<Vec<&str>, CloudSyncError> {
+    if raw.len() > MAX_ETAG_CHARS * MAX_S3_ETAG_CANDIDATES || raw.chars().any(char::is_control) {
+        return Err(unsupported_etag());
+    }
+    let mut result = Vec::new();
+    let mut start = 0;
+    let mut quoted = false;
+    for (index, character) in raw.char_indices() {
+        match character {
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                result.push(raw[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if quoted {
+        return Err(unsupported_etag());
+    }
+    result.push(raw[start..].trim());
+    Ok(result)
+}
+
+fn parse_s3_entity_tag_candidate(raw: &str) -> Result<(String, bool), CloudSyncError> {
+    let value = raw.trim();
+    if value.is_empty() || value.len() > MAX_ETAG_CHARS || value.chars().any(char::is_control) {
+        return Err(unsupported_etag());
+    }
+    if value
+        .get(..2)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("W/"))
+    {
+        let repaired = value.get(2..).ok_or_else(unsupported_etag)?;
+        let repaired = parse_strong_entity_tag(repaired)?.ok_or_else(unsupported_etag)?;
+        return Ok((repaired, false));
+    }
+    if value.starts_with('"') {
+        let strong = parse_strong_entity_tag(value)?.ok_or_else(unsupported_etag)?;
+        return Ok((strong, true));
+    }
+    if !value
+        .bytes()
+        .all(|byte| (0x21..=0x7e).contains(&byte) && !matches!(byte, b'"' | b','))
+    {
+        return Err(unsupported_etag());
+    }
+    let repaired = format!("\"{value}\"");
+    let repaired = parse_strong_entity_tag(&repaired)?.ok_or_else(unsupported_etag)?;
+    Ok((repaired, false))
+}
+
+fn s3_single_part_etag(bytes: &[u8]) -> String {
+    format!("\"{:x}\"", Md5::digest(bytes))
+}
+
+fn build_non_matching_s3_probe(
+    collection: &Url,
+    storage_name: &str,
+    candidates: &[String],
+) -> String {
+    let mut seed = format!("{}\n{storage_name}\n", collection.as_str());
+    for candidate in candidates {
+        seed.push_str(candidate);
+        seed.push('\n');
+    }
+    let digest = sha256_hex(seed.as_bytes());
+    let mut probe = format!("\"deskcubby-condition-probe-{}\"", &digest[..32]);
+    if candidates.contains(&probe) {
+        probe = format!("\"deskcubby-condition-probe-{}-2\"", &digest[..32]);
+    }
+    probe
+}
+
 fn parse_strong_entity_tag(value: &str) -> Result<Option<String>, CloudSyncError> {
     let value = value.trim();
     if value.is_empty() || value.len() > MAX_ETAG_CHARS || value.contains(['\r', '\n']) {
@@ -543,6 +783,22 @@ fn unsupported_etag() -> CloudSyncError {
     CloudSyncError::new(
         CloudSyncErrorCode::UnsupportedRemote,
         "The cloud service did not provide a usable strong ETag.",
+        true,
+    )
+}
+
+fn unsupported_s3_etag() -> CloudSyncError {
+    CloudSyncError::new(
+        CloudSyncErrorCode::UnsupportedRemote,
+        "The S3 service supplied no verifiable conditional object version.",
+        true,
+    )
+}
+
+fn ignored_s3_condition() -> CloudSyncError {
+    CloudSyncError::new(
+        CloudSyncErrorCode::UnsupportedRemote,
+        "The S3 service ignored a conditional request; synchronization was stopped.",
         true,
     )
 }
@@ -829,6 +1085,24 @@ fn status_error(status: u16) -> CloudSyncError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+        thread,
+    };
+
+    use crate::cloud_sync::{
+        types::{
+            CloudCredentials, CloudSyncConfig, CloudSyncContent, CloudSyncDirection,
+            CloudSyncServiceType, DEFAULT_CLOUD_SYNC_USER_AGENT,
+        },
+        validation::validate_cloud_sync_config,
+    };
 
     #[test]
     fn weak_empty_and_injected_etags_are_rejected() {
@@ -844,6 +1118,226 @@ mod tests {
         for value in ["strong", "\"\"", "\"bad quote\"tail", "\"bad\"quote\""] {
             assert!(parse_strong_entity_tag(value).is_err(), "{value:?}");
         }
+    }
+
+    #[test]
+    fn s3_etag_variants_are_candidates_without_weakening_webdav() {
+        let headers = header_map(&[("ETag", "\"quoted-multipart-4\"")]);
+        assert_eq!(
+            s3_entity_tag_resolution(&headers).unwrap(),
+            S3EntityTagResolution {
+                trusted: Some("\"quoted-multipart-4\"".to_owned()),
+                candidates: vec!["\"quoted-multipart-4\"".to_owned()],
+            }
+        );
+
+        for (values, candidates) in [
+            (vec![], vec![]),
+            (vec![("ETag", "unquoted-4")], vec!["\"unquoted-4\""]),
+            (vec![("ETag", "W/\"weak\"")], vec!["\"weak\""]),
+            (
+                vec![("ETag", "\"same\", \"same\""), ("ETag", "\"same\"")],
+                vec!["\"same\""],
+            ),
+            (
+                vec![("ETag", "\"proxy\", \"origin\"")],
+                vec!["\"proxy\"", "\"origin\""],
+            ),
+        ] {
+            let resolution = s3_entity_tag_resolution(&header_map(&values)).unwrap();
+            assert_eq!(resolution.trusted, None);
+            assert_eq!(
+                resolution.candidates,
+                candidates
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        // The strict parser used by WebDAV is deliberately unchanged.
+        assert_eq!(
+            response_strong_etag(&header_map(&[("ETag", "W/\"weak\"")])).unwrap(),
+            None
+        );
+        for values in [
+            vec![("ETag", "unquoted-4")],
+            vec![("ETag", "\"one\""), ("ETag", "\"two\"")],
+        ] {
+            assert!(response_strong_etag(&header_map(&values)).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn s3_repairs_missing_weak_unquoted_duplicate_and_multiple_etags_with_proof() {
+        let body = b"remote manifest".to_vec();
+        let cases = vec![
+            (Vec::new(), s3_single_part_etag(&body)),
+            (
+                vec![("ETag".to_owned(), "W/\"weak-version\"".to_owned())],
+                "\"weak-version\"".to_owned(),
+            ),
+            (
+                vec![("ETag".to_owned(), "multipart-hash-3".to_owned())],
+                "\"multipart-hash-3\"".to_owned(),
+            ),
+            (
+                vec![
+                    ("ETag".to_owned(), "\"same\", \"same\"".to_owned()),
+                    ("ETag".to_owned(), "\"same\"".to_owned()),
+                ],
+                "\"same\"".to_owned(),
+            ),
+            (
+                vec![("ETag".to_owned(), "\"proxy\", \"origin\"".to_owned())],
+                "\"origin\"".to_owned(),
+            ),
+        ];
+
+        for (initial_headers, accepted) in cases {
+            let response_body = body.clone();
+            let accepted_for_server = accepted.clone();
+            let server = TestHttpServer::new(move |request| {
+                if let Some(candidate) = request.headers.get("if-match") {
+                    return if candidate == &accepted_for_server {
+                        TestResponse::ok(response_body.clone())
+                    } else {
+                        TestResponse::status(412)
+                    };
+                }
+                TestResponse {
+                    status: 200,
+                    headers: initial_headers.clone(),
+                    body: response_body.clone(),
+                }
+            });
+            let transport = test_s3_transport(&server.endpoint());
+            let read = transport
+                .get("object.dc", 1_024, None)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(read.metadata.etag, accepted);
+            assert_eq!(read.bytes, body);
+
+            let requests = server.requests();
+            assert_eq!(requests[0].method, "GET");
+            assert_eq!(requests[1].method, "GET");
+            assert!(
+                requests[1]
+                    .headers
+                    .get("if-match")
+                    .is_some_and(|value| value.starts_with("\"deskcubby-condition-probe-"))
+            );
+            assert!(requests[2..].iter().any(|request| {
+                request.method == "GET"
+                    && request.headers.get("if-match") == Some(&read.metadata.etag)
+            }));
+        }
+    }
+
+    #[tokio::test]
+    async fn s3_missing_etag_does_not_treat_a_fixed_409_as_condition_proof() {
+        let body = b"remote manifest".to_vec();
+        let response_body = body.clone();
+        let server = TestHttpServer::new(move |request| {
+            if request.headers.contains_key("if-match") {
+                TestResponse::status(409)
+            } else {
+                TestResponse::ok(response_body.clone())
+            }
+        });
+        let transport = test_s3_transport(&server.endpoint());
+
+        let error = transport.get("object.dc", 1_024, None).await.unwrap_err();
+        assert_eq!(error.code, CloudSyncErrorCode::UnsupportedRemote);
+        let requests = server.requests();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|request| request.method == "GET"));
+        assert!(
+            requests[1]
+                .headers
+                .get("if-match")
+                .is_some_and(|value| value.starts_with("\"deskcubby-condition-probe-"))
+        );
+    }
+
+    #[tokio::test]
+    async fn s3_missing_etag_rejects_a_stale_conditional_write() {
+        let state = Arc::new(Mutex::new(TestS3Object::default()));
+        let state_for_server = Arc::clone(&state);
+        let server = TestHttpServer::new(move |request| {
+            state_for_server.lock().unwrap().respond(request, false)
+        });
+        let first_phone = test_s3_transport(&server.endpoint());
+        let second_phone = test_s3_transport(&server.endpoint());
+
+        let first = b"first manifest";
+        let created = first_phone
+            .put(
+                "object.dc",
+                first,
+                &sha256_hex(first),
+                BlobWriteCondition::MustNotExist,
+            )
+            .await
+            .unwrap();
+        let stale = second_phone
+            .get("object.dc", 1_024, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stale.metadata.etag, created.etag);
+
+        let winner = b"winner manifest";
+        first_phone
+            .put(
+                "object.dc",
+                winner,
+                &sha256_hex(winner),
+                BlobWriteCondition::MustMatch(created.etag),
+            )
+            .await
+            .unwrap();
+        let loser = b"stale loser";
+        let error = second_phone
+            .put(
+                "object.dc",
+                loser,
+                &sha256_hex(loser),
+                BlobWriteCondition::MustMatch(stale.metadata.etag),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, CloudSyncErrorCode::Conflict);
+        assert_eq!(
+            state.lock().unwrap().bytes.as_deref(),
+            Some(winner.as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn s3_missing_etag_never_accepts_a_service_that_ignores_if_match() {
+        let state = Arc::new(Mutex::new(TestS3Object {
+            bytes: Some(b"remote manifest".to_vec()),
+        }));
+        let state_for_server = Arc::clone(&state);
+        let server = TestHttpServer::new(move |request| {
+            state_for_server.lock().unwrap().respond(request, true)
+        });
+        let transport = test_s3_transport(&server.endpoint());
+
+        let error = transport.get("object.dc", 1_024, None).await.unwrap_err();
+        assert_eq!(error.code, CloudSyncErrorCode::UnsupportedRemote);
+        assert_eq!(error.message, ignored_s3_condition().message);
+        assert_eq!(
+            server
+                .requests()
+                .iter()
+                .map(|request| request.method.as_str())
+                .collect::<Vec<_>>(),
+            vec!["GET", "GET"]
+        );
     }
 
     #[test]
@@ -899,5 +1393,270 @@ mod tests {
         let auth = Authentication::WebDavBasic(Some("Basic dXNlcjpzZWNyZXQ=".to_owned()));
         let rendered = format!("{auth:?}");
         assert!(!rendered.contains("dXNlcjpzZWNyZXQ"));
+    }
+
+    fn header_map(values: &[(&str, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, value) in values {
+            headers.append(
+                HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                HeaderValue::from_str(value).unwrap(),
+            );
+        }
+        headers
+    }
+
+    fn test_s3_transport(endpoint: &str) -> ReqwestBlobTransport {
+        let config = CloudSyncConfig {
+            id: "test-s3".to_owned(),
+            name: "Test S3".to_owned(),
+            enabled: true,
+            service_type: CloudSyncServiceType::S3Compatible,
+            endpoint_url: endpoint.to_owned(),
+            remote_path: String::new(),
+            user_agent: DEFAULT_CLOUD_SYNC_USER_AGENT.to_owned(),
+            web_dav_username: String::new(),
+            s3_bucket: "deskcubby".to_owned(),
+            s3_region: "us-east-1".to_owned(),
+            s3_path_style: true,
+            allow_insecure_http: true,
+            selected_contents: BTreeSet::from([CloudSyncContent::JsonBackup]),
+            direction: CloudSyncDirection::TwoWay,
+        };
+        let mut credentials = CloudCredentials::default();
+        credentials.s3_access_key = "access-key".to_owned();
+        credentials.s3_secret_key = "secret-key".to_owned();
+        let validated = validate_cloud_sync_config(&config, &credentials).unwrap();
+        ReqwestBlobTransport::new(&validated, &credentials, CloudSyncLimits::default()).unwrap()
+    }
+
+    #[derive(Clone, Debug)]
+    struct TestRequest {
+        method: String,
+        headers: BTreeMap<String, String>,
+        body: Vec<u8>,
+    }
+
+    struct TestResponse {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    }
+
+    impl TestResponse {
+        fn ok(body: Vec<u8>) -> Self {
+            Self {
+                status: 200,
+                headers: Vec::new(),
+                body,
+            }
+        }
+
+        fn status(status: u16) -> Self {
+            Self {
+                status,
+                headers: Vec::new(),
+                body: Vec::new(),
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct TestS3Object {
+        bytes: Option<Vec<u8>>,
+    }
+
+    impl TestS3Object {
+        fn respond(&mut self, request: &TestRequest, ignore_conditions: bool) -> TestResponse {
+            let etag = self.bytes.as_deref().map(s3_single_part_etag);
+            let matches = ignore_conditions
+                || request
+                    .headers
+                    .get("if-match")
+                    .is_none_or(|expected| etag.as_ref() == Some(expected));
+            let absent = ignore_conditions
+                || request
+                    .headers
+                    .get("if-none-match")
+                    .is_none_or(|expected| expected != "*" || self.bytes.is_none());
+            if !matches || !absent {
+                return TestResponse::status(412);
+            }
+            match request.method.as_str() {
+                "HEAD" => {
+                    if self.bytes.is_some() {
+                        TestResponse::status(200)
+                    } else {
+                        TestResponse::status(404)
+                    }
+                }
+                "GET" => self
+                    .bytes
+                    .clone()
+                    .map(TestResponse::ok)
+                    .unwrap_or_else(|| TestResponse::status(404)),
+                "PUT" => {
+                    self.bytes = Some(request.body.clone());
+                    TestResponse::status(200)
+                }
+                _ => TestResponse::status(405),
+            }
+        }
+    }
+
+    struct TestHttpServer {
+        address: std::net::SocketAddr,
+        stop: Arc<AtomicBool>,
+        requests: Arc<Mutex<Vec<TestRequest>>>,
+        thread: Option<thread::JoinHandle<()>>,
+    }
+
+    impl TestHttpServer {
+        fn new<F>(handler: F) -> Self
+        where
+            F: Fn(&TestRequest) -> TestResponse + Send + Sync + 'static,
+        {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let thread_stop = Arc::clone(&stop);
+            let thread_requests = Arc::clone(&requests);
+            let handler = Arc::new(handler);
+            let thread = thread::spawn(move || {
+                while !thread_stop.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let _ = stream.set_nonblocking(false);
+                            let request = match read_test_request(&mut stream) {
+                                Ok(request) => request,
+                                Err(_) => continue,
+                            };
+                            thread_requests.lock().unwrap().push(request.clone());
+                            let response = handler(&request);
+                            write_test_response(&mut stream, response);
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(2));
+                        }
+                        // Windows can surface transient accept errors while clients rapidly close
+                        // the deliberately short-lived test connections. Keep the listener alive;
+                        // `stop` is the sole shutdown signal.
+                        Err(_) => thread::sleep(Duration::from_millis(2)),
+                    }
+                }
+            });
+            Self {
+                address,
+                stop,
+                requests,
+                thread: Some(thread),
+            }
+        }
+
+        fn endpoint(&self) -> String {
+            format!("http://{}", self.address)
+        }
+
+        fn requests(&self) -> Vec<TestRequest> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl Drop for TestHttpServer {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            let _ = TcpStream::connect(self.address);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    fn read_test_request(stream: &mut TcpStream) -> Result<TestRequest, String> {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|error| format!("timeout: {error}"))?;
+        let mut bytes = Vec::new();
+        let header_end = loop {
+            let mut chunk = [0_u8; 4_096];
+            let count = stream
+                .read(&mut chunk)
+                .map_err(|error| format!("read: {error}"))?;
+            if count == 0 {
+                return Err("eof".to_owned());
+            }
+            bytes.extend_from_slice(&chunk[..count]);
+            if bytes.len() > 2 * 1024 * 1024 {
+                return Err("too large".to_owned());
+            }
+            if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+        let head = std::str::from_utf8(&bytes[..header_end]).map_err(|_| "utf8".to_owned())?;
+        let mut lines = head.split("\r\n");
+        let method = lines
+            .next()
+            .and_then(|line| line.split_ascii_whitespace().next())
+            .ok_or_else(|| "request line".to_owned())?
+            .to_owned();
+        let mut headers = BTreeMap::new();
+        for line in lines.filter(|line| !line.is_empty()) {
+            let (name, value) = line
+                .split_once(':')
+                .ok_or_else(|| format!("header: {line:?}"))?;
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
+        }
+        let content_length = headers
+            .get("content-length")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        while bytes.len() - header_end < content_length {
+            let mut chunk = [0_u8; 4_096];
+            let count = stream
+                .read(&mut chunk)
+                .map_err(|error| format!("body read: {error}"))?;
+            if count == 0 {
+                return Err("body eof".to_owned());
+            }
+            bytes.extend_from_slice(&chunk[..count]);
+        }
+        Ok(TestRequest {
+            method,
+            headers,
+            body: bytes[header_end..header_end + content_length].to_vec(),
+        })
+    }
+
+    fn write_test_response(stream: &mut TcpStream, response: TestResponse) {
+        let reason = match response.status {
+            200 => "OK",
+            201 => "Created",
+            204 => "No Content",
+            404 => "Not Found",
+            405 => "Method Not Allowed",
+            409 => "Conflict",
+            412 => "Precondition Failed",
+            _ => "Error",
+        };
+        let mut head = format!(
+            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n",
+            response.status,
+            reason,
+            response.body.len()
+        );
+        for (name, value) in response.headers {
+            head.push_str(&format!("{name}: {value}\r\n"));
+        }
+        head.push_str("\r\n");
+        if stream.write_all(head.as_bytes()).is_err() {
+            return;
+        }
+        if stream.write_all(&response.body).is_err() {
+            return;
+        }
+        let _ = stream.flush();
     }
 }

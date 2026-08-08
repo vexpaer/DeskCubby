@@ -19,14 +19,15 @@ use crate::{
 };
 use uuid::Uuid;
 
-pub const FORMAT_VERSION: i32 = 27;
+pub const FORMAT_VERSION: i32 = 28;
 pub const MAX_JSON_BYTES: usize = 64 * 1024 * 1024;
 
 // Recovery points currently encode the encrypted compatibility shadow as a
 // JSON byte array. In the worst case that representation is materially larger
 // than the 64 MiB Android source document, so this separate bounded envelope
-// must accommodate a valid maximum-size v27 shadow.
-const MAX_RECOVERY_POINT_BYTES: usize = 320 * 1024 * 1024;
+// must accommodate a valid maximum-size v28 shadow.
+pub(crate) const MAX_RECOVERY_POINT_BYTES: usize = 320 * 1024 * 1024;
+const MAX_RECOVERY_READER_STATE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_THOUGHTS: usize = 50_000;
 const MAX_FAVORITES: usize = 20_000;
 const MAX_DATE_RECORDS: usize = 50_000;
@@ -54,6 +55,10 @@ const MAX_GAME_STATES: usize = 16;
 const MAX_GAME_STATISTICS: usize = 64;
 const MAX_GAME_ID_CHARS: usize = 64;
 const MAX_GAME_SAVE_CHARS: usize = 16 * 1024 * 1024;
+const MAX_READER_PROGRESS_RECORDS: usize = 500;
+const MAX_READER_TEXT_PAGES: i32 = 50_000;
+const MAX_READER_TEXT_PARAGRAPHS: i32 = 250_000;
+const MAX_READER_PDF_PAGES: i32 = 20_000;
 const MAX_USAGE_DEVICES: usize = 64;
 const MAX_USAGE_DEVICE_JSON_BYTES: usize = 10 * 1024 * 1024 + 64 * 1024;
 const MAX_STATISTICS_DAYS: usize = 36_600;
@@ -62,7 +67,7 @@ const MAX_PACKAGE_NAME_CHARS: usize = 255;
 const MAX_ZONE_ID_CHARS: usize = 128;
 const MAX_FOREGROUND_MILLIS_PER_APP_DAY: i64 = 26 * 60 * 60 * 1_000;
 
-/// Credential-free cloud-sync metadata shared with Android v27 backups.
+/// Credential-free cloud-sync metadata shared with Android v28 backups.
 ///
 /// Passwords, S3 access keys, secret keys and session tokens deliberately do
 /// not exist on this DTO. They are device-local secrets and must be persisted
@@ -104,6 +109,31 @@ pub enum CloudSyncContent {
     JsonBackup,
     #[serde(rename = "USAGE_STATISTICS")]
     UsageStatistics,
+    #[serde(rename = "READING_PROGRESS")]
+    ReadingProgress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum ReaderProgressBookType {
+    #[serde(rename = "TXT")]
+    Txt,
+    #[serde(rename = "PDF")]
+    Pdf,
+}
+
+/// URI-free Android v28 reader-progress row. Book titles, paths, content URIs,
+/// cover metadata and document bytes deliberately do not exist on this DTO.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReaderProgressRecord {
+    pub(crate) fingerprint: String,
+    #[serde(rename = "type")]
+    pub(crate) book_type: ReaderProgressBookType,
+    pub(crate) text_page_index: i32,
+    pub(crate) text_paragraph_index: i32,
+    pub(crate) pdf_page_index: i32,
+    pub(crate) total_pages: i32,
+    pub(crate) updated_at: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -157,11 +187,12 @@ pub struct ValidatedBackup {
     pub merge_game_statistics: bool,
     pub usage_devices: Vec<Value>,
     pub merge_usage_devices: bool,
+    pub(crate) reader_progress: Vec<ReaderProgressRecord>,
     pub source_sha256: String,
     root: Value,
 }
 
-/// A validated v27 import whose compatibility-shadow bytes have had
+/// A validated v28 import whose compatibility-shadow bytes have had
 /// device-local private fields removed.
 ///
 /// `backup.source_sha256` is the digest of `canonical_bytes`, not of the
@@ -180,6 +211,11 @@ pub(crate) struct PreparedV18Import {
     /// but are deliberately absent from `canonical_bytes` and every export.
     pub(crate) usage_devices: Vec<Value>,
     pub(crate) merge_usage_devices: bool,
+    /// Only Android v28 and newer own the cross-device reader-progress
+    /// container. Older backups are upgraded to a canonical v28 shadow with
+    /// an empty `readerProgress` array, but importing one must not erase or
+    /// otherwise touch the Windows reader ledger.
+    pub(crate) merge_reader_progress: bool,
 }
 
 impl ValidatedBackup {
@@ -199,6 +235,7 @@ impl ValidatedBackup {
             "gameStates",
             "gameStatistics",
             "usageDevices",
+            "readerProgress",
         ];
         let mut preserved_top_level_keys = self
             .root
@@ -217,6 +254,7 @@ impl ValidatedBackup {
             favorite_count: self.favorite_count,
             date_record_count: self.date_records.len(),
             poem_count: self.poems.len(),
+            reader_progress_count: self.reader_progress.len(),
             preserved_top_level_keys,
         }
     }
@@ -233,20 +271,20 @@ pub fn parse_v18(json_text: &str) -> Result<ValidatedBackup, BackupError> {
     }
     let source_format_version = required_i32(root_object, "version")?;
     if !(1..=FORMAT_VERSION).contains(&source_format_version) {
-        return Err(invalid("Windows requires an Android v1-v27 backup"));
+        return Err(invalid("Windows requires an Android v1-v28 backup"));
     }
     let exported_at = required_i64(root_object, "exportedAt")?;
     require_nonnegative(exported_at, "exportedAt")?;
 
     if source_format_version < FORMAT_VERSION {
-        root = upgrade_legacy_backup_to_v27(root, source_format_version, exported_at)?;
+        root = upgrade_legacy_backup_to_v28(root, source_format_version, exported_at)?;
     }
     let root_object = root
         .as_object()
         .ok_or_else(|| invalid("Backup root must be a JSON object"))?;
 
     let settings_object = required_object(root_object, "settings")?;
-    let cloud_sync_configs = validate_full_v27_settings(settings_object)?;
+    let cloud_sync_configs = validate_full_v28_settings(settings_object)?;
     let settings = decode_managed_settings(settings_object)?;
     settings.validate().map_err(BackupError::Invalid)?;
 
@@ -281,6 +319,8 @@ pub fn parse_v18(json_text: &str) -> Result<ValidatedBackup, BackupError> {
     validate_game_states(game_state_items)?;
     validate_game_statistics(game_statistic_items)?;
     validate_usage_devices(usage_device_items)?;
+    let reader_progress_items = required_array(root_object, "readerProgress")?;
+    let reader_progress = validate_reader_progress(reader_progress_items)?;
     let game_states = decode_game_states(game_state_items)?;
     let game_statistics = decode_game_statistics(game_statistic_items)?;
     let source_sha256 = sha256_hex(json_text.as_bytes());
@@ -302,6 +342,7 @@ pub fn parse_v18(json_text: &str) -> Result<ValidatedBackup, BackupError> {
         merge_game_statistics: source_format_version >= 24,
         usage_devices: usage_device_items.to_vec(),
         merge_usage_devices: source_format_version >= 20,
+        reader_progress,
         source_sha256,
         root,
     })
@@ -310,9 +351,9 @@ pub fn parse_v18(json_text: &str) -> Result<ValidatedBackup, BackupError> {
 /// Android's decoder accepts every historical backup version and materializes
 /// newer fields from `AppSettings` defaults before restoring. Windows keeps a
 /// lossless compatibility shadow, so legacy input is upgraded once at the
-/// boundary into an Android-readable v27 document while unrelated unknown
+/// boundary into an Android-readable v28 document while unrelated unknown
 /// siblings remain untouched.
-fn upgrade_legacy_backup_to_v27(
+fn upgrade_legacy_backup_to_v28(
     mut root: Value,
     version: i32,
     exported_at: i64,
@@ -326,7 +367,7 @@ fn upgrade_legacy_backup_to_v27(
     let defaults = default_root(&ManagedSettings::default(), exported_at);
     let default_root_object = defaults
         .as_object()
-        .ok_or_else(|| invalid("Internal v27 default root is invalid"))?;
+        .ok_or_else(|| invalid("Internal v28 default root is invalid"))?;
     let default_settings = required_object(default_root_object, "settings")?;
     let mut upgraded_settings = default_settings.clone();
     for (key, value) in original_settings {
@@ -371,6 +412,9 @@ fn upgrade_legacy_backup_to_v27(
     if version < 24 {
         root_object.insert("gameStatistics".to_owned(), json!([]));
     }
+    if version < 28 {
+        root_object.insert("readerProgress".to_owned(), json!([]));
+    }
     migrate_legacy_thoughts(root_object, version)?;
     migrate_legacy_poems(root_object, version)?;
     root_object.insert("version".to_owned(), Value::from(FORMAT_VERSION));
@@ -393,6 +437,7 @@ fn validate_legacy_required_shape(
         (19, &["poetryCategories"][..]),
         (20, &["vault", "gameStates", "usageDevices"][..]),
         (24, &["gameStatistics"][..]),
+        (28, &["readerProgress"][..]),
     ] {
         if version >= introduced {
             for field in fields {
@@ -444,6 +489,11 @@ fn validate_legacy_required_shape(
     if version < 7 && required_string(settings, "visualStyle")? == "ORGANIC_FUTURE" {
         return Err(invalid(
             "visualStyle ORGANIC_FUTURE requires backup version 7 or newer",
+        ));
+    }
+    if version < 28 && required_string(settings, "visualStyle")? == "CUSTOM" {
+        return Err(invalid(
+            "visualStyle CUSTOM requires backup version 28 or newer",
         ));
     }
     Ok(())
@@ -564,6 +614,7 @@ fn legacy_setting_introductions() -> &'static [(i32, &'static [&'static str])] {
         ),
         (26, &["notesTreeUri", "markdownHeadingSizesSp"]),
         (27, &["homeGameShortcuts"]),
+        (28, &["customTheme"]),
     ]
 }
 
@@ -821,7 +872,7 @@ fn migrate_legacy_poems(root: &mut Map<String, Value>, version: i32) -> Result<(
     Ok(())
 }
 
-/// Validate and canonicalize an imported Android v27 backup before it becomes
+/// Validate and canonicalize an imported Android v28 backup before it becomes
 /// the encrypted compatibility shadow.
 ///
 /// This is the single import-side privacy boundary: private fields and cloud
@@ -836,6 +887,7 @@ pub(crate) fn prepare_v18_import_for_shadow(
     let parsed = parse_v18(json_text)?;
     let usage_devices = parsed.usage_devices.clone();
     let merge_usage_devices = parsed.merge_usage_devices;
+    let merge_reader_progress = parsed.format_version >= 28;
     let mut root = parsed.root;
     let root_object = root
         .as_object_mut()
@@ -853,6 +905,7 @@ pub(crate) fn prepare_v18_import_for_shadow(
         backup,
         usage_devices,
         merge_usage_devices,
+        merge_reader_progress,
     })
 }
 
@@ -892,9 +945,9 @@ pub fn import_v18_transaction(
     })
 }
 
-/// Merge Windows-managed data into a decrypted v27 compatibility shadow.
+/// Merge Windows-managed data into a decrypted v28 compatibility shadow.
 ///
-/// Passing `None` creates a complete Android-readable v27 document with safe
+/// Passing `None` creates a complete Android-readable v28 document with safe
 /// defaults for postponed modules. Local Windows folder paths are never written
 /// into Android `content://` URI fields.
 #[allow(dead_code)]
@@ -907,19 +960,35 @@ pub fn export_v18_merged(
 }
 
 /// Merge Windows-managed data and optional credential-free cloud metadata into
-/// a decrypted v27 compatibility shadow.
+/// a decrypted v28 compatibility shadow.
 ///
 /// `cloud_sync_configs = None` preserves imported credential-free cloud
 /// metadata and its unknown fields. Passing `Some` makes Windows the owner of
 /// `cloudSyncConfigs`, preserves unknown sibling fields for matching IDs, and
 /// disables Android cloud/usage collection toggles. Both paths unconditionally
 /// remove non-format Windows private fields and device-local cloud credentials,
-/// and emit the required v27 Vault/usage containers only in their empty forms.
+/// and emit the required v28 Vault/usage containers only in their empty forms.
 pub fn export_v18_merged_with_cloud_configs(
     database: &Database,
     decrypted_shadow: Option<&[u8]>,
     exported_at: i64,
     cloud_sync_configs: Option<&[CloudSyncConfig]>,
+) -> Result<String, BackupError> {
+    export_v18_merged_with_cloud_configs_and_reader_progress(
+        database,
+        decrypted_shadow,
+        exported_at,
+        cloud_sync_configs,
+        None,
+    )
+}
+
+pub(crate) fn export_v18_merged_with_cloud_configs_and_reader_progress(
+    database: &Database,
+    decrypted_shadow: Option<&[u8]>,
+    exported_at: i64,
+    cloud_sync_configs: Option<&[CloudSyncConfig]>,
+    reader_progress: Option<&[ReaderProgressRecord]>,
 ) -> Result<String, BackupError> {
     require_nonnegative(exported_at, "exportedAt")?;
     if let Some(configs) = cloud_sync_configs {
@@ -999,9 +1068,12 @@ pub fn export_v18_merged_with_cloud_configs(
         "gameStatistics",
         serde_json::to_value(game_statistics)?,
     );
+    if let Some(records) = reader_progress {
+        overlay_reader_progress(root_object, records)?;
+    }
 
     // Reassert the private-data boundary after all managed overlays. Android
-    // v27 still sees the required fields, but Windows never emits Vault
+    // v28 still sees the required fields, but Windows never emits Vault
     // ciphertext/metadata or phone-usage samples in application JSON.
     scrub_excluded_private_backup_fields(root_object)?;
 
@@ -1011,6 +1083,94 @@ pub fn export_v18_merged_with_cloud_configs(
     // corrupted rows without risking an unreadable backup.
     parse_v18(&encoded)?;
     Ok(encoded)
+}
+
+fn overlay_reader_progress(
+    root: &mut Map<String, Value>,
+    records: &[ReaderProgressRecord],
+) -> Result<(), BackupError> {
+    let mut sorted = records.to_vec();
+    sorted.sort_by(|left, right| {
+        left.fingerprint
+            .cmp(&right.fingerprint)
+            .then_with(|| left.book_type.cmp(&right.book_type))
+    });
+    let managed = serde_json::to_value(&sorted)?;
+    let managed_items = managed
+        .as_array()
+        .ok_or_else(|| invalid("Windows reader-progress serialization failed"))?;
+    validate_reader_progress(managed_items)?;
+
+    let previous_items = root
+        .get_mut("readerProgress")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| invalid("readerProgress must be an array"))?;
+    let mut previous = std::mem::take(previous_items)
+        .into_iter()
+        .filter_map(|value| reader_progress_identity(&value).map(|key| (key, value)))
+        .collect::<HashMap<_, _>>();
+    let mut merged_items = Vec::with_capacity(managed_items.len() + previous.len());
+    for managed_record in managed_items {
+        let identity = reader_progress_identity(managed_record)
+            .expect("validated reader progress always has an identity");
+        let merged = if let Some(mut previous_record) = previous.remove(&identity) {
+            if reader_progress_rank(&previous_record) > reader_progress_rank(managed_record) {
+                previous_record
+            } else {
+                merge_managed_value(&mut previous_record, managed_record);
+                previous_record
+            }
+        } else {
+            managed_record.clone()
+        };
+        merged_items.push(merged);
+    }
+    merged_items.extend(previous.into_values());
+    // Same-key ties above use the actual TXT paragraph/PDF page position;
+    // Android then keeps the newest 500 distinct fingerprint/type pairs.
+    merged_items.sort_by(|left, right| {
+        reader_progress_updated_at(right)
+            .cmp(&reader_progress_updated_at(left))
+            .then_with(|| reader_progress_identity(left).cmp(&reader_progress_identity(right)))
+    });
+    merged_items.truncate(MAX_READER_PROGRESS_RECORDS);
+    merged_items.sort_by_key(reader_progress_identity);
+    *previous_items = merged_items;
+    Ok(())
+}
+
+fn reader_progress_identity(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    let fingerprint = object.get("fingerprint")?.as_str()?;
+    let book_type = object.get("type")?.as_str()?;
+    Some(format!("{fingerprint}\0{book_type}"))
+}
+
+fn reader_progress_rank(value: &Value) -> (i64, i32) {
+    let Some(object) = value.as_object() else {
+        return (-1, -1);
+    };
+    let updated_at = object
+        .get("updatedAt")
+        .and_then(|value| value_i64(value, "updatedAt").ok())
+        .unwrap_or(-1);
+    let position_field = match object.get("type").and_then(Value::as_str) {
+        Some("TXT") => "textParagraphIndex",
+        _ => "pdfPageIndex",
+    };
+    let position = object
+        .get(position_field)
+        .and_then(|value| value_i32(value, position_field).ok())
+        .unwrap_or(-1);
+    (updated_at, position)
+}
+
+fn reader_progress_updated_at(value: &Value) -> i64 {
+    value
+        .as_object()
+        .and_then(|object| object.get("updatedAt"))
+        .and_then(|value| value_i64(value, "updatedAt").ok())
+        .unwrap_or(-1)
 }
 
 fn ensure_v27_cloud_config_defaults(settings: &mut Map<String, Value>) -> Result<(), BackupError> {
@@ -1048,7 +1208,29 @@ fn ensure_v27_poem_defaults(root: &mut Map<String, Value>) -> Result<(), BackupE
     Ok(())
 }
 
-pub fn recovery_point_bytes(database: &Database) -> Result<Vec<u8>, BackupError> {
+#[cfg(test)]
+fn recovery_point_bytes(database: &Database) -> Result<Vec<u8>, BackupError> {
+    recovery_point_bytes_inner(database, None)
+}
+
+pub(crate) fn recovery_point_bytes_with_reader(
+    database: &Database,
+    reader_state: &[u8],
+) -> Result<Vec<u8>, BackupError> {
+    if reader_state.is_empty() || reader_state.len() > MAX_RECOVERY_READER_STATE_BYTES {
+        return Err(BackupError::RecoveryPointTooLarge);
+    }
+    let reader_state: Value = serde_json::from_slice(reader_state)?;
+    if !reader_state.is_object() {
+        return Err(invalid("Recovery reader state is invalid"));
+    }
+    recovery_point_bytes_inner(database, Some(reader_state))
+}
+
+fn recovery_point_bytes_inner(
+    database: &Database,
+    reader_state: Option<Value>,
+) -> Result<Vec<u8>, BackupError> {
     let mut snapshot = database.snapshot_core()?;
     // Compatibility shadows can originate from an older Windows build that
     // predates the v27 scrub boundary. A recovery point cannot decrypt and
@@ -1058,25 +1240,54 @@ pub fn recovery_point_bytes(database: &Database) -> Result<Vec<u8>, BackupError>
     snapshot.compatibility_source_sha256 = None;
     let recovery = RecoveryPoint {
         format: "DeskCubby Windows recovery".to_owned(),
-        version: 1,
+        version: if reader_state.is_some() { 2 } else { 1 },
         snapshot,
+        reader_state,
     };
     let bytes = serde_json::to_vec_pretty(&recovery)?;
-    if bytes.len() > MAX_RECOVERY_POINT_BYTES {
-        return Err(BackupError::RecoveryPointTooLarge);
-    }
+    ensure_recovery_point_size(bytes.len())?;
     Ok(bytes)
 }
 
 pub fn restore_recovery_point(database: &Database, bytes: &[u8]) -> Result<(), BackupError> {
-    if bytes.len() > MAX_RECOVERY_POINT_BYTES {
-        return Err(BackupError::RecoveryPointTooLarge);
-    }
+    let recovery = decode_recovery_point(bytes)?;
+    database.restore_core_snapshot(&recovery.snapshot)?;
+    Ok(())
+}
+
+pub(crate) fn reader_state_from_recovery_point(
+    bytes: &[u8],
+) -> Result<Option<Vec<u8>>, BackupError> {
+    let recovery = decode_recovery_point(bytes)?;
+    recovery
+        .reader_state
+        .map(|value| {
+            let bytes = serde_json::to_vec(&value)?;
+            if bytes.is_empty() || bytes.len() > MAX_RECOVERY_READER_STATE_BYTES {
+                return Err(BackupError::RecoveryPointTooLarge);
+            }
+            Ok(bytes)
+        })
+        .transpose()
+}
+
+fn decode_recovery_point(bytes: &[u8]) -> Result<RecoveryPoint, BackupError> {
+    ensure_recovery_point_size(bytes.len())?;
     let recovery: RecoveryPoint = serde_json::from_slice(bytes)?;
-    if recovery.format != "DeskCubby Windows recovery" || recovery.version != 1 {
+    if recovery.format != "DeskCubby Windows recovery"
+        || !matches!(recovery.version, 1 | 2)
+        || (recovery.version == 1 && recovery.reader_state.is_some())
+        || (recovery.version == 2 && recovery.reader_state.is_none())
+    {
         return Err(invalid("Unsupported recovery point"));
     }
-    database.restore_core_snapshot(&recovery.snapshot)?;
+    Ok(recovery)
+}
+
+fn ensure_recovery_point_size(size: usize) -> Result<(), BackupError> {
+    if size > MAX_RECOVERY_POINT_BYTES {
+        return Err(BackupError::RecoveryPointTooLarge);
+    }
     Ok(())
 }
 
@@ -1085,6 +1296,8 @@ struct RecoveryPoint {
     format: String,
     version: i32,
     snapshot: CoreSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reader_state: Option<Value>,
 }
 
 fn decode_managed_settings(settings: &Map<String, Value>) -> Result<ManagedSettings, BackupError> {
@@ -1201,7 +1414,10 @@ fn decode_managed_settings(settings: &Map<String, Value>) -> Result<ManagedSetti
         .collect::<Result<Vec<_>, BackupError>>()?;
 
     let mut decoded = ManagedSettings {
-        visual_style: required_string(settings, "visualStyle")?.to_owned(),
+        // Windows currently renders the same three base styles as Android. A
+        // v28 CUSTOM selection remains owned by the compatibility shadow, while
+        // its bounded baseStyle is used for the local Windows appearance.
+        visual_style: windows_visual_style(settings)?,
         dark_mode: required_string(settings, "darkMode")?.to_owned(),
         app_language: required_string(settings, "appLanguage")?.to_owned(),
         theme_color_argb: required_i32(settings, "themeColorArgb")?,
@@ -1254,6 +1470,9 @@ fn decode_managed_settings(settings: &Map<String, Value>) -> Result<ManagedSetti
         meal_calendar_wrap_enabled: required_bool(settings, "mealCalendarWrapEnabled")?,
         meal_calendar_photos_per_row: required_string(settings, "mealCalendarPhotosPerRow")?
             .to_owned(),
+        // This layout is Windows-local and therefore is not part of the
+        // Android backup document being decoded here.
+        meal_calendar_day_columns: 1,
         meal_photo_filter,
         meal_buttons_use_icons: required_bool(settings, "mealButtonsUseIcons")?,
         meal_button_icons,
@@ -1288,6 +1507,14 @@ fn decode_managed_settings(settings: &Map<String, Value>) -> Result<ManagedSetti
     Ok(decoded)
 }
 
+fn windows_visual_style(settings: &Map<String, Value>) -> Result<String, BackupError> {
+    let visual_style = required_string(settings, "visualStyle")?;
+    if visual_style != "CUSTOM" {
+        return Ok(visual_style.to_owned());
+    }
+    Ok(required_string(required_object(settings, "customTheme")?, "baseStyle")?.to_owned())
+}
+
 fn overlay_managed_settings(
     target: &mut Map<String, Value>,
     settings: &ManagedSettings,
@@ -1297,14 +1524,32 @@ fn overlay_managed_settings(
     let managed_object = managed_value
         .as_object()
         .ok_or_else(|| invalid("Windows settings serialization failed"))?;
+    let preserve_custom_visual_style = target
+        .get("visualStyle")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "CUSTOM")
+        && target
+            .get("customTheme")
+            .and_then(Value::as_object)
+            .and_then(|theme| theme.get("baseStyle"))
+            .and_then(Value::as_str)
+            .is_some_and(|base| base == settings.visual_style.as_str());
     for (key, value) in managed_object {
         if matches!(
             key.as_str(),
-            "backgroundImagePath" | "backgroundImageOpacity" | "backgroundImageBlurPx"
+            "backgroundImagePath"
+                | "backgroundImageOpacity"
+                | "backgroundImageBlurPx"
+                | "mealCalendarDayColumns"
         ) {
-            // Windows backgrounds are ordinary selected filesystem paths.
-            // They are local-only and must never become Android SAF settings
-            // or unknown compatibility-shadow fields.
+            // These are Windows-local display settings. They must never become
+            // Android SAF settings or unknown compatibility-shadow fields.
+            continue;
+        }
+        if key == "visualStyle" && preserve_custom_visual_style {
+            // Merely opening a Custom-themed Android backup on Windows must
+            // not replace it with the local fallback base style. Choosing a
+            // different Windows style still changes the value on export.
             continue;
         }
         match target.get_mut(key) {
@@ -1328,14 +1573,21 @@ fn overlay_managed_root_field(target: &mut Map<String, Value>, key: &str, manage
 }
 
 /// Exact known private keys are removed while unrelated future fields remain
-/// untouched. Required Android v27 Vault and usage containers are retained in
+/// untouched. Required Android v28 Vault and usage containers are retained in
 /// their canonical empty forms so the document stays schema-compatible.
 fn scrub_excluded_private_backup_fields(root: &mut Map<String, Value>) -> Result<(), BackupError> {
-    const PRIVATE_BACKUP_FIELDS: [&str; 5] = [
+    const PRIVATE_BACKUP_FIELDS: [&str; 12] = [
         "vaultItems",
         "vaultMetadata",
         "usageStatistics",
         "stepStatistics",
+        "healthHistory",
+        "healthStatistics",
+        "healthDevices",
+        "healthSnapshot",
+        "healthSourceMetadata",
+        "healthSourcePath",
+        "linkedHealthSourcePath",
         "cloudSyncSecrets",
     ];
     for field in PRIVATE_BACKUP_FIELDS {
@@ -1350,6 +1602,7 @@ fn scrub_excluded_private_backup_fields(root: &mut Map<String, Value>) -> Result
     vault.insert("pending".to_owned(), Value::Null);
     vault.insert("items".to_owned(), Value::Array(Vec::new()));
     root.insert("usageDevices".to_owned(), Value::Array(Vec::new()));
+    scrub_reader_progress_metadata(root)?;
 
     let settings_value = root
         .get_mut("settings")
@@ -1373,7 +1626,7 @@ fn scrub_excluded_private_backup_fields(root: &mut Map<String, Value>) -> Result
     Ok(())
 }
 
-const CLOUD_CREDENTIAL_FIELDS: [&str; 22] = [
+const CLOUD_CREDENTIAL_FIELDS: [&str; 30] = [
     "cloudSyncCredentials",
     "cloudSyncSecrets",
     "webDavPassword",
@@ -1391,11 +1644,19 @@ const CLOUD_CREDENTIAL_FIELDS: [&str; 22] = [
     "usageStatistics",
     "stepStatistics",
     "usageDevices",
+    "healthHistory",
+    "healthStatistics",
+    "healthDevices",
+    "healthSnapshot",
+    "healthSourceMetadata",
+    "healthSourcePath",
+    "linkedHealthSourcePath",
     "usageSourcePath",
     "phoneUsageSourcePath",
     "linkedUsageSourcePath",
     "backgroundImagePath",
     "backgroundImageBlurPx",
+    "mealCalendarDayColumns",
 ];
 
 fn scrub_cloud_credential_fields(value: &mut Value) {
@@ -1483,11 +1744,19 @@ fn merge_managed_value(target: &mut Value, managed: &Value) {
 }
 
 fn merge_identity(value: &Value) -> Option<String> {
-    let id = value.as_object()?.get("id")?;
-    match id {
-        Value::String(value) => Some(format!("s:{value}")),
-        Value::Number(_) => value_i64(id, "id").ok().map(|value| format!("n:{value}")),
-        _ => None,
+    let object = value.as_object()?;
+    if let Some(id) = object.get("id") {
+        return match id {
+            Value::String(value) => Some(format!("s:{value}")),
+            Value::Number(_) => value_i64(id, "id").ok().map(|value| format!("n:{value}")),
+            _ => None,
+        };
+    }
+    let game_id = object.get("gameId")?.as_str()?;
+    if let Some(metric_key) = object.get("metricKey").and_then(Value::as_str) {
+        Some(format!("game-stat:{game_id}\0{metric_key}"))
+    } else {
+        Some(format!("game-state:{game_id}"))
     }
 }
 
@@ -1962,7 +2231,11 @@ fn supports_game_statistic(game_id: &str, metric: &str) -> bool {
     let outcome = matches!(metric, "wins" | "losses");
     match game_id {
         "2048" | "2048_5" | "2048_6" => {
-            outcome || matches!(metric, "effectiveMoves" | "merges" | "highestTile")
+            outcome
+                || matches!(
+                    metric,
+                    "moveAttempts" | "effectiveMoves" | "merges" | "highestTile"
+                )
         }
         "snake" => matches!(metric, "losses" | "foodEaten" | "maxLength"),
         "tetris" => matches!(
@@ -1975,6 +2248,80 @@ fn supports_game_statistic(game_id: &str, metric: &str) -> bool {
         "spider" => outcome || matches!(metric, "spiderCardMoves" | "spiderDeals" | "spiderUndos"),
         _ => false,
     }
+}
+
+fn validate_reader_progress(items: &[Value]) -> Result<Vec<ReaderProgressRecord>, BackupError> {
+    if items.len() > MAX_READER_PROGRESS_RECORDS {
+        return Err(invalid("Backup contains too many reader progress records"));
+    }
+    let mut keys = HashSet::with_capacity(items.len());
+    let mut records = Vec::with_capacity(items.len());
+    for (index, value) in items.iter().enumerate() {
+        let item = object_at(value, "readerProgress", index)?;
+        let fingerprint = required_string(item, "fingerprint")?;
+        if fingerprint.len() != 64
+            || !fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(invalid(format!(
+                "readerProgress[{index}].fingerprint is invalid"
+            )));
+        }
+        let book_type = match required_string(item, "type")? {
+            "TXT" => ReaderProgressBookType::Txt,
+            "PDF" => ReaderProgressBookType::Pdf,
+            _ => {
+                return Err(invalid(format!(
+                    "readerProgress[{index}].type has an unsupported value"
+                )));
+            }
+        };
+        let text_page_index = required_i32(item, "textPageIndex")?;
+        if !(-1..MAX_READER_TEXT_PAGES).contains(&text_page_index) {
+            return Err(invalid(format!(
+                "readerProgress[{index}].textPageIndex is out of range"
+            )));
+        }
+        let text_paragraph_index = required_i32(item, "textParagraphIndex")?;
+        if !(0..MAX_READER_TEXT_PARAGRAPHS).contains(&text_paragraph_index) {
+            return Err(invalid(format!(
+                "readerProgress[{index}].textParagraphIndex is out of range"
+            )));
+        }
+        let pdf_page_index = required_i32(item, "pdfPageIndex")?;
+        if !(0..MAX_READER_PDF_PAGES).contains(&pdf_page_index) {
+            return Err(invalid(format!(
+                "readerProgress[{index}].pdfPageIndex is out of range"
+            )));
+        }
+        let total_pages = required_i32(item, "totalPages")?;
+        let total_page_limit = match book_type {
+            ReaderProgressBookType::Txt => MAX_READER_TEXT_PAGES,
+            ReaderProgressBookType::Pdf => MAX_READER_PDF_PAGES,
+        };
+        if !(0..=total_page_limit).contains(&total_pages) {
+            return Err(invalid(format!(
+                "readerProgress[{index}].totalPages is out of range"
+            )));
+        }
+        let updated_at = required_i64(item, "updatedAt")?;
+        require_nonnegative(updated_at, &format!("readerProgress[{index}].updatedAt"))?;
+        let key = format!("{fingerprint}\0{}", required_string(item, "type")?);
+        if !keys.insert(key) {
+            return Err(invalid("Backup contains duplicate reader progress keys"));
+        }
+        records.push(ReaderProgressRecord {
+            fingerprint: fingerprint.to_owned(),
+            book_type,
+            text_page_index,
+            text_paragraph_index,
+            pdf_page_index,
+            total_pages,
+            updated_at,
+        });
+    }
+    Ok(records)
 }
 
 fn validate_usage_devices(items: &[Value]) -> Result<(), BackupError> {
@@ -2256,14 +2603,15 @@ fn require_exact_keys(
     Ok(())
 }
 
-fn validate_full_v27_settings(
+fn validate_full_v28_settings(
     settings: &Map<String, Value>,
 ) -> Result<Vec<CloudSyncConfig>, BackupError> {
     require_enum(
         settings,
         "visualStyle",
-        &["MATERIAL", "LIQUID_GLASS", "ORGANIC_FUTURE"],
+        &["MATERIAL", "LIQUID_GLASS", "ORGANIC_FUTURE", "CUSTOM"],
     )?;
+    validate_custom_theme(required_object(settings, "customTheme")?)?;
     require_enum(settings, "darkMode", &["SYSTEM", "LIGHT", "DARK"])?;
     require_enum(settings, "appLanguage", &["CHINESE", "ENGLISH"])?;
     required_i32(settings, "themeColorArgb")?;
@@ -2416,6 +2764,98 @@ fn validate_full_v27_settings(
     )?;
     validate_desktop_widget_configs(required_array(settings, "desktopWidgetConfigs")?)?;
     Ok(cloud_sync_configs)
+}
+
+fn validate_custom_theme(theme: &Map<String, Value>) -> Result<(), BackupError> {
+    require_enum(
+        theme,
+        "baseStyle",
+        &["MATERIAL", "LIQUID_GLASS", "ORGANIC_FUTURE"],
+    )?;
+    validate_custom_theme_palette(required_object(theme, "lightPalette")?, "lightPalette")?;
+    validate_custom_theme_palette(required_object(theme, "darkPalette")?, "darkPalette")?;
+    for (field, minimum, maximum) in [
+        ("cornerRadiusDp", 0.0_f64, 40.0_f64),
+        ("borderWidthDp", 0.0_f64, 4.0_f64),
+        ("elevationDp", 0.0_f64, 16.0_f64),
+        ("panelOpacity", f64::from(0.65_f32), 1.0_f64),
+        ("spacingScale", f64::from(0.75_f32), f64::from(1.35_f32)),
+        ("animationScale", 0.0_f64, 2.0_f64),
+    ] {
+        // Android's requiredCustomThemeFloat validates the JSON Double against the
+        // Float bounds converted to Double before casting. Keep that exact order:
+        // values just outside a boundary must not be rounded back into range.
+        require_number_range(theme, field, minimum, maximum)?;
+    }
+    Ok(())
+}
+
+fn scrub_reader_progress_metadata(root: &mut Map<String, Value>) -> Result<(), BackupError> {
+    const FORBIDDEN_READER_METADATA: [&str; 8] = [
+        "uri",
+        "bookUri",
+        "coverUri",
+        "title",
+        "content",
+        "path",
+        "filePath",
+        "displayName",
+    ];
+    let records = root
+        .get_mut("readerProgress")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| invalid("Backup readerProgress must be an array"))?;
+    for (index, value) in records.iter_mut().enumerate() {
+        let record = value
+            .as_object_mut()
+            .ok_or_else(|| invalid(format!("readerProgress[{index}] must be an object")))?;
+        scrub_reader_metadata_object(record, &FORBIDDEN_READER_METADATA);
+    }
+    Ok(())
+}
+
+fn scrub_reader_metadata_object(object: &mut Map<String, Value>, forbidden: &[&str]) {
+    for field in forbidden {
+        object.remove(*field);
+    }
+    for value in object.values_mut() {
+        scrub_reader_metadata_value(value, forbidden);
+    }
+}
+
+fn scrub_reader_metadata_value(value: &mut Value, forbidden: &[&str]) {
+    match value {
+        Value::Object(object) => scrub_reader_metadata_object(object, forbidden),
+        Value::Array(items) => {
+            for item in items {
+                scrub_reader_metadata_value(item, forbidden);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn validate_custom_theme_palette(
+    palette: &Map<String, Value>,
+    field: &str,
+) -> Result<(), BackupError> {
+    for role in [
+        "backgroundArgb",
+        "onBackgroundArgb",
+        "surfaceArgb",
+        "onSurfaceArgb",
+        "surfaceContainerArgb",
+        "surfaceVariantArgb",
+        "onSurfaceVariantArgb",
+        "outlineArgb",
+    ] {
+        required_i32(palette, role).map_err(|_| {
+            invalid(format!(
+                "customTheme.{field}.{role} must be a 32-bit integer"
+            ))
+        })?;
+    }
+    Ok(())
 }
 
 fn validate_markdown_heading_sizes(items: &[Value]) -> Result<(), BackupError> {
@@ -2606,6 +3046,9 @@ fn decode_cloud_sync_configs(items: &[Value]) -> Result<Vec<CloudSyncConfig>, Ba
                     "USAGE_STATISTICS" => {
                         selected_contents.push(CloudSyncContent::UsageStatistics)
                     }
+                    "READING_PROGRESS" => {
+                        selected_contents.push(CloudSyncContent::ReadingProgress)
+                    }
                     _ => {
                         return Err(invalid(format!(
                             "cloudSyncConfigs[{index}].selectedContents[{content_index}] has an unsupported value"
@@ -2646,7 +3089,7 @@ fn decode_cloud_sync_configs(items: &[Value]) -> Result<Vec<CloudSyncConfig>, Ba
 
 /// Validate credential-free cloud metadata before it is persisted or exported.
 ///
-/// The limits and enum set intentionally mirror Android v27.
+/// The limits and enum set intentionally mirror Android v28.
 pub fn validate_cloud_sync_configs(configs: &[CloudSyncConfig]) -> Result<(), BackupError> {
     validate_cloud_sync_configs_inner(configs)
 }
@@ -2923,6 +3366,35 @@ fn validate_more_page_order(items: &[Value]) -> Result<(), BackupError> {
 fn default_root(settings: &ManagedSettings, exported_at: i64) -> Value {
     let mut settings_value = json!({
         "visualStyle": "MATERIAL",
+        "customTheme": {
+            "baseStyle": "MATERIAL",
+            "lightPalette": {
+                "backgroundArgb": 0xFFF7FBF5u32 as i32,
+                "onBackgroundArgb": 0xFF171D19u32 as i32,
+                "surfaceArgb": 0xFFF7FBF5u32 as i32,
+                "onSurfaceArgb": 0xFF171D19u32 as i32,
+                "surfaceContainerArgb": 0xFFE9EFE9u32 as i32,
+                "surfaceVariantArgb": 0xFFDDE5DDu32 as i32,
+                "onSurfaceVariantArgb": 0xFF414943u32 as i32,
+                "outlineArgb": 0xFF717971u32 as i32
+            },
+            "darkPalette": {
+                "backgroundArgb": 0xFF101511u32 as i32,
+                "onBackgroundArgb": 0xFFE0E4DFu32 as i32,
+                "surfaceArgb": 0xFF101511u32 as i32,
+                "onSurfaceArgb": 0xFFE0E4DFu32 as i32,
+                "surfaceContainerArgb": 0xFF1B211Cu32 as i32,
+                "surfaceVariantArgb": 0xFF414943u32 as i32,
+                "onSurfaceVariantArgb": 0xFFC1C9C1u32 as i32,
+                "outlineArgb": 0xFF8B938Au32 as i32
+            },
+            "cornerRadiusDp": 18.0,
+            "borderWidthDp": 1.0,
+            "elevationDp": 2.0,
+            "panelOpacity": 0.94,
+            "spacingScale": 1.0,
+            "animationScale": 1.0
+        },
         "darkMode": "SYSTEM",
         "appLanguage": "CHINESE",
         "themeColorArgb": 0xFF42664Du32 as i32,
@@ -3056,7 +3528,8 @@ fn default_root(settings: &ManagedSettings, exported_at: i64) -> Value {
         "vault": {"active": null, "pending": null, "items": []},
         "gameStates": [],
         "gameStatistics": [],
-        "usageDevices": []
+        "usageDevices": [],
+        "readerProgress": []
     })
 }
 
@@ -3751,6 +4224,7 @@ mod tests {
             (19, &["poetryCategories"][..]),
             (20, &["vault", "gameStates", "usageDevices"][..]),
             (24, &["gameStatistics"][..]),
+            (28, &["readerProgress"][..]),
         ] {
             if version < introduced {
                 for field in fields {
@@ -3784,7 +4258,7 @@ mod tests {
         }
     }
 
-    fn v27_cloud_config_value(config: CloudSyncConfig) -> Value {
+    fn v28_cloud_config_value(config: CloudSyncConfig) -> Value {
         let mut value = serde_json::to_value(config).expect("serialize cloud config");
         let object = value.as_object_mut().expect("cloud config object");
         object.insert(
@@ -3868,11 +4342,22 @@ mod tests {
         root["settings"]["vaultMetadata"] = json!({"salt": "private", "verifier": "private"});
         root["settings"]["usageStatistics"] = json!({"private": true});
         root["settings"]["stepStatistics"] = json!([{"private": true}]);
+        root["settings"]["healthHistory"] = json!([{"steps": 9_999}]);
+        root["settings"]["healthStatistics"] = json!({"private": true});
+        root["settings"]["healthSourcePath"] = Value::String("C:\\private-health.json".to_owned());
+        root["settings"]["mealCalendarDayColumns"] = json!(2);
         root["settings"]["futureSetting"] = json!({"keep": true});
         root["vaultItems"] = json!([{"ciphertext": "private"}]);
         root["vaultMetadata"] = json!({"salt": "private", "verifier": "private"});
         root["usageStatistics"] = json!({"private": true});
         root["stepStatistics"] = json!([{"private": true}]);
+        root["healthHistory"] = json!([{"steps": 9_999}]);
+        root["healthStatistics"] = json!({"private": true});
+        root["healthDevices"] = json!([{"private": true}]);
+        root["healthSnapshot"] = json!({"days": [{"steps": 9_999}]});
+        root["healthSourceMetadata"] = json!({"linkedPath": "C:\\private-health.json"});
+        root["healthSourcePath"] = Value::String("C:\\private-health.json".to_owned());
+        root["linkedHealthSourcePath"] = Value::String("C:\\private-health.json".to_owned());
         root["cloudSyncSecrets"] = json!({"private": true});
         root["vault"] = json!({
             "active": {
@@ -3894,15 +4379,34 @@ mod tests {
             "future": "keep"
         });
         root["usageDevices"] = json!([private_usage_device()]);
+        root["readerProgress"] = json!([{
+            "fingerprint": "a".repeat(64),
+            "type": "TXT",
+            "textPageIndex": 2,
+            "textParagraphIndex": 75,
+            "pdfPageIndex": 0,
+            "totalPages": 8,
+            "updatedAt": 42,
+            "title": "must-not-leak",
+            "futureReaderField": {"keep": true, "bookUri": "content://must-not-leak"}
+        }]);
         root["futureNested"] = json!({
             "vaultItems": [{"ciphertext": "relocated-private"}],
             "vaultMetadata": {"salt": "relocated-private"},
             "usageDevices": [private_usage_device()],
             "usageStatistics": {"private": true},
+            "healthHistory": [{"steps": 9_999}],
+            "healthStatistics": {"private": true},
+            "healthDevices": [{"private": true}],
+            "healthSnapshot": {"days": [{"steps": 9_999}]},
+            "healthSourceMetadata": {"linkedPath": "C:\\private-health.json"},
+            "healthSourcePath": "C:\\private-health.json",
+            "linkedHealthSourcePath": "C:\\private-health.json",
             "keep": true
         });
         // Similar but non-designated unknown keys prove the scrub is exact.
         root["usage"] = json!({"future": "keep"});
+        root["health"] = json!({"future": "keep"});
         root["futureRoot"] = json!({"keep": true});
         root
     }
@@ -3913,6 +4417,13 @@ mod tests {
             "vaultMetadata",
             "usageStatistics",
             "stepStatistics",
+            "healthHistory",
+            "healthStatistics",
+            "healthDevices",
+            "healthSnapshot",
+            "healthSourceMetadata",
+            "healthSourcePath",
+            "linkedHealthSourcePath",
             "cloudSyncSecrets",
         ] {
             assert!(output.get(field).is_none(), "{field} leaked");
@@ -3956,6 +4467,7 @@ mod tests {
             output["settings"]["poetryFontUri"],
             "content://provider/document/font"
         );
+        assert!(output["settings"].get("mealCalendarDayColumns").is_none());
         assert_eq!(output["settings"]["futureSetting"], json!({"keep": true}));
         assert_eq!(output["futureRoot"], json!({"keep": true}));
         assert_eq!(output["vault"]["future"], "keep");
@@ -3963,15 +4475,22 @@ mod tests {
         assert_eq!(output["vault"]["pending"], Value::Null);
         assert_eq!(output["vault"]["items"], json!([]));
         assert_eq!(output["usageDevices"], json!([]));
+        assert_eq!(
+            output["readerProgress"][0]["futureReaderField"],
+            json!({"keep": true})
+        );
+        assert!(output["readerProgress"][0].get("title").is_none());
         assert_eq!(output["futureNested"], json!({"keep": true}));
         assert_eq!(output["usage"], json!({"future": "keep"}));
+        assert_eq!(output["health"], json!({"future": "keep"}));
     }
 
     #[test]
-    fn parses_and_previews_v27() {
+    fn parses_and_previews_v28() {
         let backup = parse_v18(&valid_json()).expect("parse");
-        assert_eq!(backup.preview().format_version, 27);
+        assert_eq!(backup.preview().format_version, 28);
         assert_eq!(backup.preview().thought_count, 0);
+        assert_eq!(backup.preview().reader_progress_count, 0);
     }
 
     #[test]
@@ -3985,11 +4504,251 @@ mod tests {
             assert!(parsed.root["settings"]["homeGameShortcuts"].is_array());
             assert!(parsed.root["vault"].is_object());
             assert!(parsed.root["usageDevices"].is_array());
+            assert!(parsed.root["settings"]["customTheme"].is_object());
+            assert!(parsed.root["readerProgress"].is_array());
         }
     }
 
     #[test]
-    fn android_v27_golden_survives_windows_edit_and_export() {
+    fn v28_custom_theme_and_reader_progress_round_trip_without_android_uris() {
+        let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
+        root["settings"]["visualStyle"] = Value::String("CUSTOM".to_owned());
+        root["settings"]["customTheme"]["baseStyle"] = Value::String("LIQUID_GLASS".to_owned());
+        root["settings"]["customTheme"]["cornerRadiusDp"] = json!(27.0);
+        root["settings"]["customTheme"]["panelOpacity"] = json!(0.8);
+        root["settings"]["customTheme"]["futureThemeToken"] = json!({"keep": true});
+        root["readerProgress"] = json!([
+            {
+                "fingerprint": "b".repeat(64),
+                "type": "PDF",
+                "textPageIndex": 0,
+                "textParagraphIndex": 0,
+                "pdfPageIndex": 7,
+                "totalPages": 80,
+                "updatedAt": 22,
+                "futureProgress": {"keep": "pdf"}
+            },
+            {
+                "fingerprint": "a".repeat(64),
+                "type": "TXT",
+                "textPageIndex": 3,
+                "textParagraphIndex": 92,
+                "pdfPageIndex": 0,
+                "totalPages": 14,
+                "updatedAt": 23,
+                "futureProgress": {"keep": "txt"}
+            }
+        ]);
+        let source = serde_json::to_string_pretty(&root).expect("source");
+        let parsed = parse_v18(&source).expect("v28 parse");
+        assert_eq!(parsed.settings.visual_style, "LIQUID_GLASS");
+        assert_eq!(parsed.reader_progress.len(), 2);
+        assert_eq!(parsed.preview().reader_progress_count, 2);
+        assert!(
+            prepare_v18_import_for_shadow(&source)
+                .expect("prepare v28 import")
+                .merge_reader_progress
+        );
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let database = Database::open(directory.path().join("deskcubby.db")).expect("database");
+        import_v18_transaction(&database, &parsed, Some(b"encrypted-shadow")).expect("import");
+        let output = export_v18_merged(&database, Some(source.as_bytes()), 29).expect("export");
+        let output: Value = serde_json::from_str(&output).expect("output");
+        assert_eq!(output["version"], 28);
+        assert_eq!(output["settings"]["visualStyle"], "CUSTOM");
+        assert_eq!(
+            output["settings"]["customTheme"]["futureThemeToken"],
+            json!({"keep": true})
+        );
+        assert_eq!(output["readerProgress"], root["readerProgress"]);
+    }
+
+    #[test]
+    fn v28_rejects_incomplete_or_out_of_range_custom_theme() {
+        let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
+        root["settings"]["customTheme"]["panelOpacity"] = json!(0.1);
+        assert!(parse_v18(&root.to_string()).is_err());
+
+        root = serde_json::from_str(&valid_json()).expect("fixture");
+        root["settings"]["customTheme"]["panelOpacity"] = json!(1.000_000_01);
+        assert!(parse_v18(&root.to_string()).is_err());
+
+        root = serde_json::from_str(&valid_json()).expect("fixture");
+        root["settings"]["customTheme"]["spacingScale"] = json!(1.350_000_03);
+        assert!(parse_v18(&root.to_string()).is_err());
+
+        root = serde_json::from_str(&valid_json()).expect("fixture");
+        root["settings"]["customTheme"]["lightPalette"]
+            .as_object_mut()
+            .expect("palette")
+            .remove("onSurfaceArgb");
+        assert!(parse_v18(&root.to_string()).is_err());
+
+        root = serde_json::from_str(&valid_json()).expect("fixture");
+        root["settings"]["customTheme"]["baseStyle"] = Value::String("CSS".to_owned());
+        assert!(parse_v18(&root.to_string()).is_err());
+    }
+
+    #[test]
+    fn v28_reader_progress_rejects_malformed_duplicate_and_excess_records() {
+        let valid = json!({
+            "fingerprint": "a".repeat(64),
+            "type": "TXT",
+            "textPageIndex": -1,
+            "textParagraphIndex": 0,
+            "pdfPageIndex": 0,
+            "totalPages": 0,
+            "updatedAt": 0
+        });
+        let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
+        root["readerProgress"] = json!([valid.clone(), valid.clone()]);
+        assert!(parse_v18(&root.to_string()).is_err());
+
+        for (field, invalid_value) in [
+            ("fingerprint", Value::String("A".repeat(64))),
+            ("type", Value::String("EPUB".to_owned())),
+            ("textPageIndex", Value::from(50_000)),
+            ("textParagraphIndex", Value::from(250_000)),
+            ("pdfPageIndex", Value::from(-1)),
+            ("updatedAt", Value::from(-1)),
+        ] {
+            let mut record = valid.clone();
+            record[field] = invalid_value;
+            root["readerProgress"] = json!([record]);
+            assert!(parse_v18(&root.to_string()).is_err(), "accepted {field}");
+        }
+
+        root["readerProgress"] = Value::Array(
+            (0..=MAX_READER_PROGRESS_RECORDS)
+                .map(|index| {
+                    let mut record = valid.clone();
+                    record["fingerprint"] = Value::String(format!("{index:064x}"));
+                    record
+                })
+                .collect(),
+        );
+        assert!(parse_v18(&root.to_string()).is_err());
+    }
+
+    #[test]
+    fn v28_2048_statistics_accept_move_attempts_and_keep_legacy_losses() {
+        let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
+        root["gameStatistics"] = json!([
+            {
+                "gameId": "2048",
+                "metricKey": "moveAttempts",
+                "value": 23,
+                "updatedAt": 101
+            },
+            {
+                "gameId": "2048",
+                "metricKey": "losses",
+                "value": 4,
+                "updatedAt": 90,
+                "futureStatistic": {"keep": true}
+            }
+        ]);
+        let source = serde_json::to_string_pretty(&root).expect("source");
+        let parsed = parse_v18(&source).expect("v28 game statistics");
+        assert_eq!(parsed.game_statistics.len(), 2);
+        assert!(
+            parsed
+                .game_statistics
+                .iter()
+                .any(|item| item.metric_key == "moveAttempts" && item.value == 23)
+        );
+        assert!(
+            parsed
+                .game_statistics
+                .iter()
+                .any(|item| item.metric_key == "losses" && item.value == 4)
+        );
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let database = Database::open(directory.path().join("deskcubby.db")).expect("database");
+        import_v18_transaction(&database, &parsed, Some(b"encrypted-shadow")).expect("import");
+        let output = export_v18_merged(&database, Some(source.as_bytes()), 102).expect("export");
+        let output: Value = serde_json::from_str(&output).expect("output");
+        assert_eq!(
+            output["gameStatistics"]
+                .as_array()
+                .expect("statistics")
+                .len(),
+            2
+        );
+        assert_eq!(
+            output["gameStatistics"]
+                .as_array()
+                .expect("statistics")
+                .iter()
+                .find(|item| item["metricKey"] == "losses")
+                .expect("legacy loss")["futureStatistic"],
+            json!({"keep": true})
+        );
+    }
+
+    #[test]
+    fn reader_overlay_uses_lww_keeps_unmatched_and_preserves_future_siblings() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let database = Database::open(directory.path().join("deskcubby.db")).expect("database");
+        let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
+        root["readerProgress"] = json!([
+            {
+                "fingerprint": "a".repeat(64), "type": "TXT",
+                "textPageIndex": 1, "textParagraphIndex": 20, "pdfPageIndex": 0,
+                "totalPages": 10, "updatedAt": 10,
+                "futureProgress": {"keep": true}
+            },
+            {
+                "fingerprint": "b".repeat(64), "type": "PDF",
+                "textPageIndex": 0, "textParagraphIndex": 0, "pdfPageIndex": 4,
+                "totalPages": 30, "updatedAt": 20
+            }
+        ]);
+        let source = serde_json::to_string_pretty(&root).expect("source");
+        let parsed = parse_v18(&source).expect("parse");
+        import_v18_transaction(&database, &parsed, Some(b"encrypted-shadow")).expect("import");
+        let local = [
+            ReaderProgressRecord {
+                fingerprint: "a".repeat(64),
+                book_type: ReaderProgressBookType::Txt,
+                text_page_index: 3,
+                text_paragraph_index: 90,
+                pdf_page_index: 0,
+                total_pages: 10,
+                updated_at: 30,
+            },
+            ReaderProgressRecord {
+                fingerprint: "c".repeat(64),
+                book_type: ReaderProgressBookType::Pdf,
+                text_page_index: 0,
+                text_paragraph_index: 0,
+                pdf_page_index: 8,
+                total_pages: 40,
+                updated_at: 25,
+            },
+        ];
+        let exported = export_v18_merged_with_cloud_configs_and_reader_progress(
+            &database,
+            Some(source.as_bytes()),
+            31,
+            None,
+            Some(&local),
+        )
+        .expect("reader overlay");
+        let output: Value = serde_json::from_str(&exported).expect("output");
+        let records = output["readerProgress"].as_array().expect("records");
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0]["fingerprint"], "a".repeat(64));
+        assert_eq!(records[0]["textParagraphIndex"], 90);
+        assert_eq!(records[0]["futureProgress"], json!({"keep": true}));
+        assert_eq!(records[1]["fingerprint"], "b".repeat(64));
+        assert_eq!(records[2]["fingerprint"], "c".repeat(64));
+    }
+
+    #[test]
+    fn android_v27_golden_upgrades_to_v28_and_survives_windows_edit_and_export() {
         let source = include_str!("../test-data/android-v27-golden.json");
         let parsed = parse_v18(source).expect("parse Android golden");
         assert_eq!(parsed.thoughts.len(), 1);
@@ -4062,7 +4821,10 @@ mod tests {
             output["thoughts"][0]["futureThoughtField"],
             golden["thoughts"][0]["futureThoughtField"]
         );
-        parse_v18(&exported).expect("Android-readable v27 output");
+        assert_eq!(output["version"], 28);
+        assert!(output["settings"]["customTheme"].is_object());
+        assert_eq!(output["readerProgress"], json!([]));
+        parse_v18(&exported).expect("Android-readable v28 output");
     }
 
     #[test]
@@ -4233,11 +4995,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v18_is_upgraded_to_v27_without_losing_unknown_fields_or_ai_keys() {
+    fn legacy_v18_is_upgraded_to_v28_without_losing_unknown_fields_or_ai_keys() {
         let source = include_str!("../test-data/android-v18-golden.json");
         let parsed = parse_v18(source).expect("parse Android v18 golden");
         assert_eq!(parsed.preview().format_version, 18);
-        assert_eq!(parsed.root["version"], 27);
+        assert_eq!(parsed.root["version"], 28);
         assert_eq!(
             parsed.root["settings"]["cloudSyncConfigs"][0]["userAgent"],
             "DeskCubby-Sync/1"
@@ -4259,10 +5021,11 @@ mod tests {
         assert_eq!(parsed.root["vault"]["items"], json!([]));
 
         let prepared = prepare_v18_import_for_shadow(source).expect("prepare legacy import");
-        assert_eq!(prepared.backup.preview().format_version, 27);
+        assert!(!prepared.merge_reader_progress);
+        assert_eq!(prepared.backup.preview().format_version, 28);
         let canonical: Value =
-            serde_json::from_slice(&prepared.canonical_bytes).expect("canonical v27");
-        assert_eq!(canonical["version"], 27);
+            serde_json::from_slice(&prepared.canonical_bytes).expect("canonical v28");
+        assert_eq!(canonical["version"], 28);
         parse_v18(std::str::from_utf8(&prepared.canonical_bytes).expect("UTF-8"))
             .expect("canonical output is Android-readable");
     }
@@ -4270,8 +5033,15 @@ mod tests {
     #[test]
     fn cloud_metadata_enforces_enum_uniqueness_and_count_limits() {
         let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
-        let raw = v27_cloud_config_value(webdav_config("dav"));
+        let raw = v28_cloud_config_value(webdav_config("dav"));
         root["settings"]["cloudSyncConfigs"] = Value::Array(vec![raw.clone()]);
+
+        root["settings"]["cloudSyncConfigs"][0]["selectedContents"] = json!(["READING_PROGRESS"]);
+        let parsed = parse_v18(&root.to_string()).expect("reading progress cloud content");
+        assert_eq!(
+            parsed.cloud_sync_configs[0].selected_contents,
+            vec![CloudSyncContent::ReadingProgress]
+        );
 
         root["settings"]["cloudSyncConfigs"][0]["serviceType"] = Value::String("FTP".to_owned());
         assert!(parse_v18(&root.to_string()).is_err());
@@ -4300,7 +5070,7 @@ mod tests {
         root["version"] = Value::from(0);
         assert!(parse_v18(&root.to_string()).is_err());
 
-        root["version"] = Value::from(28);
+        root["version"] = Value::from(29);
         assert!(parse_v18(&root.to_string()).is_err());
 
         root["version"] = Value::from(FORMAT_VERSION);
@@ -4699,6 +5469,7 @@ mod tests {
             "2048、贪吃蛇、俄罗斯方块、扫雷与蜘蛛纸牌"
         );
         assert_eq!(nav[17]["moreDescription"], "调整应用与页面设置");
+        assert!(root["settings"].get("mealCalendarDayColumns").is_none());
     }
 
     #[test]
@@ -4735,6 +5506,59 @@ mod tests {
     }
 
     #[test]
+    fn recovery_point_v2_round_trips_reader_state_and_v1_stays_compatible() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let database = Database::open(directory.path().join("deskcubby.db")).expect("database");
+        let reader_state = br#"{"schemaVersion":2,"preferences":{"background":"paper"},"books":[],"progressLedger":[]}"#;
+
+        let v2 = recovery_point_bytes_with_reader(&database, reader_state)
+            .expect("reader-aware recovery point");
+        let restored_reader = reader_state_from_recovery_point(&v2)
+            .expect("decode reader-aware recovery point")
+            .expect("reader state");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&restored_reader).expect("restored reader JSON"),
+            serde_json::from_slice::<Value>(reader_state).expect("source reader JSON")
+        );
+        let decoded_v2: RecoveryPoint = serde_json::from_slice(&v2).expect("decode v2");
+        assert_eq!(decoded_v2.version, 2);
+        assert!(decoded_v2.reader_state.is_some());
+
+        let v1 = recovery_point_bytes(&database).expect("legacy recovery point");
+        assert_eq!(
+            reader_state_from_recovery_point(&v1).expect("decode legacy point"),
+            None
+        );
+        let decoded_v1: RecoveryPoint = serde_json::from_slice(&v1).expect("decode v1");
+        assert_eq!(decoded_v1.version, 1);
+        assert!(decoded_v1.reader_state.is_none());
+    }
+
+    #[test]
+    fn recovery_point_rejects_cross_version_reader_state_shape() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let database = Database::open(directory.path().join("deskcubby.db")).expect("database");
+        let v1 = recovery_point_bytes(&database).expect("legacy recovery point");
+        let mut malformed: Value = serde_json::from_slice(&v1).expect("decode");
+        malformed["version"] = json!(2);
+        assert!(
+            reader_state_from_recovery_point(
+                &serde_json::to_vec(&malformed).expect("encode malformed")
+            )
+            .is_err()
+        );
+
+        malformed["reader_state"] = json!({"schemaVersion": 2});
+        malformed["version"] = json!(1);
+        assert!(
+            reader_state_from_recovery_point(
+                &serde_json::to_vec(&malformed).expect("encode malformed")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn recovery_point_omits_compatibility_shadow_private_payload() {
         let directory = tempfile::tempdir().expect("temp dir");
         let database = Database::open(directory.path().join("deskcubby.db")).expect("database");
@@ -4763,6 +5587,15 @@ mod tests {
                 .expect("read shadow")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn recovery_point_size_limit_accepts_boundary_and_rejects_next_byte() {
+        ensure_recovery_point_size(MAX_RECOVERY_POINT_BYTES).expect("exact recovery-point limit");
+        assert!(matches!(
+            ensure_recovery_point_size(MAX_RECOVERY_POINT_BYTES + 1),
+            Err(BackupError::RecoveryPointTooLarge)
+        ));
     }
 
     #[test]

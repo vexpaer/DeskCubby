@@ -7,6 +7,8 @@ param(
     [Parameter(Mandatory)]
     [string]$Tag,
     [string]$Repository = "vexpaer/DeskCubby",
+    [ValidateSet("Required", "Absent")]
+    [string]$AuthenticodePolicy = "Absent",
     [string]$ExpectedCertificateThumbprint,
     [string]$ExpectedSignerSubject
 )
@@ -22,12 +24,6 @@ if ($Tag -ne "windows-v$Version") {
 }
 if ($Repository -notmatch "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") {
     throw "Repository must use the OWNER/REPO form."
-}
-if (
-    [string]::IsNullOrWhiteSpace($ExpectedCertificateThumbprint) -and
-    [string]::IsNullOrWhiteSpace($ExpectedSignerSubject)
-) {
-    throw "A pinned Authenticode thumbprint or signer subject is required."
 }
 if ([string]::IsNullOrWhiteSpace($env:DESKCUBBY_UPDATER_PUBLIC_KEY)) {
     throw "DESKCUBBY_UPDATER_PUBLIC_KEY is required for release verification."
@@ -64,6 +60,7 @@ foreach ($name in $requiredNames) {
     -ArtifactDirectory $resolvedArtifacts `
     -Version $Version `
     -Mode SignedRelease `
+    -AuthenticodePolicy $AuthenticodePolicy `
     -ExpectedCertificateThumbprint $ExpectedCertificateThumbprint `
     -ExpectedSignerSubject $ExpectedSignerSubject
 
@@ -174,4 +171,7 @@ foreach ($platformName in $expectedPlatforms) {
     }
 }
 
-Write-Host "Signed release candidate verification passed for $Tag."
+Write-Host (
+    "Production release candidate verification passed for $Tag " +
+    "(Authenticode policy: $AuthenticodePolicy)."
+)

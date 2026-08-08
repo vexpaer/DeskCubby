@@ -7,7 +7,8 @@ export type CloudSyncContent =
   | "DIARIES"
   | "MEDIA"
   | "JSON_BACKUP"
-  | "USAGE_STATISTICS";
+  | "USAGE_STATISTICS"
+  | "READING_PROGRESS";
 export type CloudSyncDirection = "UPLOAD_ONLY" | "TWO_WAY";
 
 export interface CloudSyncConfigV1 {

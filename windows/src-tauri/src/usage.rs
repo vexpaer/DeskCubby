@@ -1,6 +1,6 @@
 //! Read-only Android phone-usage statistics for the Windows client.
 //!
-//! Android 0.9.3 carries per-device usage history in the v27 `usageDevices`
+//! Android 0.10.0 carries per-device usage history in the v28 `usageDevices`
 //! array and in cloud objects named `usage/v1/{deviceId}.json`.  This module
 //! accepts either of those formats, while retaining import compatibility with
 //! the old canonical v4 history file.  Every source must be explicitly chosen
@@ -35,7 +35,7 @@ pub(crate) const ANDROID_USAGE_SCHEMA_VERSION: i64 = 4;
 pub(crate) const MAX_USAGE_JSON_BYTES: usize = 10 * 1024 * 1024;
 /// Android application backups are allowed to grow to 64 MiB.  Only the
 /// bounded `usageDevices` projection is retained in the Windows private
-/// cache; unrelated v27 fields never cross the usage IPC boundary.
+/// cache; unrelated v28 fields never cross the usage IPC boundary.
 pub(crate) const MAX_USAGE_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const MAX_USAGE_DAYS: usize = 36_600;
 pub(crate) const MAX_APPS_PER_DAY: usize = 4_096;
@@ -62,7 +62,8 @@ const MAX_STATE_CONTAINER_BYTES: usize =
 const STORED_DATASET_VERSION: u32 = 1;
 const LEGACY_USAGE_DEVICE_ID: &str = "00000000-0000-0000-0000-000000000000";
 const LEGACY_USAGE_DEVICE_NAME: &str = "Legacy Android v4";
-const ANDROID_BACKUP_FORMAT_VERSION: i64 = 27;
+const MIN_ANDROID_BACKUP_FORMAT_VERSION: i64 = 20;
+const MAX_ANDROID_BACKUP_FORMAT_VERSION: i64 = 28;
 const USAGE_DEVICE_SCHEMA_VERSION: i64 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -376,7 +377,7 @@ pub(crate) fn canonical_android_usage_v4(
 }
 
 /// Decode the per-device object used by Android cloud objects at
-/// `usage/v1/{deviceId}.json` and by the v27 `usageDevices` array.
+/// `usage/v1/{deviceId}.json` and by the v28 `usageDevices` array.
 pub(crate) fn parse_android_usage_device_v1(
     bytes: &[u8],
 ) -> Result<UsageDeviceRecord, UsageServiceError> {
@@ -388,11 +389,11 @@ pub(crate) fn parse_android_usage_device_v1(
     usage_device_from_strict(strict)
 }
 
-/// Project only the Android-owned multi-device usage payload from a v27 app
+/// Project only the Android-owned multi-device usage payload from a v20-v28 app
 /// backup.  The full backup is validated by the backup subsystem when it is
 /// restored; this read-only view independently validates every usage record
 /// and never exposes unrelated backup fields to the WebView.
-pub(crate) fn parse_android_v27_usage_devices(
+pub(crate) fn parse_android_v28_usage_devices(
     bytes: &[u8],
 ) -> Result<UsageDataset, UsageServiceError> {
     if bytes.len() > MAX_USAGE_SOURCE_BYTES {
@@ -400,7 +401,8 @@ pub(crate) fn parse_android_v27_usage_devices(
     }
     let envelope: AndroidBackupUsageEnvelope =
         serde_json::from_slice(bytes).map_err(|_| UsageServiceError::InvalidJson)?;
-    if envelope.version != ANDROID_BACKUP_FORMAT_VERSION
+    if !(MIN_ANDROID_BACKUP_FORMAT_VERSION..=MAX_ANDROID_BACKUP_FORMAT_VERSION)
+        .contains(&envelope.version)
         || envelope.usage_devices.len() > MAX_USAGE_DEVICES
     {
         return Err(UsageServiceError::InvalidJson);
@@ -474,7 +476,7 @@ fn parse_usage_source(bytes: &[u8]) -> Result<UsageDataset, UsageServiceError> {
     let probe: Value = serde_json::from_slice(bytes).map_err(|_| UsageServiceError::InvalidJson)?;
     let root = probe.as_object().ok_or(UsageServiceError::InvalidJson)?;
     if root.get("version").is_some() {
-        return parse_android_v27_usage_devices(bytes);
+        return parse_android_v28_usage_devices(bytes);
     }
     match root.get("schemaVersion").and_then(Value::as_i64) {
         Some(ANDROID_USAGE_SCHEMA_VERSION) if root.contains_key("days") => {
@@ -1588,7 +1590,7 @@ impl UsageStatisticsService {
         }
     }
 
-    /// Merge the already validated v27 `usageDevices` array after backup
+    /// Merge the already validated v28 `usageDevices` array after backup
     /// confirmation. This independently revalidates every value against the
     /// exact device-v1 codec, rejects duplicates, and performs one atomic
     /// private-cache replacement for the whole batch.
@@ -2224,7 +2226,7 @@ fn decode_state_container(bytes: &[u8]) -> Result<(&[u8], &[u8]), UsageServiceEr
 }
 
 /// Protect feature data with a purpose-specific DPAPI entropy value.  The
-/// security module authenticates the purpose and accepts the full bounded v27
+/// security module authenticates the purpose and accepts the full bounded v28
 /// usage projection, so a maximum-sized Android payload is never truncated.
 fn protect_for_purpose(
     protector: &dyn RawProtector,
@@ -2407,7 +2409,7 @@ mod tests {
     }
 
     #[test]
-    fn device_v1_and_backup_v27_use_the_android_contract() {
+    fn device_v1_and_backup_v28_use_the_android_contract() {
         let first = valid_device_json(
             "11111111-1111-4111-8111-111111111111",
             "A phone",
@@ -2434,7 +2436,7 @@ mod tests {
             "usageDevices": [first, second]
         });
         let dataset =
-            parse_android_v27_usage_devices(&serde_json::to_vec(&backup).expect("encode backup"))
+            parse_android_v28_usage_devices(&serde_json::to_vec(&backup).expect("encode backup"))
                 .expect("parse backup projection");
         assert_eq!(dataset.devices.len(), 2);
         assert_eq!(dataset.devices[0].device_name, "A phone");
@@ -2462,7 +2464,7 @@ mod tests {
             ]
         });
         let dataset =
-            parse_android_v27_usage_devices(&serde_json::to_vec(&backup).expect("encode backup"))
+            parse_android_v28_usage_devices(&serde_json::to_vec(&backup).expect("encode backup"))
                 .expect("parse backup");
         let source = UsageSourceStatusDto {
             dto_version: USAGE_DTO_VERSION,
@@ -2497,7 +2499,7 @@ mod tests {
     }
 
     #[test]
-    fn v27_projection_rejects_duplicate_devices_and_health_is_not_inferred() {
+    fn v28_projection_rejects_duplicate_devices_and_health_is_not_inferred() {
         let device = valid_device_json(
             "11111111-1111-4111-8111-111111111111",
             "A phone",
@@ -2508,12 +2510,12 @@ mod tests {
         let duplicate = serde_json::json!({
             "version": 27,
             "usageDevices": [device.clone(), device],
-            // v27 intentionally has no Health Connect history field. Unknown
+            // v28 intentionally has no Health Connect history field. Unknown
             // compatibility data must never be interpreted as daily health.
             "stepStatistics": {"steps": 0}
         });
         assert_eq!(
-            parse_android_v27_usage_devices(
+            parse_android_v28_usage_devices(
                 &serde_json::to_vec(&duplicate).expect("encode duplicate")
             ),
             Err(UsageServiceError::InvalidJson)

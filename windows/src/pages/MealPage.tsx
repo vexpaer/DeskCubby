@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Download,
   ImageOff,
@@ -25,9 +32,11 @@ import {
   type MealColumns,
   type MealPhoto,
   type MealQuery,
+  type MealViewPreferences,
 } from "../lib/ipc";
 import { useAppStore } from "../store/appStore";
 import "./MealPage.ai.css";
+import "./MealPage.layout.css";
 
 const CATEGORY_META: Record<
   MealCategory,
@@ -47,6 +56,23 @@ const CATEGORY_META: Record<
 };
 
 const ALL_CATEGORIES = Object.keys(CATEGORY_META) as MealCategory[];
+
+const DEFAULT_VIEW_PREFERENCES: MealViewPreferences = {
+  schemaVersion: 1,
+  dayColumns: 1,
+  wrapEnabled: false,
+  columns: "smart",
+  showCaptions: true,
+  imageMaxHeightPx: 124,
+  filter: {
+    enabled: false,
+    brightness: 100,
+    contrast: 100,
+    saturation: 100,
+    warmth: 0,
+    tint: 0,
+  },
+};
 
 function dateToday() {
   const now = new Date();
@@ -84,13 +110,9 @@ export default function MealPage() {
   const [endDate, setEndDate] = useState("");
   const [categories, setCategories] =
     useState<MealCategory[]>(ALL_CATEGORIES);
-  const [columns, setColumns] = useState<MealColumns>("smart");
-  const [showCaptions, setShowCaptions] = useState(true);
-  const [brightness, setBrightness] = useState(100);
-  const [contrast, setContrast] = useState(100);
-  const [saturation, setSaturation] = useState(100);
-  const [warmth, setWarmth] = useState(0);
-  const [tint, setTint] = useState(0);
+  const [viewPreferences, setViewPreferences] =
+    useState<MealViewPreferences>(DEFAULT_VIEW_PREFERENCES);
+  const [preferencesLoading, setPreferencesLoading] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selected, setSelected] = useState<MealPhoto | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,6 +126,92 @@ export default function MealPage() {
   const [estimatingDate, setEstimatingDate] = useState<string | null>(null);
   const [calorieProgress, setCalorieProgress] =
     useState<CalorieProgress | null>(null);
+  const preferencesRef = useRef(viewPreferences);
+  const pendingPreferencesRef = useRef<MealViewPreferences | null>(null);
+  const savingPreferencesRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  const {
+    columns,
+    dayColumns,
+    wrapEnabled,
+    showCaptions,
+    imageMaxHeightPx,
+    filter: {
+      enabled: filterEnabled,
+      brightness,
+      contrast,
+      saturation,
+      warmth,
+      tint,
+    },
+  } = viewPreferences;
+
+  const queuePreferencesSave = useCallback(
+    (next: MealViewPreferences) => {
+      pendingPreferencesRef.current = next;
+      if (savingPreferencesRef.current) return;
+      savingPreferencesRef.current = true;
+      void (async () => {
+        do {
+          const pending = pendingPreferencesRef.current;
+          pendingPreferencesRef.current = null;
+          if (!pending) break;
+          try {
+            await mealApi.updateViewPreferences(pending);
+          } catch (reason) {
+            if (mountedRef.current) {
+              setError(readableError(reason, language));
+            }
+            if (!pendingPreferencesRef.current) {
+              try {
+                const persisted = await mealApi.getViewPreferences();
+                if (mountedRef.current && !pendingPreferencesRef.current) {
+                  preferencesRef.current = persisted;
+                  setViewPreferences(persisted);
+                }
+              } catch {
+                // Keep the explicit save error. A later interaction retries
+                // the latest full meal-view preference snapshot.
+              }
+            }
+          }
+        } while (pendingPreferencesRef.current);
+        savingPreferencesRef.current = false;
+      })();
+    },
+    [language],
+  );
+
+  const updateViewPreferences = useCallback(
+    (transform: (current: MealViewPreferences) => MealViewPreferences) => {
+      const next = transform(preferencesRef.current);
+      preferencesRef.current = next;
+      setViewPreferences(next);
+      queuePreferencesSave(next);
+    },
+    [queuePreferencesSave],
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    void mealApi
+      .getViewPreferences()
+      .then((preferences) => {
+        if (!mountedRef.current) return;
+        preferencesRef.current = preferences;
+        setViewPreferences(preferences);
+      })
+      .catch((reason) => {
+        if (mountedRef.current) setError(readableError(reason, language));
+      })
+      .finally(() => {
+        if (mountedRef.current) setPreferencesLoading(false);
+      });
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [language]);
 
   const query: MealQuery = useMemo(
     () => ({
@@ -163,13 +271,15 @@ export default function MealPage() {
     return [...map].sort(([a], [b]) => b.localeCompare(a));
   }, [photos]);
 
-  const imageFilter = filterCss(
-    brightness,
-    contrast,
-    saturation,
-    warmth,
-    tint,
-  );
+  const groupedDayColumns = useMemo(() => {
+    if (dayColumns === 1) return [grouped];
+    const midpoint = Math.ceil(grouped.length / 2);
+    return [grouped.slice(0, midpoint), grouped.slice(midpoint)];
+  }, [dayColumns, grouped]);
+
+  const imageFilter = filterEnabled
+    ? filterCss(brightness, contrast, saturation, warmth, tint)
+    : "none";
 
   function toggleCategory(category: MealCategory) {
     setCategories((current) =>
@@ -208,6 +318,7 @@ export default function MealPage() {
         ...query,
         columns,
         showCaptions,
+        filterEnabled,
         brightness,
         contrast,
         saturation,
@@ -299,10 +410,14 @@ export default function MealPage() {
         <div className="header-actions">
           <button
             className={
-              filtersOpen ? "button secondary selected" : "button secondary"
+              filtersOpen || filterEnabled
+                ? "button secondary selected"
+                : "button secondary"
             }
             type="button"
+            aria-expanded={filtersOpen}
             onClick={() => setFiltersOpen((value) => !value)}
+            disabled={preferencesLoading}
           >
             <SlidersHorizontal aria-hidden="true" /> {t("滤镜", "Filters")}
           </button>
@@ -319,7 +434,7 @@ export default function MealPage() {
             className="button primary"
             type="button"
             onClick={() => void exportPng()}
-            disabled={!photos.length || busy}
+            disabled={!photos.length || busy || preferencesLoading}
           >
             {busy ? (
               <LoaderCircle className="spin" aria-hidden="true" />
@@ -401,6 +516,29 @@ export default function MealPage() {
           <div
             className="segmented"
             role="group"
+            aria-label={t("每日卡片布局", "Daily card layout")}
+          >
+            {([1, 2] as const).map((value) => (
+              <button
+                type="button"
+                key={value}
+                className={dayColumns === value ? "selected" : undefined}
+                aria-pressed={dayColumns === value}
+                disabled={preferencesLoading}
+                onClick={() =>
+                  updateViewPreferences((current) => ({
+                    ...current,
+                    dayColumns: value,
+                  }))
+                }
+              >
+                {value === 1 ? t("单列", "One column") : t("双列", "Two columns")}
+              </button>
+            ))}
+          </div>
+          <div
+            className="segmented"
+            role="group"
             aria-label={t("每行图片", "Images per row")}
           >
             {(["smart", 2, 3] as MealColumns[]).map((value) => (
@@ -408,7 +546,14 @@ export default function MealPage() {
                 type="button"
                 key={value}
                 className={columns === value ? "selected" : undefined}
-                onClick={() => setColumns(value)}
+                aria-pressed={columns === value}
+                disabled={preferencesLoading || !wrapEnabled}
+                onClick={() =>
+                  updateViewPreferences((current) => ({
+                    ...current,
+                    columns: value,
+                  }))
+                }
               >
                 {value === "smart"
                   ? t("智能", "Smart")
@@ -421,8 +566,28 @@ export default function MealPage() {
           <label className="switch-row">
             <input
               type="checkbox"
+              checked={wrapEnabled}
+              disabled={preferencesLoading}
+              onChange={(event) =>
+                updateViewPreferences((current) => ({
+                  ...current,
+                  wrapEnabled: event.target.checked,
+                }))
+              }
+            />
+            {t("智能换行", "Wrap photos")}
+          </label>
+          <label className="switch-row">
+            <input
+              type="checkbox"
               checked={showCaptions}
-              onChange={(event) => setShowCaptions(event.target.checked)}
+              disabled={preferencesLoading}
+              onChange={(event) =>
+                updateViewPreferences((current) => ({
+                  ...current,
+                  showCaptions: event.target.checked,
+                }))
+              }
             />
             {t("显示说明", "Show captions")}
           </label>
@@ -434,27 +599,49 @@ export default function MealPage() {
           className="filter-panel panel"
           aria-label={t("非破坏滤镜", "Non-destructive filters")}
         >
+          <label className="switch-row">
+            <input
+              type="checkbox"
+              checked={filterEnabled}
+              disabled={preferencesLoading}
+              onChange={(event) =>
+                updateViewPreferences((current) => ({
+                  ...current,
+                  filter: {
+                    ...current.filter,
+                    enabled: event.target.checked,
+                  },
+                }))
+              }
+            />
+            {t("启用滤镜", "Enable filters")}
+          </label>
           {[
-            [t("亮度", "Brightness"), brightness, setBrightness, 50, 150],
-            [t("对比度", "Contrast"), contrast, setContrast, 50, 150],
-            [t("饱和度", "Saturation"), saturation, setSaturation, 0, 200],
-            [t("色温", "Warmth"), warmth, setWarmth, -100, 100],
-            [t("色调", "Tint"), tint, setTint, -100, 100],
-          ].map(([label, value, setter, min, max]) => (
-            <label className="range-field" key={label as string}>
+            { key: "brightness" as const, label: t("亮度", "Brightness"), value: brightness, min: 0, max: 200 },
+            { key: "contrast" as const, label: t("对比度", "Contrast"), value: contrast, min: 0, max: 200 },
+            { key: "saturation" as const, label: t("饱和度", "Saturation"), value: saturation, min: 0, max: 200 },
+            { key: "warmth" as const, label: t("色温", "Warmth"), value: warmth, min: -100, max: 100 },
+            { key: "tint" as const, label: t("色调", "Tint"), value: tint, min: -100, max: 100 },
+          ].map(({ key, label, value, min, max }) => (
+            <label className="range-field" key={key}>
               <span>
-                {label as string}
-                <output>{value as number}</output>
+                {label}
+                <output>{value}</output>
               </span>
               <input
                 type="range"
-                min={min as number}
-                max={max as number}
-                value={value as number}
+                min={min}
+                max={max}
+                value={value}
+                disabled={preferencesLoading}
                 onChange={(event) =>
-                  (
-                    setter as React.Dispatch<React.SetStateAction<number>>
-                  )(Number(event.target.value))
+                  updateViewPreferences((current) => ({
+                    ...current,
+                    filter: {
+                      ...current.filter,
+                      [key]: Number(event.target.value),
+                    },
+                  }))
                 }
               />
             </label>
@@ -462,12 +649,19 @@ export default function MealPage() {
           <button
             className="button secondary"
             type="button"
+            disabled={preferencesLoading}
             onClick={() => {
-              setBrightness(100);
-              setContrast(100);
-              setSaturation(100);
-              setWarmth(0);
-              setTint(0);
+              updateViewPreferences((current) => ({
+                ...current,
+                filter: {
+                  ...current.filter,
+                  brightness: 100,
+                  contrast: 100,
+                  saturation: 100,
+                  warmth: 0,
+                  tint: 0,
+                },
+              }));
             }}
           >
             {t("恢复原始显示", "Reset display")}
@@ -533,9 +727,23 @@ export default function MealPage() {
           <p>{t("正在整理照片…", "Organizing photos…")}</p>
         </div>
       ) : grouped.length ? (
-        <div className="meal-days">
-          {grouped.map(([date, dayPhotos]) => (
-            <section className="meal-day" key={date}>
+        <div
+          className={`meal-days layout-${dayColumns}`}
+          style={
+            {
+              "--meal-image-max-height": `${imageMaxHeightPx}px`,
+              "--meal-card-max-width": `${Math.round((imageMaxHeightPx * 4) / 3)}px`,
+            } as CSSProperties
+          }
+        >
+          {groupedDayColumns.map((dayGroup, columnIndex) => (
+            <div
+              className="meal-day-column"
+              data-column={columnIndex + 1}
+              key={`column-${columnIndex + 1}`}
+            >
+              {dayGroup.map(([date, dayPhotos]) => (
+                <section className="meal-day" key={date}>
               <header>
                 <div>
                   <h2>{date}</h2>
@@ -576,7 +784,11 @@ export default function MealPage() {
                 </div>
               ) : null}
               <div
-                className={`meal-grid columns-${columns}`}
+                className={
+                  wrapEnabled
+                    ? `meal-grid columns-${columns}`
+                    : "meal-grid no-wrap"
+                }
                 data-count={dayPhotos.length}
               >
                 {dayPhotos.map((photo) => {
@@ -634,7 +846,9 @@ export default function MealPage() {
                   );
                 })}
               </div>
-            </section>
+                </section>
+              ))}
+            </div>
           ))}
         </div>
       ) : (

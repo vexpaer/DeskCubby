@@ -4,7 +4,12 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, Link, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  createDefaultDesktopNavigationPreferences,
+  MAX_DESKTOP_NAVIGATION_CATEGORIES,
+} from "../components";
 import type { WindowsSettings } from "../lib/ipc";
+import { useAppStore } from "../store/appStore";
 import SettingsPage from "./SettingsPage";
 
 const SAVED_SETTINGS = {
@@ -101,6 +106,10 @@ describe("SettingsPage", () => {
     document.documentElement.lang = "zh-CN";
     invokeMock.mockReset();
     vi.spyOn(window, "confirm").mockReturnValue(true);
+    useAppStore.setState({
+      desktopNavigation: createDefaultDesktopNavigationPreferences(),
+      collapsedNavigationCategoryIds: [],
+    });
     invokeMock.mockImplementation(async (command, args) => {
       if (command === "get_windows_settings") {
         return { ...SAVED_SETTINGS } as never;
@@ -291,5 +300,86 @@ describe("SettingsPage", () => {
         (updateCall?.[1] as { settings: WindowsSettings }).settings.diaryDirectory,
       ).toBe("E:\\DeskCubby\\Selected");
     });
+  });
+
+  it("keeps desktop navigation edits as a local draft until top-right save", async () => {
+    const user = userEvent.setup();
+    renderSettings(["/settings/navigation"]);
+    await screen.findByRole("heading", { name: "桌面导航", level: 1 });
+
+    const chineseName = screen.getByLabelText("分类 1 中文名称");
+    await user.clear(chineseName);
+    await user.type(chineseName, "我的记录");
+    await user.click(screen.getByRole("checkbox", { name: "在侧栏显示日记" }));
+    await user.click(screen.getByRole("button", { name: "下移首页" }));
+    await user.click(screen.getByRole("button", { name: "新建分类" }));
+    expect(screen.getByDisplayValue("新分类")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "删除分类 新分类" }));
+
+    const beforeSave = useAppStore.getState().desktopNavigation;
+    expect(beforeSave.categories[0].chinese).toBe("记录");
+    expect(beforeSave.hiddenItemIds).not.toContain("diary");
+    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      const saved = useAppStore.getState().desktopNavigation;
+      expect(saved.categories[0].chinese).toBe("我的记录");
+      expect(saved.categories[0].itemIds.slice(0, 2)).toEqual(["diary", "home"]);
+      expect(saved.hiddenItemIds).toContain("diary");
+    });
+    expect(
+      invokeMock.mock.calls.some(
+        ([command]) => command === "update_windows_settings",
+      ),
+    ).toBe(false);
+    expect(screen.getByRole("button", { name: "已保存" })).toBeDisabled();
+  });
+
+  it("never allows the final navigation category to be deleted", async () => {
+    const preferences = createDefaultDesktopNavigationPreferences();
+    preferences.categories = [
+      {
+        id: "only",
+        chinese: "唯一分类",
+        english: "Only category",
+        itemIds: preferences.categories.flatMap((category) => category.itemIds),
+      },
+    ];
+    useAppStore.setState({ desktopNavigation: preferences });
+
+    renderSettings(["/settings/navigation"]);
+
+    expect(
+      await screen.findByRole("button", { name: "删除分类 唯一分类" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "在侧栏显示首页" })).toBeChecked();
+  });
+
+  it("disables category creation with a clear hint at the persisted limit", async () => {
+    const preferences = createDefaultDesktopNavigationPreferences();
+    preferences.categories = Array.from(
+      { length: MAX_DESKTOP_NAVIGATION_CATEGORIES },
+      (_, index) => ({
+        id: `category-${index + 1}`,
+        chinese: `分类 ${index + 1}`,
+        english: `Category ${index + 1}`,
+        itemIds:
+          index === 0
+            ? preferences.categories.flatMap((category) => category.itemIds)
+            : [],
+      }),
+    );
+    useAppStore.setState({ desktopNavigation: preferences });
+
+    renderSettings(["/settings/navigation"]);
+
+    expect(
+      await screen.findByRole("button", { name: "已达 32 个分类上限" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "已达 32 个分类上限" }),
+    ).toHaveAttribute("title", "最多可创建 32 个分类");
   });
 });

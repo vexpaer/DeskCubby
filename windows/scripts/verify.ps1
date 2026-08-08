@@ -37,6 +37,8 @@ Push-Location $windowsRoot
 try {
     Write-Host "`n==> Packaging configuration"
     & (Join-Path $PSScriptRoot "verify-packaging.ps1")
+    Write-Host "`n==> Release policy scripts"
+    & (Join-Path $PSScriptRoot "test-release-policy.ps1")
     Invoke-Checked -Name "Frontend lint" -Command { Invoke-Pnpm lint }
     Invoke-Checked -Name "Frontend typecheck" -Command { Invoke-Pnpm typecheck }
     Invoke-Checked -Name "Frontend tests" -Command { Invoke-Pnpm test }

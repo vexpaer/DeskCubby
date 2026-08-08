@@ -21,6 +21,25 @@ describe("AboutPage", () => {
     listenMock.mockResolvedValue(vi.fn());
   });
 
+  it("uses the shared DeskCubby logo as a decorative brand mark", async () => {
+    invokeMock.mockResolvedValue({
+      schemaVersion: 1,
+      configured: false,
+      currentVersion: "0.3.0",
+      automaticChecksEnabled: true,
+    } as never);
+
+    const { container } = render(<AboutPage />);
+    await screen.findByText("此构建没有配置可信更新源或更新公钥。");
+
+    const image = container.querySelector<HTMLImageElement>(
+      ".about-app-mark img",
+    );
+    expect(image).not.toBeNull();
+    expect(image).toHaveAttribute("alt", "");
+    expect(image?.src).toMatch(/deskcubby\.png$/);
+  });
+
   it("checks, displays and installs an exact signed updater version", async () => {
     const user = userEvent.setup();
     const unlisten = vi.fn();

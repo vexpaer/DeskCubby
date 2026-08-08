@@ -158,7 +158,7 @@ pub struct AiModelConfig {
     pub temperature: f64,
     #[serde(default)]
     pub system_prompt: String,
-    /// Product requirement: Android stores this value in plain text and v27
+    /// Product requirement: Android stores this value in plain text and v28
     /// backups must round-trip it. Callers must never include it in logs or
     /// user-visible error/preview payloads.
     #[serde(default)]
@@ -206,7 +206,7 @@ pub struct ManagedSettings {
     pub compact_mode: bool,
     /// Windows-local background selected through the Rust command boundary.
     /// These three fields are persisted locally but never overlaid onto the
-    /// Android v27 compatibility document.
+    /// Android v28 compatibility document.
     pub background_image_path: Option<String>,
     pub background_image_opacity: f64,
     pub background_image_blur_px: f64,
@@ -234,6 +234,10 @@ pub struct ManagedSettings {
     pub meal_calendar_show_captions: bool,
     pub meal_calendar_wrap_enabled: bool,
     pub meal_calendar_photos_per_row: String,
+    /// Windows-only outer layout for complete day cards. This is persisted in
+    /// the local managed settings JSON and intentionally is not overlaid onto
+    /// Android backup settings.
+    pub meal_calendar_day_columns: i32,
     pub meal_photo_filter: MealPhotoFilter,
     pub meal_buttons_use_icons: bool,
     pub meal_button_icons: Vec<String>,
@@ -297,6 +301,7 @@ impl Default for ManagedSettings {
             meal_calendar_show_captions: true,
             meal_calendar_wrap_enabled: false,
             meal_calendar_photos_per_row: "SMART".to_owned(),
+            meal_calendar_day_columns: 1,
             meal_photo_filter: MealPhotoFilter::default(),
             meal_buttons_use_icons: false,
             meal_button_icons: vec![
@@ -479,6 +484,7 @@ impl ManagedSettings {
         self.poetry_line_spacing = android_float(self.poetry_line_spacing);
         self.meal_calendar_image_max_height_dp =
             self.meal_calendar_image_max_height_dp.clamp(80, 320);
+        self.meal_calendar_day_columns = self.meal_calendar_day_columns.clamp(1, 2);
         self.meal_photo_filter.brightness = android_float(self.meal_photo_filter.brightness);
         self.meal_photo_filter.contrast = android_float(self.meal_photo_filter.contrast);
         self.meal_photo_filter.saturation = android_float(self.meal_photo_filter.saturation);
@@ -591,6 +597,12 @@ impl ManagedSettings {
             "mealCalendarPhotosPerRow",
             &self.meal_calendar_photos_per_row,
             &["TWO", "THREE", "SMART"],
+        )?;
+        require_integer_range(
+            "mealCalendarDayColumns",
+            self.meal_calendar_day_columns,
+            1,
+            2,
         )?;
         require_finite_range(
             "mealPhotoFilter.brightness",
@@ -896,6 +908,7 @@ pub struct BackupPreview {
     pub favorite_count: usize,
     pub date_record_count: usize,
     pub poem_count: usize,
+    pub reader_progress_count: usize,
     pub preserved_top_level_keys: Vec<String>,
 }
 
@@ -924,7 +937,7 @@ pub struct CoreSnapshot {
     #[serde(default)]
     pub poetry_categories: Vec<PoetryCategory>,
     pub poems: Vec<SavedPoem>,
-    /// Present in recovery points created after Windows gained v27 game
+    /// Present in recovery points created after Windows gained v28 game
     /// parity. `None` keeps older recovery files from clearing newer local
     /// game data when they are restored.
     #[serde(default)]
@@ -972,6 +985,7 @@ mod tests {
             thought_highlight_color_argb: 0x0001_0203,
             thought_editor_max_height_dp: 999,
             meal_calendar_image_max_height_dp: -5,
+            meal_calendar_day_columns: 99,
             ..ManagedSettings::default()
         };
 
@@ -988,6 +1002,7 @@ mod tests {
         assert_eq!(settings.thought_highlight_color_argb, 0xFF01_0203u32 as i32);
         assert_eq!(settings.thought_editor_max_height_dp, 400);
         assert_eq!(settings.meal_calendar_image_max_height_dp, 80);
+        assert_eq!(settings.meal_calendar_day_columns, 2);
         settings.validate().expect("normalized settings");
     }
 

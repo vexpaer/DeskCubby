@@ -54,6 +54,7 @@ const GAME_TITLES: Record<GameId, [string, string]> = {
 };
 
 const METRIC_LABELS: Record<string, [string, string]> = {
+  moveAttempts: ["总操作次数", "Total moves"],
   effectiveMoves: ["有效移动", "Effective moves"],
   merges: ["合并次数", "Merges"],
   highestTile: ["最高方块", "Highest tile"],
@@ -299,6 +300,7 @@ export default function StatsPage() {
               const state = data.games?.games.find((game) => game.gameId === gameId);
               const metrics = gameMetrics.get(gameId);
               const hasData = Boolean(state?.updatedAt) || Boolean(metrics?.size) || (decimal(state?.totalPlayMillis) ?? 0n) > 0n;
+              const is2048 = gameId === "2048" || gameId === "2048_5" || gameId === "2048_6";
               const wins = decimal(metrics?.get("wins"));
               const losses = decimal(metrics?.get("losses"));
               const finished = (wins ?? 0n) + (losses ?? 0n);
@@ -309,8 +311,8 @@ export default function StatsPage() {
                     <dl>
                       <Metric label={tr(language, "最高分", "High score")} value={number(BigInt(state?.highScore ?? 0), language)} />
                       <Metric label={tr(language, "游玩时长", "Play time")} value={duration(state?.totalPlayMillis, language)} />
-                      {metrics ? [...metrics].map(([key, value]) => <Metric key={key} label={language === "en" ? METRIC_LABELS[key]?.[1] ?? key : METRIC_LABELS[key]?.[0] ?? key} value={number(decimal(value), language)} />) : null}
-                      {finished > 0n && wins !== null ? <Metric label={tr(language, "胜率", "Win rate")} value={`${Number((wins * 10_000n) / finished) / 100}%`} /> : null}
+                      {metrics ? [...metrics].filter(([key]) => !(is2048 && key === "losses")).map(([key, value]) => <Metric key={key} label={language === "en" ? METRIC_LABELS[key]?.[1] ?? key : METRIC_LABELS[key]?.[0] ?? key} value={number(decimal(value), language)} />) : null}
+                      {!is2048 && finished > 0n && wins !== null ? <Metric label={tr(language, "胜率", "Win rate")} value={`${Number((wins * 10_000n) / finished) / 100}%`} /> : null}
                     </dl>
                   ) : <p>{unknown}</p>}
                 </article>

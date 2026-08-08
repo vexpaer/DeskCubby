@@ -849,7 +849,9 @@ export default function DiaryPage() {
               ) : (
                 <article className="markdown-preview">
                   <ReactMarkdown
-                    urlTransform={(url) => safeExternalHttpUrl(url) ?? ""}
+                    urlTransform={(url, key) =>
+                      key === "src" ? url : safeExternalHttpUrl(url) ?? ""
+                    }
                     components={{
                       a: ({ href, children }) => (
                         <ExternalMarkdownLink

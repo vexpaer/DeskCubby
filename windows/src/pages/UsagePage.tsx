@@ -250,8 +250,8 @@ export default function UsagePage() {
         eyebrow={copy("只读显示 · 不采集 Windows", "Read only · No Windows tracking")}
         title={copy("手机使用时间", "Phone screen time")}
         description={copy(
-          "只显示 Android v27、设备云对象或旧 v4 的导入/只读链接数据。",
-          "Displays imported or read-only linked Android v27, device-cloud or legacy v4 data.",
+          "只显示 Android v28、设备云对象或旧 v4 的导入/只读链接数据。",
+          "Displays imported or read-only linked Android v28, device-cloud or legacy v4 data.",
         )}
       >
         <div className="panel">
@@ -271,8 +271,8 @@ export default function UsagePage() {
       eyebrow={copy("只读显示 · 不采集 Windows", "Read only · No Windows tracking")}
       title={copy("手机使用时间", "Phone screen time")}
       description={copy(
-        "只显示 Android v27、usage/v1 设备对象或旧 v4 数据；DeskCubby 不会统计这台电脑的应用使用时间。",
-        "Displays Android v27, usage/v1 device objects or legacy v4 data. DeskCubby does not track app usage on this PC.",
+        "只显示 Android v28、usage/v1 设备对象或旧 v4 数据；DeskCubby 不会统计这台电脑的应用使用时间。",
+        "Displays Android v28, usage/v1 device objects or legacy v4 data. DeskCubby does not track app usage on this PC.",
       )}
       actions={
         <>
@@ -321,8 +321,8 @@ export default function UsagePage() {
           <h2>{copy("数据边界", "Data boundary")}</h2>
           <p>
             {copy(
-              "Windows 只读取 Android v27/usage-v1/旧 v4 统计数据，不申请系统使用权限、不采集电脑应用，也不改写源文件。",
-              "Windows only reads Android v27, usage-v1 or legacy v4 statistics. It requests no usage permission, tracks no PC apps and never rewrites the source.",
+              "Windows 只读取 Android v28/usage-v1/旧 v4 统计数据，不申请系统使用权限、不采集电脑应用，也不改写源文件。",
+              "Windows only reads Android v28, usage-v1 or legacy v4 statistics. It requests no usage permission, tracks no PC apps and never rewrites the source.",
             )}
           </p>
         </div>
@@ -337,8 +337,8 @@ export default function UsagePage() {
           <EmptyState
             title={copy("还没有手机统计数据", "No phone statistics yet")}
             description={copy(
-              "选择 Android v27 备份、usage/v1 设备对象或旧 v4 文件导入一次，也可建立手动刷新的只读链接。",
-              "Choose an Android v27 backup, usage/v1 device object or legacy v4 file, or create a manually refreshed read-only link.",
+              "选择 Android v28 备份、usage/v1 设备对象或旧 v4 文件导入一次，也可建立手动刷新的只读链接。",
+              "Choose an Android v28 backup, usage/v1 device object or legacy v4 file, or create a manually refreshed read-only link.",
             )}
             icon={Timer}
             action={

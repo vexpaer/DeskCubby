@@ -80,6 +80,7 @@ function configDraft(config?: CloudSyncConfigV1): CloudSyncConfigDraftV1 {
       "MEDIA",
       "JSON_BACKUP",
       "USAGE_STATISTICS",
+      "READING_PROGRESS",
     ],
     direction: config?.direction ?? "TWO_WAY",
   };
@@ -441,8 +442,8 @@ function ConfigDialog({
                   />
                   <small className="form-hint">
                     {copy(
-                      "与 Android v27 使用相同的可配置请求标识；不能为空或包含控制字符。",
-                      "Uses the same configurable request identifier as Android v27; it cannot be blank or contain control characters.",
+                      "与 Android v28 使用相同的可配置请求标识；不能为空或包含控制字符。",
+                      "Uses the same configurable request identifier as Android v28; it cannot be blank or contain control characters.",
                     )}
                   </small>
                 </label>
@@ -470,6 +471,7 @@ function ConfigDialog({
                       ["MEDIA", copy("媒体", "Media")],
                       ["JSON_BACKUP", copy("应用 JSON", "App JSON")],
                       ["USAGE_STATISTICS", copy("手机使用时间", "Phone screen time")],
+                      ["READING_PROGRESS", copy("阅读进度", "Reading progress")],
                     ] as Array<[CloudSyncContent, string]>
                   ).map(([content, label]) => (
                     <label className="check-control" key={content}>
@@ -505,6 +507,17 @@ function ConfigDialog({
                       {copy(
                         "Windows 只下载并显示 Android 的 usage/v1 设备对象，绝不会采集或上传这台电脑的使用时间；“仅上传”模式会跳过这些对象。",
                         "Windows only downloads and displays Android usage/v1 device objects. It never collects or uploads PC usage; upload-only mode skips these objects.",
+                      )}
+                    </span>
+                  </div>
+                ) : null}
+                {draft.selectedContents.includes("READING_PROGRESS") ? (
+                  <div className="cloud-sensitive-warning" role="note">
+                    <ShieldAlert aria-hidden="true" size={18} />
+                    <span>
+                      {copy(
+                        "仅同步完整文件 SHA-256 指纹、类型、位置、总页数与更新时间，不包含路径、书名、封面或正文；指纹仍可能被用于识别已知文件，远端对象没有端到端加密。",
+                        "Only the full-file SHA-256 fingerprint, type, position, page count, and update time are synced—never paths, titles, covers, or document text. A fingerprint can still identify a known file, and the remote object is not end-to-end encrypted.",
                       )}
                     </span>
                   </div>
@@ -993,8 +1006,8 @@ export default function CloudSyncPage() {
       eyebrow={copy("设置 → 应用数据", "Settings → App data")}
       title={copy("WebDAV / S3 云同步", "WebDAV / S3 cloud sync")}
       description={copy(
-        "同步日记、媒体与 Android v27 应用 JSON；手机使用时间仅按需从 Android usage 对象下载并显示。本地文件仍是最终来源。",
-        "Sync diaries, media and Android v27 app JSON; phone screen time is downloaded from Android usage objects only when selected. Local files remain the source of truth.",
+        "同步日记、媒体与 Android v28 应用 JSON；手机使用时间仅按需从 Android usage 对象下载并显示。本地文件仍是最终来源。",
+        "Sync diaries, media and Android v28 app JSON; phone screen time is downloaded from Android usage objects only when selected. Local files remain the source of truth.",
       )}
       actions={
         <>
@@ -1134,7 +1147,9 @@ export default function CloudSyncPage() {
                                   ? copy("媒体", "Media")
                                   : content === "JSON_BACKUP"
                                     ? "JSON"
-                                    : copy("手机使用时间", "Phone screen time"),
+                                    : content === "USAGE_STATISTICS"
+                                      ? copy("手机使用时间", "Phone screen time")
+                                      : copy("阅读进度", "Reading progress"),
                             )
                             .join(language === "en" ? ", " : "、")}
                         </dd>

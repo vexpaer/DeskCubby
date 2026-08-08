@@ -4,6 +4,8 @@ param()
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+Add-Type -AssemblyName System.Drawing
+
 $windowsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $tauriPath = Join-Path $windowsRoot "src-tauri\tauri.conf.json"
 $packagePath = Join-Path $windowsRoot "package.json"
@@ -147,20 +149,99 @@ if (-not $toolchain.Contains("stable-x86_64-pc-windows-msvc")) {
     throw "The project Rust toolchain must target stable MSVC x64."
 }
 
-foreach ($icon in @(
-    "32x32.png",
-    "128x128.png",
-    "128x128@2x.png",
-    "icon.ico",
-    "icon.png"
-)) {
-    $path = Join-Path $windowsRoot "src-tauri\icons\$icon"
+$expectedPngs = [ordered]@{
+    "app-icon.png" = 512
+    "src-tauri\icons\32x32.png" = 32
+    "src-tauri\icons\128x128.png" = 128
+    "src-tauri\icons\128x128@2x.png" = 256
+    "src-tauri\icons\icon.png" = 512
+    "src\assets\deskcubby.png" = 128
+}
+
+$canonicalPalette = [System.Collections.Generic.HashSet[int]]::new()
+$canonicalPath = Join-Path $windowsRoot "app-icon.png"
+$canonicalImage = [System.Drawing.Bitmap]::FromFile($canonicalPath)
+try {
+    for ($y = 0; $y -lt $canonicalImage.Height; $y++) {
+        for ($x = 0; $x -lt $canonicalImage.Width; $x++) {
+            [void]$canonicalPalette.Add($canonicalImage.GetPixel($x, $y).ToArgb())
+        }
+    }
+}
+finally {
+    $canonicalImage.Dispose()
+}
+
+foreach ($entry in $expectedPngs.GetEnumerator()) {
+    $path = Join-Path $windowsRoot $entry.Key
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Required Windows icon is missing: $path"
+        throw "Required Windows PNG icon is missing: $path"
     }
     if ((Get-Item -LiteralPath $path).Length -le 0) {
-        throw "Windows icon is empty: $path"
+        throw "Windows PNG icon is empty: $path"
     }
+
+    $image = [System.Drawing.Bitmap]::FromFile($path)
+    try {
+        if ($image.Width -ne $entry.Value -or $image.Height -ne $entry.Value) {
+            throw (
+                "Windows PNG icon has unexpected dimensions: $path " +
+                "($($image.Width)x$($image.Height), expected " +
+                "$($entry.Value)x$($entry.Value))."
+            )
+        }
+        if (-not [System.Drawing.Image]::IsAlphaPixelFormat($image.PixelFormat)) {
+            throw "Windows PNG icon must preserve an alpha channel: $path"
+        }
+
+        $hasTransparentPixel = $false
+        $hasVisiblePixel = $false
+        for ($y = 0; $y -lt $image.Height; $y++) {
+            for ($x = 0; $x -lt $image.Width; $x++) {
+                $color = $image.GetPixel($x, $y)
+                if ($color.A -eq 0) {
+                    $hasTransparentPixel = $true
+                }
+                elseif ($color.A -eq 255) {
+                    $hasVisiblePixel = $true
+                }
+                else {
+                    throw (
+                        "Pixel-art PNG contains a smoothed partial-alpha pixel: " +
+                        "$path"
+                    )
+                }
+                if (-not $canonicalPalette.Contains($color.ToArgb())) {
+                    throw "Pixel-art PNG contains a color outside the source palette: $path"
+                }
+            }
+        }
+        if (-not $hasTransparentPixel -or -not $hasVisiblePixel) {
+            throw "Windows PNG icon must contain visible and transparent pixels: $path"
+        }
+    }
+    finally {
+        $image.Dispose()
+    }
+}
+
+if (
+    (Get-FileHash -Algorithm SHA256 -LiteralPath $canonicalPath).Hash -ne
+    (Get-FileHash -Algorithm SHA256 -LiteralPath (
+        Join-Path $windowsRoot "src-tauri\icons\icon.png"
+    )).Hash
+) {
+    throw "The packaged 512 px icon must exactly match app-icon.png."
+}
+if (
+    (Get-FileHash -Algorithm SHA256 -LiteralPath (
+        Join-Path $windowsRoot "src-tauri\icons\128x128.png"
+    )).Hash -ne
+    (Get-FileHash -Algorithm SHA256 -LiteralPath (
+        Join-Path $windowsRoot "src\assets\deskcubby.png"
+    )).Hash
+) {
+    throw "The React brand icon must exactly match the packaged 128 px icon."
 }
 
 $icoPath = Join-Path $windowsRoot "src-tauri\icons\icon.ico"
@@ -172,6 +253,44 @@ if (
     [BitConverter]::ToUInt16($icoHeader, 4) -lt 1
 ) {
     throw "Windows ICO header is invalid."
+}
+
+$expectedIcoSizes = @(16, 24, 32, 48, 64, 128, 256)
+$icoCount = [BitConverter]::ToUInt16($icoHeader, 4)
+if ($icoCount -ne $expectedIcoSizes.Count) {
+    throw "Windows ICO must contain all seven required size layers."
+}
+for ($index = 0; $index -lt $icoCount; $index++) {
+    $directoryOffset = 6 + (16 * $index)
+    $width = [int]$icoHeader[$directoryOffset]
+    $height = [int]$icoHeader[$directoryOffset + 1]
+    if ($width -eq 0) { $width = 256 }
+    if ($height -eq 0) { $height = 256 }
+    $expectedSize = $expectedIcoSizes[$index]
+    if ($width -ne $expectedSize -or $height -ne $expectedSize) {
+        throw "Windows ICO layer $index has unexpected dimensions."
+    }
+    if ([BitConverter]::ToUInt16($icoHeader, $directoryOffset + 6) -ne 32) {
+        throw "Windows ICO layer $expectedSize must be 32-bit."
+    }
+
+    $frameLength = [BitConverter]::ToUInt32($icoHeader, $directoryOffset + 8)
+    $frameOffset = [BitConverter]::ToUInt32($icoHeader, $directoryOffset + 12)
+    if (
+        $frameLength -lt 26 -or
+        ([uint64]$frameOffset + [uint64]$frameLength) -gt $icoHeader.Length
+    ) {
+        throw "Windows ICO layer $expectedSize has an invalid data range."
+    }
+    $pngSignature = @(137, 80, 78, 71, 13, 10, 26, 10)
+    for ($byteIndex = 0; $byteIndex -lt $pngSignature.Count; $byteIndex++) {
+        if ($icoHeader[$frameOffset + $byteIndex] -ne $pngSignature[$byteIndex]) {
+            throw "Windows ICO layer $expectedSize is not an embedded PNG."
+        }
+    }
+    if ($icoHeader[$frameOffset + 25] -ne 6) {
+        throw "Windows ICO layer $expectedSize must use RGBA PNG data."
+    }
 }
 
 Write-Host "Tauri packaging configuration, capabilities, and icons are valid."

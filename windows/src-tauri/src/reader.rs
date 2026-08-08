@@ -3,8 +3,9 @@
 //! Files enter this boundary only through an explicit native file-picker action. The
 //! WebView receives TXT logical pages or an opaque `reader://` URL; an absolute path never
 //! crosses IPC. Library metadata, progress, preferences and engagement time live in a private
-//! crash-safe JSON file that is intentionally outside Android v27, automatic backup and cloud
-//! sync data.
+//! crash-safe JSON file. Paths, titles, settings and reading time stay private; only the bounded,
+//! URI-free fingerprint progress ledger participates in Android v28 backup and optional cloud
+//! synchronization.
 
 use crate::AppState;
 use crate::security::{
@@ -14,7 +15,8 @@ use crate::security::{
 use encoding_rs::GB18030;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -25,12 +27,14 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 pub(crate) const READER_DTO_VERSION: u32 = 1;
-const READER_STATE_SCHEMA_VERSION: u32 = 1;
+const READER_STATE_SCHEMA_VERSION: u32 = 2;
 const READER_DIRECTORY_NAME: &str = "reader";
 const READER_STATE_FILE_NAME: &str = "reader-state-v1.json";
 const READER_STATE_PENDING_FILE_NAME: &str = "reader-state-v1.json.pending";
 const READER_STATE_PREVIOUS_FILE_NAME: &str = "reader-state-v1.json.previous";
 const MAX_READER_STATE_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_READER_PROGRESS_JSON_BYTES: usize = 512 * 1024;
+pub(crate) const MAX_READER_PROGRESS_RECORDS: usize = 500;
 const MAX_READER_BOOKS: usize = 500;
 const MAX_READER_PATH_UTF16_UNITS: usize = 32_767;
 const MAX_READER_TITLE_CHARS: usize = 240;
@@ -50,10 +54,12 @@ const MIN_PDF_ZOOM_PERCENT: u16 = 50;
 const MAX_PDF_ZOOM_PERCENT: u16 = 300;
 const MAX_RECORDED_READER_DELTA_MILLIS: u64 = 5 * 60 * 1_000;
 const MAX_JAVASCRIPT_DATE_MILLIS: i64 = 8_640_000_000_000_000;
+const READER_PROGRESS_FORMAT_VERSION: u32 = 1;
+const READER_FINGERPRINT_DOMAIN: &[u8] = b"DeskCubby.ReaderBook.v1";
 
 static READER_STATE_MUTEX: Mutex<()> = Mutex::new(());
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ReaderBookType {
     Txt,
@@ -122,6 +128,101 @@ struct StoredReaderBook {
     text_page_index: usize,
     pdf_page_index: usize,
     reading_millis: u64,
+    #[serde(default)]
+    fingerprint: Option<String>,
+    #[serde(default)]
+    total_pages: usize,
+    #[serde(default)]
+    progress_updated_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ReaderProgressBookType {
+    Txt,
+    Pdf,
+}
+
+impl From<ReaderBookType> for ReaderProgressBookType {
+    fn from(value: ReaderBookType) -> Self {
+        match value {
+            ReaderBookType::Txt => Self::Txt,
+            ReaderBookType::Pdf => Self::Pdf,
+        }
+    }
+}
+
+impl From<ReaderProgressBookType> for ReaderBookType {
+    fn from(value: ReaderProgressBookType) -> Self {
+        match value {
+            ReaderProgressBookType::Txt => Self::Txt,
+            ReaderProgressBookType::Pdf => Self::Pdf,
+        }
+    }
+}
+
+/// URI-free, title-free progress record shared with Android. The full-file fingerprint is the
+/// only book identifier that may leave the private reader boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ReaderProgressRecord {
+    pub(crate) fingerprint: String,
+    #[serde(rename = "type")]
+    pub(crate) book_type: ReaderProgressBookType,
+    pub(crate) text_page_index: i32,
+    pub(crate) text_paragraph_index: i32,
+    pub(crate) pdf_page_index: i32,
+    pub(crate) total_pages: i32,
+    pub(crate) updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReaderProgressPayload {
+    version: u32,
+    records: Vec<ReaderProgressRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReaderProgressSnapshot {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) last_modified_millis: i64,
+}
+
+/// Holds the reader mutex across a larger backup transaction. The original private state includes
+/// every book/ledger row, so rollback is exact even when their union exceeds the 500-record export
+/// boundary. Paths never leave this Rust-only value or cross IPC.
+pub(crate) struct ReaderProgressMutation {
+    guard: Option<MutexGuard<'static, ()>>,
+    private_dir: PathBuf,
+    original: StoredReaderState,
+    active: bool,
+}
+
+impl ReaderProgressMutation {
+    pub(crate) fn commit(mut self) {
+        self.active = false;
+        self.guard.take();
+    }
+
+    pub(crate) fn rollback(mut self) -> Result<(), ReaderError> {
+        if self.active {
+            write_reader_state(&self.private_dir, &self.original)?;
+            self.active = false;
+        }
+        self.guard.take();
+        Ok(())
+    }
+}
+
+impl Drop for ReaderProgressMutation {
+    fn drop(&mut self) {
+        if self.active {
+            // A caller that unwinds or returns early still gets a best-effort exact restore while
+            // the reader mutex is held. Explicit rollback remains required when errors are shown.
+            let _ = write_reader_state(&self.private_dir, &self.original);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -130,6 +231,8 @@ struct StoredReaderState {
     schema_version: u32,
     preferences: ReaderPreferences,
     books: Vec<StoredReaderBook>,
+    #[serde(default)]
+    progress_ledger: Vec<ReaderProgressRecord>,
 }
 
 impl Default for StoredReaderState {
@@ -138,6 +241,7 @@ impl Default for StoredReaderState {
             schema_version: READER_STATE_SCHEMA_VERSION,
             preferences: ReaderPreferences::default(),
             books: Vec::new(),
+            progress_ledger: Vec::new(),
         }
     }
 }
@@ -242,7 +346,7 @@ pub(crate) struct ReaderTimeRequest {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReaderError {
+pub(crate) enum ReaderError {
     InvalidInput,
     UnsupportedType,
     TooLarge,
@@ -256,7 +360,7 @@ enum ReaderError {
 }
 
 impl ReaderError {
-    fn dto(self) -> SecurityErrorDto {
+    pub(crate) fn dto(self) -> SecurityErrorDto {
         match self {
             Self::InvalidInput => SecurityErrorDto::invalid_input(),
             Self::UnsupportedType => SecurityErrorDto::new(
@@ -381,19 +485,45 @@ pub(crate) fn choose_reader_book<R: Runtime>(
             text_page_index: 0,
             pdf_page_index: 0,
             reading_millis: 0,
+            fingerprint: None,
+            total_pages: 0,
+            progress_updated_at: 0,
         });
     if book.book_type != book_type {
         return Err(ReaderError::UnsupportedType.dto());
     }
     let content = read_document_content(&book, &stored.preferences).map_err(ReaderError::dto)?;
+    let fingerprint = fingerprint_reader_book(&book).map_err(ReaderError::dto)?;
+    let content_changed = book
+        .fingerprint
+        .as_ref()
+        .is_some_and(|existing| existing != &fingerprint);
+    if content_changed {
+        book.text_paragraph_index = 0;
+        book.text_page_index = 0;
+        book.pdf_page_index = 0;
+        book.progress_updated_at = 0;
+    }
+    book.fingerprint = Some(fingerprint);
+    book.total_pages = document_total_pages(&content);
+    if book.book_type == ReaderBookType::Txt && !content_changed {
+        book.text_page_index = remap_text_page_index(&content, book.text_paragraph_index);
+    }
     book.last_opened_at = now;
     if let Some(index) = existing_index {
         stored.books[index] = book.clone();
     } else {
         stored.books.push(book.clone());
     }
+    stored = merge_reader_progress_state(stored, &[]).map_err(ReaderError::dto)?;
     sort_reader_books(&mut stored.books);
     write_reader_state(&state.private_dir, &stored).map_err(ReaderError::dto)?;
+    let book = stored
+        .books
+        .iter()
+        .find(|candidate| candidate.id == book.id)
+        .cloned()
+        .ok_or_else(|| ReaderError::Storage.dto())?;
     Ok(Some(document_dto(book, stored.preferences, content)))
 }
 
@@ -413,10 +543,33 @@ pub(crate) fn open_reader_book(
         .ok_or_else(|| ReaderError::NotFound.dto())?;
     let content = read_document_content(&stored.books[index], &stored.preferences)
         .map_err(ReaderError::dto)?;
+    let fingerprint = fingerprint_reader_book(&stored.books[index]).map_err(ReaderError::dto)?;
+    let content_changed = stored.books[index]
+        .fingerprint
+        .as_ref()
+        .is_some_and(|existing| existing != &fingerprint);
+    if content_changed {
+        stored.books[index].text_paragraph_index = 0;
+        stored.books[index].text_page_index = 0;
+        stored.books[index].pdf_page_index = 0;
+        stored.books[index].progress_updated_at = 0;
+    }
+    stored.books[index].fingerprint = Some(fingerprint);
+    stored.books[index].total_pages = document_total_pages(&content);
+    if stored.books[index].book_type == ReaderBookType::Txt && !content_changed {
+        stored.books[index].text_page_index =
+            remap_text_page_index(&content, stored.books[index].text_paragraph_index);
+    }
     stored.books[index].last_opened_at = chrono::Utc::now().timestamp_millis().max(0);
-    let book = stored.books[index].clone();
+    stored = merge_reader_progress_state(stored, &[]).map_err(ReaderError::dto)?;
     sort_reader_books(&mut stored.books);
     write_reader_state(&state.private_dir, &stored).map_err(ReaderError::dto)?;
+    let book = stored
+        .books
+        .iter()
+        .find(|book| book.id == request.book_id)
+        .cloned()
+        .ok_or_else(|| ReaderError::Storage.dto())?;
     Ok(document_dto(book, stored.preferences, content))
 }
 
@@ -443,17 +596,33 @@ pub(crate) fn save_reader_progress(
             if paragraph >= MAX_TEXT_PARAGRAPHS {
                 return Err(ReaderError::InvalidInput.dto());
             }
+            let canonical_changed = book.text_paragraph_index != paragraph;
             book.text_page_index = request.page_index;
             book.text_paragraph_index = paragraph;
+            if canonical_changed {
+                book.progress_updated_at = next_reader_progress_timestamp(book.progress_updated_at);
+            }
         }
         ReaderBookType::Pdf => {
             if request.page_index >= MAX_PDF_PAGES || request.paragraph_index.is_some() {
                 return Err(ReaderError::InvalidInput.dto());
             }
-            book.pdf_page_index = request.page_index;
+            if book.pdf_page_index != request.page_index {
+                book.pdf_page_index = request.page_index;
+                book.progress_updated_at = next_reader_progress_timestamp(book.progress_updated_at);
+            }
         }
     }
     let updated = book.clone();
+    if let Some(record) = progress_record_for_book(&updated) {
+        stored.progress_ledger = merge_progress_ledger(
+            stored
+                .progress_ledger
+                .iter()
+                .cloned()
+                .chain(std::iter::once(record)),
+        );
+    }
     write_reader_state(&state.private_dir, &stored).map_err(ReaderError::dto)?;
     Ok(book_dto(&updated))
 }
@@ -647,9 +816,13 @@ fn validate_stored_state(mut state: StoredReaderState) -> Result<StoredReaderSta
     if state.schema_version > READER_STATE_SCHEMA_VERSION {
         return Err(ReaderError::StateUnsupported);
     }
-    if state.schema_version != READER_STATE_SCHEMA_VERSION || state.books.len() > MAX_READER_BOOKS {
+    if state.schema_version == 0
+        || state.books.len() > MAX_READER_BOOKS
+        || state.progress_ledger.len() > MAX_READER_PROGRESS_RECORDS
+    {
         return Err(ReaderError::StateCorrupt);
     }
+    state.schema_version = READER_STATE_SCHEMA_VERSION;
     state.preferences =
         normalize_reader_preferences(state.preferences).map_err(|_| ReaderError::StateCorrupt)?;
     let mut ids = HashSet::with_capacity(state.books.len());
@@ -666,6 +839,16 @@ fn validate_stored_state(mut state: StoredReaderState) -> Result<StoredReaderSta
             || book.text_paragraph_index >= MAX_TEXT_PARAGRAPHS
             || book.text_page_index >= MAX_TEXT_PAGES
             || book.pdf_page_index >= MAX_PDF_PAGES
+            || book.progress_updated_at < 0
+            || book
+                .fingerprint
+                .as_ref()
+                .is_some_and(|value| !valid_fingerprint(value))
+            || book.total_pages
+                > match book.book_type {
+                    ReaderBookType::Txt => MAX_TEXT_PAGES,
+                    ReaderBookType::Pdf => MAX_PDF_PAGES,
+                }
         {
             return Err(ReaderError::StateCorrupt);
         }
@@ -689,6 +872,14 @@ fn validate_stored_state(mut state: StoredReaderState) -> Result<StoredReaderSta
             return Err(ReaderError::StateCorrupt);
         }
     }
+    if state
+        .progress_ledger
+        .iter()
+        .any(|record| validate_progress_record(record).is_err())
+    {
+        return Err(ReaderError::StateCorrupt);
+    }
+    state.progress_ledger = merge_progress_ledger(state.progress_ledger);
     sort_reader_books(&mut state.books);
     Ok(state)
 }
@@ -918,6 +1109,523 @@ fn read_bounded(file: &mut File, maximum: usize) -> Result<Vec<u8>, ReaderError>
         return Err(ReaderError::SourceChanged);
     }
     Ok(bytes)
+}
+
+fn document_total_pages(content: &ReaderDocumentContentDto) -> usize {
+    match content {
+        ReaderDocumentContentDto::Txt { pages, .. } => pages.len(),
+        // WebView2's built-in PDF viewer does not expose a trusted page-count API to the app.
+        // Zero is the shared schema's explicit "not measured" value.
+        ReaderDocumentContentDto::Pdf { .. } => 0,
+    }
+}
+
+fn remap_text_page_index(content: &ReaderDocumentContentDto, paragraph_index: usize) -> usize {
+    let ReaderDocumentContentDto::Txt { pages, .. } = content else {
+        return 0;
+    };
+    text_page_for_paragraph(pages, paragraph_index)
+}
+
+fn text_page_for_paragraph(pages: &[ReaderTextPageDto], paragraph_index: usize) -> usize {
+    if pages.is_empty() {
+        return 0;
+    }
+    if let Some(first_exact) = pages
+        .iter()
+        .position(|page| page.first_paragraph_index == paragraph_index)
+    {
+        // A long paragraph can span multiple logical pages. Android resumes at the first page
+        // carrying that paragraph, and Windows deliberately follows the same rule.
+        return first_exact;
+    }
+    pages
+        .iter()
+        .rposition(|page| page.first_paragraph_index < paragraph_index)
+        .unwrap_or(0)
+}
+
+fn fingerprint_reader_book(book: &StoredReaderBook) -> Result<String, ReaderError> {
+    fingerprint_reader_book_with_size(book).map(|(fingerprint, _)| fingerprint)
+}
+
+fn fingerprint_reader_book_with_size(
+    book: &StoredReaderBook,
+) -> Result<(String, u64), ReaderError> {
+    let mut file = open_stored_reader_file(book)?;
+    validate_reader_file(&mut file, book.book_type)?;
+    let before = file.metadata().map_err(|_| ReaderError::Storage)?;
+    let maximum = match book.book_type {
+        ReaderBookType::Txt => MAX_TEXT_BYTES,
+        ReaderBookType::Pdf => MAX_PDF_BYTES,
+    };
+    if before.len() > maximum as u64 {
+        return Err(ReaderError::TooLarge);
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| ReaderError::Storage)?;
+    let mut digest = Sha256::new();
+    digest.update(READER_FINGERPRINT_DOMAIN);
+    digest.update([0]);
+    digest.update(match book.book_type {
+        ReaderBookType::Txt => b"TXT".as_slice(),
+        ReaderBookType::Pdf => b"PDF".as_slice(),
+    });
+    digest.update([0]);
+    let mut buffer = [0_u8; 8 * 1024];
+    let mut total = 0_u64;
+    loop {
+        let count = file.read(&mut buffer).map_err(|_| ReaderError::Storage)?;
+        if count == 0 {
+            break;
+        }
+        total = total.saturating_add(count as u64);
+        if total > maximum as u64 {
+            return Err(ReaderError::TooLarge);
+        }
+        digest.update(&buffer[..count]);
+    }
+    let after = file.metadata().map_err(|_| ReaderError::Storage)?;
+    if before.len() != after.len()
+        || total != before.len()
+        || before.modified().ok() != after.modified().ok()
+    {
+        return Err(ReaderError::SourceChanged);
+    }
+    Ok((hex::encode(digest.finalize()), total))
+}
+
+fn valid_fingerprint(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn validate_progress_record(record: &ReaderProgressRecord) -> Result<(), ReaderError> {
+    let maximum_total_pages = match record.book_type {
+        ReaderProgressBookType::Txt => MAX_TEXT_PAGES as i32,
+        ReaderProgressBookType::Pdf => MAX_PDF_PAGES as i32,
+    };
+    if !valid_fingerprint(&record.fingerprint)
+        || !(-1..MAX_TEXT_PAGES as i32).contains(&record.text_page_index)
+        || !(0..MAX_TEXT_PARAGRAPHS as i32).contains(&record.text_paragraph_index)
+        || !(0..MAX_PDF_PAGES as i32).contains(&record.pdf_page_index)
+        || !(0..=maximum_total_pages).contains(&record.total_pages)
+        || record.updated_at < 0
+    {
+        return Err(ReaderError::InvalidInput);
+    }
+    Ok(())
+}
+
+fn progress_position(record: &ReaderProgressRecord) -> i32 {
+    match record.book_type {
+        ReaderProgressBookType::Txt => record.text_paragraph_index,
+        ReaderProgressBookType::Pdf => record.pdf_page_index,
+    }
+}
+
+fn book_progress_position(book: &StoredReaderBook) -> usize {
+    match book.book_type {
+        ReaderBookType::Txt => book.text_paragraph_index,
+        ReaderBookType::Pdf => book.pdf_page_index,
+    }
+}
+
+fn merge_progress_ledger(
+    records: impl IntoIterator<Item = ReaderProgressRecord>,
+) -> Vec<ReaderProgressRecord> {
+    let mut newest = BTreeMap::<(String, ReaderProgressBookType), ReaderProgressRecord>::new();
+    for record in records {
+        if validate_progress_record(&record).is_err() {
+            continue;
+        }
+        let key = (record.fingerprint.clone(), record.book_type);
+        let replace = newest.get(&key).is_none_or(|current| {
+            record.updated_at > current.updated_at
+                || (record.updated_at == current.updated_at
+                    && progress_position(&record) > progress_position(current))
+        });
+        if replace {
+            newest.insert(key, record);
+        }
+    }
+    let mut records = newest.into_values().collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.fingerprint.cmp(&right.fingerprint))
+            .then_with(|| left.book_type.cmp(&right.book_type))
+    });
+    records.truncate(MAX_READER_PROGRESS_RECORDS);
+    records
+}
+
+fn progress_record_for_book(book: &StoredReaderBook) -> Option<ReaderProgressRecord> {
+    let fingerprint = book.fingerprint.as_ref()?.clone();
+    if !valid_fingerprint(&fingerprint) {
+        return None;
+    }
+    Some(ReaderProgressRecord {
+        fingerprint,
+        book_type: book.book_type.into(),
+        text_page_index: i32::try_from(book.text_page_index).ok()?,
+        text_paragraph_index: i32::try_from(book.text_paragraph_index).ok()?,
+        pdf_page_index: i32::try_from(book.pdf_page_index).ok()?,
+        total_pages: i32::try_from(book.total_pages).ok()?,
+        updated_at: book.progress_updated_at.max(0),
+    })
+}
+
+fn map_pdf_progress_page(source_index: i32, source_total: i32, destination_total: usize) -> usize {
+    let destination_limit = if destination_total > 0 {
+        destination_total.min(MAX_PDF_PAGES) - 1
+    } else {
+        MAX_PDF_PAGES - 1
+    };
+    if source_total <= 1 || destination_total <= 1 || source_total as usize == destination_total {
+        return (source_index.max(0) as usize).min(destination_limit);
+    }
+    let source_limit = i64::from(source_total - 1);
+    let destination_last = destination_total.min(MAX_PDF_PAGES) as i64 - 1;
+    let mapped = (i64::from(source_index.min(source_total - 1).max(0)) * destination_last
+        + source_limit / 2)
+        / source_limit;
+    usize::try_from(mapped).unwrap_or(0).min(destination_limit)
+}
+
+fn mapped_text_page_for_book(
+    book: &StoredReaderBook,
+    preferences: &ReaderPreferences,
+    paragraph_index: usize,
+) -> Option<usize> {
+    let content = read_document_content(book, preferences).ok()?;
+    Some(remap_text_page_index(&content, paragraph_index))
+}
+
+fn merge_reader_progress_state(
+    mut state: StoredReaderState,
+    incoming: &[ReaderProgressRecord],
+) -> Result<StoredReaderState, ReaderError> {
+    if incoming.len() > MAX_READER_PROGRESS_RECORDS
+        || incoming
+            .iter()
+            .any(|record| validate_progress_record(record).is_err())
+    {
+        return Err(ReaderError::InvalidInput);
+    }
+    let ledger = merge_progress_ledger(
+        state
+            .progress_ledger
+            .iter()
+            .cloned()
+            .chain(incoming.iter().cloned()),
+    );
+    let newest = ledger
+        .iter()
+        .map(|record| ((record.fingerprint.as_str(), record.book_type), record))
+        .collect::<BTreeMap<_, _>>();
+    for book in &mut state.books {
+        let Some(fingerprint) = book.fingerprint.as_deref() else {
+            continue;
+        };
+        let Some(record) = newest.get(&(fingerprint, book.book_type.into())) else {
+            continue;
+        };
+        let should_apply = record.updated_at > book.progress_updated_at
+            || (record.updated_at == book.progress_updated_at
+                && progress_position(record) as usize > book_progress_position(book));
+        if !should_apply {
+            continue;
+        }
+        match book.book_type {
+            ReaderBookType::Txt => {
+                let paragraph = record.text_paragraph_index as usize;
+                let Some(page) = mapped_text_page_for_book(book, &state.preferences, paragraph)
+                else {
+                    // Retain the ledger even if a previously imported local path is temporarily
+                    // unavailable. Opening/re-importing the same bytes applies it later.
+                    continue;
+                };
+                book.text_paragraph_index = paragraph;
+                book.text_page_index = page;
+            }
+            ReaderBookType::Pdf => {
+                book.pdf_page_index = map_pdf_progress_page(
+                    record.pdf_page_index,
+                    record.total_pages,
+                    book.total_pages,
+                );
+            }
+        }
+        book.progress_updated_at = book.progress_updated_at.max(record.updated_at);
+    }
+    state.progress_ledger = ledger;
+    Ok(state)
+}
+
+fn encode_reader_progress_records(
+    records: &[ReaderProgressRecord],
+) -> Result<Vec<u8>, ReaderError> {
+    if records.len() > MAX_READER_PROGRESS_RECORDS
+        || records
+            .iter()
+            .any(|record| validate_progress_record(record).is_err())
+    {
+        return Err(ReaderError::InvalidInput);
+    }
+    let mut sorted = records.to_vec();
+    sorted.sort_by(|left, right| {
+        left.fingerprint
+            .cmp(&right.fingerprint)
+            .then_with(|| left.book_type.cmp(&right.book_type))
+    });
+    if sorted.windows(2).any(|pair| {
+        pair[0].fingerprint == pair[1].fingerprint && pair[0].book_type == pair[1].book_type
+    }) {
+        return Err(ReaderError::InvalidInput);
+    }
+    let bytes = serde_json::to_vec(&ReaderProgressPayload {
+        version: READER_PROGRESS_FORMAT_VERSION,
+        records: sorted,
+    })
+    .map_err(|_| ReaderError::Storage)?;
+    if bytes.is_empty() || bytes.len() > MAX_READER_PROGRESS_JSON_BYTES {
+        return Err(ReaderError::TooLarge);
+    }
+    Ok(bytes)
+}
+
+fn decode_reader_progress_records(bytes: &[u8]) -> Result<Vec<ReaderProgressRecord>, ReaderError> {
+    if bytes.is_empty() || bytes.len() > MAX_READER_PROGRESS_JSON_BYTES {
+        return Err(ReaderError::TooLarge);
+    }
+    let mut payload: ReaderProgressPayload =
+        serde_json::from_slice(bytes).map_err(|_| ReaderError::InvalidInput)?;
+    if payload.version != READER_PROGRESS_FORMAT_VERSION
+        || payload.records.len() > MAX_READER_PROGRESS_RECORDS
+        || payload
+            .records
+            .iter()
+            .any(|record| validate_progress_record(record).is_err())
+    {
+        return Err(ReaderError::InvalidInput);
+    }
+    payload.records.sort_by(|left, right| {
+        left.fingerprint
+            .cmp(&right.fingerprint)
+            .then_with(|| left.book_type.cmp(&right.book_type))
+    });
+    if payload.records.windows(2).any(|pair| {
+        pair[0].fingerprint == pair[1].fingerprint && pair[0].book_type == pair[1].book_type
+    }) {
+        return Err(ReaderError::InvalidInput);
+    }
+    Ok(payload.records)
+}
+
+fn enrich_legacy_reader_fingerprints(
+    mut state: StoredReaderState,
+) -> Result<StoredReaderState, ReaderError> {
+    let mut candidates = state
+        .books
+        .iter()
+        .filter(|book| book.fingerprint.is_none() && has_meaningful_progress(book))
+        .map(|book| {
+            (
+                book.id.clone(),
+                book.progress_updated_at,
+                book.last_opened_at,
+            )
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then_with(|| right.2.cmp(&left.2))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    let mut remaining = 512_u64 * 1024 * 1024;
+    for (id, _, _) in candidates {
+        let Some(index) = state.books.iter().position(|book| book.id == id) else {
+            continue;
+        };
+        let declared = open_stored_reader_file(&state.books[index])
+            .and_then(|file| file.metadata().map_err(|_| ReaderError::Storage))
+            .map(|metadata| metadata.len());
+        let Ok(declared) = declared else {
+            continue;
+        };
+        if declared > remaining {
+            continue;
+        }
+        let Ok((fingerprint, measured)) = fingerprint_reader_book_with_size(&state.books[index])
+        else {
+            continue;
+        };
+        remaining = remaining.saturating_sub(measured);
+        state.books[index].fingerprint = Some(fingerprint);
+    }
+    merge_reader_progress_state(state, &[])
+}
+
+fn has_meaningful_progress(book: &StoredReaderBook) -> bool {
+    book.progress_updated_at > 0
+        || match book.book_type {
+            ReaderBookType::Txt => book.text_page_index > 0 || book.text_paragraph_index > 0,
+            ReaderBookType::Pdf => book.pdf_page_index > 0,
+        }
+}
+
+pub(crate) fn export_reader_progress_records(
+    private_dir: &Path,
+) -> Result<Vec<ReaderProgressRecord>, ReaderError> {
+    let _guard = reader_lock()?;
+    let original = load_reader_state(private_dir)?;
+    let normalized = enrich_legacy_reader_fingerprints(original.clone())?;
+    if normalized != original {
+        write_reader_state(private_dir, &normalized)?;
+    }
+    let mut records = merge_progress_ledger(
+        normalized
+            .books
+            .iter()
+            .filter_map(progress_record_for_book)
+            .chain(normalized.progress_ledger.iter().cloned()),
+    );
+    records.sort_by(|left, right| {
+        left.fingerprint
+            .cmp(&right.fingerprint)
+            .then_with(|| left.book_type.cmp(&right.book_type))
+    });
+    Ok(records)
+}
+
+pub(crate) fn snapshot_reader_progress(
+    private_dir: &Path,
+    max_bytes: u64,
+) -> Result<ReaderProgressSnapshot, ReaderError> {
+    let records = export_reader_progress_records(private_dir)?;
+    let bytes = encode_reader_progress_records(&records)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(ReaderError::TooLarge);
+    }
+    Ok(ReaderProgressSnapshot {
+        bytes,
+        last_modified_millis: records
+            .iter()
+            .map(|record| record.updated_at)
+            .max()
+            .unwrap_or(0),
+    })
+}
+
+pub(crate) fn merge_reader_progress_bytes(
+    private_dir: &Path,
+    bytes: &[u8],
+    max_bytes: u64,
+) -> Result<ReaderProgressSnapshot, ReaderError> {
+    if bytes.len() as u64 > max_bytes {
+        return Err(ReaderError::TooLarge);
+    }
+    let incoming = decode_reader_progress_records(bytes)?;
+    let _guard = reader_lock()?;
+    let current = load_reader_state(private_dir)?;
+    let merged = merge_reader_progress_state(current.clone(), &incoming)?;
+    let mut records = merge_progress_ledger(
+        merged
+            .books
+            .iter()
+            .filter_map(progress_record_for_book)
+            .chain(merged.progress_ledger.iter().cloned()),
+    );
+    records.sort_by(|left, right| {
+        left.fingerprint
+            .cmp(&right.fingerprint)
+            .then_with(|| left.book_type.cmp(&right.book_type))
+    });
+    let encoded = encode_reader_progress_records(&records)?;
+    if encoded.len() as u64 > max_bytes {
+        return Err(ReaderError::TooLarge);
+    }
+    // The complete merged wire object is validated before any durable mutation. A caller-specific
+    // lower max_bytes therefore cannot report failure after reader progress was already changed.
+    if merged != current {
+        write_reader_state(private_dir, &merged)?;
+    }
+    Ok(ReaderProgressSnapshot {
+        bytes: encoded,
+        last_modified_millis: records
+            .iter()
+            .map(|record| record.updated_at)
+            .max()
+            .unwrap_or(0),
+    })
+}
+
+pub(crate) fn begin_reader_progress_merge(
+    private_dir: &Path,
+    records: &[ReaderProgressRecord],
+) -> Result<ReaderProgressMutation, ReaderError> {
+    let guard = reader_lock()?;
+    let current = load_reader_state(private_dir)?;
+    let merged = merge_reader_progress_state(current.clone(), records)?;
+    if merged != current {
+        write_reader_state(private_dir, &merged)?;
+    }
+    Ok(ReaderProgressMutation {
+        guard: Some(guard),
+        private_dir: private_dir.to_path_buf(),
+        original: current,
+        active: true,
+    })
+}
+
+pub(crate) fn export_reader_state_for_recovery(private_dir: &Path) -> Result<Vec<u8>, ReaderError> {
+    let _guard = reader_lock()?;
+    let state = load_reader_state(private_dir)?;
+    let bytes = serde_json::to_vec(&state).map_err(|_| ReaderError::Storage)?;
+    if bytes.is_empty() || bytes.len() > MAX_READER_STATE_BYTES {
+        return Err(ReaderError::TooLarge);
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn begin_reader_state_restore(
+    private_dir: &Path,
+    bytes: &[u8],
+) -> Result<ReaderProgressMutation, ReaderError> {
+    if bytes.is_empty() || bytes.len() > MAX_READER_STATE_BYTES {
+        return Err(ReaderError::TooLarge);
+    }
+    let replacement: StoredReaderState =
+        serde_json::from_slice(bytes).map_err(|_| ReaderError::StateCorrupt)?;
+    let replacement = validate_stored_state(replacement)?;
+    let guard = reader_lock()?;
+    let current = load_reader_state(private_dir)?;
+    if replacement != current {
+        write_reader_state(private_dir, &replacement)?;
+    }
+    Ok(ReaderProgressMutation {
+        guard: Some(guard),
+        private_dir: private_dir.to_path_buf(),
+        original: current,
+        active: true,
+    })
+}
+
+fn next_reader_progress_timestamp(previous: i64) -> i64 {
+    if previous == i64::MAX {
+        previous
+    } else {
+        chrono::Utc::now()
+            .timestamp_millis()
+            .max(0)
+            .max(previous + 1)
+    }
 }
 
 fn decode_reader_text(bytes: &[u8]) -> String {
@@ -1595,6 +2303,9 @@ mod tests {
                 text_page_index: 0,
                 pdf_page_index: 0,
                 reading_millis: 30_000,
+                fingerprint: None,
+                total_pages: 0,
+                progress_updated_at: 0,
             }],
             ..StoredReaderState::default()
         };
@@ -1644,5 +2355,292 @@ mod tests {
             normalize_reader_preferences(invalid),
             Err(ReaderError::InvalidInput)
         );
+    }
+
+    fn stored_book(path: &Path, book_type: ReaderBookType) -> StoredReaderBook {
+        StoredReaderBook {
+            id: Uuid::new_v4().to_string(),
+            path: fs::canonicalize(path)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            title: "book".to_owned(),
+            book_type,
+            added_at: 1,
+            last_opened_at: 2,
+            text_paragraph_index: 0,
+            text_page_index: 0,
+            pdf_page_index: 0,
+            reading_millis: 0,
+            fingerprint: None,
+            total_pages: 0,
+            progress_updated_at: 0,
+        }
+    }
+
+    fn progress_record(
+        fingerprint: &str,
+        book_type: ReaderProgressBookType,
+        updated_at: i64,
+        position: i32,
+    ) -> ReaderProgressRecord {
+        ReaderProgressRecord {
+            fingerprint: fingerprint.to_owned(),
+            book_type,
+            text_page_index: if book_type == ReaderProgressBookType::Txt {
+                -1
+            } else {
+                0
+            },
+            text_paragraph_index: if book_type == ReaderProgressBookType::Txt {
+                position
+            } else {
+                0
+            },
+            pdf_page_index: if book_type == ReaderProgressBookType::Pdf {
+                position
+            } else {
+                0
+            },
+            total_pages: 0,
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn fingerprint_matches_android_domain_type_and_full_bytes() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("book.txt");
+        fs::write(&path, b"hello").unwrap();
+        let book = stored_book(&path, ReaderBookType::Txt);
+        assert_eq!(
+            fingerprint_reader_book(&book).unwrap(),
+            "d0d2326eb359ca57360d29729d7dea223c503ecbed572f3a9756bef79e5ef853"
+        );
+
+        let pdf_path = root.path().join("book.pdf");
+        fs::write(&pdf_path, b"%PDF-hello").unwrap();
+        let pdf = stored_book(&pdf_path, ReaderBookType::Pdf);
+        assert_ne!(
+            fingerprint_reader_book(&pdf).unwrap(),
+            fingerprint_reader_book(&book).unwrap()
+        );
+    }
+
+    #[test]
+    fn schema_one_state_migrates_without_losing_local_progress() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("legacy.txt");
+        fs::write(&path, "legacy").unwrap();
+        let (target, _, _, directory) = state_paths(root.path());
+        fs::create_dir_all(directory).unwrap();
+        let legacy = serde_json::json!({
+            "schemaVersion": 1,
+            "preferences": serde_json::to_value(ReaderPreferences::default()).unwrap(),
+            "books": [{
+                "id": Uuid::new_v4().to_string(),
+                "path": fs::canonicalize(path).unwrap().to_string_lossy(),
+                "title": "legacy",
+                "bookType": "txt",
+                "addedAt": 1,
+                "lastOpenedAt": 2,
+                "textParagraphIndex": 7,
+                "textPageIndex": 3,
+                "pdfPageIndex": 0,
+                "readingMillis": 9
+            }]
+        });
+        fs::write(&target, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+        let migrated = load_reader_state(root.path()).unwrap();
+        assert_eq!(migrated.schema_version, 2);
+        assert_eq!(migrated.books[0].text_paragraph_index, 7);
+        assert_eq!(migrated.books[0].text_page_index, 3);
+        assert_eq!(migrated.books[0].fingerprint, None);
+        assert!(migrated.progress_ledger.is_empty());
+    }
+
+    #[test]
+    fn reader_progress_codec_is_strict_bounded_and_deterministic() {
+        let first = progress_record(&"b".repeat(64), ReaderProgressBookType::Pdf, 20, 4);
+        let second = progress_record(&"a".repeat(64), ReaderProgressBookType::Txt, 10, 3);
+        let encoded = encode_reader_progress_records(&[first.clone(), second.clone()]).unwrap();
+        let text = std::str::from_utf8(&encoded).unwrap();
+        assert!(text.starts_with("{\"version\":1,\"records\":[{\"fingerprint\":\"aaa"));
+        assert_eq!(
+            decode_reader_progress_records(&encoded).unwrap(),
+            vec![second.clone(), first.clone()]
+        );
+
+        let unknown_root = text.replacen("{", "{\"extra\":true,", 1);
+        assert_eq!(
+            decode_reader_progress_records(unknown_root.as_bytes()),
+            Err(ReaderError::InvalidInput)
+        );
+        let unknown_record = text.replacen("\"fingerprint\"", "\"extra\":true,\"fingerprint\"", 1);
+        assert_eq!(
+            decode_reader_progress_records(unknown_record.as_bytes()),
+            Err(ReaderError::InvalidInput)
+        );
+        let wrong_type = text.replace("\"TXT\"", "\"txt\"");
+        assert_eq!(
+            decode_reader_progress_records(wrong_type.as_bytes()),
+            Err(ReaderError::InvalidInput)
+        );
+        assert_eq!(
+            encode_reader_progress_records(&[first.clone(), first]),
+            Err(ReaderError::InvalidInput)
+        );
+        assert_eq!(
+            decode_reader_progress_records(&vec![b' '; MAX_READER_PROGRESS_JSON_BYTES + 1]),
+            Err(ReaderError::TooLarge)
+        );
+    }
+
+    #[test]
+    fn progress_received_before_import_is_retained_and_txt_uses_paragraph_mapping() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("same.txt");
+        fs::write(
+            &path,
+            format!("{}\nsecond paragraph\nthird paragraph", "a".repeat(1_800)),
+        )
+        .unwrap();
+        let mut book = stored_book(&path, ReaderBookType::Txt);
+        let fingerprint = fingerprint_reader_book(&book).unwrap();
+        let incoming = ReaderProgressRecord {
+            fingerprint: fingerprint.clone(),
+            book_type: ReaderProgressBookType::Txt,
+            text_page_index: 49_999,
+            text_paragraph_index: 2,
+            pdf_page_index: 0,
+            total_pages: 50_000,
+            updated_at: 123,
+        };
+
+        let waiting =
+            merge_reader_progress_state(StoredReaderState::default(), &[incoming]).unwrap();
+        assert_eq!(waiting.progress_ledger.len(), 1);
+        book.fingerprint = Some(fingerprint);
+        let with_book = merge_reader_progress_state(
+            StoredReaderState {
+                books: vec![book],
+                ..waiting
+            },
+            &[],
+        )
+        .unwrap();
+        assert_eq!(with_book.books[0].text_paragraph_index, 2);
+        assert_eq!(with_book.books[0].text_page_index, 1);
+        assert_eq!(with_book.books[0].progress_updated_at, 123);
+    }
+
+    #[test]
+    fn progress_merge_is_lww_with_position_tie_break() {
+        let fingerprint = "c".repeat(64);
+        let book = StoredReaderBook {
+            id: Uuid::new_v4().to_string(),
+            path: "C:\\book.pdf".to_owned(),
+            title: "book".to_owned(),
+            book_type: ReaderBookType::Pdf,
+            added_at: 1,
+            last_opened_at: 2,
+            text_paragraph_index: 0,
+            text_page_index: 0,
+            pdf_page_index: 3,
+            reading_millis: 0,
+            fingerprint: Some(fingerprint.clone()),
+            total_pages: 100,
+            progress_updated_at: 10,
+        };
+        let older = progress_record(&fingerprint, ReaderProgressBookType::Pdf, 9, 90);
+        let same_time_further = progress_record(&fingerprint, ReaderProgressBookType::Pdf, 10, 5);
+        let state = StoredReaderState {
+            books: vec![book.clone()],
+            ..StoredReaderState::default()
+        };
+        let merged = merge_reader_progress_state(state, &[older, same_time_further]).unwrap();
+        assert_eq!(merged.books[0].pdf_page_index, 5);
+        assert_eq!(merged.books[0].progress_updated_at, 10);
+    }
+
+    #[test]
+    fn merge_size_failure_does_not_mutate_private_state() {
+        let root = tempdir().unwrap();
+        let original = StoredReaderState {
+            progress_ledger: vec![progress_record(
+                &"a".repeat(64),
+                ReaderProgressBookType::Pdf,
+                1,
+                1,
+            )],
+            ..StoredReaderState::default()
+        };
+        write_reader_state(root.path(), &original).unwrap();
+        let incoming = encode_reader_progress_records(&[progress_record(
+            &"b".repeat(64),
+            ReaderProgressBookType::Pdf,
+            2,
+            2,
+        )])
+        .unwrap();
+
+        assert_eq!(
+            merge_reader_progress_bytes(root.path(), &incoming, incoming.len() as u64),
+            Err(ReaderError::TooLarge)
+        );
+        assert_eq!(load_reader_state(root.path()).unwrap(), original);
+    }
+
+    #[test]
+    fn reader_mutation_rollback_restores_full_state_beyond_wire_union() {
+        let root = tempdir().unwrap();
+        let pdf_path = root.path().join("book.pdf");
+        fs::write(&pdf_path, b"%PDF-test").unwrap();
+        let mut book = stored_book(&pdf_path, ReaderBookType::Pdf);
+        let book_fingerprint = "f".repeat(64);
+        book.fingerprint = Some(book_fingerprint.clone());
+        book.total_pages = 100;
+        let ledger = (0..MAX_READER_PROGRESS_RECORDS)
+            .map(|index| {
+                progress_record(&format!("{index:064x}"), ReaderProgressBookType::Pdf, 1, 1)
+            })
+            .collect::<Vec<_>>();
+        let state = StoredReaderState {
+            books: vec![book],
+            progress_ledger: ledger,
+            ..StoredReaderState::default()
+        };
+        write_reader_state(root.path(), &state).unwrap();
+        let original = load_reader_state(root.path()).unwrap();
+        assert_eq!(
+            merge_progress_ledger(
+                original
+                    .books
+                    .iter()
+                    .filter_map(progress_record_for_book)
+                    .chain(original.progress_ledger.iter().cloned())
+            )
+            .len(),
+            MAX_READER_PROGRESS_RECORDS
+        );
+
+        let mutation = begin_reader_progress_merge(
+            root.path(),
+            &[progress_record(
+                &book_fingerprint,
+                ReaderProgressBookType::Pdf,
+                1_000,
+                12,
+            )],
+        )
+        .unwrap();
+        let (target, _, _, _) = state_paths(root.path());
+        let changed = read_state_candidate(&target).unwrap().unwrap();
+        assert_eq!(changed.books[0].pdf_page_index, 12);
+        assert_ne!(changed, original);
+
+        mutation.rollback().unwrap();
+        assert_eq!(load_reader_state(root.path()).unwrap(), original);
     }
 }

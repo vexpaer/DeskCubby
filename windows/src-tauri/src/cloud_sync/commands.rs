@@ -20,6 +20,7 @@ use crate::{
         self, CloudSyncBaseStateRecord, CloudSyncConfigRecord, CloudSyncSecretMutation,
         CloudSyncSecretRecord, CloudSyncSettingsRecord, CloudSyncStatusRecord, DataError, Database,
     },
+    reader,
     security::{CommandResult, SecurityErrorDto},
     usage::{UsageServiceError, UsageStatisticsService},
 };
@@ -30,8 +31,9 @@ use super::{
     CloudSyncItemOutcome, CloudSyncLimits, CloudSyncProgress, CloudSyncRunResult,
     CloudSyncServiceType, CloudSyncStateStore, EncryptedCloudCredentials, FileSystemLocalStore,
     JsonBackupBridge, JsonSnapshot, LocalRoots, LocalSyncObject, LocalWriteResult, PendingJson,
-    ReqwestRemoteStoreFactory, UsageStatisticsBridge, UsageStatisticsSnapshot, decrypt_credentials,
-    encrypt_credentials, secret_binding_sha256, validate_cloud_sync_config,
+    ReaderProgressBridge, ReaderProgressSnapshot, ReqwestRemoteStoreFactory, UsageStatisticsBridge,
+    UsageStatisticsSnapshot, decrypt_credentials, encrypt_credentials, secret_binding_sha256,
+    validate_cloud_sync_config,
 };
 
 const DTO_VERSION: u32 = 1;
@@ -269,17 +271,23 @@ impl CloudSyncService {
             let roots = self.local_roots()?;
             let bridge: Arc<dyn JsonBackupBridge> = Arc::new(DatabaseJsonBackupBridge {
                 database: self.database.clone(),
+                private_dir: self.private_dir.clone(),
             });
             let usage_bridge = self.usage_statistics.as_ref().map(|service| {
                 Arc::new(ReadOnlyUsageStatisticsBridge {
                     service: Arc::clone(service),
                 }) as Arc<dyn UsageStatisticsBridge>
             });
-            let local = match FileSystemLocalStore::new_with_usage(
+            let reader_progress_bridge: Arc<dyn ReaderProgressBridge> =
+                Arc::new(PrivateReaderProgressBridge {
+                    private_dir: self.private_dir.clone(),
+                });
+            let local = match FileSystemLocalStore::new_with_bridges(
                 roots,
                 core_config.id.clone(),
                 Some(bridge),
                 usage_bridge,
+                Some(reader_progress_bridge),
             ) {
                 Ok(local) => Arc::new(local),
                 Err(error) => return Err(error),
@@ -584,6 +592,7 @@ impl CloudSyncStateStore for DatabaseStateStore {
 #[derive(Clone)]
 struct DatabaseJsonBackupBridge {
     database: Database,
+    private_dir: PathBuf,
 }
 
 impl JsonBackupBridge for DatabaseJsonBackupBridge {
@@ -592,7 +601,7 @@ impl JsonBackupBridge for DatabaseJsonBackupBridge {
         max_bytes: u64,
     ) -> BoxFuture<'a, Result<JsonSnapshot, CloudSyncError>> {
         Box::pin(async move {
-            let bytes = app_commands::build_cloud_backup_bytes(&self.database)
+            let bytes = app_commands::build_cloud_backup_bytes(&self.database, &self.private_dir)
                 .map_err(map_security_to_cloud)?;
             if bytes.len() as u64 > max_bytes {
                 return Err(CloudSyncError::limit_exceeded());
@@ -675,6 +684,82 @@ impl UsageStatisticsBridge for ReadOnlyUsageStatisticsBridge {
                 local_token: format!("usage-cloud-{content_sha256}"),
             }))
         })
+    }
+}
+
+#[derive(Clone)]
+struct PrivateReaderProgressBridge {
+    private_dir: PathBuf,
+}
+
+impl ReaderProgressBridge for PrivateReaderProgressBridge {
+    fn snapshot<'a>(
+        &'a self,
+        max_bytes: u64,
+    ) -> BoxFuture<'a, Result<ReaderProgressSnapshot, CloudSyncError>> {
+        Box::pin(async move {
+            let private_dir = self.private_dir.clone();
+            let snapshot = tokio::task::spawn_blocking(move || {
+                reader::snapshot_reader_progress(&private_dir, max_bytes)
+            })
+            .await
+            .map_err(|_| CloudSyncError::storage())?
+            .map_err(map_reader_to_cloud)?;
+            let local_token = super::encoding::sha256_hex(&snapshot.bytes);
+            Ok(ReaderProgressSnapshot {
+                bytes: snapshot.bytes,
+                last_modified_millis: snapshot.last_modified_millis,
+                local_token,
+            })
+        })
+    }
+
+    fn merge_remote<'a>(
+        &'a self,
+        bytes: &'a [u8],
+        content_sha256: &'a str,
+        max_bytes: u64,
+    ) -> BoxFuture<'a, Result<ReaderProgressSnapshot, CloudSyncError>> {
+        Box::pin(async move {
+            if bytes.is_empty()
+                || bytes.len() > reader::MAX_READER_PROGRESS_JSON_BYTES
+                || bytes.len() as u64 > max_bytes
+                || super::encoding::sha256_hex(bytes) != content_sha256
+            {
+                return Err(CloudSyncError::conflict());
+            }
+            let private_dir = self.private_dir.clone();
+            let owned = bytes.to_vec();
+            let snapshot = tokio::task::spawn_blocking(move || {
+                reader::merge_reader_progress_bytes(&private_dir, &owned, max_bytes)
+            })
+            .await
+            .map_err(|_| CloudSyncError::storage())?
+            .map_err(map_reader_to_cloud)?;
+            let local_token = super::encoding::sha256_hex(&snapshot.bytes);
+            Ok(ReaderProgressSnapshot {
+                bytes: snapshot.bytes,
+                last_modified_millis: snapshot.last_modified_millis,
+                local_token,
+            })
+        })
+    }
+}
+
+fn map_reader_to_cloud(error: reader::ReaderError) -> CloudSyncError {
+    match error {
+        reader::ReaderError::TooLarge | reader::ReaderError::TooManyBooks => {
+            CloudSyncError::limit_exceeded()
+        }
+        reader::ReaderError::InvalidInput | reader::ReaderError::UnsupportedType => {
+            CloudSyncError::invalid_input()
+        }
+        reader::ReaderError::NotFound
+        | reader::ReaderError::PathNotAllowed
+        | reader::ReaderError::SourceChanged => CloudSyncError::conflict(),
+        reader::ReaderError::StateCorrupt
+        | reader::ReaderError::StateUnsupported
+        | reader::ReaderError::Storage => CloudSyncError::storage(),
     }
 }
 
@@ -1256,6 +1341,9 @@ pub(crate) fn backup_configs_from_database(
                         CloudSyncContent::JsonBackup => backup::CloudSyncContent::JsonBackup,
                         CloudSyncContent::UsageStatistics => {
                             backup::CloudSyncContent::UsageStatistics
+                        }
+                        CloudSyncContent::ReadingProgress => {
+                            backup::CloudSyncContent::ReadingProgress
                         }
                     })
                     .collect(),

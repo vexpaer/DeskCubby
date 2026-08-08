@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "deskcubby-windows"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -674,6 +674,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hex",
  "image",
+ "md-5",
  "minisign-verify",
  "notify",
  "pbkdf2",
@@ -2043,6 +2044,16 @@ dependencies = [
  "log",
  "tendril",
  "web_atoms",
+]
+
+[[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest",
 ]
 
 [[package]]

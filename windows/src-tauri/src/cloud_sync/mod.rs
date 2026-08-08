@@ -24,7 +24,8 @@ mod validation;
 pub use engine::CloudSyncEngine;
 pub use local::{
     FileSystemLocalStore, JsonBackupBridge, JsonSnapshot, LocalRoots, PendingJson,
-    UsageStatisticsBridge, UsageStatisticsSnapshot, canonicalize_backup_for_cloud,
+    ReaderProgressBridge, ReaderProgressSnapshot, UsageStatisticsBridge, UsageStatisticsSnapshot,
+    canonicalize_backup_for_cloud,
 };
 pub use manifest::ManifestRemoteStore;
 pub use secrets::{

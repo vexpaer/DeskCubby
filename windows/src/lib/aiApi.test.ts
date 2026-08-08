@@ -45,7 +45,7 @@ describe("aiApi", () => {
     expect(serialized).not.toContain("apiKey");
   });
 
-  it("saves the full v27-compatible setting through the versioned command", async () => {
+  it("saves the full v28-compatible setting through the versioned command", async () => {
     invokeMock.mockResolvedValue(SETTINGS as never);
     await aiApi.saveSettings(SETTINGS);
     expect(invokeMock).toHaveBeenCalledWith("save_ai_settings", {

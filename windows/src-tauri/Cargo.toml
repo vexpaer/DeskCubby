@@ -1,6 +1,6 @@
 [package]
 name = "deskcubby-windows"
-version = "0.3.0"
+version = "0.4.0"
 description = "DeskCubby for Windows"
 authors = ["DeskCubby contributors"]
 edition = "2024"
@@ -22,6 +22,7 @@ encoding_rs = "0.8"
 getrandom = "0.3"
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+md-5 = "0.10"
 minisign-verify = "=0.2.5"
 notify = "8"
 pbkdf2 = "0.12"

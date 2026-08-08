@@ -1,4 +1,4 @@
-name: Windows signed release
+name: Windows release
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Existing protected release tag, for example windows-v0.3.0"
+        description: "Existing protected release tag, for example windows-v0.4.0"
         required: true
         type: string
 
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   release:
-    name: Build signed Windows release
+    name: Build Windows release
     runs-on: windows-latest
     timeout-minutes: 90
     environment: windows-production
@@ -31,7 +31,6 @@ jobs:
       # for GitHub's repository-wide `/releases/latest` alias.
       DESKCUBBY_UPDATER_ENDPOINT: https://github.com/vexpaer/DeskCubby/releases/download/windows-stable/latest.json
       DESKCUBBY_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
-      DESKCUBBY_WINDOWS_PUBLISHER: ${{ vars.WINDOWS_PUBLISHER }}
       DESKCUBBY_WINDOWS_SIGNER_SUBJECT: ${{ vars.WINDOWS_SIGNER_SUBJECT }}
       DESKCUBBY_WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
       DESKCUBBY_WINDOWS_TIMESTAMP_TSP: ${{ vars.WINDOWS_TIMESTAMP_TSP }}
@@ -111,8 +110,9 @@ jobs:
           cargo clippy --locked --manifest-path .\src-tauri\Cargo.toml --all-targets -- -D warnings
           cargo test --locked --manifest-path .\src-tauri\Cargo.toml
           .\scripts\verify-packaging.ps1
+          .\scripts\test-release-policy.ps1
 
-      - name: Fail closed when production signing inputs are missing
+      - name: Validate updater signing and optional Authenticode inputs
         shell: pwsh
         working-directory: windows
         env:
@@ -125,8 +125,6 @@ jobs:
           $required = @{
             DESKCUBBY_UPDATER_PUBLIC_KEY = $env:DESKCUBBY_UPDATER_PUBLIC_KEY
             DESKCUBBY_UPDATER_ENDPOINT = $env:DESKCUBBY_UPDATER_ENDPOINT
-            DESKCUBBY_WINDOWS_PUBLISHER = $env:DESKCUBBY_WINDOWS_PUBLISHER
-            DESKCUBBY_WINDOWS_SIGNER_SUBJECT = $env:DESKCUBBY_WINDOWS_SIGNER_SUBJECT
             TAURI_SIGNING_PRIVATE_KEY = $env:TAURI_SIGNING_PRIVATE_KEY
             TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           }
@@ -141,8 +139,8 @@ jobs:
           $hasSignCommand = -not [string]::IsNullOrWhiteSpace(
             $env:DESKCUBBY_WINDOWS_SIGN_COMMAND
           )
-          if ($hasPfx -eq $hasSignCommand) {
-            throw "Configure exactly one Authenticode signing mechanism."
+          if ($hasPfx -and $hasSignCommand) {
+            throw "Configure at most one Authenticode signing mechanism."
           }
           if ($hasPfx) {
             if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE_PASSWORD)) {
@@ -153,7 +151,23 @@ jobs:
             )) {
               throw "WINDOWS_TIMESTAMP_URL is required for PFX signing."
             }
+            $authenticodePolicy = "Required"
+          } elseif ($hasSignCommand) {
+            if ([string]::IsNullOrWhiteSpace(
+              $env:DESKCUBBY_WINDOWS_SIGNER_SUBJECT
+            )) {
+              throw "WINDOWS_SIGNER_SUBJECT is required for custom signing."
+            }
+            $authenticodePolicy = "Required"
+          } else {
+            $authenticodePolicy = "Absent"
+            Write-Warning (
+              "Authenticode is not configured. The updater remains signed, " +
+              "but Windows may display an unknown publisher."
+            )
           }
+          "DESKCUBBY_AUTHENTICODE_POLICY=$authenticodePolicy" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Import Authenticode PFX when configured
         shell: pwsh
@@ -161,15 +175,14 @@ jobs:
         env:
           WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          DESKCUBBY_WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
         run: |
           if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_BASE64)) {
             .\scripts\import-code-signing-certificate.ps1 -WriteGitHubEnvironment
-          } elseif ([string]::IsNullOrWhiteSpace($env:DESKCUBBY_WINDOWS_SIGN_COMMAND)) {
-            throw "No Authenticode PFX or Tauri signCommand was configured."
+          } else {
+            Write-Host "No Authenticode PFX was configured; nothing to import."
           }
 
-      - name: Build and verify signed updater artifacts
+      - name: Build and verify release artifacts
         shell: pwsh
         working-directory: windows
         env:
@@ -199,7 +212,8 @@ jobs:
             -Version $config.version `
             -Tag $env:DESKCUBBY_RELEASE_TAG `
             -ExpectedCommit $env:DESKCUBBY_RELEASE_COMMIT `
-            -Repository "${{ github.repository }}"
+            -Repository "${{ github.repository }}" `
+            -AuthenticodePolicy $env:DESKCUBBY_AUTHENTICODE_POLICY
 
       - name: Remove imported certificate from the runner
         if: ${{ always() }}

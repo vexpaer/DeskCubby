@@ -23,8 +23,10 @@ use super::{
 
 const JSON_SYNC_KEY: &str = "json/dc.json";
 const LEGACY_JSON_SYNC_KEY: &str = "json/DeskCubby.json";
+const READER_PROGRESS_SYNC_KEY: &str = "reading/v1/progress.json";
 const MAX_JSON_BYTES: u64 = 64 * 1024 * 1024;
-const ANDROID_BACKUP_FORMAT_VERSION: i64 = 27;
+const ANDROID_BACKUP_FORMAT_VERSION: i64 = 28;
+const MAX_READER_PROGRESS_BYTES: usize = 512 * 1024;
 const MAX_PENDING_JSON: usize = 100;
 const RECOVERY_SUFFIX: &str = ".dc-sync-recovery";
 
@@ -81,7 +83,7 @@ pub trait JsonBackupBridge: Send + Sync {
         max_bytes: u64,
     ) -> BoxFuture<'a, Result<JsonSnapshot, CloudSyncError>>;
 
-    /// Perform the full Android-v27/legacy validation. No database mutation is allowed
+    /// Perform the full Android-v28/legacy validation. No database mutation is allowed
     /// here; importing remains a separate user-confirmed command.
     fn validate_incoming<'a>(
         &'a self,
@@ -131,13 +133,49 @@ pub trait UsageStatisticsBridge: Send + Sync {
     ) -> BoxFuture<'a, Result<LocalWriteResult, CloudSyncError>>;
 }
 
+/// One canonical, URI-free `reading/v1/progress.json` object. The bridge owns strict schema
+/// validation and record-level LWW merging; the generic store only guards key/hash/size changes.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ReaderProgressSnapshot {
+    pub bytes: Vec<u8>,
+    pub last_modified_millis: i64,
+    pub local_token: String,
+}
+
+impl fmt::Debug for ReaderProgressSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReaderProgressSnapshot")
+            .field("bytes", &format_args!("<redacted:{}>", self.bytes.len()))
+            .field("last_modified_millis", &self.last_modified_millis)
+            .field("local_token", &"<redacted>")
+            .finish()
+    }
+}
+
+pub trait ReaderProgressBridge: Send + Sync {
+    fn snapshot<'a>(
+        &'a self,
+        max_bytes: u64,
+    ) -> BoxFuture<'a, Result<ReaderProgressSnapshot, CloudSyncError>>;
+
+    fn merge_remote<'a>(
+        &'a self,
+        bytes: &'a [u8],
+        content_sha256: &'a str,
+        max_bytes: u64,
+    ) -> BoxFuture<'a, Result<ReaderProgressSnapshot, CloudSyncError>>;
+}
+
 pub struct FileSystemLocalStore {
     roots: LocalRoots,
     config_id: String,
     json_bridge: Option<Arc<dyn JsonBackupBridge>>,
     usage_bridge: Option<Arc<dyn UsageStatisticsBridge>>,
+    reader_progress_bridge: Option<Arc<dyn ReaderProgressBridge>>,
     json_snapshot: Mutex<Option<JsonSnapshot>>,
     usage_snapshots: Mutex<BTreeMap<String, UsageStatisticsSnapshot>>,
+    reader_progress_snapshot: Mutex<Option<ReaderProgressSnapshot>>,
     mutation_mutex: Mutex<()>,
 }
 
@@ -156,6 +194,16 @@ impl FileSystemLocalStore {
         json_bridge: Option<Arc<dyn JsonBackupBridge>>,
         usage_bridge: Option<Arc<dyn UsageStatisticsBridge>>,
     ) -> Result<Self, CloudSyncError> {
+        Self::new_with_bridges(roots, config_id, json_bridge, usage_bridge, None)
+    }
+
+    pub fn new_with_bridges(
+        roots: LocalRoots,
+        config_id: String,
+        json_bridge: Option<Arc<dyn JsonBackupBridge>>,
+        usage_bridge: Option<Arc<dyn UsageStatisticsBridge>>,
+        reader_progress_bridge: Option<Arc<dyn ReaderProgressBridge>>,
+    ) -> Result<Self, CloudSyncError> {
         if config_id.trim().is_empty() || config_id.chars().any(char::is_control) {
             return Err(CloudSyncError::invalid_configuration());
         }
@@ -164,8 +212,10 @@ impl FileSystemLocalStore {
             config_id,
             json_bridge,
             usage_bridge,
+            reader_progress_bridge,
             json_snapshot: Mutex::new(None),
             usage_snapshots: Mutex::new(BTreeMap::new()),
+            reader_progress_snapshot: Mutex::new(None),
             mutation_mutex: Mutex::new(()),
         })
     }
@@ -333,6 +383,32 @@ impl CloudLocalStore for FileSystemLocalStore {
             } else {
                 self.usage_snapshots.lock().await.clear();
             }
+            if selected_contents.contains(&CloudSyncContent::ReadingProgress) {
+                let bridge = self
+                    .reader_progress_bridge
+                    .as_ref()
+                    .ok_or_else(CloudSyncError::invalid_configuration)?;
+                let snapshot = bridge.snapshot(limits.max_object_bytes).await?;
+                if snapshot.bytes.is_empty()
+                    || snapshot.bytes.len() > MAX_READER_PROGRESS_BYTES
+                    || snapshot.bytes.len() as u64 > limits.max_object_bytes
+                    || snapshot.local_token.is_empty()
+                {
+                    return Err(CloudSyncError::limit_exceeded());
+                }
+                let object = LocalSyncObject {
+                    key: READER_PROGRESS_SYNC_KEY.to_owned(),
+                    content: CloudSyncContent::ReadingProgress,
+                    size: snapshot.bytes.len() as u64,
+                    last_modified_millis: snapshot.last_modified_millis.max(0),
+                    sha256: sha256_hex(&snapshot.bytes),
+                    local_token: snapshot.local_token.clone(),
+                };
+                *self.reader_progress_snapshot.lock().await = Some(snapshot);
+                result.push(object);
+            } else {
+                *self.reader_progress_snapshot.lock().await = None;
+            }
             if result.len() > limits.max_objects {
                 return Err(CloudSyncError::limit_exceeded());
             }
@@ -364,6 +440,19 @@ impl CloudLocalStore for FileSystemLocalStore {
                     .ok_or_else(CloudSyncError::conflict)?;
                 if snapshot.local_token != object.local_token
                     || snapshot.bytes.len() as u64 != object.size
+                    || sha256_hex(&snapshot.bytes) != object.sha256
+                {
+                    return Err(CloudSyncError::conflict());
+                }
+                return Ok(snapshot.bytes.clone());
+            }
+            if object.content == CloudSyncContent::ReadingProgress {
+                let snapshot = self.reader_progress_snapshot.lock().await;
+                let snapshot = snapshot.as_ref().ok_or_else(CloudSyncError::conflict)?;
+                if object.key != READER_PROGRESS_SYNC_KEY
+                    || snapshot.local_token != object.local_token
+                    || snapshot.bytes.len() as u64 != object.size
+                    || snapshot.bytes.len() > MAX_READER_PROGRESS_BYTES
                     || sha256_hex(&snapshot.bytes) != object.sha256
                 {
                     return Err(CloudSyncError::conflict());
@@ -435,6 +524,38 @@ impl CloudLocalStore for FileSystemLocalStore {
                         local_token: pending.id,
                     },
                 });
+            }
+            if key == READER_PROGRESS_SYNC_KEY {
+                if bytes.is_empty() || bytes.len() > MAX_READER_PROGRESS_BYTES {
+                    return Err(CloudSyncError::limit_exceeded());
+                }
+                let bridge = self
+                    .reader_progress_bridge
+                    .as_ref()
+                    .ok_or_else(CloudSyncError::invalid_configuration)?;
+                // Record-level LWW intentionally ignores the stale whole-object local hash. A
+                // newer page saved during the scan is merged, never replaced by an older remote
+                // snapshot; the next run uploads the merged object and converges both devices.
+                let merged = bridge
+                    .merge_remote(bytes, content_sha256, limits.max_object_bytes)
+                    .await?;
+                if merged.bytes.is_empty()
+                    || merged.bytes.len() > MAX_READER_PROGRESS_BYTES
+                    || merged.bytes.len() as u64 > limits.max_object_bytes
+                    || merged.local_token.is_empty()
+                {
+                    return Err(CloudSyncError::limit_exceeded());
+                }
+                let object = LocalSyncObject {
+                    key: READER_PROGRESS_SYNC_KEY.to_owned(),
+                    content: CloudSyncContent::ReadingProgress,
+                    size: merged.bytes.len() as u64,
+                    last_modified_millis: merged.last_modified_millis.max(0),
+                    sha256: sha256_hex(&merged.bytes),
+                    local_token: merged.local_token.clone(),
+                };
+                *self.reader_progress_snapshot.lock().await = Some(merged);
+                return Ok(LocalWriteResult::Applied(object));
             }
             if key.starts_with("usage/v1/") {
                 let bridge = self
@@ -694,6 +815,7 @@ fn root_for_content(
         CloudSyncContent::Media => roots.media.as_deref(),
         CloudSyncContent::JsonBackup => None,
         CloudSyncContent::UsageStatistics => None,
+        CloudSyncContent::ReadingProgress => None,
     }
     .ok_or_else(CloudSyncError::invalid_configuration)
 }
@@ -1005,8 +1127,8 @@ mod tests {
 
     #[test]
     fn canonical_json_ignores_export_time() {
-        let first = br#"{"format":"DeskCubby","version":27,"exportedAt":1,"settings":{}}"#;
-        let second = br#"{"format":"DeskCubby","version":27,"exportedAt":999,"settings":{}}"#;
+        let first = br#"{"format":"DeskCubby","version":28,"exportedAt":1,"settings":{}}"#;
+        let second = br#"{"format":"DeskCubby","version":28,"exportedAt":999,"settings":{}}"#;
         assert_eq!(
             canonicalize_backup_for_cloud(first).unwrap(),
             canonicalize_backup_for_cloud(second).unwrap()

@@ -103,6 +103,22 @@ describe("CloudSyncPage", () => {
     expect(screen.queryByDisplayValue("Renamed WebDAV")).not.toBeInTheDocument();
   });
 
+  it("defaults reading progress only for new configurations", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "list_cloud_sync_configs") return STATE as never;
+      if (command === "list_pending_cloud_json") return [] as never;
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    renderCloud();
+    await user.click(await screen.findByRole("button", { name: "编辑配置" }));
+    expect(screen.getByRole("checkbox", { name: "阅读进度" })).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: "关闭" }));
+    await user.click((await screen.findAllByRole("button", { name: "新增配置" }))[0]);
+    expect(screen.getByRole("checkbox", { name: "阅读进度" })).toBeChecked();
+  });
+
   it("requires explicit confirmation before saving an HTTP configuration", async () => {
     const user = userEvent.setup();
     invokeMock.mockImplementation(async (command) => {

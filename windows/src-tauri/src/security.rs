@@ -78,7 +78,7 @@ impl SecurityErrorDto {
     pub fn backup_invalid() -> Self {
         Self::new(
             "backup_invalid",
-            "The selected file is not a valid DeskCubby v1-v27 backup.",
+            "The selected file is not a valid DeskCubby v1-v28 backup.",
             true,
         )
     }

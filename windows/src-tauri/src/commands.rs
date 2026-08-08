@@ -9,10 +9,11 @@ use crate::models::{
     ThoughtCategory, ThoughtCategoryDraft, ThoughtDraft,
 };
 use crate::poetry;
+use crate::reader;
 use crate::security::{
     CommandResult, SecurityError, SecurityErrorDto, dpapi_protect, dpapi_unprotect,
     open_regular_file_no_reparse, reject_reparse_point, resolve_existing_file_beneath,
-    resolve_path_beneath, validate_relative_file_name,
+    resolve_path_beneath, validate_relative_file_name, validate_relative_path,
 };
 use crate::updater;
 use chrono::{DateTime, Local, NaiveDate, Utc};
@@ -48,6 +49,8 @@ pub fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + 
         resolve_media_asset,
         select_and_import_diary_image,
         list_meal_photos,
+        get_meal_view_preferences,
+        update_meal_view_preferences,
         select_and_import_meal_photos,
         export_meal_calendar_png,
         list_daily_templates,
@@ -509,7 +512,10 @@ fn configured_diary_date(
         .into_iter()
         .find(|document| document.file_name.eq_ignore_ascii_case(file_name))
         .map(|document| document.date_iso)
-        .unwrap_or_else(|| date_from_file_name(file_name, fallback_millis)))
+        .unwrap_or_else(|| {
+            let leaf_name = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
+            date_from_file_name(leaf_name, fallback_millis)
+        }))
 }
 
 fn scan_diaries_configured(
@@ -2547,7 +2553,7 @@ struct ImportMealPhotosRequest {
     category: MealCategoryDto,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 enum MealColumnsDto {
     Count(u8),
@@ -2565,6 +2571,95 @@ impl MealColumnsDto {
             _ => Err(SecurityErrorDto::invalid_input()),
         }
     }
+
+    fn into_setting(self) -> CommandResult<String> {
+        match self {
+            Self::Count(2) => Ok("TWO".to_owned()),
+            Self::Count(3) => Ok("THREE".to_owned()),
+            Self::Named(value) if value.eq_ignore_ascii_case("smart") => Ok("SMART".to_owned()),
+            _ => Err(SecurityErrorDto::invalid_input()),
+        }
+    }
+
+    fn from_setting(value: &str) -> Self {
+        match value {
+            "TWO" => Self::Count(2),
+            "THREE" => Self::Count(3),
+            _ => Self::Named("smart".to_owned()),
+        }
+    }
+}
+
+const MEAL_VIEW_PREFERENCES_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MealFilterPreferencesDto {
+    enabled: bool,
+    brightness: f64,
+    contrast: f64,
+    saturation: f64,
+    warmth: f64,
+    tint: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MealViewPreferencesDto {
+    schema_version: u32,
+    day_columns: i32,
+    wrap_enabled: bool,
+    columns: MealColumnsDto,
+    show_captions: bool,
+    image_max_height_px: i32,
+    filter: MealFilterPreferencesDto,
+}
+
+impl MealViewPreferencesDto {
+    fn from_settings(settings: &ManagedSettings) -> Self {
+        Self {
+            schema_version: MEAL_VIEW_PREFERENCES_SCHEMA_VERSION,
+            day_columns: settings.meal_calendar_day_columns,
+            wrap_enabled: settings.meal_calendar_wrap_enabled,
+            columns: MealColumnsDto::from_setting(&settings.meal_calendar_photos_per_row),
+            show_captions: settings.meal_calendar_show_captions,
+            image_max_height_px: settings.meal_calendar_image_max_height_dp,
+            filter: MealFilterPreferencesDto {
+                enabled: settings.meal_photo_filter.enabled,
+                brightness: ((settings.meal_photo_filter.brightness + 1.0) * 100.0).round(),
+                contrast: (settings.meal_photo_filter.contrast * 100.0).round(),
+                saturation: (settings.meal_photo_filter.saturation * 100.0).round(),
+                warmth: (settings.meal_photo_filter.warmth * 100.0).round(),
+                tint: (settings.meal_photo_filter.tint * 100.0).round(),
+            },
+        }
+    }
+
+    fn apply_to(self, settings: &mut ManagedSettings) -> CommandResult<()> {
+        if self.schema_version != MEAL_VIEW_PREFERENCES_SCHEMA_VERSION
+            || !(1..=2).contains(&self.day_columns)
+            || !(80..=320).contains(&self.image_max_height_px)
+        {
+            return Err(SecurityErrorDto::invalid_input());
+        }
+        let mut filter = meal_filter_from_percentages(
+            self.filter.brightness,
+            self.filter.contrast,
+            self.filter.saturation,
+            self.filter.warmth,
+            self.filter.tint,
+        )?;
+        filter.enabled = self.filter.enabled;
+        settings.meal_calendar_day_columns = self.day_columns;
+        settings.meal_calendar_wrap_enabled = self.wrap_enabled;
+        settings.meal_calendar_photos_per_row = self.columns.into_setting()?;
+        settings.meal_calendar_show_captions = self.show_captions;
+        settings.meal_calendar_image_max_height_dp = self.image_max_height_px;
+        settings.meal_photo_filter = filter;
+        settings
+            .validate()
+            .map_err(|_| SecurityErrorDto::invalid_input())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2576,6 +2671,8 @@ struct MealExportRequestDto {
     categories: Vec<MealCategoryDto>,
     columns: MealColumnsDto,
     show_captions: bool,
+    #[serde(default)]
+    filter_enabled: bool,
     brightness: f64,
     contrast: f64,
     saturation: f64,
@@ -2589,7 +2686,7 @@ fn resolve_media_asset(
     source: String,
     state: State<'_, AppState>,
 ) -> CommandResult<Option<String>> {
-    validate_relative_file_name(&diary_relative_path, &["md"]).map_err(SecurityErrorDto::from)?;
+    validate_diary_markdown_relative_path(&diary_relative_path).map_err(SecurityErrorDto::from)?;
     let Some(file_name) = normalized_markdown_media_name(&source) else {
         return Ok(None);
     };
@@ -2602,10 +2699,18 @@ fn select_and_import_diary_image<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> CommandResult<Option<ImportedMediaDto>> {
-    let diary_name = validate_relative_file_name(&request.diary_relative_path, &["md"])
-        .map_err(SecurityErrorDto::from)?;
     let root = diary_root(&state)?;
-    let diary_document = diary::load_diary(&root, &diary_name).map_err(map_diary_error)?;
+    let diary_file = open_existing_diary_markdown(&root, &request.diary_relative_path)
+        .map_err(SecurityErrorDto::from)?;
+    let diary_modified_at = diary_file
+        .metadata()
+        .map_err(|error| crate::security::map_io_error(&error))?
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| i64::try_from(value.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0);
+    drop(diary_file);
     let Some(selected) = app
         .dialog()
         .file()
@@ -2626,8 +2731,8 @@ fn select_and_import_diary_image<R: Runtime>(
         configured_diary_date(
             &state,
             &root,
-            &diary_name,
-            diary_document.version.modified_at,
+            &request.diary_relative_path,
+            diary_modified_at,
         )?,
         request.category,
     );
@@ -2651,6 +2756,38 @@ fn list_meal_photos(
     let days = media::scan_meal_calendar(&diary_root, &media_root, &query.to_scan_options())
         .map_err(map_media_error)?;
     flatten_meal_days(&media_root, &metadata, days)
+}
+
+#[tauri::command]
+fn get_meal_view_preferences(state: State<'_, AppState>) -> CommandResult<MealViewPreferencesDto> {
+    let settings = state
+        .database
+        .get_managed_settings()
+        .map_err(map_data_error)?;
+    Ok(MealViewPreferencesDto::from_settings(&settings))
+}
+
+#[tauri::command]
+fn update_meal_view_preferences(
+    preferences: MealViewPreferencesDto,
+    state: State<'_, AppState>,
+) -> CommandResult<MealViewPreferencesDto> {
+    // Update only the meal-view slice of ManagedSettings. This avoids sending
+    // a stale full settings form back from the page and overwriting unrelated
+    // user choices.
+    let _guard = SETTINGS_UPDATE_MUTEX
+        .lock()
+        .map_err(|_| SecurityErrorDto::storage_unavailable())?;
+    let mut settings = state
+        .database
+        .get_managed_settings()
+        .map_err(map_data_error)?;
+    preferences.apply_to(&mut settings)?;
+    state
+        .database
+        .put_managed_settings(&settings, db::now_millis())
+        .map_err(map_data_error)?;
+    Ok(MealViewPreferencesDto::from_settings(&settings))
 }
 
 #[tauri::command]
@@ -2760,13 +2897,14 @@ fn export_meal_calendar_png<R: Runtime>(
     let destination = selected
         .into_path()
         .map_err(|_| SecurityErrorDto::path_not_allowed())?;
-    let filter = meal_filter_from_percentages(
+    let mut filter = meal_filter_from_percentages(
         request.brightness,
         request.contrast,
         request.saturation,
         request.warmth,
         request.tint,
     )?;
+    filter.enabled = request.filter_enabled;
     let options = media::MealExportOptions {
         width: 1_200,
         photos_per_row: request.columns.into_internal()?,
@@ -2794,8 +2932,8 @@ fn meal_filter_from_percentages(
 ) -> CommandResult<MealPhotoFilter> {
     let values = [brightness, contrast, saturation, warmth, tint];
     if values.iter().any(|value| !value.is_finite())
-        || !(50.0..=150.0).contains(&brightness)
-        || !(50.0..=150.0).contains(&contrast)
+        || !(0.0..=200.0).contains(&brightness)
+        || !(0.0..=200.0).contains(&contrast)
         || !(0.0..=200.0).contains(&saturation)
         || !(-100.0..=100.0).contains(&warmth)
         || !(-100.0..=100.0).contains(&tint)
@@ -2907,6 +3045,25 @@ fn normalized_markdown_media_name(source: &str) -> Option<String> {
     validate_relative_file_name(source, &["jpg", "jpeg", "png", "webp"]).ok()
 }
 
+fn validate_diary_markdown_relative_path(relative_path: &str) -> Result<PathBuf, SecurityError> {
+    let validated = validate_relative_path(relative_path)?;
+    let leaf_name = validated
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or(SecurityError::InvalidInput)?;
+    validate_relative_file_name(leaf_name, &["md"])?;
+    Ok(validated)
+}
+
+fn open_existing_diary_markdown(
+    root: &Path,
+    relative_path: &str,
+) -> Result<fs::File, SecurityError> {
+    validate_diary_markdown_relative_path(relative_path)?;
+    let path = resolve_existing_file_beneath(root, relative_path)?;
+    open_regular_file_no_reparse(&path)
+}
+
 fn media_asset_url(root: &Path, file_name: &str) -> CommandResult<Option<String>> {
     let path = match resolve_existing_file_beneath(root, file_name) {
         Ok(path) => path,
@@ -2933,6 +3090,7 @@ struct BackupPreviewDto {
     favorite_count: usize,
     date_record_count: usize,
     poem_count: usize,
+    reader_progress_count: usize,
     preserved_top_level_keys: Vec<String>,
 }
 
@@ -2946,6 +3104,7 @@ impl From<crate::models::BackupPreview> for BackupPreviewDto {
             favorite_count: preview.favorite_count,
             date_record_count: preview.date_record_count,
             poem_count: preview.poem_count,
+            reader_progress_count: preview.reader_progress_count,
             preserved_top_level_keys: preview.preserved_top_level_keys,
         }
     }
@@ -3081,9 +3240,21 @@ fn import_backup(token: String, state: State<'_, AppState>) -> CommandResult<Imp
     let restore_point = create_restore_point_unlocked(&state)?;
     let encrypted_shadow =
         dpapi_protect(&prepared.canonical_bytes).map_err(SecurityErrorDto::from)?;
-    let receipt =
-        backup::import_v18_transaction(&state.database, &prepared.backup, Some(&encrypted_shadow))
-            .map_err(map_backup_error)?;
+    let reader_mutation = merge_backup_reader_progress(&state, &prepared)?;
+    let receipt = match backup::import_v18_transaction(
+        &state.database,
+        &prepared.backup,
+        Some(&encrypted_shadow),
+    ) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            rollback_reader_progress(reader_mutation)?;
+            return Err(map_backup_error(error));
+        }
+    };
+    if let Some(mutation) = reader_mutation {
+        mutation.commit();
+    }
     // The core database transaction above is the durable import boundary. The
     // usage cache is a separate DPAPI-private, display-only projection: keep
     // its last valid snapshot on a cache failure rather than reporting the
@@ -3286,17 +3457,38 @@ fn restore_restore_point(id: String, state: State<'_, AppState>) -> CommandResul
     let _guard = backup_mutation_guard()?;
     let directory = ensure_private_subdirectory(&state, "restore-points")?;
     let path = resolve_existing_file_beneath(&directory, &id).map_err(SecurityErrorDto::from)?;
-    let bytes = read_bounded_file(&path, 64 * 1024 * 1024)?;
+    let bytes = read_bounded_file(&path, backup::MAX_RECOVERY_POINT_BYTES)?;
+    let reader_state =
+        backup::reader_state_from_recovery_point(&bytes).map_err(map_backup_error)?;
     // Restoring is itself destructive, so preserve the current core first.
     create_restore_point_unlocked(&state)?;
-    backup::restore_recovery_point(&state.database, &bytes).map_err(map_backup_error)
+    let reader_mutation = reader_state
+        .as_deref()
+        .map(|snapshot| reader::begin_reader_state_restore(&state.private_dir, snapshot))
+        .transpose()
+        .map_err(reader::ReaderError::dto)?;
+    match backup::restore_recovery_point(&state.database, &bytes) {
+        Ok(()) => {
+            if let Some(mutation) = reader_mutation {
+                mutation.commit();
+            }
+            Ok(())
+        }
+        Err(error) => {
+            rollback_reader_progress(reader_mutation)?;
+            Err(map_backup_error(error))
+        }
+    }
 }
 
 fn create_restore_point_unlocked(state: &AppState) -> CommandResult<RestorePointDto> {
     let directory = ensure_private_subdirectory(state, "restore-points")?;
     let created_at = db::now_millis();
     let id = format!("restore-{created_at}-{}.dcr", Uuid::new_v4().simple());
-    let bytes = backup::recovery_point_bytes(&state.database).map_err(map_backup_error)?;
+    let reader_state = reader::export_reader_state_for_recovery(&state.private_dir)
+        .map_err(reader::ReaderError::dto)?;
+    let bytes = backup::recovery_point_bytes_with_reader(&state.database, &reader_state)
+        .map_err(map_backup_error)?;
     let path = secure_leaf(&directory, &id, &["dcr"])?;
     write_verified(&path, &bytes)?;
     Ok(RestorePointDto {
@@ -3308,10 +3500,15 @@ fn create_restore_point_unlocked(state: &AppState) -> CommandResult<RestorePoint
 }
 
 fn build_backup_bytes(state: &AppState) -> CommandResult<Vec<u8>> {
-    build_backup_bytes_from_database(&state.database)
+    let records = reader::export_reader_progress_records(&state.private_dir)
+        .map_err(reader::ReaderError::dto)?;
+    build_backup_bytes_from_database_and_reader(&state.database, Some(&records))
 }
 
-fn build_backup_bytes_from_database(database: &db::Database) -> CommandResult<Vec<u8>> {
+fn build_backup_bytes_from_database_and_reader(
+    database: &db::Database,
+    reader_progress: Option<&[reader::ReaderProgressRecord]>,
+) -> CommandResult<Vec<u8>> {
     let shadow = database
         .get_compatibility_shadow()
         .map_err(map_data_error)?;
@@ -3340,20 +3537,32 @@ fn build_backup_bytes_from_database(database: &db::Database) -> CommandResult<Ve
     } else {
         None
     };
-    let exported = backup::export_v18_merged_with_cloud_configs(
+    let backup_reader_progress = reader_progress.map(|records| {
+        records
+            .iter()
+            .map(reader_progress_to_backup)
+            .collect::<Vec<_>>()
+    });
+    let exported = backup::export_v18_merged_with_cloud_configs_and_reader_progress(
         database,
         decrypted.as_ref().map(|plaintext| plaintext.as_slice()),
         db::now_millis(),
         cloud_configs.as_deref(),
+        backup_reader_progress.as_deref(),
     );
     exported.map(String::into_bytes).map_err(map_backup_error)
 }
 
 /// Cloud JSON snapshots share the same serialization lock as manual/automatic
 /// backups so an import cannot interleave with a multi-read export.
-pub(crate) fn build_cloud_backup_bytes(database: &db::Database) -> CommandResult<Vec<u8>> {
+pub(crate) fn build_cloud_backup_bytes(
+    database: &db::Database,
+    private_dir: &Path,
+) -> CommandResult<Vec<u8>> {
     let _guard = backup_mutation_guard()?;
-    build_backup_bytes_from_database(database)
+    let records =
+        reader::export_reader_progress_records(private_dir).map_err(reader::ReaderError::dto)?;
+    build_backup_bytes_from_database_and_reader(database, Some(&records))
 }
 
 /// Restore a fully downloaded cloud JSON only after the cloud command has
@@ -3367,9 +3576,21 @@ pub(crate) fn restore_cloud_backup_bytes(state: &AppState, bytes: &[u8]) -> Comm
     create_restore_point_unlocked(state)?;
     let encrypted_shadow =
         dpapi_protect(&prepared.canonical_bytes).map_err(SecurityErrorDto::from)?;
-    let receipt =
-        backup::import_v18_transaction(&state.database, &prepared.backup, Some(&encrypted_shadow))
-            .map_err(map_backup_error)?;
+    let reader_mutation = merge_backup_reader_progress(state, &prepared)?;
+    let receipt = match backup::import_v18_transaction(
+        &state.database,
+        &prepared.backup,
+        Some(&encrypted_shadow),
+    ) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            rollback_reader_progress(reader_mutation)?;
+            return Err(map_backup_error(error));
+        }
+    };
+    if let Some(mutation) = reader_mutation {
+        mutation.commit();
+    }
     if prepared.merge_usage_devices {
         // The structured cloud restore has committed. Usage is deliberately a
         // separate, read-only private projection, so a cache write failure
@@ -3380,6 +3601,65 @@ pub(crate) fn restore_cloud_backup_bytes(state: &AppState, bytes: &[u8]) -> Comm
             .merge_backup_device_values(&prepared.usage_devices, receipt.imported_at);
     }
     Ok(())
+}
+
+fn reader_progress_to_backup(
+    record: &reader::ReaderProgressRecord,
+) -> backup::ReaderProgressRecord {
+    backup::ReaderProgressRecord {
+        fingerprint: record.fingerprint.clone(),
+        book_type: match record.book_type {
+            reader::ReaderProgressBookType::Txt => backup::ReaderProgressBookType::Txt,
+            reader::ReaderProgressBookType::Pdf => backup::ReaderProgressBookType::Pdf,
+        },
+        text_page_index: record.text_page_index,
+        text_paragraph_index: record.text_paragraph_index,
+        pdf_page_index: record.pdf_page_index,
+        total_pages: record.total_pages,
+        updated_at: record.updated_at,
+    }
+}
+
+fn backup_progress_to_reader(
+    record: &backup::ReaderProgressRecord,
+) -> reader::ReaderProgressRecord {
+    reader::ReaderProgressRecord {
+        fingerprint: record.fingerprint.clone(),
+        book_type: match record.book_type {
+            backup::ReaderProgressBookType::Txt => reader::ReaderProgressBookType::Txt,
+            backup::ReaderProgressBookType::Pdf => reader::ReaderProgressBookType::Pdf,
+        },
+        text_page_index: record.text_page_index,
+        text_paragraph_index: record.text_paragraph_index,
+        pdf_page_index: record.pdf_page_index,
+        total_pages: record.total_pages,
+        updated_at: record.updated_at,
+    }
+}
+
+fn merge_backup_reader_progress(
+    state: &AppState,
+    prepared: &backup::PreparedV18Import,
+) -> CommandResult<Option<reader::ReaderProgressMutation>> {
+    if !prepared.merge_reader_progress {
+        return Ok(None);
+    }
+    let incoming = prepared
+        .backup
+        .reader_progress
+        .iter()
+        .map(backup_progress_to_reader)
+        .collect::<Vec<_>>();
+    reader::begin_reader_progress_merge(&state.private_dir, &incoming)
+        .map(Some)
+        .map_err(reader::ReaderError::dto)
+}
+
+fn rollback_reader_progress(mutation: Option<reader::ReaderProgressMutation>) -> CommandResult<()> {
+    let Some(mutation) = mutation else {
+        return Ok(());
+    };
+    mutation.rollback().map_err(reader::ReaderError::dto)
 }
 
 fn read_bounded_file(path: &Path, limit: usize) -> CommandResult<Vec<u8>> {
@@ -4433,6 +4713,141 @@ mod tests {
     }
 
     #[test]
+    fn meal_view_preferences_round_trip_only_the_managed_meal_slice() {
+        let mut settings = ManagedSettings::default();
+        let unrelated_name = settings.user_name.clone();
+        MealViewPreferencesDto {
+            schema_version: 1,
+            day_columns: 2,
+            wrap_enabled: true,
+            columns: MealColumnsDto::Count(3),
+            show_captions: false,
+            image_max_height_px: 216,
+            filter: MealFilterPreferencesDto {
+                enabled: true,
+                brightness: 125.0,
+                contrast: 90.0,
+                saturation: 140.0,
+                warmth: -20.0,
+                tint: 15.0,
+            },
+        }
+        .apply_to(&mut settings)
+        .expect("valid meal preferences");
+
+        assert_eq!(settings.meal_calendar_day_columns, 2);
+        assert!(settings.meal_calendar_wrap_enabled);
+        assert_eq!(settings.meal_calendar_photos_per_row, "THREE");
+        assert!(!settings.meal_calendar_show_captions);
+        assert_eq!(settings.meal_calendar_image_max_height_dp, 216);
+        assert!(settings.meal_photo_filter.enabled);
+        assert_eq!(settings.meal_photo_filter.brightness, 0.25);
+        assert_eq!(settings.meal_photo_filter.contrast, 0.9);
+        assert_eq!(settings.user_name, unrelated_name);
+
+        let encoded = serde_json::to_value(MealViewPreferencesDto::from_settings(&settings))
+            .expect("serialize preferences");
+        assert_eq!(encoded["schemaVersion"], 1);
+        assert_eq!(encoded["dayColumns"], 2);
+        assert_eq!(encoded["columns"], 3);
+        assert_eq!(encoded["filter"]["brightness"], 125.0);
+    }
+
+    #[test]
+    fn meal_view_preferences_reject_unknown_versions_and_invalid_columns() {
+        let invalid = |schema_version, day_columns| MealViewPreferencesDto {
+            schema_version,
+            day_columns,
+            wrap_enabled: false,
+            columns: MealColumnsDto::Named("smart".to_owned()),
+            show_captions: true,
+            image_max_height_px: 124,
+            filter: MealFilterPreferencesDto {
+                enabled: false,
+                brightness: 100.0,
+                contrast: 100.0,
+                saturation: 100.0,
+                warmth: 0.0,
+                tint: 0.0,
+            },
+        };
+        assert!(
+            invalid(2, 1)
+                .apply_to(&mut ManagedSettings::default())
+                .is_err()
+        );
+        assert!(
+            invalid(1, 3)
+                .apply_to(&mut ManagedSettings::default())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn markdown_media_names_accept_leaf_images_and_reject_path_escape() {
+        assert_eq!(
+            normalized_markdown_media_name("<午餐 01.jpg>").as_deref(),
+            Some("午餐 01.jpg")
+        );
+        assert_eq!(
+            normalized_markdown_media_name("./meal.png").as_deref(),
+            Some("meal.png")
+        );
+        for source in [
+            "../secret.jpg",
+            "folder/meal.jpg",
+            r"folder\meal.jpg",
+            "file:///C:/secret.jpg",
+            "https://example.test/meal.jpg",
+            "meal%2Ejpg",
+            "meal.jpg?token=secret",
+        ] {
+            assert!(
+                normalized_markdown_media_name(source).is_none(),
+                "unexpectedly accepted {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn diary_markdown_paths_accept_safe_nested_files_and_reject_escape() {
+        assert_eq!(
+            validate_diary_markdown_relative_path("2026/2026-07-29.md").expect("nested diary path"),
+            PathBuf::from("2026").join("2026-07-29.md")
+        );
+        assert!(validate_diary_markdown_relative_path(r"2026\2026-07-29.md").is_ok());
+
+        for invalid in [
+            "../secret.md",
+            "2026/../secret.md",
+            "/absolute.md",
+            r"C:\absolute.md",
+            "2026//entry.md",
+            "2026/entry.txt",
+            "2026/entry.md/child",
+        ] {
+            assert!(
+                validate_diary_markdown_relative_path(invalid).is_err(),
+                "unexpectedly accepted {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_diary_markdown_reference_opens_only_beneath_selected_root() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let year = directory.path().join("2026");
+        fs::create_dir(&year).expect("nested diary directory");
+        fs::write(year.join("2026-07-29.md"), b"# Diary").expect("nested diary file");
+
+        let file = open_existing_diary_markdown(directory.path(), "2026/2026-07-29.md")
+            .expect("open nested diary");
+        assert!(file.metadata().expect("diary metadata").is_file());
+        assert!(open_existing_diary_markdown(directory.path(), "../outside.md").is_err());
+        assert!(open_existing_diary_markdown(directory.path(), "2026/missing.md").is_err());
+    }
+
+    #[test]
     fn diary_conflict_dto_uses_frontend_camel_case_fields() {
         let value = serde_json::to_value(DiarySaveResultDto::Conflict {
             current_version: IpcFileVersion {
@@ -4450,7 +4865,7 @@ mod tests {
     #[test]
     fn meal_filter_rejects_non_finite_and_out_of_range_values() {
         assert!(meal_filter_from_percentages(f64::NAN, 100.0, 100.0, 0.0, 0.0).is_err());
-        assert!(meal_filter_from_percentages(100.0, 151.0, 100.0, 0.0, 0.0).is_err());
+        assert!(meal_filter_from_percentages(100.0, 201.0, 100.0, 0.0, 0.0).is_err());
         assert!(meal_filter_from_percentages(100.0, 100.0, 201.0, 0.0, 0.0).is_err());
     }
 

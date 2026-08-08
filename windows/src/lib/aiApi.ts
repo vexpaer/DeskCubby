@@ -27,7 +27,7 @@ export interface AiModelConfig {
   temperature: number;
   systemPrompt: string;
   /**
-   * Android v27 deliberately treats this as a normal, plaintext setting. It
+   * Android v28 deliberately treats this as a normal, plaintext setting. It
    * is returned in full for editing and backup compatibility, but the request
    * builder must only place it in the Authorization header.
    */

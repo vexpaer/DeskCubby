@@ -20,7 +20,7 @@ use crate::models::{
 const SCHEMA_VERSION: i32 = 6;
 const RECOVERY_SNAPSHOT_VERSION: i32 = 1;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-// Android v27 accepts backup documents up to 64 MiB. DPAPI ciphertext adds a
+// Android v28 accepts backup documents up to 64 MiB. DPAPI ciphertext adds a
 // small envelope, so keep the database boundary slightly above that wire
 // limit while remaining bounded.
 const MAX_SHADOW_BYTES: usize = 65 * 1024 * 1024;
@@ -103,14 +103,14 @@ pub(crate) struct CloudSyncSettingsRecord {
     pub automatic_sync_enabled: bool,
     pub interval_minutes: i64,
     /// False until Windows explicitly creates, edits, copies, or deletes a
-    /// cloud configuration. While false, v27 export preserves Android's
+    /// cloud configuration. While false, v28 export preserves Android's
     /// compatibility-shadow cloud metadata verbatim.
     pub configs_managed: bool,
     pub updated_at: i64,
 }
 
 /// Windows-only sync configuration. This is deliberately separate from
-/// ManagedSettings so Android v27 cloud metadata remains shadow-preserved.
+/// ManagedSettings so Android v28 cloud metadata remains shadow-preserved.
 #[allow(dead_code)]
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct CloudSyncConfigRecord {
@@ -503,7 +503,7 @@ impl Database {
     }
 
     /// Records whether Windows has taken ownership of the credential-free
-    /// `cloudSyncConfigs` field in v27 backups. The default deliberately keeps
+    /// `cloudSyncConfigs` field in v28 backups. The default deliberately keeps
     /// imported Android metadata shadow-owned until the user edits cloud
     /// configuration on Windows.
     fn migrate_2_to_3(connection: &mut Connection) -> Result<(), DataError> {

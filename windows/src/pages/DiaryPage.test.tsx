@@ -35,9 +35,11 @@ const DOCUMENT = {
 describe("DiaryPage file conflict flow", () => {
   const invokeMock = vi.mocked(invoke);
   let conflictReason: "changed" | "deleted";
+  let openedDocument = DOCUMENT;
 
   beforeEach(() => {
     conflictReason = "changed";
+    openedDocument = DOCUMENT;
     rememberActiveDiary(null);
     useAppStore.setState({
       appearance: {
@@ -58,7 +60,11 @@ describe("DiaryPage file conflict flow", () => {
         return (conflictReason === "deleted" ? [] : [ENTRY]) as never;
       }
       if (command === "open_diary") {
-        return DOCUMENT as never;
+        return openedDocument as never;
+      }
+      if (command === "resolve_media_asset") {
+        const source = (args as { source: string }).source;
+        return `http://media.localhost/${source.replace(/^\.\//, "")}` as never;
       }
       if (command === "select_and_import_diary_image") {
         return {
@@ -101,6 +107,37 @@ describe("DiaryPage file conflict flow", () => {
         } as never;
       }
       throw new Error(`Unexpected command: ${command}`);
+    });
+  });
+
+  it("passes local meal and ordinary images to the bounded media protocol in preview mode", async () => {
+    openedDocument = {
+      ...DOCUMENT,
+      content:
+        "# 测试日记\n\n![午餐](<lunch.jpg>)\n\n![随手拍](./snapshot.webp)",
+    };
+    const user = userEvent.setup();
+    const router = createMemoryRouter(
+      [{ path: "/diary", element: <DiaryPage /> }],
+      { initialEntries: ["/diary?entry=2026-07-29.md"] },
+    );
+    render(<RouterProvider router={router} />);
+
+    await user.click(await screen.findByRole("button", { name: "预览" }));
+
+    const image = await screen.findByRole("img", { name: "午餐" });
+    expect(image).toHaveAttribute("src", "http://media.localhost/lunch.jpg");
+    expect(await screen.findByRole("img", { name: "随手拍" })).toHaveAttribute(
+      "src",
+      "http://media.localhost/snapshot.webp",
+    );
+    expect(invokeMock).toHaveBeenCalledWith("resolve_media_asset", {
+      diaryRelativePath: "2026/2026-07-29.md",
+      source: "lunch.jpg",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("resolve_media_asset", {
+      diaryRelativePath: "2026/2026-07-29.md",
+      source: "./snapshot.webp",
     });
   });
 

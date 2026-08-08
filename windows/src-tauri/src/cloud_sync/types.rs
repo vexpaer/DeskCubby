@@ -26,6 +26,7 @@ pub enum CloudSyncContent {
     Media,
     JsonBackup,
     UsageStatistics,
+    ReadingProgress,
 }
 
 impl CloudSyncContent {
@@ -35,6 +36,7 @@ impl CloudSyncContent {
             Self::Media => "media",
             Self::JsonBackup => "json",
             Self::UsageStatistics => "usage/v1",
+            Self::ReadingProgress => "reading/v1",
         }
     }
 }
@@ -47,7 +49,7 @@ pub enum CloudSyncDirection {
 }
 
 /// Non-secret metadata. Secret material is always supplied separately through
-/// [`CloudCredentials`] and must never be serialized into Android v27 backup
+/// [`CloudCredentials`] and must never be serialized into Android v28 backup
 /// settings.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -124,6 +126,7 @@ impl Default for CloudSyncConfig {
                 CloudSyncContent::Media,
                 CloudSyncContent::JsonBackup,
                 CloudSyncContent::UsageStatistics,
+                CloudSyncContent::ReadingProgress,
             ]
             .into_iter()
             .collect(),

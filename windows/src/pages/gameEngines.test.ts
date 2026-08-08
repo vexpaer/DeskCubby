@@ -36,9 +36,28 @@ describe("Windows game engines", () => {
     expect(result.changed).toBe(true);
     expect(result.state.cells.slice(0, 2)).toEqual([4, 8]);
     expect(result.state.score).toBe(12);
-    expect(result.metrics?.increments).toMatchObject({ effectiveMoves: 1, merges: 2 });
+    expect(result.metrics?.increments).toMatchObject({
+      moveAttempts: 1,
+      effectiveMoves: 1,
+      merges: 2,
+    });
+    expect(result.metrics?.increments).not.toHaveProperty("losses");
     expect(result.metrics?.maxima).toMatchObject({ highestTile: 8 });
     expect(parseGame2048(JSON.stringify(result.state), 4)).not.toBeNull();
+  });
+
+  it("counts a 2048 direction attempt even when the board does not move", () => {
+    const state: Game2048State = {
+      size: 4,
+      cells: [2, 0, 0, 0, ...Array<number>(12).fill(0)],
+      score: 0,
+      undoHistory: [],
+      winRecorded: false,
+      lossRecorded: false,
+    };
+    const result = move2048(state, "LEFT");
+    expect(result.changed).toBe(false);
+    expect(result.metrics?.increments).toEqual({ moveAttempts: 1 });
   });
 
   it("records one snake collision loss and leaves later ticks idempotent", () => {

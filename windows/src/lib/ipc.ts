@@ -262,9 +262,31 @@ export interface MealQuery {
 
 export type MealColumns = 2 | 3 | "smart";
 
+export type MealDayColumns = 1 | 2;
+
+export interface MealFilterPreferences {
+  enabled: boolean;
+  brightness: number;
+  contrast: number;
+  saturation: number;
+  warmth: number;
+  tint: number;
+}
+
+export interface MealViewPreferences {
+  schemaVersion: 1;
+  dayColumns: MealDayColumns;
+  wrapEnabled: boolean;
+  columns: MealColumns;
+  showCaptions: boolean;
+  imageMaxHeightPx: number;
+  filter: MealFilterPreferences;
+}
+
 export interface MealExportRequest extends MealQuery {
   columns: MealColumns;
   showCaptions: boolean;
+  filterEnabled: boolean;
   brightness: number;
   contrast: number;
   saturation: number;
@@ -535,6 +557,16 @@ export const mealApi = {
     return call("list_meal_photos", { query });
   },
 
+  getViewPreferences(): Promise<MealViewPreferences> {
+    return call("get_meal_view_preferences");
+  },
+
+  updateViewPreferences(
+    preferences: MealViewPreferences,
+  ): Promise<MealViewPreferences> {
+    return call("update_meal_view_preferences", { preferences });
+  },
+
   selectAndImport(
     date: string,
     category: MealCategory,
@@ -756,10 +788,10 @@ export function readableError(
     network_unavailable: "网络暂时不可用，已保留本地内容。",
     json_too_large: "备份文件超过 64 MiB 上限。",
     backup_too_large: "备份文件超过 64 MiB 上限。",
-    backup_invalid: "备份文件无效或不符合 Android v1–v27 格式。",
-    backup_version_unsupported: "仅支持 Android v1–v27 备份。",
+    backup_invalid: "备份文件无效或不符合 Android v1–v28 格式。",
+    backup_version_unsupported: "仅支持 Android v1–v28 备份。",
     compatibility_shadow_corrupt:
-      "兼容备份数据已损坏，无法安全保留未知字段，请重新导入有效的 v1–v27 备份。",
+      "兼容备份数据已损坏，无法安全保留未知字段，请重新导入有效的 v1–v28 备份。",
     ipc_protocol_incompatible:
       "Windows 界面与本机后端版本不兼容，请安装匹配版本的 DeskCubby。",
     database_busy: "本地数据库正忙，请稍后重试。",
@@ -790,7 +822,7 @@ export function readableError(
     vault_url_not_safe: "这条收藏不是可安全打开的 HTTP(S) 链接。",
     vault_open_failed: "无法使用系统浏览器打开这条收藏。",
     vault_clipboard_failed: "无法把收藏正文复制到剪贴板。",
-    usage_statistics_invalid: "手机使用时间文件无效，仅支持 Android v4 统计文件或含 usageDevices 的 v27 备份。",
+    usage_statistics_invalid: "手机使用时间文件无效，仅支持 Android v4 统计文件或含 usageDevices 的 v28 备份。",
     usage_statistics_too_large: "手机使用时间文件超过安全大小上限。",
     usage_statistics_source_missing: "手机统计源文件已丢失，请重新选择。",
     usage_statistics_source_changed: "读取时手机统计源文件发生变化，请重试。",
@@ -828,10 +860,10 @@ export function readableError(
       "The network is unavailable. Local content has been preserved.",
     json_too_large: "The backup exceeds the 64 MiB limit.",
     backup_too_large: "The backup exceeds the 64 MiB limit.",
-    backup_invalid: "The backup is invalid or is not an Android v1–v27 backup.",
-    backup_version_unsupported: "Only Android v1–v27 backups are supported.",
+    backup_invalid: "The backup is invalid or is not an Android v1–v28 backup.",
+    backup_version_unsupported: "Only Android v1–v28 backups are supported.",
     compatibility_shadow_corrupt:
-      "Compatibility backup data is corrupt, so unknown fields cannot be preserved safely. Import a valid v1–v27 backup again.",
+      "Compatibility backup data is corrupt, so unknown fields cannot be preserved safely. Import a valid v1–v28 backup again.",
     ipc_protocol_incompatible:
       "The Windows interface and local backend are incompatible. Install matching DeskCubby versions.",
     database_busy: "The local database is busy. Try again shortly.",
@@ -875,7 +907,7 @@ export function readableError(
     vault_open_failed: "The vault item could not be opened in the system browser.",
     vault_clipboard_failed: "The vault content could not be copied to the clipboard.",
     usage_statistics_invalid:
-      "The phone screen-time file is invalid. Use Android v4 statistics or a v27 backup containing usageDevices.",
+      "The phone screen-time file is invalid. Use Android v4 statistics or a v28 backup containing usageDevices.",
     usage_statistics_too_large:
       "The phone screen-time file exceeds the safety size limit.",
     usage_statistics_source_missing:
