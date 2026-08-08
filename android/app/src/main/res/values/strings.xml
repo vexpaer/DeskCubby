@@ -2,4 +2,5 @@
     <string name="app_name">DeskCubby</string>
     <string name="launcher_name_default">Desk Cubby</string>
     <string name="launcher_name_chinese">桌洞</string>
+    <string name="desktop_widget_preview_value">桌面小卡片 · Desktop widget</string>
 </resources>

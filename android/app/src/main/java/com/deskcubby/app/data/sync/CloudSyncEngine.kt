@@ -1,6 +1,7 @@
 package com.deskcubby.app.data.sync
 
 import com.deskcubby.app.data.model.CloudSyncConfig
+import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -293,6 +294,14 @@ class CloudSyncEngine(
             requireInventoryItem(item.key, item.size, item.sha256, prefixes, limits)
             if (item.version.isBlank()) throw CloudSyncException("云端同步版本无效。")
         }
+        (local.asSequence().map(LocalSyncObject::key) +
+            remote.asSequence().map(RemoteSyncObject::key))
+            .filter { it.startsWith("${CloudSyncContent.READING_PROGRESS.remoteDirectory}/") }
+            .forEach { key ->
+                if (key != READING_PROGRESS_SYNC_KEY) {
+                    throw CloudSyncException("阅读进度同步清单包含无效路径。")
+                }
+            }
     }
 
     private fun requireInventoryItem(
@@ -317,5 +326,6 @@ class CloudSyncEngine(
 
     private companion object {
         val SHA256_REGEX = Regex("[0-9a-f]{64}", RegexOption.IGNORE_CASE)
+        const val READING_PROGRESS_SYNC_KEY = "reading/v1/progress.json"
     }
 }

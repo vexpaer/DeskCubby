@@ -116,6 +116,19 @@ class ReaderViewModel @Inject constructor(
         runCatching { repository.saveTextProgress(bookId, pageIndex, paragraphIndex) }
     }
 
+    fun setCustomCover(bookId: String, uri: android.net.Uri?) = viewModelScope.launch {
+        try {
+            repository.setCustomCover(bookId, uri)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            _message.value = ReaderMessage.SETTINGS_FAILED
+        }
+    }
+
+    suspend fun loadCover(book: ReaderBook, widthPx: Int): Bitmap? =
+        repository.loadCover(book, widthPx)
+
     fun savePdfProgress(bookId: String, pageIndex: Int) = viewModelScope.launch {
         runCatching { repository.savePdfProgress(bookId, pageIndex) }
     }

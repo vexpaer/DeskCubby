@@ -76,8 +76,8 @@ android {
         applicationId = "com.deskcubby.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23
-        versionName = "0.9.3"
+        versionCode = 24
+        versionName = "0.10.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -158,6 +158,7 @@ kapt {
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
 
+    implementation(project(":plugin-api:core"))
     implementation(composeBom)
     androidTestImplementation(composeBom)
 

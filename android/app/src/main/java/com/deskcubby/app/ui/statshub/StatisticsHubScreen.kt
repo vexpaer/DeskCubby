@@ -732,6 +732,7 @@ private fun localizedGameMetrics(game: GameStatisticsHubItem): List<LocalizedMet
 
 @Composable
 private fun gameMetricLabel(key: String): String = when (key) {
+    "moveAttempts" -> tr("总操作次数", "Total moves")
     "effectiveMoves" -> tr("有效移动", "Effective moves")
     "merges" -> tr("合并次数", "Tile merges")
     "highestTile" -> tr("最高方块", "Highest tile")
@@ -821,7 +822,7 @@ private val MONTH_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("yy
 private val DAY_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd")
 
 private val GAMES_WITH_WIN_RATE = setOf(
-    "2048", "2048_5", "2048_6", "minesweeper", "spider",
+    "minesweeper", "spider",
 )
 
 private val GAME_CATALOG_IDS = listOf(
@@ -831,9 +832,9 @@ private val GAME_CATALOG_IDS = listOf(
 private val GAME_PANEL_ROLES = listOf(PanelRole.STANDARD, PanelRole.FEATURE, PanelRole.MEDIA)
 
 private val GAME_METRIC_ORDER: Map<String, List<String>> = mapOf(
-    "2048" to listOf("effectiveMoves", "merges", "highestTile", "wins", "losses"),
-    "2048_5" to listOf("effectiveMoves", "merges", "highestTile", "wins", "losses"),
-    "2048_6" to listOf("effectiveMoves", "merges", "highestTile", "wins", "losses"),
+    "2048" to listOf("moveAttempts", "effectiveMoves", "merges", "highestTile", "wins"),
+    "2048_5" to listOf("moveAttempts", "effectiveMoves", "merges", "highestTile", "wins"),
+    "2048_6" to listOf("moveAttempts", "effectiveMoves", "merges", "highestTile", "wins"),
     "snake" to listOf("foodEaten", "maxLength", "losses"),
     "tetris" to listOf("piecesLocked", "linesCleared", "tetrises", "losses"),
     "minesweeper" to listOf(

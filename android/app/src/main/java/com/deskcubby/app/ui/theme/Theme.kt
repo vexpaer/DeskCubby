@@ -36,18 +36,23 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AppLanguage
+import com.deskcubby.app.data.model.CustomThemeBaseStyle
+import com.deskcubby.app.data.model.CustomThemeSettings
 import com.deskcubby.app.data.model.DEFAULT_THEME_COLOR_ARGB
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.MAX_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.model.normalized
 import androidx.core.view.WindowCompat
 
 val LocalVisualStyle: ProvidableCompositionLocal<VisualStyle> =
@@ -113,11 +118,14 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
         DarkMode.LIGHT -> false
         DarkMode.DARK -> true
     }
+    val customTheme = settings.customTheme.normalized()
+    val effectiveStyle = settings.visualStyle.effectiveBaseStyle(customTheme)
     val baseScheme = resolveColorScheme(
         visualStyle = settings.visualStyle,
         dark = dark,
         themeColorArgb = settings.themeColorArgb,
         themeSecondaryColorsArgb = settings.themeSecondaryColorsArgb,
+        customTheme = customTheme,
     )
     // The app background layer lives below every navigation destination. Making only the
     // page-background role transparent keeps cards, dialogs, and controls readable while allowing
@@ -127,18 +135,21 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
     } else {
         baseScheme
     }
-    val baseTypography = if (settings.visualStyle == VisualStyle.ORGANIC_FUTURE) {
+    val baseTypography = if (effectiveStyle == VisualStyle.ORGANIC_FUTURE) {
         OrganicFutureTypography
     } else {
         AppTypography
     }
     val typography = scaledTypography(baseTypography, settings.fontScale)
-    val shapes = if (settings.visualStyle == VisualStyle.ORGANIC_FUTURE) {
-        OrganicFutureShapes
-    } else {
-        DefaultShapes
+    val shapes = when (settings.visualStyle) {
+        VisualStyle.CUSTOM -> customShapes(customTheme.cornerRadiusDp.dp)
+        else -> if (effectiveStyle == VisualStyle.ORGANIC_FUTURE) OrganicFutureShapes else DefaultShapes
     }
-    val visualTokens = visualTokensFor(settings.visualStyle)
+    val visualTokens = if (settings.visualStyle == VisualStyle.CUSTOM) {
+        customVisualTokens(effectiveStyle, customTheme)
+    } else {
+        visualTokensFor(effectiveStyle)
+    }
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
@@ -155,7 +166,9 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
         }
     }
     androidx.compose.runtime.CompositionLocalProvider(
-        LocalVisualStyle provides settings.visualStyle,
+        // Existing screens only need the rendering behavior. Keeping CUSTOM out of this local
+        // lets every established Material/Glass/Organic branch continue to work unchanged.
+        LocalVisualStyle provides effectiveStyle,
         LocalAppLanguage provides settings.appLanguage,
         LocalCompactMode provides settings.compactMode,
         LocalDeskCubbyVisuals provides visualTokens,
@@ -178,8 +191,11 @@ internal fun resolveColorScheme(
     dark: Boolean,
     themeColorArgb: Int = DEFAULT_THEME_COLOR_ARGB,
     themeSecondaryColorsArgb: List<Int> = DEFAULT_THEME_SECONDARY_COLORS_ARGB,
+    customTheme: CustomThemeSettings = CustomThemeSettings(),
 ): ColorScheme {
-    val baseScheme = when (visualStyle) {
+    val normalizedCustomTheme = customTheme.normalized()
+    val effectiveStyle = visualStyle.effectiveBaseStyle(normalizedCustomTheme)
+    val baseScheme = when (effectiveStyle) {
         VisualStyle.MATERIAL -> if (dark) MaterialDark else MaterialLight
         VisualStyle.LIQUID_GLASS -> if (dark) GlassDark else GlassLight
         VisualStyle.ORGANIC_FUTURE -> organicFutureColorScheme(
@@ -187,35 +203,134 @@ internal fun resolveColorScheme(
             themeColorArgb = themeColorArgb,
             secondaryColorsArgb = themeSecondaryColorsArgb,
         )
+        VisualStyle.CUSTOM -> error("CUSTOM must resolve to a concrete base style")
     }
-    if (visualStyle == VisualStyle.ORGANIC_FUTURE) {
-        return baseScheme
+    val accentedScheme = if (effectiveStyle == VisualStyle.ORGANIC_FUTURE) {
+        baseScheme
+    } else {
+        // Material and Liquid Glass share the same primary + secondary color settings as
+        // Organic Future: the first two secondary colors drive the secondary/tertiary roles.
+        val accent = Color(themeColorArgb)
+        val accents = organicFutureAccentColors(themeSecondaryColorsArgb)
+        val secondary = accents[0]
+        val tertiary = accents[1]
+        fun onColor(color: Color) = if (color.luminance() > 0.48f) Color.Black else Color.White
+        fun container(color: Color) = lerp(
+            color,
+            if (dark) Color.Black else Color.White,
+            if (dark) 0.48f else 0.72f,
+        )
+        baseScheme.copy(
+            primary = accent,
+            onPrimary = onColor(accent),
+            primaryContainer = container(accent),
+            onPrimaryContainer = if (dark) Color.White else Color.Black,
+            secondary = secondary,
+            onSecondary = onColor(secondary),
+            secondaryContainer = container(secondary),
+            onSecondaryContainer = if (dark) Color.White else Color.Black,
+            tertiary = tertiary,
+            onTertiary = onColor(tertiary),
+            tertiaryContainer = container(tertiary),
+            onTertiaryContainer = if (dark) Color.White else Color.Black,
+        )
     }
-    // Material and Liquid Glass share the same primary + secondary color settings as
-    // Organic Future: the first two secondary colors drive the secondary/tertiary roles.
-    val accent = Color(themeColorArgb)
-    val accents = organicFutureAccentColors(themeSecondaryColorsArgb)
-    val secondary = accents[0]
-    val tertiary = accents[1]
-    fun onColor(color: Color) = if (color.luminance() > 0.48f) Color.Black else Color.White
-    fun container(color: Color) = lerp(
-        color,
-        if (dark) Color.Black else Color.White,
-        if (dark) 0.48f else 0.72f,
-    )
-    return baseScheme.copy(
-        primary = accent,
-        onPrimary = onColor(accent),
-        primaryContainer = container(accent),
-        onPrimaryContainer = if (dark) Color.White else Color.Black,
+    return if (visualStyle == VisualStyle.CUSTOM) {
+        accentedScheme.withCustomPalette(normalizedCustomTheme, dark)
+    } else {
+        accentedScheme
+    }
+}
+
+private fun VisualStyle.effectiveBaseStyle(customTheme: CustomThemeSettings): VisualStyle =
+    if (this != VisualStyle.CUSTOM) this else when (customTheme.baseStyle) {
+        CustomThemeBaseStyle.MATERIAL -> VisualStyle.MATERIAL
+        CustomThemeBaseStyle.LIQUID_GLASS -> VisualStyle.LIQUID_GLASS
+        CustomThemeBaseStyle.ORGANIC_FUTURE -> VisualStyle.ORGANIC_FUTURE
+    }
+
+private fun ColorScheme.withCustomPalette(
+    customTheme: CustomThemeSettings,
+    dark: Boolean,
+): ColorScheme {
+    val palette = if (dark) customTheme.darkPalette else customTheme.lightPalette
+    val background = Color(palette.backgroundArgb)
+    val onBackground = Color(palette.onBackgroundArgb)
+    val surface = Color(palette.surfaceArgb)
+    val onSurface = Color(palette.onSurfaceArgb)
+    val container = Color(palette.surfaceContainerArgb)
+    val variant = Color(palette.surfaceVariantArgb)
+    val onVariant = Color(palette.onSurfaceVariantArgb)
+    val outline = Color(palette.outlineArgb)
+    val primary = customRoleColor(this.primary, surface)
+    val secondary = customRoleColor(this.secondary, surface)
+    val tertiary = customRoleColor(this.tertiary, surface)
+    val primaryContainer = lerp(primary, surface, if (dark) 0.58f else 0.72f)
+    val secondaryContainer = lerp(secondary, surface, if (dark) 0.58f else 0.72f)
+    val tertiaryContainer = lerp(tertiary, surface, if (dark) 0.58f else 0.72f)
+    return copy(
+        primary = primary,
+        onPrimary = readableCustomContent(primary),
+        primaryContainer = primaryContainer,
+        onPrimaryContainer = readableCustomContent(primaryContainer),
         secondary = secondary,
-        onSecondary = onColor(secondary),
-        secondaryContainer = container(secondary),
-        onSecondaryContainer = if (dark) Color.White else Color.Black,
+        onSecondary = readableCustomContent(secondary),
+        secondaryContainer = secondaryContainer,
+        onSecondaryContainer = readableCustomContent(secondaryContainer),
         tertiary = tertiary,
-        onTertiary = onColor(tertiary),
-        tertiaryContainer = container(tertiary),
-        onTertiaryContainer = if (dark) Color.White else Color.Black,
+        onTertiary = readableCustomContent(tertiary),
+        tertiaryContainer = tertiaryContainer,
+        onTertiaryContainer = readableCustomContent(tertiaryContainer),
+        background = background,
+        onBackground = onBackground,
+        surface = surface,
+        onSurface = onSurface,
+        surfaceVariant = variant,
+        onSurfaceVariant = onVariant,
+        outline = outline,
+        outlineVariant = lerp(outline, surface, 0.58f),
+        inverseSurface = onSurface,
+        inverseOnSurface = surface,
+        surfaceBright = lerp(surface, Color.White, if (dark) 0.12f else 0.02f),
+        surfaceDim = lerp(surface, Color.Black, if (dark) 0.10f else 0.08f),
+        surfaceContainerLowest = lerp(container, surface, 0.78f),
+        surfaceContainerLow = lerp(container, surface, 0.48f),
+        surfaceContainer = container,
+        surfaceContainerHigh = lerp(container, variant, 0.34f),
+        surfaceContainerHighest = lerp(container, variant, 0.62f),
+    )
+}
+
+private fun customRoleColor(seed: Color, surface: Color): Color {
+    if (customContrastRatio(seed, surface) >= 3f) return seed
+    val target = if (surface.luminance() > 0.5f) Color.Black else Color.White
+    for (step in 1..20) {
+        val candidate = lerp(seed, target, step / 20f)
+        if (customContrastRatio(candidate, surface) >= 3f) return candidate
+    }
+    return target
+}
+
+private fun readableCustomContent(background: Color): Color {
+    val blackContrast = customContrastRatio(Color.Black, background)
+    val whiteContrast = customContrastRatio(Color.White, background)
+    return if (blackContrast >= whiteContrast) Color.Black else Color.White
+}
+
+private fun customContrastRatio(first: Color, second: Color): Float {
+    val lighter = maxOf(first.luminance(), second.luminance())
+    val darker = minOf(first.luminance(), second.luminance())
+    return (lighter + 0.05f) / (darker + 0.05f)
+}
+
+private fun customShapes(radius: Dp): Shapes {
+    val safeRadius = radius.coerceIn(0.dp, 40.dp)
+    return Shapes(
+        extraSmall = RoundedCornerShape(safeRadius * 0.45f),
+        small = RoundedCornerShape(safeRadius * 0.68f),
+        medium = RoundedCornerShape(safeRadius),
+        large = RoundedCornerShape((safeRadius * 1.35f).coerceAtMost(48.dp)),
+        extraLarge = RoundedCornerShape((safeRadius * 1.7f).coerceAtMost(56.dp)),
     )
 }
 
@@ -276,28 +391,51 @@ fun GlassPanel(
     val organicAccent = organicAccents.getOrElse(role.ordinal % organicAccents.size.coerceAtLeast(1)) {
         MaterialTheme.colorScheme.secondary
     }
-    val shape = if (style == VisualStyle.ORGANIC_FUTURE) {
-        organicPanelShape(cornerRadius, role)
-    } else {
-        RoundedCornerShape(cornerRadius)
+    val shape = when {
+        visuals.customized -> when (role) {
+            PanelRole.FEATURE -> visuals.featureShape
+            PanelRole.MEDIA -> visuals.mediaShape
+            PanelRole.TOOLBAR -> visuals.toolbarShape
+            PanelRole.STANDARD -> visuals.listShape
+        }
+        style == VisualStyle.ORGANIC_FUTURE -> organicPanelShape(cornerRadius, role)
+        else -> RoundedCornerShape(cornerRadius)
     }
     val scheme = MaterialTheme.colorScheme
+    val layoutDirection = LocalLayoutDirection.current
+    val paddingScale = (visuals.contentPadding.value / 16f).coerceIn(0.75f, 1.35f)
+    fun scaledPanelPadding(values: PaddingValues): PaddingValues = PaddingValues(
+        start = when (layoutDirection) {
+            LayoutDirection.Ltr -> values.calculateLeftPadding(layoutDirection)
+            LayoutDirection.Rtl -> values.calculateRightPadding(layoutDirection)
+        } * paddingScale,
+        top = values.calculateTopPadding() * paddingScale,
+        end = when (layoutDirection) {
+            LayoutDirection.Ltr -> values.calculateRightPadding(layoutDirection)
+            LayoutDirection.Rtl -> values.calculateLeftPadding(layoutDirection)
+        } * paddingScale,
+        bottom = values.calculateBottomPadding() * paddingScale,
+    )
     val panelModifier = when (style) {
         VisualStyle.LIQUID_GLASS -> modifier
-                .shadow(10.dp, shape, ambientColor = scheme.primary.copy(alpha = 0.16f))
+                .shadow(
+                    if (visuals.customized) visuals.panelElevation else 10.dp,
+                    shape,
+                    ambientColor = scheme.primary.copy(alpha = 0.16f),
+                )
                 .clip(shape)
                 .background(
                     Brush.linearGradient(
                         listOf(
-                            scheme.surface.copy(alpha = 0.86f),
-                            scheme.primaryContainer.copy(alpha = 0.52f),
-                            scheme.surface.copy(alpha = 0.72f),
+                            scheme.surface.copy(alpha = 0.86f * visuals.panelOpacity),
+                            scheme.primaryContainer.copy(alpha = 0.52f * visuals.panelOpacity),
+                            scheme.surface.copy(alpha = 0.72f * visuals.panelOpacity),
                         ),
                     ),
                 )
                 .border(
                     BorderStroke(
-                        1.dp,
+                        if (visuals.customized) visuals.borderWidth else 1.dp,
                         Brush.linearGradient(
                             listOf(Color.White.copy(alpha = 0.58f), scheme.primary.copy(alpha = 0.18f)),
                         ),
@@ -316,9 +454,10 @@ fun GlassPanel(
                 .background(
                     Brush.linearGradient(
                         listOf(
-                            scheme.surfaceContainer,
-                            lerp(scheme.surfaceContainer, organicAccent, 0.10f),
-                            scheme.surfaceContainerHigh,
+                            scheme.surfaceContainer.copy(alpha = visuals.panelOpacity),
+                            lerp(scheme.surfaceContainer, organicAccent, 0.10f)
+                                .copy(alpha = visuals.panelOpacity),
+                            scheme.surfaceContainerHigh.copy(alpha = visuals.panelOpacity),
                         ),
                     ),
                 )
@@ -347,11 +486,20 @@ fun GlassPanel(
                 )
 
         VisualStyle.MATERIAL -> modifier
-                .shadow(1.dp, shape)
+                .shadow(if (visuals.customized) visuals.panelElevation else 1.dp, shape)
                 .clip(shape)
-                .background(scheme.surfaceContainer)
+                .background(scheme.surfaceContainer.copy(alpha = visuals.panelOpacity))
+                .then(
+                    if (visuals.customized && visuals.borderWidth > 0.dp) {
+                        Modifier.border(visuals.borderWidth, scheme.outlineVariant, shape)
+                    } else {
+                        Modifier
+                    },
+                )
+
+        VisualStyle.CUSTOM -> error("CUSTOM is resolved before it reaches LocalVisualStyle")
     }
     CompositionLocalProvider(LocalContentColor provides scheme.onSurface) {
-        Box(panelModifier.padding(padding), content = content)
+        Box(panelModifier.padding(scaledPanelPadding(padding)), content = content)
     }
 }

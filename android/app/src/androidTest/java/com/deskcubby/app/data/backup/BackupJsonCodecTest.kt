@@ -17,6 +17,8 @@ import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
+import com.deskcubby.app.data.model.CustomThemeBaseStyle
+import com.deskcubby.app.data.model.CustomThemeSettings
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
@@ -33,6 +35,8 @@ import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.repository.ReaderBookType
+import com.deskcubby.app.data.repository.ReaderProgressRecord
 import com.deskcubby.app.data.repository.VaultEncryptedBackup
 import com.deskcubby.app.data.repository.VaultEncryptedKeyBackup
 import com.deskcubby.app.data.statistics.StatisticsDayState
@@ -54,7 +58,7 @@ import org.json.JSONObject
 @RunWith(AndroidJUnit4::class)
 class BackupJsonCodecTest {
     @Test
-    fun versionTwentySevenRoundTripPreservesEncryptedVaultGamesUsageWidgetsAndNewSettings() {
+    fun versionTwentyEightRoundTripPreservesEncryptedVaultGamesUsageWidgetsAndNewSettings() {
         val iv = Base64.getEncoder().encodeToString(ByteArray(12) { 2 })
         val cipher = Base64.getEncoder().encodeToString(ByteArray(32) { 3 })
         val vault = VaultEncryptedBackup(
@@ -129,6 +133,23 @@ class BackupJsonCodecTest {
             GameStatisticEntity("2048", "highestTile", 8_192, 19),
             GameStatisticEntity("minesweeper", "minesSwept", 42, 20),
         )
+        val readerProgress = listOf(
+            ReaderProgressRecord(
+                fingerprint = "a".repeat(64),
+                type = ReaderBookType.TXT,
+                textPageIndex = 3,
+                textParagraphIndex = 92,
+                totalPages = 14,
+                updatedAt = 23,
+            ),
+            ReaderProgressRecord(
+                fingerprint = "b".repeat(64),
+                type = ReaderBookType.PDF,
+                pdfPageIndex = 7,
+                totalPages = 80,
+                updatedAt = 22,
+            ),
+        )
         val source = AppBackup(
             exportedAt = 21,
             settings = AppSettings(
@@ -167,15 +188,17 @@ class BackupJsonCodecTest {
             gameStates = gameStates,
             gameStatistics = gameStatistics,
             usageDevices = usageDevices,
+            readerProgress = readerProgress,
         )
 
         val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
 
-        assertEquals(27, decoded.formatVersion)
+        assertEquals(28, decoded.formatVersion)
         assertEquals(vault, decoded.vault)
         assertEquals(gameStates, decoded.gameStates)
         assertEquals(gameStatistics, decoded.gameStatistics)
         assertEquals(usageDevices, decoded.usageDevices)
+        assertEquals(readerProgress, decoded.readerProgress)
         assertEquals(source.settings.desktopWidgetConfigs, decoded.settings.desktopWidgetConfigs)
         assertEquals(true, decoded.settings.musicVisualizerEnabled)
         assertEquals(MusicVisualizerStyle.CURVE, decoded.settings.musicVisualizerStyle)
@@ -802,6 +825,163 @@ class BackupJsonCodecTest {
         assertEquals(settings.fontScale, decoded.settings.fontScale)
         assertEquals(BackupJsonCodec.FORMAT_VERSION, decoded.formatVersion)
         assertEquals(40L, decoded.exportedAt)
+    }
+
+    @Test
+    fun versionTwentyEightRoundTripPreservesNormalizedCustomTheme() {
+        val customTheme = CustomThemeSettings(
+            baseStyle = CustomThemeBaseStyle.LIQUID_GLASS,
+            lightPalette = CustomThemeSettings().lightPalette.copy(
+                backgroundArgb = 0xFFF8EBD7.toInt(),
+                onBackgroundArgb = 0xFF2A1708.toInt(),
+            ),
+            darkPalette = CustomThemeSettings().darkPalette.copy(
+                backgroundArgb = 0xFF120D18.toInt(),
+                onBackgroundArgb = 0xFFF8EFFD.toInt(),
+            ),
+            cornerRadiusDp = 27f,
+            borderWidthDp = 2.25f,
+            elevationDp = 7f,
+            panelOpacity = 0.8f,
+            spacingScale = 1.2f,
+            animationScale = 0.6f,
+        )
+        val encoded = BackupJsonCodec.encode(
+            AppBackup(
+                exportedAt = 28,
+                settings = AppSettings(
+                    visualStyle = VisualStyle.CUSTOM,
+                    customTheme = customTheme,
+                ),
+                thoughts = emptyList(),
+                favorites = emptyList(),
+            ),
+        )
+
+        val decoded = BackupJsonCodec.decode(encoded)
+
+        assertEquals(28, decoded.formatVersion)
+        assertEquals(VisualStyle.CUSTOM, decoded.settings.visualStyle)
+        assertEquals(customTheme, decoded.settings.customTheme)
+    }
+
+    @Test
+    fun versionTwentyEightRequiresReaderProgressRootField() {
+        val missing = validEmptyBackupJson().apply {
+            remove("readerProgress")
+        }
+
+        assertDecodeRejected(missing)
+    }
+
+    @Test
+    fun versionTwentyEightReaderProgressEncodingIsDeterministicAndContainsNoBookMetadata() {
+        val encoded = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 28,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                    readerProgress = listOf(
+                        validReaderProgressRecord(
+                            fingerprint = "b".repeat(64),
+                            type = ReaderBookType.PDF,
+                        ),
+                        validReaderProgressRecord(
+                            fingerprint = "a".repeat(64),
+                            type = ReaderBookType.TXT,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val records = encoded.getJSONArray("readerProgress")
+        assertEquals("a".repeat(64), records.getJSONObject(0).getString("fingerprint"))
+        assertEquals("b".repeat(64), records.getJSONObject(1).getString("fingerprint"))
+        repeat(records.length()) { index ->
+            val record = records.getJSONObject(index)
+            assertFalse(record.has("uri"))
+            assertFalse(record.has("title"))
+            assertFalse(record.has("coverUri"))
+            assertFalse(record.has("content"))
+        }
+    }
+
+    @Test
+    fun versionTwentyEightRejectsMalformedReaderProgressRecords() {
+        val invalidRecords = listOf(
+            validReaderProgressJson().put("fingerprint", "A".repeat(64)),
+            validReaderProgressJson().put("type", "EPUB"),
+            validReaderProgressJson().put("textPageIndex", 50_000),
+            validReaderProgressJson().put("textParagraphIndex", 250_000),
+            validReaderProgressJson().put("pdfPageIndex", -1),
+            validReaderProgressJson().put("totalPages", 50_001),
+            validReaderProgressJson(ReaderBookType.PDF).put("pdfPageIndex", 20_000),
+            validReaderProgressJson(ReaderBookType.PDF).put("totalPages", 20_001),
+            validReaderProgressJson().put("updatedAt", -1),
+        )
+
+        invalidRecords.forEach { record ->
+            assertDecodeRejected(
+                validEmptyBackupJson().put("readerProgress", JSONArray().put(record)),
+            )
+        }
+    }
+
+    @Test
+    fun versionTwentyEightRejectsDuplicateOrExcessReaderProgressRecords() {
+        val duplicate = validReaderProgressJson()
+        assertDecodeRejected(
+            validEmptyBackupJson().put(
+                "readerProgress",
+                JSONArray().put(duplicate).put(JSONObject(duplicate.toString())),
+            ),
+        )
+
+        val excessive = JSONArray().apply {
+            repeat(501) { put(validReaderProgressJson()) }
+        }
+        assertDecodeRejected(validEmptyBackupJson().put("readerProgress", excessive))
+    }
+
+    @Test
+    fun versionTwentySevenUsesDefaultCustomThemeAndRejectsCustomStyle() {
+        val versionTwentySeven = JSONObject(validEmptyBackupJson().toString()).apply {
+            put("version", 27)
+            remove("readerProgress")
+            getJSONObject("settings").apply {
+                put("visualStyle", VisualStyle.MATERIAL.name)
+                remove("customTheme")
+            }
+        }
+
+        val decoded = BackupJsonCodec.decode(versionTwentySeven.toString())
+
+        assertEquals(27, decoded.formatVersion)
+        assertEquals(CustomThemeSettings(), decoded.settings.customTheme)
+        assertEquals(emptyList<ReaderProgressRecord>(), decoded.readerProgress)
+
+        versionTwentySeven.getJSONObject("settings")
+            .put("visualStyle", VisualStyle.CUSTOM.name)
+        assertDecodeRejected(versionTwentySeven)
+    }
+
+    @Test
+    fun versionTwentyEightRejectsOutOfRangeOrIncompleteCustomTheme() {
+        val outOfRange = validEmptyBackupJson().apply {
+            getJSONObject("settings").getJSONObject("customTheme")
+                .put("panelOpacity", 0.1)
+        }
+        assertDecodeRejected(outOfRange)
+
+        val incomplete = validEmptyBackupJson().apply {
+            getJSONObject("settings").getJSONObject("customTheme")
+                .getJSONObject("lightPalette")
+                .remove("onSurfaceArgb")
+        }
+        assertDecodeRejected(incomplete)
     }
 
     @Test
@@ -1761,6 +1941,40 @@ class BackupJsonCodecTest {
             ),
         ),
     )
+
+    private fun validReaderProgressRecord(
+        fingerprint: String = "a".repeat(64),
+        type: ReaderBookType = ReaderBookType.TXT,
+    ): ReaderProgressRecord = when (type) {
+        ReaderBookType.TXT -> ReaderProgressRecord(
+            fingerprint = fingerprint,
+            type = type,
+            textPageIndex = 1,
+            textParagraphIndex = 20,
+            totalPages = 12,
+            updatedAt = 28,
+        )
+        ReaderBookType.PDF -> ReaderProgressRecord(
+            fingerprint = fingerprint,
+            type = type,
+            pdfPageIndex = 2,
+            totalPages = 30,
+            updatedAt = 28,
+        )
+    }
+
+    private fun validReaderProgressJson(
+        type: ReaderBookType = ReaderBookType.TXT,
+    ): JSONObject = validReaderProgressRecord(type = type).let { record ->
+        JSONObject()
+            .put("fingerprint", record.fingerprint)
+            .put("type", record.type.name)
+            .put("textPageIndex", record.textPageIndex)
+            .put("textParagraphIndex", record.textParagraphIndex)
+            .put("pdfPageIndex", record.pdfPageIndex)
+            .put("totalPages", record.totalPages)
+            .put("updatedAt", record.updatedAt)
+    }
 
     private fun validEmptyBackupJson(): JSONObject = JSONObject(
         BackupJsonCodec.encode(

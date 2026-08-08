@@ -2,6 +2,8 @@ package com.deskcubby.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import com.deskcubby.app.data.model.CustomThemeBaseStyle
+import com.deskcubby.app.data.model.CustomThemeSettings
 import com.deskcubby.app.data.model.VisualStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -150,6 +152,60 @@ class OrganicFutureThemeTest {
         assertTrue(tokens.organic)
         assertEquals(340, tokens.transitionMillis)
         assertTrue(OrganicFutureTypography.headlineMedium.fontSize > OrganicFutureTypography.bodyLarge.fontSize)
+    }
+
+    @Test
+    fun customStyleAppliesModePaletteWhileKeepingAccentRoles() {
+        val custom = CustomThemeSettings(
+            baseStyle = CustomThemeBaseStyle.LIQUID_GLASS,
+            lightPalette = CustomThemeSettings().lightPalette.copy(
+                backgroundArgb = 0xFFF4E8D8.toInt(),
+                surfaceArgb = 0xFFFFF9F2.toInt(),
+                surfaceContainerArgb = 0xFFF1DDC5.toInt(),
+                onBackgroundArgb = 0xFF24180D.toInt(),
+                onSurfaceArgb = 0xFF24180D.toInt(),
+            ),
+            darkPalette = CustomThemeSettings().darkPalette.copy(
+                backgroundArgb = 0xFF120D18.toInt(),
+                surfaceArgb = 0xFF1B1422.toInt(),
+                surfaceContainerArgb = 0xFF261C30.toInt(),
+                onBackgroundArgb = 0xFFF2EAF8.toInt(),
+                onSurfaceArgb = 0xFFF2EAF8.toInt(),
+            ),
+        )
+        val primary = 0xFF9C4A24.toInt()
+
+        val light = resolveColorScheme(VisualStyle.CUSTOM, false, primary, customTheme = custom)
+        val dark = resolveColorScheme(VisualStyle.CUSTOM, true, primary, customTheme = custom)
+
+        assertEquals(Color(0xFFF4E8D8), light.background)
+        assertEquals(Color(0xFFFFF9F2), light.surface)
+        assertEquals(Color(0xFF120D18), dark.background)
+        assertEquals(Color(0xFF1B1422), dark.surface)
+        assertEquals(Color(primary), light.primary)
+        assertTrue(contrastRatio(light.onSurface, light.surface) >= 4.5f)
+        assertTrue(contrastRatio(dark.onSurface, dark.surface) >= 4.5f)
+    }
+
+    @Test
+    fun customVisualTokensApplyBoundedGeometrySpacingOpacityAndMotion() {
+        val settings = CustomThemeSettings(
+            cornerRadiusDp = 28f,
+            borderWidthDp = 2.5f,
+            elevationDp = 8f,
+            panelOpacity = 0.8f,
+            spacingScale = 1.25f,
+            animationScale = 0.5f,
+        )
+
+        val tokens = customVisualTokens(VisualStyle.MATERIAL, settings)
+
+        assertTrue(tokens.customized)
+        assertEquals(2.5f, tokens.borderWidth.value, 0.001f)
+        assertEquals(8f, tokens.panelElevation.value, 0.001f)
+        assertEquals(10f, tokens.spaceSmall.value, 0.001f)
+        assertEquals(150, tokens.transitionMillis)
+        assertEquals(0.8f, tokens.panelOpacity, 0.001f)
     }
 
     private fun contrastRatio(first: Color, second: Color): Float {

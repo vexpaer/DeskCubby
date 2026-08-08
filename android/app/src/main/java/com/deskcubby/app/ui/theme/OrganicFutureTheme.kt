@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.deskcubby.app.data.model.DEFAULT_THEME_COLOR_ARGB
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
+import com.deskcubby.app.data.model.CustomThemeSettings
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.VisualStyle
@@ -391,6 +392,7 @@ enum class PanelRole {
 @Immutable
 data class DeskCubbyVisualTokens(
     val organic: Boolean,
+    val customized: Boolean,
     val featureShape: Shape,
     val listShape: Shape,
     val mediaShape: Shape,
@@ -402,10 +404,12 @@ data class DeskCubbyVisualTokens(
     val spaceMedium: Dp,
     val contentPadding: Dp,
     val transitionMillis: Int,
+    val panelOpacity: Float,
 )
 
 private val StandardVisualTokens = DeskCubbyVisualTokens(
     organic = false,
+    customized = false,
     featureShape = RoundedCornerShape(24.dp),
     listShape = RoundedCornerShape(16.dp),
     mediaShape = RoundedCornerShape(20.dp),
@@ -417,10 +421,12 @@ private val StandardVisualTokens = DeskCubbyVisualTokens(
     spaceMedium = 12.dp,
     contentPadding = 16.dp,
     transitionMillis = 300,
+    panelOpacity = 1f,
 )
 
 private val OrganicVisualTokens = DeskCubbyVisualTokens(
     organic = true,
+    customized = false,
     featureShape = RoundedCornerShape(
         topStart = 30.dp,
         topEnd = 18.dp,
@@ -452,6 +458,7 @@ private val OrganicVisualTokens = DeskCubbyVisualTokens(
     spaceMedium = 12.dp,
     contentPadding = 16.dp,
     transitionMillis = 340,
+    panelOpacity = 1f,
 )
 
 val LocalDeskCubbyVisuals: ProvidableCompositionLocal<DeskCubbyVisualTokens> =
@@ -465,6 +472,32 @@ internal fun visualTokensFor(style: VisualStyle): DeskCubbyVisualTokens = when (
     VisualStyle.LIQUID_GLASS,
     -> StandardVisualTokens
     VisualStyle.ORGANIC_FUTURE -> OrganicVisualTokens
+    VisualStyle.CUSTOM -> error("CUSTOM must resolve to a concrete base style")
+}
+
+internal fun customVisualTokens(
+    baseStyle: VisualStyle,
+    settings: CustomThemeSettings,
+): DeskCubbyVisualTokens {
+    val base = visualTokensFor(baseStyle)
+    val radius = settings.cornerRadiusDp.dp
+    val featureRadius = (settings.cornerRadiusDp * 1.45f).coerceAtMost(52f).dp
+    val mediaRadius = (settings.cornerRadiusDp * 1.65f).coerceAtMost(56f).dp
+    val spacing = settings.spacingScale
+    return base.copy(
+        customized = true,
+        featureShape = RoundedCornerShape(featureRadius),
+        listShape = RoundedCornerShape(radius),
+        mediaShape = RoundedCornerShape(mediaRadius),
+        borderWidth = settings.borderWidthDp.dp,
+        panelElevation = settings.elevationDp.dp,
+        spaceSmall = 8.dp * spacing,
+        spaceMedium = 12.dp * spacing,
+        contentPadding = 16.dp * spacing,
+        transitionMillis = (base.transitionMillis * settings.animationScale).toInt()
+            .coerceIn(0, 2_000),
+        panelOpacity = settings.panelOpacity,
+    )
 }
 
 internal fun organicPanelShape(cornerRadius: Dp, role: PanelRole): Shape {

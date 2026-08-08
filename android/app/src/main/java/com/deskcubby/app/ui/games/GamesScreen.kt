@@ -90,6 +90,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -797,6 +798,20 @@ private fun Game2048Page(
         viewModel.clearSave(gameId)
     }
 
+    fun attemptMove(direction: Game2048.Direction) {
+        val current = engine ?: return
+        if (current.isGameOver) return
+        val result = current.moveWithResult(direction)
+        // A direction the active game accepts is an operation even when no tile can move.
+        viewModel.record2048MoveAttempt(gameId, result?.statisticsDelta)
+        if (result != null) {
+            // State and undo history commit before the visual transition.
+            transition = if (animationsEnabled) result else null
+            transitionSequence++
+            frame++
+        }
+    }
+
     GameAutoPauseEffect(onPauseAndSave = ::pauseAndSave)
     BackHandler {
         saveIfRunning()
@@ -808,15 +823,7 @@ private fun Game2048Page(
             .fillMaxSize()
             .background(palette.pageBackground)
             .swipeInput(engine != null && !gameOver) { swipe ->
-                val current = engine
-                if (current != null && !current.isGameOver) {
-                    current.moveWithResult(swipe.to2048Direction())?.let { result ->
-                        viewModel.record2048Statistics(gameId, result.statisticsDelta)
-                        transition = if (animationsEnabled) result else null
-                        transitionSequence++
-                        frame++
-                    }
-                }
+                attemptMove(swipe.to2048Direction())
             },
         contentAlignment = Alignment.Center,
     ) {
@@ -948,18 +955,7 @@ private fun Game2048Page(
                     animate = animationsEnabled,
                     animationDurationMillis = animationDurationMillis,
                     palette = palette,
-                    onMove = { direction ->
-                        val current = engine
-                        if (current != null && !current.isGameOver) {
-                            current.moveWithResult(direction)?.let { result ->
-                                viewModel.record2048Statistics(gameId, result.statisticsDelta)
-                                // State and undo history commit before the visual transition.
-                                transition = if (animationsEnabled) result else null
-                                transitionSequence++
-                                frame++
-                            }
-                        }
-                    },
+                    onMove = ::attemptMove,
                     modifier = Modifier.fillMaxSize(),
                 )
                 if (gameOver) {
@@ -1326,12 +1322,15 @@ private fun Tile2048(
                 color = textColor,
                 fontWeight = FontWeight.Bold,
                 fontSize = tileFontSize(value, boardSize, maxWidth.value).sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip,
             )
         }
     }
 }
 
-private fun tileFontSize(value: Int, boardSize: Int, tileWidthDp: Float): Int {
+internal fun tileFontSize(value: Int, boardSize: Int, tileWidthDp: Float): Int {
     val boardScale = when (boardSize) {
         4 -> 1f
         5 -> 0.98f
@@ -1340,12 +1339,20 @@ private fun tileFontSize(value: Int, boardSize: Int, tileWidthDp: Float): Int {
     val base = (tileWidthDp * 0.47f * boardScale)
         .roundToInt()
         .coerceIn(16, 55)
-    return when {
-        value < 100 -> base
-        value < 1_000 -> (base * 0.82f).roundToInt()
-        value < 10_000 -> (base * 0.64f).roundToInt()
-        else -> (base * 0.54f).roundToInt().coerceAtLeast(9)
+    val digitCount = value.toString().length.coerceAtLeast(1)
+    val original2048Scale = when (digitCount) {
+        1, 2 -> 1f
+        3 -> 0.82f
+        4 -> 0.64f
+        else -> 0.54f
     }
+    // Keep roughly 82% of the cell width available. Decimal digits in the game's bold typeface
+    // average about 0.6 em, so this also scales values beyond 65536 instead of clipping them.
+    val widthBound = (tileWidthDp * 0.82f / (digitCount * 0.6f)).toInt()
+    return minOf(
+        (base * original2048Scale).roundToInt(),
+        widthBound,
+    ).coerceAtLeast(9)
 }
 
 // ---------------------------------------------------------------------------------------------

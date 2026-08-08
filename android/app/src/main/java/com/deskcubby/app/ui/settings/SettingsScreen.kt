@@ -123,6 +123,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -163,8 +164,23 @@ import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
+import com.deskcubby.app.data.model.CustomThemeBaseStyle
+import com.deskcubby.app.data.model.CustomThemePalette
+import com.deskcubby.app.data.model.CustomThemeSettings
 import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_ANIMATION_SCALE
+import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_BORDER_WIDTH_DP
+import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_CORNER_RADIUS_DP
+import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_ELEVATION_DP
+import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_PANEL_OPACITY
+import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_SPACING_SCALE
+import com.deskcubby.app.data.model.MIN_CUSTOM_THEME_ANIMATION_SCALE
+import com.deskcubby.app.data.model.MIN_CUSTOM_THEME_BORDER_WIDTH_DP
+import com.deskcubby.app.data.model.MIN_CUSTOM_THEME_CORNER_RADIUS_DP
+import com.deskcubby.app.data.model.MIN_CUSTOM_THEME_ELEVATION_DP
+import com.deskcubby.app.data.model.MIN_CUSTOM_THEME_PANEL_OPACITY
+import com.deskcubby.app.data.model.MIN_CUSTOM_THEME_SPACING_SCALE
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
@@ -187,6 +203,7 @@ import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.model.normalized
 import com.deskcubby.app.data.repository.UpdateCheckResult
 import com.deskcubby.app.data.repository.UpdateDownloadFailure
 import com.deskcubby.app.data.repository.buildAiRequestPreviewJson
@@ -588,11 +605,12 @@ fun SettingsScreen(
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
                 onPersistBackground = viewModel::persistAppBackground,
-                onSave = { visualStyle, darkMode, language, themeColor, secondaryColors,
+                onSave = { visualStyle, customTheme, darkMode, language, themeColor, secondaryColors,
                         fontScale, compactMode, backgroundUri, backgroundOpacity,
                         backgroundBlur, onDone ->
                     viewModel.setAppearanceSettings(
                         visualStyle = visualStyle,
+                        customTheme = customTheme,
                         darkMode = darkMode,
                         appLanguage = language,
                         themeColorArgb = themeColor,
@@ -1021,8 +1039,8 @@ private data class SettingsSearchEntry(
 private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry(
         tr("外观与语言", "Appearance & language"),
-        tr("风格、主题颜色、辅色、字号、明暗、紧凑模式", "Style, theme colors, secondary colors, font size, dark mode, compact mode"),
-        "appearance style theme color secondary font dark compact 外观 风格 主题 颜色 辅色 副色 字号 明暗 紧凑 语言 material glass organic",
+        tr("风格、自定义主题、颜色、字号、明暗、紧凑模式", "Style, custom theme, colors, font size, dark mode, compact mode"),
+        "appearance style custom theme color secondary font dark compact opacity radius border shadow spacing motion 外观 风格 自定义 主题 颜色 辅色 副色 字号 明暗 紧凑 透明度 圆角 边框 阴影 间距 动效 material glass organic",
         SettingsPage.APPEARANCE,
     ),
     SettingsSearchEntry(
@@ -1701,8 +1719,8 @@ private fun CloudSyncSettingsPage(
             text = {
                 Text(
                     tr(
-                        "这会按 v27 备份导入应用设置和结构化数据，恢复 Markdown 标题字号、主页小游戏快捷入口、背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Vault 随后保持锁定。日记、笔记、媒体与背景图片文件不会被替换。",
-                        "This imports v27 app settings and structured data, restores Markdown heading sizes, Home mini-game shortcuts, background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. The Vault remains locked, and diary, note, media, and background-image files are not replaced.",
+                        "这会按 v28 备份导入应用设置和结构化数据，恢复自定义主题、Markdown 标题字号、主页小游戏快捷入口、背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Vault 随后保持锁定。日记、笔记、媒体与背景图片文件不会被替换。",
+                        "This imports v28 app settings and structured data, restores the custom theme, Markdown heading sizes, Home mini-game shortcuts, background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. The Vault remains locked, and diary, note, media, and background-image files are not replaced.",
                     ),
                 )
             },
@@ -1994,8 +2012,8 @@ private fun CloudSyncConfigDetailPage(
                 }
                 Text(
                     tr(
-                        "双向同步遇到双方都修改时会保留冲突副本，不会无条件覆盖。",
-                        "Two-way sync preserves a conflict copy when both sides changed.",
+                        "双向同步遇到双方都修改时会保留冲突副本；支持逐条安全合并的内容会按更新时间合并，不会无条件覆盖。",
+                        "Two-way sync preserves a conflict copy when both sides changed; content that supports safe record-level merging is merged by update time and is never overwritten unconditionally.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2003,8 +2021,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.JSON_BACKUP in selectedContents) {
                     Text(
                         tr(
-                            "v27 应用 JSON 包含 Markdown 显示设置、主页小游戏快捷入口、全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "The v27 app JSON contains Markdown display settings, Home mini-game shortcuts, global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                            "v28 应用 JSON 包含自定义主题、Markdown 显示设置、主页小游戏快捷入口、全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "The v28 app JSON contains the custom theme, Markdown display settings, Home mini-game shortcuts, global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2015,6 +2033,16 @@ private fun CloudSyncConfigDetailPage(
                         tr(
                             "使用时间会按设备 ID 自动上传并合并，包含应用包名、日期、时区与前台时长；请只使用可信云端。",
                             "Screen time is uploaded and merged by device ID. It includes package names, dates, time zones, and foreground durations; use only a trusted cloud service.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (CloudSyncContent.READING_PROGRESS in selectedContents) {
+                    Text(
+                        tr(
+                            "阅读进度会按书籍文件的 SHA-256 指纹自动合并。云端不包含书名、文件地址、封面或正文，但文件指纹仍可能用于识别你持有的特定文件；请只使用可信云端。",
+                            "Reading progress is merged using each book file's SHA-256 fingerprint. The cloud object contains no title, file URI, cover, or book text, but a fingerprint can still identify a specific file you possess; use only a trusted cloud service.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2177,6 +2205,7 @@ private fun syncContentLabel(content: CloudSyncContent): String = when (content)
     CloudSyncContent.MEDIA -> tr("媒体", "Media")
     CloudSyncContent.JSON_BACKUP -> tr("应用 JSON", "App JSON")
     CloudSyncContent.USAGE_STATISTICS -> tr("多设备使用时间", "Multi-device screen time")
+    CloudSyncContent.READING_PROGRESS -> tr("阅读进度", "Reading progress")
 }
 
 @Composable
@@ -2190,6 +2219,7 @@ private fun syncContentsLabel(contents: Set<CloudSyncContent>): String =
                     CloudSyncContent.MEDIA -> "Media"
                     CloudSyncContent.JSON_BACKUP -> "App JSON"
                     CloudSyncContent.USAGE_STATISTICS -> "Screen time"
+                    CloudSyncContent.READING_PROGRESS -> "Reading progress"
                 }
             }
     } else {
@@ -2201,6 +2231,7 @@ private fun syncContentsLabel(contents: Set<CloudSyncContent>): String =
                     CloudSyncContent.MEDIA -> "媒体"
                     CloudSyncContent.JSON_BACKUP -> "应用 JSON"
                     CloudSyncContent.USAGE_STATISTICS -> "使用时间"
+                    CloudSyncContent.READING_PROGRESS -> "阅读进度"
                 }
             }
     }
@@ -2311,8 +2342,8 @@ private fun BackupSettingsPage(
                     )
                     Text(
                         tr(
-                            "${conflict.summary.thoughtCount} 条小巧思，${conflict.summary.categoryCount} 个小巧思分类，${conflict.summary.favoriteCount} 个浏览器收藏，${conflict.summary.dateRecordCount} 个日期记录，${conflict.summary.poetryCategoryCount} 个诗词分类，${conflict.summary.poemCount} 首诗词，${conflict.summary.vaultItemCount} 条收藏夹密文，${conflict.summary.gameStateCount} 个游戏存档，${conflict.summary.gameStatisticCount} 项游戏累计统计，${conflict.summary.usageDeviceCount} 台设备的 ${conflict.summary.usageDayCount} 天使用时间",
-                            "${conflict.summary.thoughtCount} thoughts, ${conflict.summary.categoryCount} thought categories, ${conflict.summary.favoriteCount} browser bookmarks, ${conflict.summary.dateRecordCount} date records, ${conflict.summary.poetryCategoryCount} poetry categories, ${conflict.summary.poemCount} poems, ${conflict.summary.vaultItemCount} encrypted Vault items, ${conflict.summary.gameStateCount} game saves, ${conflict.summary.gameStatisticCount} lifetime game metrics, and ${conflict.summary.usageDayCount} screen-time days from ${conflict.summary.usageDeviceCount} devices",
+                            "${conflict.summary.thoughtCount} 条小巧思，${conflict.summary.categoryCount} 个小巧思分类，${conflict.summary.favoriteCount} 个浏览器收藏，${conflict.summary.dateRecordCount} 个日期记录，${conflict.summary.poetryCategoryCount} 个诗词分类，${conflict.summary.poemCount} 首诗词，${conflict.summary.vaultItemCount} 条收藏夹密文，${conflict.summary.gameStateCount} 个游戏存档，${conflict.summary.gameStatisticCount} 项游戏累计统计，${conflict.summary.usageDeviceCount} 台设备的 ${conflict.summary.usageDayCount} 天使用时间，${conflict.summary.readerProgressCount} 本书的阅读进度",
+                            "${conflict.summary.thoughtCount} thoughts, ${conflict.summary.categoryCount} thought categories, ${conflict.summary.favoriteCount} browser bookmarks, ${conflict.summary.dateRecordCount} date records, ${conflict.summary.poetryCategoryCount} poetry categories, ${conflict.summary.poemCount} poems, ${conflict.summary.vaultItemCount} encrypted Vault items, ${conflict.summary.gameStateCount} game saves, ${conflict.summary.gameStatisticCount} lifetime game metrics, ${conflict.summary.usageDayCount} screen-time days from ${conflict.summary.usageDeviceCount} devices, and reading progress for ${conflict.summary.readerProgressCount} books",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -2349,8 +2380,8 @@ private fun BackupSettingsPage(
             text = {
                 Text(
                     tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v27 还会恢复 Markdown 标题字号、主页小游戏快捷入口、全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。日记、笔记、媒体和背景图片文件不会被修改。确定继续吗？",
-                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. v27 also restores Markdown heading sizes, Home mini-game shortcuts, global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merges games and per-device screen time while leaving the Vault locked. Diary, note, media, and background-image files are unchanged. Continue?",
+                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v28 还会恢复自定义主题、Markdown 标题字号、主页小游戏快捷入口、全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。日记、笔记、媒体和背景图片文件不会被修改。确定继续吗？",
+                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. v28 also restores the custom theme, Markdown heading sizes, Home mini-game shortcuts, global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merges games and per-device screen time while leaving the Vault locked. Diary, note, media, and background-image files are unchanged. Continue?",
                     ),
                 )
             },
@@ -2525,8 +2556,8 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "v27 包含应用设置（含 Markdown 标题字号与笔记目录引用、主页小游戏快捷入口、全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。笔记/日记正文、媒体文件、逐页教学确认和背景图片文件不包含在内。",
-                        "v27 includes app settings (including Markdown heading sizes and the notes-folder reference, Home mini-game shortcuts, global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time. Note/diary contents, media files, per-page confirmations, and background-image files are excluded.",
+                        "v28 包含应用设置（含自定义主题、Markdown 标题字号与笔记目录引用、主页小游戏快捷入口、全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。笔记/日记正文、媒体文件、逐页教学确认和背景图片文件不包含在内。",
+                        "v28 includes app settings (including the custom theme, Markdown heading sizes and the notes-folder reference, Home mini-game shortcuts, global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time. Note/diary contents, media files, per-page confirmations, and background-image files are excluded.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -2595,6 +2626,7 @@ private fun AppearanceSettingsPage(
     onPersistBackground: (Uri, (Boolean) -> Unit) -> Unit,
     onSave: (
         VisualStyle,
+        CustomThemeSettings,
         DarkMode,
         AppLanguage,
         Int,
@@ -2615,9 +2647,37 @@ private fun AppearanceSettingsPage(
         0xFF7B5EA7.toInt(),
         0xFF00897B.toInt(),
     )
-    // null = closed, -1 = primary color, >= 0 = index into secondaryHexes.
+    // null = closed, -1 = primary, 0..4 = secondary, 100..107 = custom light,
+    // 200..207 = custom dark.
     var colorPickerTarget by remember { mutableStateOf<Int?>(null) }
     var visualStyle by rememberSaveable(settings.visualStyle) { mutableStateOf(settings.visualStyle) }
+    var customBaseStyle by rememberSaveable(settings.customTheme.baseStyle) {
+        mutableStateOf(settings.customTheme.baseStyle)
+    }
+    var customLightHexes by rememberSaveable(settings.customTheme.lightPalette) {
+        mutableStateOf(settings.customTheme.lightPalette.toThemeHexList())
+    }
+    var customDarkHexes by rememberSaveable(settings.customTheme.darkPalette) {
+        mutableStateOf(settings.customTheme.darkPalette.toThemeHexList())
+    }
+    var customCornerRadiusDp by rememberSaveable(settings.customTheme.cornerRadiusDp) {
+        mutableFloatStateOf(settings.customTheme.cornerRadiusDp)
+    }
+    var customBorderWidthDp by rememberSaveable(settings.customTheme.borderWidthDp) {
+        mutableFloatStateOf(settings.customTheme.borderWidthDp)
+    }
+    var customElevationDp by rememberSaveable(settings.customTheme.elevationDp) {
+        mutableFloatStateOf(settings.customTheme.elevationDp)
+    }
+    var customPanelOpacity by rememberSaveable(settings.customTheme.panelOpacity) {
+        mutableFloatStateOf(settings.customTheme.panelOpacity)
+    }
+    var customSpacingScale by rememberSaveable(settings.customTheme.spacingScale) {
+        mutableFloatStateOf(settings.customTheme.spacingScale)
+    }
+    var customAnimationScale by rememberSaveable(settings.customTheme.animationScale) {
+        mutableFloatStateOf(settings.customTheme.animationScale)
+    }
     var darkMode by rememberSaveable(settings.darkMode) { mutableStateOf(settings.darkMode) }
     var language by rememberSaveable(settings.appLanguage) { mutableStateOf(settings.appLanguage) }
     var themeHex by rememberSaveable(settings.themeColorArgb) { mutableStateOf(colorToHex(settings.themeColorArgb)) }
@@ -2667,7 +2727,32 @@ private fun AppearanceSettingsPage(
     val secondaryColorsUnique = validSecondaryValues.distinct().size == secondaryHexes.size
     val secondaryColorsValid = secondaryHexes.size in 2..5 &&
         parsedSecondaryColors.all { it != null } && secondaryColorsUnique
+    val rawCustomTheme = customThemeFromDraft(
+        baseStyle = customBaseStyle,
+        lightHexes = customLightHexes,
+        darkHexes = customDarkHexes,
+        cornerRadiusDp = customCornerRadiusDp,
+        borderWidthDp = customBorderWidthDp,
+        elevationDp = customElevationDp,
+        panelOpacity = customPanelOpacity,
+        spacingScale = customSpacingScale,
+        animationScale = customAnimationScale,
+    )
+    val parsedCustomTheme = rawCustomTheme?.normalized()
+    val customThemeValid = parsedCustomTheme != null
+    val customThemeNeedsSafetyAdjustment = rawCustomTheme != null &&
+        rawCustomTheme != parsedCustomTheme
+    val customThemeDraftDirty = customBaseStyle != settings.customTheme.baseStyle ||
+        customLightHexes != settings.customTheme.lightPalette.toThemeHexList() ||
+        customDarkHexes != settings.customTheme.darkPalette.toThemeHexList() ||
+        customCornerRadiusDp != settings.customTheme.cornerRadiusDp ||
+        customBorderWidthDp != settings.customTheme.borderWidthDp ||
+        customElevationDp != settings.customTheme.elevationDp ||
+        customPanelOpacity != settings.customTheme.panelOpacity ||
+        customSpacingScale != settings.customTheme.spacingScale ||
+        customAnimationScale != settings.customTheme.animationScale
     val appearanceDirty = visualStyle != settings.visualStyle ||
+        customThemeDraftDirty ||
         darkMode != settings.darkMode || language != settings.appLanguage ||
         parsedThemeColor != settings.themeColorArgb ||
         validSecondaryValues != settings.themeSecondaryColorsArgb ||
@@ -2679,10 +2764,21 @@ private fun AppearanceSettingsPage(
     RegisterSettingsSave(
         coordinator = saveCoordinator,
         dirty = appearanceDirty,
-        enabled = parsedThemeColor != null && secondaryColorsValid && !saving && !backgroundImporting,
+        enabled = parsedThemeColor != null && secondaryColorsValid &&
+            (visualStyle != VisualStyle.CUSTOM || customThemeValid) &&
+            !saving && !backgroundImporting,
         onReset = {
             val defaults = AppSettings()
             visualStyle = defaults.visualStyle
+            customBaseStyle = defaults.customTheme.baseStyle
+            customLightHexes = defaults.customTheme.lightPalette.toThemeHexList()
+            customDarkHexes = defaults.customTheme.darkPalette.toThemeHexList()
+            customCornerRadiusDp = defaults.customTheme.cornerRadiusDp
+            customBorderWidthDp = defaults.customTheme.borderWidthDp
+            customElevationDp = defaults.customTheme.elevationDp
+            customPanelOpacity = defaults.customTheme.panelOpacity
+            customSpacingScale = defaults.customTheme.spacingScale
+            customAnimationScale = defaults.customTheme.animationScale
             darkMode = defaults.darkMode
             language = defaults.appLanguage
             themeHex = colorToHex(defaults.themeColorArgb)
@@ -2697,6 +2793,7 @@ private fun AppearanceSettingsPage(
         saving = true
         onSave(
             visualStyle,
+            parsedCustomTheme ?: settings.customTheme,
             darkMode,
             language,
             parsedThemeColor ?: settings.themeColorArgb,
@@ -2712,10 +2809,13 @@ private fun AppearanceSettingsPage(
     }
 
     colorPickerTarget?.let { target ->
-        val initial = if (target < 0) {
-            parsedThemeColor ?: settings.themeColorArgb
-        } else {
-            secondaryHexes.getOrNull(target)?.let(::parseThemeColor)
+        val initial = when {
+            target < 0 -> parsedThemeColor ?: settings.themeColorArgb
+            target >= 200 -> customDarkHexes.getOrNull(target - 200)
+                ?.let(::parseThemeColor) ?: settings.customTheme.darkPalette.surfaceArgb
+            target >= 100 -> customLightHexes.getOrNull(target - 100)
+                ?.let(::parseThemeColor) ?: settings.customTheme.lightPalette.surfaceArgb
+            else -> secondaryHexes.getOrNull(target)?.let(::parseThemeColor)
                 ?: settings.themeSecondaryColorsArgb.firstOrNull()
                 ?: settings.themeColorArgb
         }
@@ -2723,11 +2823,20 @@ private fun AppearanceSettingsPage(
             initialColorArgb = initial,
             onDismiss = { colorPickerTarget = null },
             onConfirm = { picked ->
-                if (target < 0) {
-                    themeHex = colorToHex(picked)
-                } else if (target < secondaryHexes.size) {
-                    secondaryHexes = secondaryHexes.toMutableList().apply {
-                        this[target] = colorToHex(picked)
+                when {
+                    target < 0 -> themeHex = colorToHex(picked)
+                    target >= 200 -> customDarkHexes = customDarkHexes.toMutableList().apply {
+                        val index = target - 200
+                        if (index in indices) this[index] = colorToHex(picked)
+                    }
+                    target >= 100 -> customLightHexes = customLightHexes.toMutableList().apply {
+                        val index = target - 100
+                        if (index in indices) this[index] = colorToHex(picked)
+                    }
+                    target < secondaryHexes.size -> {
+                        secondaryHexes = secondaryHexes.toMutableList().apply {
+                            this[target] = colorToHex(picked)
+                        }
                     }
                 }
                 colorPickerTarget = null
@@ -2754,6 +2863,7 @@ private fun AppearanceSettingsPage(
                                     VisualStyle.MATERIAL -> tr("原生", "Material")
                                     VisualStyle.LIQUID_GLASS -> tr("玻璃", "Glass")
                                     VisualStyle.ORGANIC_FUTURE -> tr("有机未来", "Organic")
+                                    VisualStyle.CUSTOM -> tr("自定义", "Custom")
                                 },
                                 style = MaterialTheme.typography.labelMedium,
                                 maxLines = 1,
@@ -2775,10 +2885,151 @@ private fun AppearanceSettingsPage(
                             "有机未来 · 森林色、哑光有机面板与杂志式层级",
                             "Organic Future · Forest tones, matte organic panels, and editorial type",
                         )
+                        VisualStyle.CUSTOM -> tr(
+                            "自定义 · 使用受控颜色和视觉参数，不执行 CSS、脚本或任意选择器",
+                            "Custom · Controlled colors and visual parameters, without CSS, scripts, or arbitrary selectors",
+                        )
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+        if (visualStyle == VisualStyle.CUSTOM) {
+            item {
+                SettingsSection(tr("自定义主题", "Custom theme")) {
+                    Text(
+                        tr(
+                            "设置只映射到 Compose 的受控主题角色；不会加载 CSS、脚本、网络资源或修改页面结构。",
+                            "Settings map only to controlled Compose theme roles; no CSS, scripts, network resources, or page-structure changes are loaded.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(tr("基础渲染", "Base rendering"), style = MaterialTheme.typography.labelLarge)
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        CustomThemeBaseStyle.entries.forEachIndexed { index, style ->
+                            SegmentedButton(
+                                selected = customBaseStyle == style,
+                                onClick = { customBaseStyle = style },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index,
+                                    CustomThemeBaseStyle.entries.size,
+                                ),
+                            ) {
+                                Text(
+                                    when (style) {
+                                        CustomThemeBaseStyle.MATERIAL -> tr("原生", "Material")
+                                        CustomThemeBaseStyle.LIQUID_GLASS -> tr("玻璃", "Glass")
+                                        CustomThemeBaseStyle.ORGANIC_FUTURE -> tr("有机", "Organic")
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                    Text(tr("浅色模式颜色", "Light-mode colors"), style = MaterialTheme.typography.labelLarge)
+                    CustomThemePaletteEditor(
+                        hexes = customLightHexes,
+                        onHexChanged = { index, value ->
+                            customLightHexes = customLightHexes.toMutableList().apply {
+                                this[index] = value.take(7)
+                            }
+                        },
+                        onPickColor = { index -> colorPickerTarget = 100 + index },
+                    )
+                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                    Text(tr("深色模式颜色", "Dark-mode colors"), style = MaterialTheme.typography.labelLarge)
+                    CustomThemePaletteEditor(
+                        hexes = customDarkHexes,
+                        onHexChanged = { index, value ->
+                            customDarkHexes = customDarkHexes.toMutableList().apply {
+                                this[index] = value.take(7)
+                            }
+                        },
+                        onPickColor = { index -> colorPickerTarget = 200 + index },
+                    )
+                    if (!customThemeValid) {
+                        Text(
+                            tr(
+                                "所有自定义颜色都必须使用 #RRGGBB 格式。",
+                                "Every custom color must use #RRGGBB format.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    } else if (customThemeNeedsSafetyAdjustment) {
+                        Text(
+                            tr(
+                                "部分文字或边框颜色对比度不足，保存时会自动调整到可读颜色。",
+                                "Some text or border colors have low contrast and will be adjusted to readable colors when saved.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+
+                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                    CustomThemeSlider(
+                        label = tr("全局圆角", "Global corners"),
+                        valueLabel = "${customCornerRadiusDp.roundToInt()} dp",
+                        value = customCornerRadiusDp,
+                        valueRange = MIN_CUSTOM_THEME_CORNER_RADIUS_DP..MAX_CUSTOM_THEME_CORNER_RADIUS_DP,
+                        steps = 39,
+                        onValueChange = { customCornerRadiusDp = it.roundToInt().toFloat() },
+                    )
+                    CustomThemeSlider(
+                        label = tr("面板边框", "Panel border"),
+                        valueLabel = "${formatThemeDecimal(customBorderWidthDp)} dp",
+                        value = customBorderWidthDp,
+                        valueRange = MIN_CUSTOM_THEME_BORDER_WIDTH_DP..MAX_CUSTOM_THEME_BORDER_WIDTH_DP,
+                        steps = 15,
+                        onValueChange = { customBorderWidthDp = snapThemeValue(it, 0.25f) },
+                    )
+                    CustomThemeSlider(
+                        label = tr("面板阴影", "Panel elevation"),
+                        valueLabel = "${customElevationDp.roundToInt()} dp",
+                        value = customElevationDp,
+                        valueRange = MIN_CUSTOM_THEME_ELEVATION_DP..MAX_CUSTOM_THEME_ELEVATION_DP,
+                        steps = 15,
+                        onValueChange = { customElevationDp = it.roundToInt().toFloat() },
+                    )
+                    CustomThemeSlider(
+                        label = tr("面板不透明度", "Panel opacity"),
+                        valueLabel = "${(customPanelOpacity * 100).roundToInt()}%",
+                        value = customPanelOpacity,
+                        valueRange = MIN_CUSTOM_THEME_PANEL_OPACITY..MAX_CUSTOM_THEME_PANEL_OPACITY,
+                        steps = 6,
+                        onValueChange = { customPanelOpacity = snapThemeValue(it, 0.05f) },
+                    )
+                    CustomThemeSlider(
+                        label = tr("面板内容间距", "Panel content spacing"),
+                        valueLabel = "${(customSpacingScale * 100).roundToInt()}%",
+                        value = customSpacingScale,
+                        valueRange = MIN_CUSTOM_THEME_SPACING_SCALE..MAX_CUSTOM_THEME_SPACING_SCALE,
+                        steps = 11,
+                        onValueChange = { customSpacingScale = snapThemeValue(it, 0.05f) },
+                    )
+                    CustomThemeSlider(
+                        label = tr("页面切换动效", "Page transition motion"),
+                        valueLabel = "${(customAnimationScale * 100).roundToInt()}%",
+                        value = customAnimationScale,
+                        valueRange = MIN_CUSTOM_THEME_ANIMATION_SCALE..MAX_CUSTOM_THEME_ANIMATION_SCALE,
+                        steps = 19,
+                        onValueChange = { customAnimationScale = snapThemeValue(it, 0.1f) },
+                    )
+                    Text(
+                        tr(
+                            "设为 0% 会关闭页面切换动效；系统“移除动画”设置仍具有更高优先级。",
+                            "0% disables page transitions; the system Remove animations setting still takes precedence.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
         item {
@@ -3088,6 +3339,139 @@ private fun AppearanceSettingsPage(
         }
     }
 }
+
+private val customThemeRoleLabels: List<Pair<String, String>> = listOf(
+    "页面背景" to "Page background",
+    "背景文字" to "Background text",
+    "基础表面" to "Base surface",
+    "正文文字" to "Body text",
+    "卡片表面" to "Card surface",
+    "次级表面" to "Secondary surface",
+    "次要文字" to "Secondary text",
+    "边框" to "Outline",
+)
+
+@Composable
+private fun CustomThemePaletteEditor(
+    hexes: List<String>,
+    onHexChanged: (Int, String) -> Unit,
+    onPickColor: (Int) -> Unit,
+) {
+    customThemeRoleLabels.forEachIndexed { index, labels ->
+        val value = hexes.getOrElse(index) { "" }
+        val parsed = parseThemeColor(value)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(parsed?.let(::Color) ?: MaterialTheme.colorScheme.errorContainer)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                    .clickable { onPickColor(index) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Outlined.Palette,
+                    contentDescription = tr("选择${labels.first}", "Pick ${labels.second}"),
+                    modifier = Modifier.size(17.dp),
+                    tint = parsed?.let { color ->
+                        if (Color(color).luminance() > 0.5f) Color.Black else Color.White
+                    } ?: MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            OutlinedTextField(
+                value = value,
+                onValueChange = { onHexChanged(index, it) },
+                label = { Text(tr(labels.first, labels.second)) },
+                isError = parsed == null,
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CustomThemeSlider(
+    label: String,
+    valueLabel: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onValueChange: (Float) -> Unit,
+) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label)
+        Text(valueLabel, color = MaterialTheme.colorScheme.primary)
+    }
+    Slider(
+        value = value.coerceIn(valueRange.start, valueRange.endInclusive),
+        onValueChange = onValueChange,
+        valueRange = valueRange,
+        steps = steps,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+private fun CustomThemePalette.toThemeHexList(): List<String> = listOf(
+    backgroundArgb,
+    onBackgroundArgb,
+    surfaceArgb,
+    onSurfaceArgb,
+    surfaceContainerArgb,
+    surfaceVariantArgb,
+    onSurfaceVariantArgb,
+    outlineArgb,
+).map(::colorToHex)
+
+private fun customThemeFromDraft(
+    baseStyle: CustomThemeBaseStyle,
+    lightHexes: List<String>,
+    darkHexes: List<String>,
+    cornerRadiusDp: Float,
+    borderWidthDp: Float,
+    elevationDp: Float,
+    panelOpacity: Float,
+    spacingScale: Float,
+    animationScale: Float,
+): CustomThemeSettings? {
+    fun palette(values: List<String>): CustomThemePalette? {
+        if (values.size != customThemeRoleLabels.size) return null
+        val parsed = values.map(::parseThemeColor)
+        if (parsed.any { it == null }) return null
+        return CustomThemePalette(
+            backgroundArgb = parsed[0]!!,
+            onBackgroundArgb = parsed[1]!!,
+            surfaceArgb = parsed[2]!!,
+            onSurfaceArgb = parsed[3]!!,
+            surfaceContainerArgb = parsed[4]!!,
+            surfaceVariantArgb = parsed[5]!!,
+            onSurfaceVariantArgb = parsed[6]!!,
+            outlineArgb = parsed[7]!!,
+        )
+    }
+    return CustomThemeSettings(
+        baseStyle = baseStyle,
+        lightPalette = palette(lightHexes) ?: return null,
+        darkPalette = palette(darkHexes) ?: return null,
+        cornerRadiusDp = cornerRadiusDp,
+        borderWidthDp = borderWidthDp,
+        elevationDp = elevationDp,
+        panelOpacity = panelOpacity,
+        spacingScale = spacingScale,
+        animationScale = animationScale,
+    )
+}
+
+private fun snapThemeValue(value: Float, step: Float): Float =
+    (value / step).roundToInt() * step
+
+private fun formatThemeDecimal(value: Float): String =
+    String.format(Locale.ROOT, "%.2f", value).trimEnd('0').trimEnd('.')
 
 @Composable
 private fun HomeSettingsPage(

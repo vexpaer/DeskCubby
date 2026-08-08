@@ -135,52 +135,55 @@ class DesktopWidgetsViewModel @Inject constructor(
 
     fun requestPin(config: DesktopWidgetConfig, english: Boolean) {
         val manager = AppWidgetManager.getInstance(context)
-        if (!manager.isRequestPinAppWidgetSupported) {
-            _message.value = if (english) {
-                "This launcher does not support in-app pinning. Add DeskCubby from the launcher's Widgets panel."
-            } else {
-                "当前桌面不支持应用内添加，请从桌面的“小组件/窗口小工具”面板添加 DeskCubby。"
-            }
+        val launcherFamily = desktopWidgetLauncherFamily(Build.MANUFACTURER)
+        val pinSupported = runCatching { manager.isRequestPinAppWidgetSupported }
+            .getOrDefault(false)
+        if (!pinSupported) {
+            _message.value = desktopWidgetManualAddMessage(english, launcherFamily)
             return
         }
-        val accepted = manager.requestPinAppWidget(
-            ComponentName(context, DeskCubbyWidgetProvider::class.java),
-            Bundle().apply {
-                putString(DeskCubbyWidgetConfigureActivity.EXTRA_CONFIG_ID, config.id)
-                putInt(
-                    AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,
-                    config.widthCells * APPROX_WIDGET_CELL_DP,
-                )
-                putInt(
-                    AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,
-                    config.heightCells * APPROX_WIDGET_CELL_DP,
-                )
-            },
-            PendingIntent.getBroadcast(
-                context,
-                config.id.hashCode(),
-                Intent(context, DeskCubbyWidgetProvider::class.java)
-                    .setAction(DeskCubbyWidgetProvider.ACTION_PIN_SUCCEEDED)
-                    .putExtra(DeskCubbyWidgetConfigureActivity.EXTRA_CONFIG_ID, config.id),
-                PendingIntent.FLAG_UPDATE_CURRENT or if (
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                ) {
-                    PendingIntent.FLAG_MUTABLE
-                } else {
-                    0
+        val accepted = try {
+            manager.requestPinAppWidget(
+                ComponentName(context, DeskCubbyWidgetProvider::class.java),
+                Bundle().apply {
+                    putString(DeskCubbyWidgetConfigureActivity.EXTRA_CONFIG_ID, config.id)
+                    putInt(
+                        AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,
+                        config.widthCells * APPROX_WIDGET_CELL_DP,
+                    )
+                    putInt(
+                        AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,
+                        config.heightCells * APPROX_WIDGET_CELL_DP,
+                    )
                 },
-            ),
-        )
+                PendingIntent.getBroadcast(
+                    context,
+                    config.id.hashCode(),
+                    Intent(context, DeskCubbyWidgetProvider::class.java)
+                        .setAction(DeskCubbyWidgetProvider.ACTION_PIN_SUCCEEDED)
+                        .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                        .putExtra(DeskCubbyWidgetConfigureActivity.EXTRA_CONFIG_ID, config.id),
+                    PendingIntent.FLAG_UPDATE_CURRENT or if (
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                    ) {
+                        // The launcher must be able to add EXTRA_APPWIDGET_ID to the callback.
+                        PendingIntent.FLAG_MUTABLE
+                    } else {
+                        0
+                    },
+                ),
+            )
+        } catch (_: IllegalStateException) {
+            false
+        } catch (_: SecurityException) {
+            false
+        } catch (_: RuntimeException) {
+            false
+        }
         _message.value = if (accepted) {
-            if (english) {
-                "Sent to the launcher. Confirm placement, then resize it there if needed."
-            } else {
-                "已交给桌面，请确认放置；需要时可在桌面继续拖动缩放。"
-            }
-        } else if (english) {
-            "The launcher declined the pin request."
+            desktopWidgetPinAcceptedMessage(english, launcherFamily)
         } else {
-            "桌面未接受添加请求。"
+            desktopWidgetManualAddMessage(english, launcherFamily)
         }
     }
 
@@ -191,4 +194,43 @@ class DesktopWidgetsViewModel @Inject constructor(
     private companion object {
         const val APPROX_WIDGET_CELL_DP = 70
     }
+}
+
+internal enum class DesktopWidgetLauncherFamily {
+    COLOR_OS,
+    GENERIC,
+}
+
+internal fun desktopWidgetLauncherFamily(manufacturer: String): DesktopWidgetLauncherFamily =
+    when (manufacturer.trim().lowercase()) {
+        "oppo", "oneplus", "realme" -> DesktopWidgetLauncherFamily.COLOR_OS
+        else -> DesktopWidgetLauncherFamily.GENERIC
+    }
+
+internal fun desktopWidgetManualAddMessage(
+    english: Boolean,
+    family: DesktopWidgetLauncherFamily,
+): String = when {
+    family == DesktopWidgetLauncherFamily.COLOR_OS && english ->
+        "ColorOS did not complete in-app placement. Pinch or touch and hold an empty area of the home screen, open Widgets, and choose DeskCubby. If it is missing, check any launcher-shortcut permission and allow DeskCubby background activity in system settings. The launcher makes the final decision."
+    family == DesktopWidgetLauncherFamily.COLOR_OS ->
+        "ColorOS 未完成应用内放置。请在桌面空白处双指捏合或长按，进入“小组件/插件”，再选择 DeskCubby。若列表中没有，可检查系统是否提供“桌面快捷方式”权限，并允许 DeskCubby 后台活动；最终是否支持由系统桌面决定。"
+    english ->
+        "The launcher did not complete in-app placement. Touch and hold an empty area of the home screen, open Widgets, and choose DeskCubby. The launcher makes the final decision."
+    else ->
+        "桌面未完成应用内放置。请长按桌面空白处，进入“小组件/窗口小工具”，再选择 DeskCubby；最终是否支持由系统桌面决定。"
+}
+
+internal fun desktopWidgetPinAcceptedMessage(
+    english: Boolean,
+    family: DesktopWidgetLauncherFamily,
+): String = when {
+    family == DesktopWidgetLauncherFamily.COLOR_OS && english ->
+        "Sent to ColorOS. Confirm placement; if no prompt appears, pinch the home screen and add DeskCubby from Widgets."
+    family == DesktopWidgetLauncherFamily.COLOR_OS ->
+        "已交给 ColorOS，请确认放置；若没有出现确认窗口，请在桌面双指捏合，从“小组件/插件”中添加 DeskCubby。"
+    english ->
+        "Sent to the launcher. Confirm placement, then resize it there if needed."
+    else ->
+        "已交给桌面，请确认放置；需要时可在桌面继续拖动缩放。"
 }

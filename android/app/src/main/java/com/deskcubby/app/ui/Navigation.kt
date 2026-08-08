@@ -150,6 +150,7 @@ import com.deskcubby.app.ui.vault.VaultViewModel
 import com.deskcubby.app.ui.widgets.DesktopWidgetsScreen
 import com.deskcubby.app.ui.widgets.DesktopWidgetsViewModel
 import com.deskcubby.app.data.statistics.StepHealthConnectAccess
+import kotlin.math.roundToInt
 
 object Routes {
     const val EDITOR = "diary_editor"
@@ -211,8 +212,18 @@ fun DeskCubbyRoot(
         var tutorialConfirmedThisSession by remember { mutableStateOf(emptySet<String>()) }
         val initialStartDestination = remember { settings.defaultPage.route }
         val systemAnimationsEnabled = remember { ValueAnimator.areAnimatorsEnabled() }
-        val organicMotionEnabled = settings.visualStyle == VisualStyle.ORGANIC_FUTURE &&
-            systemAnimationsEnabled
+        val resolvedVisualStyle = LocalVisualStyle.current
+        val rootVisuals = deskCubbyVisuals
+        val customMotionDisabled = rootVisuals.customized && rootVisuals.transitionMillis == 0
+        val organicMotionEnabled = resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE &&
+            systemAnimationsEnabled && !customMotionDisabled
+        val organicEnterMillis = if (rootVisuals.customized) rootVisuals.transitionMillis else 340
+        val organicExitMillis = if (rootVisuals.customized) {
+            (rootVisuals.transitionMillis * 300 / 340f).roundToInt()
+        } else {
+            300
+        }
+        val standardMotionMillis = if (rootVisuals.customized) rootVisuals.transitionMillis else 700
         val backStack by navController.currentBackStackEntryAsState()
         val route = backStack?.destination?.route
         val visibleTabs = settings.navItems.filter { it.visible || it.id == NavItemId.SETTINGS }
@@ -270,38 +281,42 @@ fun DeskCubbyRoot(
                     modifier = Modifier.fillMaxSize(),
                     enterTransition = {
                         when {
-                            organicMotionEnabled -> fadeIn(tween(340)) +
-                                slideInHorizontally(tween(340)) { it / 20 } +
-                                scaleIn(tween(340), initialScale = 0.992f)
-                            settings.visualStyle == VisualStyle.ORGANIC_FUTURE -> EnterTransition.None
-                            else -> fadeIn(tween(700))
+                            organicMotionEnabled -> fadeIn(tween(organicEnterMillis)) +
+                                slideInHorizontally(tween(organicEnterMillis)) { it / 20 } +
+                                scaleIn(tween(organicEnterMillis), initialScale = 0.992f)
+                            resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
+                                EnterTransition.None
+                            else -> fadeIn(tween(standardMotionMillis))
                         }
                     },
                     exitTransition = {
                         when {
-                            organicMotionEnabled -> fadeOut(tween(300)) +
-                                slideOutHorizontally(tween(340)) { -it / 28 } +
-                                scaleOut(tween(340), targetScale = 1.008f)
-                            settings.visualStyle == VisualStyle.ORGANIC_FUTURE -> ExitTransition.None
-                            else -> fadeOut(tween(700))
+                            organicMotionEnabled -> fadeOut(tween(organicExitMillis)) +
+                                slideOutHorizontally(tween(organicEnterMillis)) { -it / 28 } +
+                                scaleOut(tween(organicEnterMillis), targetScale = 1.008f)
+                            resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
+                                ExitTransition.None
+                            else -> fadeOut(tween(standardMotionMillis))
                         }
                     },
                     popEnterTransition = {
                         when {
-                            organicMotionEnabled -> fadeIn(tween(340)) +
-                                slideInHorizontally(tween(340)) { -it / 20 } +
-                                scaleIn(tween(340), initialScale = 0.992f)
-                            settings.visualStyle == VisualStyle.ORGANIC_FUTURE -> EnterTransition.None
-                            else -> fadeIn(tween(700))
+                            organicMotionEnabled -> fadeIn(tween(organicEnterMillis)) +
+                                slideInHorizontally(tween(organicEnterMillis)) { -it / 20 } +
+                                scaleIn(tween(organicEnterMillis), initialScale = 0.992f)
+                            resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
+                                EnterTransition.None
+                            else -> fadeIn(tween(standardMotionMillis))
                         }
                     },
                     popExitTransition = {
                         when {
-                            organicMotionEnabled -> fadeOut(tween(300)) +
-                                slideOutHorizontally(tween(340)) { it / 28 } +
-                                scaleOut(tween(340), targetScale = 1.008f)
-                            settings.visualStyle == VisualStyle.ORGANIC_FUTURE -> ExitTransition.None
-                            else -> fadeOut(tween(700))
+                            organicMotionEnabled -> fadeOut(tween(organicExitMillis)) +
+                                slideOutHorizontally(tween(organicEnterMillis)) { it / 28 } +
+                                scaleOut(tween(organicEnterMillis), targetScale = 1.008f)
+                            resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
+                                ExitTransition.None
+                            else -> fadeOut(tween(standardMotionMillis))
                         }
                     },
                 ) {

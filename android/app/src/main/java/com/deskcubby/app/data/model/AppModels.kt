@@ -1,6 +1,185 @@
 package com.deskcubby.app.data.model
 
-enum class VisualStyle { MATERIAL, LIQUID_GLASS, ORGANIC_FUTURE }
+enum class VisualStyle { MATERIAL, LIQUID_GLASS, ORGANIC_FUTURE, CUSTOM }
+
+/** Rendering behavior inherited by the user-defined visual style. */
+enum class CustomThemeBaseStyle { MATERIAL, LIQUID_GLASS, ORGANIC_FUTURE }
+
+const val MIN_CUSTOM_THEME_CORNER_RADIUS_DP: Float = 0f
+const val MAX_CUSTOM_THEME_CORNER_RADIUS_DP: Float = 40f
+const val MIN_CUSTOM_THEME_BORDER_WIDTH_DP: Float = 0f
+const val MAX_CUSTOM_THEME_BORDER_WIDTH_DP: Float = 4f
+const val MIN_CUSTOM_THEME_ELEVATION_DP: Float = 0f
+const val MAX_CUSTOM_THEME_ELEVATION_DP: Float = 16f
+const val MIN_CUSTOM_THEME_PANEL_OPACITY: Float = 0.65f
+const val MAX_CUSTOM_THEME_PANEL_OPACITY: Float = 1f
+const val MIN_CUSTOM_THEME_SPACING_SCALE: Float = 0.75f
+const val MAX_CUSTOM_THEME_SPACING_SCALE: Float = 1.35f
+const val MIN_CUSTOM_THEME_ANIMATION_SCALE: Float = 0f
+const val MAX_CUSTOM_THEME_ANIMATION_SCALE: Float = 2f
+
+val DEFAULT_CUSTOM_THEME_LIGHT_PALETTE = CustomThemePalette(
+    backgroundArgb = 0xFFF7FBF5.toInt(),
+    onBackgroundArgb = 0xFF171D19.toInt(),
+    surfaceArgb = 0xFFF7FBF5.toInt(),
+    onSurfaceArgb = 0xFF171D19.toInt(),
+    surfaceContainerArgb = 0xFFE9EFE9.toInt(),
+    surfaceVariantArgb = 0xFFDDE5DD.toInt(),
+    onSurfaceVariantArgb = 0xFF414943.toInt(),
+    outlineArgb = 0xFF717971.toInt(),
+)
+
+val DEFAULT_CUSTOM_THEME_DARK_PALETTE = CustomThemePalette(
+    backgroundArgb = 0xFF101511.toInt(),
+    onBackgroundArgb = 0xFFE0E4DF.toInt(),
+    surfaceArgb = 0xFF101511.toInt(),
+    onSurfaceArgb = 0xFFE0E4DF.toInt(),
+    surfaceContainerArgb = 0xFF1B211C.toInt(),
+    surfaceVariantArgb = 0xFF414943.toInt(),
+    onSurfaceVariantArgb = 0xFFC1C9C1.toInt(),
+    outlineArgb = 0xFF8B938A.toInt(),
+)
+
+/** A bounded set of Material color roles; arbitrary selectors, CSS and scripts are never stored. */
+data class CustomThemePalette(
+    val backgroundArgb: Int,
+    val onBackgroundArgb: Int,
+    val surfaceArgb: Int,
+    val onSurfaceArgb: Int,
+    val surfaceContainerArgb: Int,
+    val surfaceVariantArgb: Int,
+    val onSurfaceVariantArgb: Int,
+    val outlineArgb: Int,
+)
+
+data class CustomThemeSettings(
+    val baseStyle: CustomThemeBaseStyle = CustomThemeBaseStyle.MATERIAL,
+    val lightPalette: CustomThemePalette = DEFAULT_CUSTOM_THEME_LIGHT_PALETTE,
+    val darkPalette: CustomThemePalette = DEFAULT_CUSTOM_THEME_DARK_PALETTE,
+    val cornerRadiusDp: Float = 18f,
+    val borderWidthDp: Float = 1f,
+    val elevationDp: Float = 2f,
+    val panelOpacity: Float = 0.94f,
+    val spacingScale: Float = 1f,
+    val animationScale: Float = 1f,
+)
+
+fun CustomThemeSettings.normalized(): CustomThemeSettings = copy(
+    lightPalette = lightPalette.normalizedCustomThemePalette(),
+    darkPalette = darkPalette.normalizedCustomThemePalette(),
+    cornerRadiusDp = cornerRadiusDp.normalizedThemeValue(
+        MIN_CUSTOM_THEME_CORNER_RADIUS_DP,
+        MAX_CUSTOM_THEME_CORNER_RADIUS_DP,
+        18f,
+    ),
+    borderWidthDp = borderWidthDp.normalizedThemeValue(
+        MIN_CUSTOM_THEME_BORDER_WIDTH_DP,
+        MAX_CUSTOM_THEME_BORDER_WIDTH_DP,
+        1f,
+    ),
+    elevationDp = elevationDp.normalizedThemeValue(
+        MIN_CUSTOM_THEME_ELEVATION_DP,
+        MAX_CUSTOM_THEME_ELEVATION_DP,
+        2f,
+    ),
+    panelOpacity = panelOpacity.normalizedThemeValue(
+        MIN_CUSTOM_THEME_PANEL_OPACITY,
+        MAX_CUSTOM_THEME_PANEL_OPACITY,
+        0.94f,
+    ),
+    spacingScale = spacingScale.normalizedThemeValue(
+        MIN_CUSTOM_THEME_SPACING_SCALE,
+        MAX_CUSTOM_THEME_SPACING_SCALE,
+        1f,
+    ),
+    animationScale = animationScale.normalizedThemeValue(
+        MIN_CUSTOM_THEME_ANIMATION_SCALE,
+        MAX_CUSTOM_THEME_ANIMATION_SCALE,
+        1f,
+    ),
+)
+
+private fun CustomThemePalette.normalizedCustomThemePalette(): CustomThemePalette {
+    val background = opaqueThemeArgb(backgroundArgb)
+    val surface = opaqueThemeArgb(surfaceArgb)
+    var surfaceContainer = opaqueThemeArgb(surfaceContainerArgb)
+    val surfaceVariant = opaqueThemeArgb(surfaceVariantArgb)
+    val onBackground = readableThemeColor(opaqueThemeArgb(onBackgroundArgb), listOf(background))
+    var onSurface = readableThemeColor(
+        opaqueThemeArgb(onSurfaceArgb),
+        listOf(surface, surfaceContainer),
+    )
+    if (themeContrastRatio(onSurface, surfaceContainer) < 4.5) {
+        // A single Material onSurface role cannot remain readable on two opposite-luminance
+        // surfaces. Preserve the main surface and safely collapse the conflicting container.
+        surfaceContainer = surface
+        onSurface = readableThemeColor(onSurface, listOf(surface))
+    }
+    val onSurfaceVariant = readableThemeColor(
+        opaqueThemeArgb(onSurfaceVariantArgb),
+        listOf(surfaceVariant),
+    )
+    val outline = contrastedThemeColor(opaqueThemeArgb(outlineArgb), surface, 1.5)
+    return copy(
+        backgroundArgb = background,
+        onBackgroundArgb = onBackground,
+        surfaceArgb = surface,
+        onSurfaceArgb = onSurface,
+        surfaceContainerArgb = surfaceContainer,
+        surfaceVariantArgb = surfaceVariant,
+        onSurfaceVariantArgb = onSurfaceVariant,
+        outlineArgb = outline,
+    )
+}
+
+private fun Float.normalizedThemeValue(min: Float, max: Float, fallback: Float): Float =
+    takeIf(Float::isFinite)?.coerceIn(min, max) ?: fallback
+
+private fun opaqueThemeArgb(value: Int): Int = value or 0xFF000000.toInt()
+
+private fun readableThemeColor(requested: Int, backgrounds: List<Int>): Int {
+    if (backgrounds.all { themeContrastRatio(requested, it) >= 4.5 }) return requested
+    val black = 0xFF000000.toInt()
+    val white = 0xFFFFFFFF.toInt()
+    return listOf(black, white).maxBy { candidate ->
+        backgrounds.minOf { background -> themeContrastRatio(candidate, background) }
+    }
+}
+
+private fun contrastedThemeColor(requested: Int, background: Int, minimum: Double): Int {
+    if (themeContrastRatio(requested, background) >= minimum) return requested
+    val target = if (themeLuminance(background) > 0.5) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
+    for (step in 1..20) {
+        val candidate = blendThemeArgb(requested, target, step / 20.0)
+        if (themeContrastRatio(candidate, background) >= minimum) return candidate
+    }
+    return target
+}
+
+private fun themeContrastRatio(first: Int, second: Int): Double {
+    val firstLuminance = themeLuminance(first)
+    val secondLuminance = themeLuminance(second)
+    return (maxOf(firstLuminance, secondLuminance) + 0.05) /
+        (minOf(firstLuminance, secondLuminance) + 0.05)
+}
+
+private fun themeLuminance(argb: Int): Double {
+    fun channel(shift: Int): Double {
+        val encoded = ((argb ushr shift) and 0xFF) / 255.0
+        return if (encoded <= 0.04045) encoded / 12.92
+        else Math.pow((encoded + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+}
+
+private fun blendThemeArgb(first: Int, second: Int, fraction: Double): Int {
+    fun channel(shift: Int): Int {
+        val start = (first ushr shift) and 0xFF
+        val end = (second ushr shift) and 0xFF
+        return (start + (end - start) * fraction).toInt().coerceIn(0, 255)
+    }
+    return (0xFF shl 24) or (channel(16) shl 16) or (channel(8) shl 8) or channel(0)
+}
 
 enum class DarkMode { SYSTEM, LIGHT, DARK }
 
@@ -429,6 +608,7 @@ val DEFAULT_HOME_GREETINGS: List<HomeGreetingTemplate> = listOf(
 
 data class AppSettings(
     val visualStyle: VisualStyle = VisualStyle.MATERIAL,
+    val customTheme: CustomThemeSettings = CustomThemeSettings(),
     val darkMode: DarkMode = DarkMode.SYSTEM,
     val appLanguage: AppLanguage = AppLanguage.CHINESE,
     val userName: String = "",

@@ -1,8 +1,13 @@
 package com.deskcubby.app.ui.reader
 
+import android.annotation.SuppressLint
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
+import android.view.View
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -54,6 +59,7 @@ internal fun AndroidxPdfReader(
     preferences: ReaderPreferences,
     textFeaturesAvailable: Boolean,
     background: Color,
+    foreground: Color,
     modifier: Modifier = Modifier,
     requestedPage: Int?,
     searchQuery: String,
@@ -66,9 +72,20 @@ internal fun AndroidxPdfReader(
     onEnhancedReaderUnavailable: () -> Unit,
 ) {
     val context = LocalContext.current
-    val documentResult by produceState<Result<PdfDocument>?>(null, uri) {
+    val applicationContext = context.applicationContext ?: context
+    // Keep the loader and an optional warm-up binding alive for the whole document composition.
+    // Some OEMs are slow to start AndroidX PDF's isolated service, so warming the process removes
+    // that cold-start work from the bounded document-open operation below.
+    val pdfLoader = remember(applicationContext) { SandboxedPdfLoader(applicationContext) }
+    DisposableEffect(applicationContext) {
+        val sandboxHandle = runCatching {
+            SandboxedPdfLoader.startInitialization(applicationContext)
+        }.getOrNull()
+        onDispose { runCatching { sandboxHandle?.close() } }
+    }
+    val documentResult by produceState<Result<PdfDocument>?>(null, uri, pdfLoader) {
         value = runReaderPdfLoadWithTimeout(READER_PDF_DOCUMENT_OPEN_TIMEOUT_MILLIS) {
-            SandboxedPdfLoader(context).openDocument(uri)
+            pdfLoader.openDocument(uri)
         }
     }
     val document = documentResult?.getOrNull()
@@ -93,6 +110,7 @@ internal fun AndroidxPdfReader(
                 preferences = preferences,
                 textFeaturesAvailable = textFeaturesAvailable,
                 background = background,
+                foreground = foreground,
                 requestedPage = requestedPage,
                 searchQuery = searchQuery,
                 selectedSearchIndex = selectedSearchIndex,
@@ -108,6 +126,7 @@ internal fun AndroidxPdfReader(
 }
 
 @RequiresApi(Build.VERSION_CODES.P)
+@SuppressLint("RestrictedApi")
 @Composable
 private fun AndroidxPdfDocumentView(
     document: PdfDocument,
@@ -115,6 +134,7 @@ private fun AndroidxPdfDocumentView(
     preferences: ReaderPreferences,
     textFeaturesAvailable: Boolean,
     background: Color,
+    foreground: Color,
     requestedPage: Int?,
     searchQuery: String,
     selectedSearchIndex: Int,
@@ -135,13 +155,50 @@ private fun AndroidxPdfDocumentView(
     val currentOnEnhancedReaderUnavailable by rememberUpdatedState(onEnhancedReaderUnavailable)
     val currentPdfZoomPercent by rememberUpdatedState(preferences.pdfZoomPercent)
     val safeInitialPage = initialPage.coerceIn(0, document.pageCount - 1)
+    val pdfLayerPaint = remember(background, foreground) {
+        val backgroundArgb = background.toArgb()
+        val foregroundArgb = foreground.toArgb()
+        if (readerPdfColorTransformRequired(backgroundArgb, foregroundArgb)) {
+            Paint().apply {
+                colorFilter = ColorMatrixColorFilter(
+                    ColorMatrix(readerPdfColorMatrixValues(backgroundArgb, foregroundArgb)),
+                )
+            }
+        } else {
+            null
+        }
+    }
+
+    fun markFirstContentLoaded(view: PdfView) {
+        if (firstContentLoaded || view.pdfDocument !== document) return
+        firstContentLoaded = true
+        if (fitWidthZoom == null) fitWidthZoom = view.zoom
+        fitWidthZoom?.let { fit ->
+            view.zoom = (fit * currentPdfZoomPercent / 100f)
+                .coerceIn(view.minZoom, view.maxZoom)
+        }
+        view.scrollToPage(safeInitialPage)
+    }
+
+    fun applyReaderPdfColors(view: PdfView) {
+        if (pdfLayerPaint == null) {
+            view.setBackgroundColor(background.toArgb())
+            view.setLayerType(View.LAYER_TYPE_NONE, null)
+        } else {
+            // The layer paint also filters PdfView's own background. Feed it white so that the
+            // same matrix maps the page surround to the requested reader background exactly.
+            view.setBackgroundColor(android.graphics.Color.WHITE)
+            view.setLayerType(View.LAYER_TYPE_HARDWARE, pdfLayerPaint)
+        }
+        view.invalidate()
+    }
 
     AndroidView(
         factory = { viewContext ->
             PdfView(viewContext).apply {
                 pagesPerRow = 1
                 verticalAlignment = PdfView.VERTICAL_ALIGNMENT_TOP
-                setBackgroundColor(background.toArgb())
+                applyReaderPdfColors(this)
                 var lastReportedPage = -1
                 addOnViewportChangedListener(
                     object : PdfView.OnViewportChangedListener {
@@ -151,7 +208,10 @@ private fun AndroidxPdfDocumentView(
                             pageLocations: android.util.SparseArray<RectF>,
                             zoomLevel: Float,
                         ) {
-                            if (visiblePagesCount > 0 && firstVisiblePage != lastReportedPage) {
+                            if (firstContentLoaded &&
+                                visiblePagesCount > 0 &&
+                                firstVisiblePage != lastReportedPage
+                            ) {
                                 lastReportedPage = firstVisiblePage
                                 currentOnPageChanged(firstVisiblePage)
                             }
@@ -159,19 +219,27 @@ private fun AndroidxPdfDocumentView(
                     },
                 )
                 addOnFirstContentLoadListener {
-                    firstContentLoaded = true
-                    if (fitWidthZoom == null) fitWidthZoom = zoom
-                    fitWidthZoom?.let { fit ->
-                        zoom = (fit * currentPdfZoomPercent / 100f)
-                            .coerceIn(minZoom, maxZoom)
-                    }
-                    scrollToPage(safeInitialPage)
+                    markFirstContentLoaded(this)
                 }
+                // alpha19's public first-content callback is dispatched from onDraw. On some OEM
+                // render pipelines a page bitmap arrives successfully without that callback,
+                // which previously caused a false compatibility fallback. This pinned-alpha19
+                // listener is intentionally confined to this adapter; update it together with the
+                // AndroidX PDF dependency when a public bitmap-ready callback becomes available.
+                setOnBitmapUpdatedListener(
+                    object : PdfView.OnBitmapUpdatedListener {
+                        override fun onBitmapFetched(pageNum: Int) {
+                            post { markFirstContentLoaded(this@apply) }
+                        }
+
+                        override fun onBitmapCleared(pageNum: Int) = Unit
+                    },
+                )
                 pdfView = this
             }
         },
         update = { view ->
-            view.setBackgroundColor(background.toArgb())
+            applyReaderPdfColors(view)
             if (view.pdfDocument !== document) view.pdfDocument = document
         },
         modifier = Modifier.fillMaxSize(),

@@ -30,7 +30,12 @@ class ReaderRepositoryTest {
                 fontSizeSp = 26f,
                 lineHeightMultiplier = 1.8f,
                 paragraphSpacingDp = 16f,
+                pdfZoomPercent = 135,
                 orientation = ReaderOrientation.LANDSCAPE,
+                libraryLayout = ReaderLibraryLayout.GRID,
+                showProgressPercentage = true,
+                immersiveMode = true,
+                customForegroundArgb = 0xFFABCDEF.toInt(),
                 chapterDetectionMode = ReaderChapterDetectionMode.CUSTOM,
                 customChapterRegex = "^Scene\\s+[0-9]+$",
                 chapterHeadingMaxChars = 96,
@@ -47,7 +52,7 @@ class ReaderRepositoryTest {
             )
             assertTrue(stored.isFile)
             assertTrue(stored.length() in 1..ReaderRepository.MAX_STATE_BYTES.toLong())
-            assertEquals(3, JSONObject(stored.readText(Charsets.UTF_8)).getInt("schemaVersion"))
+            assertEquals(5, JSONObject(stored.readText(Charsets.UTF_8)).getInt("schemaVersion"))
 
             val reloaded = ReaderRepository(isolatedContext)
             assertEquals(ReaderPreferences(), reloaded.state.value.preferences)
@@ -140,6 +145,212 @@ class ReaderRepositoryTest {
             ReaderPreferences(),
             ReaderStateCodec.decode(encoded.toString()).preferences,
         )
+    }
+
+    @Test
+    fun schemaFourReaderStateDefaultsLibraryCoverAndSyncFields() {
+        val fingerprint = "a".repeat(64)
+        val encoded = JSONObject(
+            ReaderStateCodec.encode(
+                ReaderLibraryState(
+                    books = listOf(
+                        ReaderBook(
+                            id = "legacy-pdf",
+                            uri = "content://library/legacy.pdf",
+                            title = "Legacy PDF",
+                            type = ReaderBookType.PDF,
+                            addedAt = 1L,
+                            lastOpenedAt = 2L,
+                            coverUri = "content://covers/legacy.png",
+                            fingerprint = fingerprint,
+                            totalPages = 80,
+                            progressUpdatedAt = 99L,
+                        ),
+                    ),
+                    preferences = ReaderPreferences(
+                        libraryLayout = ReaderLibraryLayout.GRID,
+                        showProgressPercentage = true,
+                        immersiveMode = true,
+                        customForegroundArgb = 0xFF123456.toInt(),
+                    ),
+                    progressLedger = listOf(
+                        ReaderProgressRecord(
+                            fingerprint = fingerprint,
+                            type = ReaderBookType.PDF,
+                            pdfPageIndex = 10,
+                            totalPages = 80,
+                            updatedAt = 99L,
+                        ),
+                    ),
+                ),
+            ),
+        ).apply {
+            put("schemaVersion", 4)
+            getJSONObject("preferences").apply {
+                remove("libraryLayout")
+                remove("showProgressPercentage")
+                remove("immersiveMode")
+                remove("customForegroundArgb")
+            }
+            getJSONArray("books").getJSONObject(0).apply {
+                remove("coverUri")
+                remove("fingerprint")
+                remove("totalPages")
+                remove("progressUpdatedAt")
+            }
+            remove("progressLedger")
+        }
+
+        val decoded = ReaderStateCodec.decode(encoded.toString())
+
+        assertEquals(ReaderLibraryLayout.LIST, decoded.preferences.libraryLayout)
+        assertFalse(decoded.preferences.showProgressPercentage)
+        assertFalse(decoded.preferences.immersiveMode)
+        assertEquals(null, decoded.preferences.customForegroundArgb)
+        assertEquals(null, decoded.books.single().coverUri)
+        assertEquals(null, decoded.books.single().fingerprint)
+        assertEquals(0, decoded.books.single().totalPages)
+        assertEquals(0L, decoded.books.single().progressUpdatedAt)
+        assertTrue(decoded.progressLedger.isEmpty())
+    }
+
+    @Test
+    fun unmatchedProgressLedgerAppliesWhenSameBookIsImportedLater() {
+        val fingerprint = "b".repeat(64)
+        val remote = ReaderProgressRecord(
+            fingerprint = fingerprint,
+            type = ReaderBookType.PDF,
+            pdfPageIndex = 42,
+            totalPages = 100,
+            updatedAt = 1_000L,
+        )
+        val withoutBook = mergeReaderProgress(ReaderLibraryState(), listOf(remote)).state
+
+        assertEquals(listOf(remote), withoutBook.progressLedger)
+        val withBook = withoutBook.copy(
+            books = listOf(
+                ReaderBook(
+                    id = "same-pdf",
+                    uri = "content://library/same.pdf",
+                    title = "Same PDF",
+                    type = ReaderBookType.PDF,
+                    addedAt = 1L,
+                    lastOpenedAt = 1L,
+                    fingerprint = fingerprint,
+                    totalPages = 100,
+                ),
+            ),
+        )
+
+        val applied = mergeReaderProgress(withBook, withBook.progressLedger)
+
+        assertEquals(1, applied.result.matchedBooks)
+        assertEquals(1, applied.result.updatedBooks)
+        assertEquals(42, applied.state.books.single().pdfPageIndex)
+        assertEquals(1_000L, applied.state.books.single().progressUpdatedAt)
+    }
+
+    @Test
+    fun syncedTxtProgressUsesCanonicalParagraphAndRequestsLocalPageRemap() {
+        val fingerprint = "c".repeat(64)
+        val state = ReaderLibraryState(
+            books = listOf(
+                ReaderBook(
+                    id = "same-txt",
+                    uri = "content://library/same.txt",
+                    title = "Same TXT",
+                    type = ReaderBookType.TXT,
+                    addedAt = 1L,
+                    lastOpenedAt = 1L,
+                    fingerprint = fingerprint,
+                    totalPages = 80,
+                    textPageIndex = 5,
+                    textParagraphIndex = 50,
+                    progressUpdatedAt = 10L,
+                ),
+            ),
+        )
+        val remote = ReaderProgressRecord(
+            fingerprint = fingerprint,
+            type = ReaderBookType.TXT,
+            textPageIndex = 30,
+            textParagraphIndex = 900,
+            totalPages = 60,
+            updatedAt = 20L,
+        )
+
+        val book = mergeReaderProgress(state, listOf(remote)).state.books.single()
+
+        assertEquals(-1, book.textPageIndex)
+        assertEquals(900, book.textParagraphIndex)
+        assertEquals(20L, book.progressUpdatedAt)
+    }
+
+    @Test
+    fun rollbackReplacementRestoresOnlyProgressAndLedger() = runBlocking {
+        val application = ApplicationProvider.getApplicationContext<Context>()
+        val isolatedFiles = File(application.cacheDir, "reader-rollback-${UUID.randomUUID()}")
+        val isolatedContext = object : ContextWrapper(application) {
+            override fun getFilesDir(): File = isolatedFiles
+        }
+        val fingerprint = "d".repeat(64)
+        val remote = ReaderProgressRecord(
+            fingerprint = fingerprint,
+            type = ReaderBookType.PDF,
+            pdfPageIndex = 70,
+            totalPages = 100,
+            updatedAt = 2_000L,
+        )
+        val previous = ReaderProgressRecord(
+            fingerprint = fingerprint,
+            type = ReaderBookType.PDF,
+            pdfPageIndex = 12,
+            totalPages = 100,
+            updatedAt = 1_000L,
+        )
+        val initial = ReaderLibraryState(
+            books = listOf(
+                ReaderBook(
+                    id = "rollback-pdf",
+                    uri = "content://library/rollback.pdf",
+                    title = "Do not replace",
+                    type = ReaderBookType.PDF,
+                    addedAt = 11L,
+                    lastOpenedAt = 22L,
+                    pdfPageIndex = 70,
+                    coverUri = "content://covers/keep.png",
+                    fingerprint = fingerprint,
+                    totalPages = 100,
+                    progressUpdatedAt = 2_000L,
+                ),
+            ),
+            preferences = ReaderPreferences(background = ReaderBackground.NIGHT),
+            progressLedger = listOf(remote),
+        )
+        val stateDirectory = File(isolatedFiles, ReaderRepository.DIRECTORY_NAME).apply { mkdirs() }
+        File(stateDirectory, ReaderRepository.STATE_FILE_NAME)
+            .writeText(ReaderStateCodec.encode(initial), Charsets.UTF_8)
+        try {
+            val repository = ReaderRepository(isolatedContext)
+            repository.initialize()
+            repository.replaceProgressRecordsForRollback(listOf(previous))
+
+            val restored = repository.state.value
+            val book = restored.books.single()
+            assertEquals("content://library/rollback.pdf", book.uri)
+            assertEquals("Do not replace", book.title)
+            assertEquals("content://covers/keep.png", book.coverUri)
+            assertEquals(ReaderBackground.NIGHT, restored.preferences.background)
+            assertEquals(12, book.pdfPageIndex)
+            assertEquals(1_000L, book.progressUpdatedAt)
+            assertEquals(listOf(previous), restored.progressLedger)
+
+            val reloaded = ReaderRepository(isolatedContext)
+            reloaded.initialize()
+            assertEquals(restored, reloaded.state.value)
+        } finally {
+            isolatedFiles.deleteRecursively()
+        }
     }
 
     @Test

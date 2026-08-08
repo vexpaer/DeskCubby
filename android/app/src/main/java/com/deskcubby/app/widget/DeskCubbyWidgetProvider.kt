@@ -34,6 +34,14 @@ class DeskCubbyWidgetProvider : AppWidgetProvider() {
         requestUpdate(context, intArrayOf(appWidgetId))
     }
 
+    override fun onEnabled(context: Context) {
+        DesktopWidgetUpdateScheduler.ensurePeriodic(context)
+    }
+
+    override fun onDisabled(context: Context) {
+        DesktopWidgetUpdateScheduler.cancel(context)
+    }
+
     override fun onUpdate(
         context: Context,
         appWidgetManager: AppWidgetManager,
@@ -73,8 +81,14 @@ class DeskCubbyWidgetProvider : AppWidgetProvider() {
             context.sendBroadcast(
                 Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE)
                     .setComponent(component)
+                    .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                     .putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids),
             )
+            // Some OEM launchers defer or suppress provider broadcasts while the app is
+            // background-restricted. WorkManager gives the same update a durable fallback;
+            // platform/OEM battery restrictions still apply and cannot be bypassed.
+            DesktopWidgetUpdateScheduler.enqueueImmediate(context)
+            DesktopWidgetUpdateScheduler.ensurePeriodic(context)
         }
     }
 }

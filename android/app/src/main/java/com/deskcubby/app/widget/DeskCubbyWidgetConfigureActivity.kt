@@ -36,23 +36,31 @@ import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.ui.theme.DeskCubbyTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @AndroidEntryPoint
 class DeskCubbyWidgetConfigureActivity : ComponentActivity() {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var instanceStore: DesktopWidgetInstanceStore
+    @Inject lateinit var renderer: DesktopWidgetRenderer
 
     private var appWidgetId: Int = AppWidgetManager.INVALID_APPWIDGET_ID
+    private var finishingConfiguration = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setResult(Activity.RESULT_CANCELED)
         appWidgetId = intent?.getIntExtra(
             AppWidgetManager.EXTRA_APPWIDGET_ID,
             AppWidgetManager.INVALID_APPWIDGET_ID,
         ) ?: AppWidgetManager.INVALID_APPWIDGET_ID
+        setResult(
+            Activity.RESULT_CANCELED,
+            Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId),
+        )
         if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
             finish()
             return
@@ -92,13 +100,38 @@ class DeskCubbyWidgetConfigureActivity : ComponentActivity() {
     }
 
     private fun bindAndFinish(config: DesktopWidgetConfig) {
-        instanceStore.bind(appWidgetId, config.id)
-        DeskCubbyWidgetProvider.requestUpdate(this, intArrayOf(appWidgetId))
-        setResult(
-            Activity.RESULT_OK,
-            Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId),
-        )
-        finish()
+        if (finishingConfiguration) return
+        finishingConfiguration = true
+        lifecycleScope.launch {
+            instanceStore.bind(appWidgetId, config.id)
+            val manager = AppWidgetManager.getInstance(this@DeskCubbyWidgetConfigureActivity)
+            // A configuration activity does not receive an initial APPWIDGET_UPDATE on every
+            // launcher. Render directly before RESULT_OK so OEM launchers never commit a blank
+            // initialLayout, then keep the normal broadcast/WorkManager refresh as compensation.
+            try {
+                withContext(Dispatchers.IO) {
+                    renderer.update(manager, intArrayOf(appWidgetId))
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The XML initial layout remains usable; the durable update worker will retry.
+            }
+            // Configuration activities do not receive a guaranteed follow-up onUpdate(). Queue
+            // a unique durable refresh as well, so a launcher that ignores the pre-result update
+            // gets another chance after it has committed this widget ID.
+            DesktopWidgetUpdateScheduler.enqueueImmediate(
+                this@DeskCubbyWidgetConfigureActivity,
+            )
+            DesktopWidgetUpdateScheduler.ensurePeriodic(
+                this@DeskCubbyWidgetConfigureActivity,
+            )
+            setResult(
+                Activity.RESULT_OK,
+                Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId),
+            )
+            finish()
+        }
     }
 
     companion object {

@@ -31,6 +31,7 @@ data class CloudSyncConfig(
         CloudSyncContent.MEDIA,
         CloudSyncContent.JSON_BACKUP,
         CloudSyncContent.USAGE_STATISTICS,
+        CloudSyncContent.READING_PROGRESS,
     ),
     val direction: CloudSyncDirection = CloudSyncDirection.TWO_WAY,
 ) {
@@ -82,6 +83,7 @@ enum class CloudSyncContent(
     MEDIA("media"),
     JSON_BACKUP("json"),
     USAGE_STATISTICS("usage/v1"),
+    READING_PROGRESS("reading/v1"),
 }
 
 enum class CloudSyncDirection {

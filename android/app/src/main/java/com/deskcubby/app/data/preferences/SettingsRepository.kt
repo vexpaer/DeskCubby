@@ -24,6 +24,9 @@ import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
+import com.deskcubby.app.data.model.CustomThemeBaseStyle
+import com.deskcubby.app.data.model.CustomThemePalette
+import com.deskcubby.app.data.model.CustomThemeSettings
 import com.deskcubby.app.data.model.DEFAULT_MEAL_BUTTON_ICONS
 import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
 import com.deskcubby.app.data.model.DEFAULT_CALORIE_TEXT_PROMPT
@@ -70,6 +73,7 @@ import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.normalizeMarkdownHeadingSizes
 import com.deskcubby.app.data.model.normalizeMorePageOrder
+import com.deskcubby.app.data.model.normalized
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -93,6 +97,7 @@ class SettingsRepository @Inject constructor(
 ) {
     private object Keys {
         val visualStyle = stringPreferencesKey("visual_style")
+        val customTheme = stringPreferencesKey("custom_theme_v1")
         val darkMode = stringPreferencesKey("dark_mode")
         val appLanguage = stringPreferencesKey("app_language")
         val userName = stringPreferencesKey("user_name")
@@ -231,6 +236,7 @@ class SettingsRepository @Inject constructor(
         )
         return AppSettings(
             visualStyle = prefs[Keys.visualStyle].enumValueOr(defaults.visualStyle),
+            customTheme = decodeCustomTheme(prefs[Keys.customTheme], defaults.customTheme),
             darkMode = prefs[Keys.darkMode].enumValueOr(defaults.darkMode),
             appLanguage = prefs[Keys.appLanguage].enumValueOr(defaults.appLanguage),
             userName = normalizeUserName(prefs[Keys.userName] ?: defaults.userName),
@@ -455,6 +461,7 @@ class SettingsRepository @Inject constructor(
     suspend fun setCompactMode(value: Boolean) = set(Keys.compactMode, value)
     suspend fun setAppearanceSettings(
         visualStyle: VisualStyle,
+        customTheme: CustomThemeSettings,
         darkMode: DarkMode,
         appLanguage: AppLanguage,
         themeColorArgb: Int,
@@ -467,6 +474,7 @@ class SettingsRepository @Inject constructor(
     ) {
         context.settingsDataStore.edit { prefs ->
             prefs[Keys.visualStyle] = visualStyle.name
+            prefs[Keys.customTheme] = encodeCustomTheme(customTheme)
             prefs[Keys.darkMode] = darkMode.name
             prefs[Keys.appLanguage] = appLanguage.name
             prefs[Keys.themeColorArgb] = opaqueArgb(themeColorArgb)
@@ -818,6 +826,7 @@ class SettingsRepository @Inject constructor(
                 }
             }
             prefs[Keys.visualStyle] = value.visualStyle.name
+            prefs[Keys.customTheme] = encodeCustomTheme(value.customTheme)
             prefs[Keys.darkMode] = value.darkMode.name
             prefs[Keys.appLanguage] = value.appLanguage.name
             prefs[Keys.userName] = normalizeUserName(value.userName)
@@ -1305,6 +1314,64 @@ class SettingsRepository @Inject constructor(
         }.map { normalizeThemeSecondaryColors(it, fallback) }
             .getOrElse { normalizeThemeSecondaryColors(fallback) }
     }
+
+    private fun decodeCustomTheme(
+        raw: String?,
+        fallback: CustomThemeSettings,
+    ): CustomThemeSettings {
+        if (raw == null) return fallback.normalized()
+        return runCatching {
+            val json = JSONObject(raw)
+            CustomThemeSettings(
+                baseStyle = CustomThemeBaseStyle.valueOf(json.getString("baseStyle")),
+                lightPalette = decodeCustomThemePalette(json.getJSONObject("lightPalette")),
+                darkPalette = decodeCustomThemePalette(json.getJSONObject("darkPalette")),
+                cornerRadiusDp = json.getDouble("cornerRadiusDp").toFloat(),
+                borderWidthDp = json.getDouble("borderWidthDp").toFloat(),
+                elevationDp = json.getDouble("elevationDp").toFloat(),
+                panelOpacity = json.getDouble("panelOpacity").toFloat(),
+                spacingScale = json.getDouble("spacingScale").toFloat(),
+                animationScale = json.getDouble("animationScale").toFloat(),
+            ).normalized()
+        }.getOrElse { fallback.normalized() }
+    }
+
+    private fun decodeCustomThemePalette(json: JSONObject): CustomThemePalette =
+        CustomThemePalette(
+            backgroundArgb = json.getInt("backgroundArgb"),
+            onBackgroundArgb = json.getInt("onBackgroundArgb"),
+            surfaceArgb = json.getInt("surfaceArgb"),
+            onSurfaceArgb = json.getInt("onSurfaceArgb"),
+            surfaceContainerArgb = json.getInt("surfaceContainerArgb"),
+            surfaceVariantArgb = json.getInt("surfaceVariantArgb"),
+            onSurfaceVariantArgb = json.getInt("onSurfaceVariantArgb"),
+            outlineArgb = json.getInt("outlineArgb"),
+        )
+
+    private fun encodeCustomTheme(value: CustomThemeSettings): String {
+        val normalized = value.normalized()
+        return JSONObject()
+            .put("baseStyle", normalized.baseStyle.name)
+            .put("lightPalette", encodeCustomThemePalette(normalized.lightPalette))
+            .put("darkPalette", encodeCustomThemePalette(normalized.darkPalette))
+            .put("cornerRadiusDp", normalized.cornerRadiusDp.toDouble())
+            .put("borderWidthDp", normalized.borderWidthDp.toDouble())
+            .put("elevationDp", normalized.elevationDp.toDouble())
+            .put("panelOpacity", normalized.panelOpacity.toDouble())
+            .put("spacingScale", normalized.spacingScale.toDouble())
+            .put("animationScale", normalized.animationScale.toDouble())
+            .toString()
+    }
+
+    private fun encodeCustomThemePalette(value: CustomThemePalette): JSONObject = JSONObject()
+        .put("backgroundArgb", value.backgroundArgb)
+        .put("onBackgroundArgb", value.onBackgroundArgb)
+        .put("surfaceArgb", value.surfaceArgb)
+        .put("onSurfaceArgb", value.onSurfaceArgb)
+        .put("surfaceContainerArgb", value.surfaceContainerArgb)
+        .put("surfaceVariantArgb", value.surfaceVariantArgb)
+        .put("onSurfaceVariantArgb", value.onSurfaceVariantArgb)
+        .put("outlineArgb", value.outlineArgb)
 
     private fun decodeDailyEventTemplates(raw: String?): List<DailyEventTemplate> = runCatching {
         val array = JSONArray(raw ?: return@runCatching emptyList())

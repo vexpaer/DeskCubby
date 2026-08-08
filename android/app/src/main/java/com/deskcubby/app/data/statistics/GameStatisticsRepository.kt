@@ -16,6 +16,7 @@ object GameStatisticMetric {
     const val WINS = "wins"
     const val LOSSES = "losses"
 
+    const val MOVE_ATTEMPTS = "moveAttempts"
     const val EFFECTIVE_MOVES = "effectiveMoves"
     const val MERGES = "merges"
     const val HIGHEST_TILE = "highestTile"
@@ -45,11 +46,13 @@ object GameStatisticCatalog {
     const val GAME_MINESWEEPER = "minesweeper"
     const val GAME_SPIDER = "spider"
 
+    private val game2048Ids = setOf(GAME_2048, GAME_2048_5, GAME_2048_6)
     private val commonOutcomes = setOf(
         GameStatisticMetric.WINS,
         GameStatisticMetric.LOSSES,
     )
     private val game2048 = commonOutcomes + setOf(
+        GameStatisticMetric.MOVE_ATTEMPTS,
         GameStatisticMetric.EFFECTIVE_MOVES,
         GameStatisticMetric.MERGES,
         GameStatisticMetric.HIGHEST_TILE,
@@ -87,6 +90,16 @@ object GameStatisticCatalog {
 
     fun supports(gameId: String, metricKey: String): Boolean =
         metricKey in supportedMetricsByGameId[gameId].orEmpty()
+
+    /**
+     * Metrics used by current gameplay and statistics screens. 2048 loss rows remain supported
+     * only so older Room data and JSON backups can round-trip without being deleted or rejected.
+     */
+    fun isActive(gameId: String, metricKey: String): Boolean =
+        supports(gameId, metricKey) && !(
+            gameId in game2048Ids &&
+                metricKey == GameStatisticMetric.LOSSES
+        )
 }
 
 data class GameMetricValues internal constructor(
@@ -125,13 +138,13 @@ class GameStatisticsRepository @Inject constructor(
             "A metric cannot be incremented and maximized in the same update"
         }
         increments.forEach { (metricKey, delta) ->
-            require(GameStatisticCatalog.supports(gameId, metricKey)) {
+            require(GameStatisticCatalog.isActive(gameId, metricKey)) {
                 "Unsupported game statistic metric"
             }
             require(delta > 0L) { "Statistic increments must be positive" }
         }
         maxima.forEach { (metricKey, candidate) ->
-            require(GameStatisticCatalog.supports(gameId, metricKey)) {
+            require(GameStatisticCatalog.isActive(gameId, metricKey)) {
                 "Unsupported game statistic metric"
             }
             require(candidate >= 0L) { "Statistic maxima must be non-negative" }
@@ -145,7 +158,7 @@ internal fun snapshotOf(items: List<GameStatisticEntity>): GameStatisticsSnapsho
     GameStatisticsSnapshot(
         byGameId = items
             .filter { item ->
-                item.value >= 0L && GameStatisticCatalog.supports(item.gameId, item.metricKey)
+                item.value >= 0L && GameStatisticCatalog.isActive(item.gameId, item.metricKey)
             }
             .groupBy(GameStatisticEntity::gameId)
             .mapValues { (_, metrics) ->

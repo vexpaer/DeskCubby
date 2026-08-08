@@ -18,6 +18,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -34,11 +36,15 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -46,11 +52,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.FormatListNumbered
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Palette
@@ -76,6 +85,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -97,12 +107,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -113,6 +133,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -120,6 +143,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.repository.ReaderBackground
 import com.deskcubby.app.data.repository.ReaderBook
 import com.deskcubby.app.data.repository.ReaderBookType
+import com.deskcubby.app.data.repository.ReaderLibraryLayout
 import com.deskcubby.app.data.repository.ReaderContent
 import com.deskcubby.app.data.repository.ReaderChapter
 import com.deskcubby.app.data.repository.ReaderChapterDetectionMode
@@ -142,11 +166,13 @@ import com.deskcubby.app.ui.components.PageTutorialTarget
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.tr
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Composable
@@ -188,11 +214,15 @@ fun ReaderScreen(
         ReaderContentState.Idle -> ReaderLibrary(
             padding = padding,
             books = library.books,
+            preferences = library.preferences,
             storageIssue = storageIssue,
             totals = { id -> times.total(EngagementKind.READING, id) },
             onImport = { importLauncher.launch(arrayOf("text/plain", "application/pdf")) },
             onOpen = viewModel::open,
             onRemove = viewModel::remove,
+            onUpdatePreferences = viewModel::updatePreferences,
+            onSetCustomCover = viewModel::setCustomCover,
+            loadCover = viewModel::loadCover,
             snackbar = snackbar,
         )
         ReaderContentState.Loading -> ReaderLoadingPage(onBack = viewModel::close)
@@ -220,18 +250,40 @@ fun ReaderScreen(
 private fun ReaderLibrary(
     padding: PaddingValues,
     books: List<ReaderBook>,
+    preferences: ReaderPreferences,
     storageIssue: ReaderStorageIssue?,
     totals: (String) -> Long,
     onImport: () -> Unit,
     onOpen: (ReaderBook) -> Unit,
     onRemove: (String) -> Unit,
+    onUpdatePreferences: (ReaderPreferences) -> Unit,
+    onSetCustomCover: (String, android.net.Uri?) -> Unit,
+    loadCover: suspend (ReaderBook, Int) -> Bitmap?,
     snackbar: SnackbarHostState,
 ) {
     var pendingDelete by remember { mutableStateOf<ReaderBook?>(null) }
+    var coverBook by remember { mutableStateOf<ReaderBook?>(null) }
+    var showShelfSettings by remember { mutableStateOf(false) }
+    val coverLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val selectedBook = coverBook
+        if (selectedBook != null && uri != null) {
+            onSetCustomCover(selectedBook.id, uri)
+        }
+        coverBook = null
+    }
     Scaffold(
         modifier = Modifier.padding(bottom = padding.calculateBottomPadding()),
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
-        topBar = { TopAppBar(title = { Text(tr("阅读", "Reader")) }) },
+        topBar = {
+            TopAppBar(
+                title = { Text(tr("阅读", "Reader")) },
+                actions = {
+                    IconButton(onClick = { showShelfSettings = true }) {
+                        Icon(Icons.Outlined.Settings, tr("书架设置", "Shelf settings"))
+                    }
+                },
+            )
+        },
         floatingActionButton = {
             if (storageIssue == null) {
                 FloatingActionButton(onClick = onImport) {
@@ -263,7 +315,7 @@ private fun ReaderLibrary(
                 onAction = onImport,
                 modifier = Modifier.fillMaxSize().padding(inner),
             )
-        } else {
+        } else if (preferences.libraryLayout == ReaderLibraryLayout.LIST) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(inner),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp),
@@ -278,7 +330,11 @@ private fun ReaderLibrary(
                     ) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                if (book.type == ReaderBookType.PDF) Icons.Outlined.PictureAsPdf else Icons.AutoMirrored.Outlined.MenuBook,
+                                if (book.type == ReaderBookType.PDF) {
+                                    Icons.Outlined.PictureAsPdf
+                                } else {
+                                    Icons.AutoMirrored.Outlined.MenuBook
+                                },
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
                             )
@@ -286,7 +342,15 @@ private fun ReaderLibrary(
                             Column(Modifier.weight(1f)) {
                                 Text(book.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    tr("累计阅读 ", "Total reading ") + formatDuration(totals(book.id)),
+                                    buildString {
+                                        append(tr("累计阅读 ", "Total reading "))
+                                        append(formatDuration(totals(book.id)))
+                                        if (preferences.showProgressPercentage) {
+                                            append(tr(" · 进度 ", " · Progress "))
+                                            append(readerBookProgressPercent(book))
+                                            append('%')
+                                        }
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -298,7 +362,134 @@ private fun ReaderLibrary(
                     }
                 }
             }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                modifier = Modifier.fillMaxSize().padding(inner),
+                contentPadding = PaddingValues(
+                    start = 14.dp,
+                    end = 14.dp,
+                    top = 12.dp,
+                    bottom = 96.dp,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                gridItems(books, key = ReaderBook::id) { book ->
+                    GlassPanel(
+                        modifier = Modifier.fillMaxWidth().clickable { onOpen(book) },
+                        cornerRadius = 20.dp,
+                        padding = PaddingValues(10.dp),
+                    ) {
+                        Column {
+                            Box {
+                                ReaderCover(
+                                    book = book,
+                                    widthPx = 720,
+                                    loadCover = loadCover,
+                                    modifier = Modifier.fillMaxWidth().aspectRatio(0.7f),
+                                )
+                                Surface(
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                                ) {
+                                    Row {
+                                        IconButton(
+                                            onClick = { coverBook = book },
+                                            modifier = Modifier.size(38.dp),
+                                        ) {
+                                            Icon(Icons.Outlined.Image, tr("修改封面", "Change cover"))
+                                        }
+                                        IconButton(
+                                            onClick = { pendingDelete = book },
+                                            modifier = Modifier.size(38.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Delete,
+                                                tr("从书架移除", "Remove from library"),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                book.title,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            if (preferences.showProgressPercentage) {
+                                Text(
+                                    tr("进度 ", "Progress ") +
+                                        readerBookProgressPercent(book) + "%",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    coverBook?.let { book ->
+        AlertDialog(
+            onDismissRequest = { coverBook = null },
+            title = { Text(tr("修改封面", "Change cover")) },
+            text = {
+                Text(
+                    if (book.type == ReaderBookType.PDF) {
+                        tr(
+                            "默认自动使用 PDF 第一页；也可以选择一张图片覆盖。",
+                            "The first PDF page is used automatically, or you can override it with an image.",
+                        )
+                    } else {
+                        tr(
+                            "可以选择一张图片作为 TXT 书籍封面。",
+                            "Choose an image to use as this TXT book's cover.",
+                        )
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { coverLauncher.launch(arrayOf("image/*")) }) {
+                    Text(tr("选择图片", "Choose image"))
+                }
+            },
+            dismissButton = {
+                Row {
+                    if (book.coverUri != null) {
+                        TextButton(onClick = {
+                            onSetCustomCover(book.id, null)
+                            coverBook = null
+                        }) {
+                            Text(
+                                if (book.type == ReaderBookType.PDF) {
+                                    tr("恢复自动封面", "Use automatic cover")
+                                } else {
+                                    tr("移除封面", "Remove cover")
+                                },
+                            )
+                        }
+                    }
+                    TextButton(onClick = { coverBook = null }) { Text(tr("取消", "Cancel")) }
+                }
+            },
+        )
+    }
+
+    if (showShelfSettings) {
+        ReaderShelfSettingsDialog(
+            initial = preferences,
+            onDismiss = { showShelfSettings = false },
+            onSave = {
+                onUpdatePreferences(it)
+                showShelfSettings = false
+            },
+        )
     }
 
     pendingDelete?.let { book ->
@@ -377,6 +568,7 @@ private fun ReaderBookPage(
     val (background, foreground) = readerColors(
         preferences.background,
         preferences.customBackgroundArgb,
+        preferences.customForegroundArgb,
     )
     var showSettings by remember { mutableStateOf(false) }
     var showJump by remember { mutableStateOf(false) }
@@ -389,6 +581,20 @@ private fun ReaderBookPage(
     var enhancedPdfReaderUnavailable by rememberSaveable(book.id) { mutableStateOf(false) }
     var pdfFallbackNoticeCount by remember(book.id) { mutableIntStateOf(0) }
     var requestedPage by remember(book.id) { mutableStateOf<Int?>(null) }
+    var controlsVisible by rememberSaveable(book.id) {
+        mutableStateOf(!preferences.immersiveMode)
+    }
+    val showReaderControls = !preferences.immersiveMode || controlsVisible
+    val centerControlDescription = if (showReaderControls) {
+        tr("阅读组件已显示", "Reading controls are visible")
+    } else {
+        tr("阅读组件已隐藏", "Reading controls are hidden")
+    }
+    val centerControlActionLabel = if (showReaderControls) {
+        tr("隐藏阅读组件", "Hide reading controls")
+    } else {
+        tr("显示阅读组件", "Show reading controls")
+    }
     val textContent = content as? ReaderContent.TextBook
     var currentPage by rememberSaveable(book.id) {
         mutableIntStateOf(
@@ -430,7 +636,12 @@ private fun ReaderBookPage(
         if (drawerState.isOpen) scope.launch { drawerState.close() } else onBack()
     }
     ReaderOrientationEffect(activity, preferences.orientation)
+    ReaderSystemBarsEffect(activity, hideSystemBars = preferences.immersiveMode && !controlsVisible)
     ReaderTimingEffect(book.id, viewModel)
+
+    LaunchedEffect(preferences.immersiveMode) {
+        controlsVisible = !preferences.immersiveMode
+    }
 
     LaunchedEffect(searchQuery, textSearchMatches) {
         selectedSearchIndex = 0
@@ -461,7 +672,7 @@ private fun ReaderBookPage(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = true,
+        gesturesEnabled = showReaderControls,
         drawerContent = {
             ReaderChapterDrawer(
                 chapters = chapters,
@@ -486,116 +697,178 @@ private fun ReaderBookPage(
         Scaffold(
             containerColor = background,
             contentColor = foreground,
-            contentWindowInsets = WindowInsets.safeDrawing,
+            contentWindowInsets = if (showReaderControls) {
+                WindowInsets.safeDrawing
+            } else {
+                WindowInsets(0, 0, 0, 0)
+            },
             snackbarHost = { SnackbarHost(bookSnackbar) },
             topBar = {
-                Column(Modifier.background(background)) {
-                    TopAppBar(
-                        title = {
-                            Text(book.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        },
-                        navigationIcon = {
-                            IconButton(onClick = onBack) {
-                                Icon(
-                                    Icons.AutoMirrored.Outlined.ArrowBack,
-                                    tr("返回书架", "Back to library"),
-                                )
-                            }
-                        },
-                        actions = {
-                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                                Icon(
-                                    Icons.AutoMirrored.Outlined.MenuBook,
-                                    tr("打开目录", "Open contents"),
-                                )
-                            }
-                            if (textLayerAvailable) {
-                                IconButton(onClick = {
-                                    showSearch = !showSearch
-                                    if (!showSearch) searchQuery = ""
-                                }) {
-                                    Icon(Icons.Outlined.Search, tr("搜索正文", "Search text"))
-                                }
-                            }
-                            IconButton(onClick = { showJump = true }) {
-                                Icon(
-                                    Icons.Outlined.FormatListNumbered,
-                                    tr("跳转页数或进度", "Jump to page or progress"),
-                                )
-                            }
-                            IconButton(onClick = { showSettings = true }) {
-                                Icon(
-                                    Icons.Outlined.Settings,
-                                    tr("阅读设置", "Reading settings"),
-                                )
-                            }
-                        },
-                        colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
-                            containerColor = background,
-                            titleContentColor = foreground,
-                            navigationIconContentColor = foreground,
-                            actionIconContentColor = foreground,
-                        ),
-                    )
-                    if (showSearch) {
-                        ReaderSearchBar(
-                            query = searchQuery,
-                            resultCount = searchResultCount,
-                            selectedIndex = selectedSearchIndex,
-                            foreground = foreground,
-                            onQueryChanged = { searchQuery = it.take(MAX_READER_SEARCH_QUERY_CHARS) },
-                            onPrevious = { selectSearchResult(selectedSearchIndex - 1) },
-                            onNext = { selectSearchResult(selectedSearchIndex + 1) },
-                            onClose = {
-                                showSearch = false
-                                searchQuery = ""
+                if (showReaderControls) {
+                    Column(Modifier.background(background)) {
+                        TopAppBar(
+                            title = {
+                                Text(book.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             },
+                            navigationIcon = {
+                                IconButton(onClick = onBack) {
+                                    Icon(
+                                        Icons.AutoMirrored.Outlined.ArrowBack,
+                                        tr("返回书架", "Back to library"),
+                                    )
+                                }
+                            },
+                            actions = {
+                                IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                    Icon(
+                                        Icons.AutoMirrored.Outlined.MenuBook,
+                                        tr("打开目录", "Open contents"),
+                                    )
+                                }
+                                if (textLayerAvailable) {
+                                    IconButton(onClick = {
+                                        showSearch = !showSearch
+                                        if (!showSearch) searchQuery = ""
+                                    }) {
+                                        Icon(Icons.Outlined.Search, tr("搜索正文", "Search text"))
+                                    }
+                                }
+                                IconButton(onClick = { showJump = true }) {
+                                    Icon(
+                                        Icons.Outlined.FormatListNumbered,
+                                        tr("跳转页数或进度", "Jump to page or progress"),
+                                    )
+                                }
+                                IconButton(onClick = { showSettings = true }) {
+                                    Icon(
+                                        Icons.Outlined.Settings,
+                                        tr("阅读设置", "Reading settings"),
+                                    )
+                                }
+                            },
+                            colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                                containerColor = background,
+                                titleContentColor = foreground,
+                                navigationIconContentColor = foreground,
+                                actionIconContentColor = foreground,
+                            ),
                         )
+                        if (showSearch) {
+                            ReaderSearchBar(
+                                query = searchQuery,
+                                resultCount = searchResultCount,
+                                selectedIndex = selectedSearchIndex,
+                                foreground = foreground,
+                                onQueryChanged = { searchQuery = it.take(MAX_READER_SEARCH_QUERY_CHARS) },
+                                onPrevious = { selectSearchResult(selectedSearchIndex - 1) },
+                                onNext = { selectSearchResult(selectedSearchIndex + 1) },
+                                onClose = {
+                                    showSearch = false
+                                    searchQuery = ""
+                                },
+                            )
+                        }
                     }
                 }
             },
         ) { inner ->
-            when (content) {
-                is ReaderContent.TextBook -> TextReader(
-                    book = book,
-                    pages = content.pages,
-                    preferences = preferences,
-                    background = background,
-                    foreground = foreground,
-                    searchQuery = searchQuery,
-                    contentPadding = inner,
-                    requestedPage = requestedPage,
-                    onRequestedPageConsumed = { requestedPage = null },
-                    onCurrentPageChanged = { currentPage = it },
-                    onProgress = { pageIndex, paragraphIndex ->
-                        viewModel.saveTextProgress(book.id, pageIndex, paragraphIndex)
-                    },
-                )
-                is ReaderContent.PdfBook -> PdfReader(
-                    book = book,
-                    pageCount = content.pageCount,
-                    preferences = preferences,
-                    useEnhancedRenderer = pdfRendererMode == ReaderPdfRendererMode.ENHANCED,
-                    textFeaturesAvailable = textLayerAvailable,
-                    background = background,
-                    foreground = foreground,
-                    contentPadding = inner,
-                    requestedPage = requestedPage,
-                    onRequestedPageConsumed = { requestedPage = null },
-                    onCurrentPageChanged = { currentPage = it },
-                    searchQuery = searchQuery,
-                    selectedSearchIndex = selectedSearchIndex,
-                    onSearchResultCountChanged = { pdfSearchResultCount = it },
-                    onChaptersChanged = { pdfChapters = it },
-                    onChapterScanRunningChanged = { pdfChapterScanRunning = it },
-                    onEnhancedReaderUnavailable = {
-                        if (!enhancedPdfReaderUnavailable) {
-                            enhancedPdfReaderUnavailable = true
-                            pdfFallbackNoticeCount += 1
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(preferences.immersiveMode) {
+                        if (!preferences.immersiveMode) return@pointerInput
+                        awaitEachGesture {
+                            val down = awaitFirstDown(
+                                requireUnconsumed = false,
+                                pass = PointerEventPass.Initial,
+                            )
+                            val halfHotspot = READER_CENTER_HOTSPOT_SIZE_DP.dp.toPx() / 2f
+                            if (abs(down.position.x - size.width / 2f) > halfHotspot ||
+                                abs(down.position.y - size.height / 2f) > halfHotspot
+                            ) {
+                                return@awaitEachGesture
+                            }
+                            var moved = false
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Final)
+                                if (event.changes.size > 1) moved = true
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                if (change == null) {
+                                    moved = true
+                                    break
+                                }
+                                if ((change.position - down.position).getDistance() >
+                                    viewConfiguration.touchSlop
+                                ) {
+                                    moved = true
+                                }
+                                if (!change.pressed) break
+                            }
+                            // Observe without consuming: TXT scrolling, PDF pan/zoom and text
+                            // selection continue to receive the complete pointer stream.
+                            if (!moved) controlsVisible = !controlsVisible
                         }
                     },
-                    viewModel = viewModel,
-                )
+            ) {
+                when (content) {
+                    is ReaderContent.TextBook -> TextReader(
+                        book = book,
+                        pages = content.pages,
+                        preferences = preferences,
+                        background = background,
+                        foreground = foreground,
+                        searchQuery = searchQuery,
+                        contentPadding = inner,
+                        showPageIndicator = showReaderControls,
+                        requestedPage = requestedPage,
+                        onRequestedPageConsumed = { requestedPage = null },
+                        onCurrentPageChanged = { currentPage = it },
+                        onProgress = { pageIndex, paragraphIndex ->
+                            viewModel.saveTextProgress(book.id, pageIndex, paragraphIndex)
+                        },
+                    )
+                    is ReaderContent.PdfBook -> PdfReader(
+                        book = book,
+                        pageCount = content.pageCount,
+                        preferences = preferences,
+                        useEnhancedRenderer = pdfRendererMode == ReaderPdfRendererMode.ENHANCED,
+                        textFeaturesAvailable = textLayerAvailable,
+                        background = background,
+                        foreground = foreground,
+                        contentPadding = inner,
+                        showPageIndicator = showReaderControls,
+                        requestedPage = requestedPage,
+                        onRequestedPageConsumed = { requestedPage = null },
+                        onCurrentPageChanged = { currentPage = it },
+                        searchQuery = searchQuery,
+                        selectedSearchIndex = selectedSearchIndex,
+                        onSearchResultCountChanged = { pdfSearchResultCount = it },
+                        onChaptersChanged = { pdfChapters = it },
+                        onChapterScanRunningChanged = { pdfChapterScanRunning = it },
+                        onEnhancedReaderUnavailable = {
+                            if (!enhancedPdfReaderUnavailable) {
+                                enhancedPdfReaderUnavailable = true
+                                pdfFallbackNoticeCount += 1
+                            }
+                        },
+                        viewModel = viewModel,
+                    )
+                }
+                if (preferences.immersiveMode) {
+                    Box(
+                        Modifier
+                            .size(READER_CENTER_HOTSPOT_SIZE_DP.dp)
+                            .align(Alignment.Center)
+                            .semantics {
+                                contentDescription = centerControlDescription
+                                role = Role.Button
+                                onClick(label = centerControlActionLabel) {
+                                    controlsVisible = !controlsVisible
+                                    true
+                                }
+                            },
+                    )
+                }
             }
         }
     }
@@ -627,6 +900,127 @@ private fun ReaderBookPage(
 }
 
 @Composable
+private fun ReaderCover(
+    book: ReaderBook,
+    widthPx: Int,
+    loadCover: suspend (ReaderBook, Int) -> Bitmap?,
+    modifier: Modifier = Modifier,
+) {
+    val bitmap by produceState<Bitmap?>(
+        initialValue = null,
+        key1 = book.id,
+        key2 = book.coverUri,
+        key3 = "${book.fingerprint}:${book.totalPages}:$widthPx",
+    ) {
+        value = try {
+            loadCover(book, widthPx)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+    }
+    DisposableEffect(bitmap) {
+        onDispose {
+            bitmap?.takeUnless(Bitmap::isRecycled)?.recycle()
+        }
+    }
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap!!.asImageBitmap(),
+                contentDescription = tr("《${book.title}》封面", "Cover for ${book.title}"),
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(
+                    if (book.type == ReaderBookType.PDF) {
+                        Icons.Outlined.PictureAsPdf
+                    } else {
+                        Icons.AutoMirrored.Outlined.MenuBook
+                    },
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(28.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReaderShelfSettingsDialog(
+    initial: ReaderPreferences,
+    onDismiss: () -> Unit,
+    onSave: (ReaderPreferences) -> Unit,
+) {
+    var draft by remember(initial) { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("书架设置", "Shelf settings")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(tr("显示方式", "Layout"), fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = draft.libraryLayout == ReaderLibraryLayout.LIST,
+                        onClick = { draft = draft.copy(libraryLayout = ReaderLibraryLayout.LIST) },
+                        leadingIcon = {
+                            Icon(Icons.AutoMirrored.Outlined.List, contentDescription = null)
+                        },
+                        label = { Text(tr("列表", "List")) },
+                    )
+                    FilterChip(
+                        selected = draft.libraryLayout == ReaderLibraryLayout.GRID,
+                        onClick = { draft = draft.copy(libraryLayout = ReaderLibraryLayout.GRID) },
+                        leadingIcon = { Icon(Icons.Outlined.GridView, contentDescription = null) },
+                        label = { Text(tr("两列封面", "Two-column covers")) },
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("显示阅读进度百分比", "Show reading progress"))
+                        Text(
+                            tr(
+                                "进度按稳定逻辑页或 PDF 实际页数计算。",
+                                "Progress uses stable logical TXT pages or actual PDF pages.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = draft.showProgressPercentage,
+                        onCheckedChange = { draft = draft.copy(showProgressPercentage = it) },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(draft) }) { Text(tr("保存", "Save")) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) } },
+    )
+}
+
+private fun readerBookProgressPercent(book: ReaderBook): Int {
+    if (book.totalPages <= 1) return 0
+    val page = if (book.type == ReaderBookType.PDF) book.pdfPageIndex else book.textPageIndex
+    return (page.coerceIn(0, book.totalPages - 1).toFloat() /
+        (book.totalPages - 1).toFloat() * 100f).roundToInt()
+}
+
+@Composable
 private fun TextReader(
     book: ReaderBook,
     pages: List<ReaderTextPage>,
@@ -635,6 +1029,7 @@ private fun TextReader(
     foreground: Color,
     searchQuery: String,
     contentPadding: PaddingValues,
+    showPageIndicator: Boolean,
     requestedPage: Int?,
     onRequestedPageConsumed: () -> Unit,
     onCurrentPageChanged: (Int) -> Unit,
@@ -717,13 +1112,15 @@ private fun TextReader(
                 }
             }
         }
-        ReaderPageIndicator(
-            currentPage = visiblePage,
-            totalPages = pages.size,
-            background = background,
-            foreground = foreground,
-            modifier = Modifier.align(Alignment.BottomCenter),
-        )
+        if (showPageIndicator) {
+            ReaderPageIndicator(
+                currentPage = visiblePage,
+                totalPages = pages.size,
+                background = background,
+                foreground = foreground,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
     }
 }
 
@@ -896,6 +1293,7 @@ private fun ReaderChapterDrawer(
             }
         }
     }
+
 }
 
 @Composable
@@ -908,6 +1306,7 @@ private fun PdfReader(
     background: Color,
     foreground: Color,
     contentPadding: PaddingValues,
+    showPageIndicator: Boolean,
     requestedPage: Int?,
     onRequestedPageConsumed: () -> Unit,
     onCurrentPageChanged: (Int) -> Unit,
@@ -939,6 +1338,7 @@ private fun PdfReader(
                 preferences = preferences,
                 textFeaturesAvailable = textFeaturesAvailable,
                 background = background,
+                foreground = foreground,
                 modifier = Modifier.fillMaxSize(),
                 requestedPage = requestedPage,
                 searchQuery = searchQuery,
@@ -960,19 +1360,23 @@ private fun PdfReader(
                 book = book,
                 pageCount = pageCount,
                 zoomPercent = preferences.pdfZoomPercent,
+                background = background,
+                foreground = foreground,
                 requestedPage = requestedPage,
                 onRequestedPageConsumed = onRequestedPageConsumed,
                 onCurrentPageChanged = reportCurrentPage,
                 viewModel = viewModel,
             )
         }
-        ReaderPageIndicator(
-            currentPage = currentPage,
-            totalPages = pageCount,
-            background = background,
-            foreground = foreground,
-            modifier = Modifier.align(Alignment.BottomCenter),
-        )
+        if (showPageIndicator) {
+            ReaderPageIndicator(
+                currentPage = currentPage,
+                totalPages = pageCount,
+                background = background,
+                foreground = foreground,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
     }
 }
 
@@ -981,6 +1385,8 @@ private fun LegacyContinuousPdfReader(
     book: ReaderBook,
     pageCount: Int,
     zoomPercent: Int,
+    background: Color,
+    foreground: Color,
     requestedPage: Int?,
     onRequestedPageConsumed: () -> Unit,
     onCurrentPageChanged: (Int) -> Unit,
@@ -1000,6 +1406,7 @@ private fun LegacyContinuousPdfReader(
             .distinctUntilChanged()
             .collect(onCurrentPageChanged)
     }
+    val sharedHorizontalScroll = rememberScrollState()
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val pageWidth = ((maxWidth - 24.dp) * zoomPercent / 100f).coerceAtLeast(160.dp)
@@ -1016,6 +1423,9 @@ private fun LegacyContinuousPdfReader(
                     page = page,
                     displayWidth = pageWidth,
                     targetWidthPx = targetWidthPx,
+                    horizontalScrollState = sharedHorizontalScroll,
+                    background = background,
+                    foreground = foreground,
                     viewModel = viewModel,
                 )
             }
@@ -1123,6 +1533,9 @@ private fun LegacyPdfPage(
     page: Int,
     displayWidth: androidx.compose.ui.unit.Dp,
     targetWidthPx: Int,
+    horizontalScrollState: androidx.compose.foundation.ScrollState,
+    background: Color,
+    foreground: Color,
     viewModel: ReaderViewModel,
 ) {
     val rendered by produceState<Result<Bitmap>?>(null, book.id, page, targetWidthPx) {
@@ -1135,7 +1548,7 @@ private fun LegacyPdfPage(
     Box(
         Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
+            .horizontalScroll(horizontalScrollState)
             .padding(vertical = 2.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
@@ -1149,6 +1562,7 @@ private fun LegacyPdfPage(
                 contentDescription = tr("PDF 第 ${page + 1} 页", "PDF page ${page + 1}"),
                 modifier = Modifier.width(displayWidth),
                 contentScale = ContentScale.FillWidth,
+                colorFilter = readerPdfColorFilter(background, foreground),
             )
             else -> Text(tr("这一页无法显示", "This page could not be rendered"), color = MaterialTheme.colorScheme.error)
         }
@@ -1165,6 +1579,7 @@ private fun ReaderSettingsDialog(
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
     var showCustomColorPicker by remember { mutableStateOf(false) }
+    var showForegroundColorPicker by remember { mutableStateOf(false) }
     val customRegexValid = isValidReaderChapterRegex(draft.customChapterRegex)
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1202,7 +1617,11 @@ private fun ReaderSettingsDialog(
                     Text(tr("背景颜色", "Background"), fontWeight = FontWeight.SemiBold)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ReaderBackground.entries.forEach { background ->
-                            val colors = readerColors(background, draft.customBackgroundArgb)
+                            val colors = readerColors(
+                                background,
+                                draft.customBackgroundArgb,
+                                draft.customForegroundArgb,
+                            )
                             Surface(
                                 modifier = Modifier.size(42.dp).clickable {
                                     if (background == ReaderBackground.CUSTOM) {
@@ -1230,6 +1649,88 @@ private fun ReaderSettingsDialog(
                                 }
                             }
                         }
+                    }
+                }
+                item {
+                    val foregroundPreview = Color(
+                        draft.customForegroundArgb ?: readerColors(
+                            draft.background,
+                            draft.customBackgroundArgb,
+                            null,
+                        ).second.toArgb(),
+                    )
+                    Text(tr("字体 / PDF 前景色", "Text / PDF foreground"), fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        FilterChip(
+                            selected = draft.customForegroundArgb == null,
+                            onClick = { draft = draft.copy(customForegroundArgb = null) },
+                            label = { Text(tr("自动", "Automatic")) },
+                        )
+                        Surface(
+                            modifier = Modifier.size(42.dp).clickable {
+                                showForegroundColorPicker = true
+                            },
+                            shape = CircleShape,
+                            color = foregroundPreview,
+                            border = androidx.compose.foundation.BorderStroke(
+                                if (draft.customForegroundArgb != null) 3.dp else 1.dp,
+                                if (draft.customForegroundArgb != null) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.outline
+                                },
+                            ),
+                        ) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Outlined.Palette,
+                                    contentDescription = tr("自定义字体颜色", "Custom text color"),
+                                    tint = if (foregroundPreview.luminance() > 0.5f) {
+                                        Color.Black
+                                    } else {
+                                        Color.White
+                                    },
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                    }
+                    if (isPdf) {
+                        Text(
+                            tr(
+                                "PDF 会把页面映射为当前背景与前景双色；选择夜间背景和浅色前景即可获得黑底白字效果，原文件不会修改。",
+                                "PDF pages are mapped to the selected background and foreground. Use a dark background with a light foreground for dark mode; the original file is unchanged.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(tr("全屏纯净模式", "Immersive reading"), fontWeight = FontWeight.SemiBold)
+                            Text(
+                                tr(
+                                    "隐藏书名、工具栏、页码和系统栏；点屏幕中央可显示或再次隐藏。",
+                                    "Hide the title, toolbar, page indicator, and system bars. Tap the center to show or hide them.",
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = draft.immersiveMode,
+                            onCheckedChange = { draft = draft.copy(immersiveMode = it) },
+                        )
                     }
                 }
                 item {
@@ -1375,6 +1876,21 @@ private fun ReaderSettingsDialog(
             },
         )
     }
+    if (showForegroundColorPicker) {
+        ColorPickerDialog(
+            initialColorArgb = draft.customForegroundArgb ?: readerColors(
+                draft.background,
+                draft.customBackgroundArgb,
+                null,
+            ).second.toArgb(),
+            title = tr("自定义字体颜色", "Custom text color"),
+            onDismiss = { showForegroundColorPicker = false },
+            onConfirm = { color ->
+                draft = draft.copy(customForegroundArgb = color)
+                showForegroundColorPicker = false
+            },
+        )
+    }
 }
 
 @Composable
@@ -1450,6 +1966,25 @@ private fun ReaderOrientationEffect(activity: Activity?, orientation: ReaderOrie
     }
 }
 
+@Composable
+private fun ReaderSystemBarsEffect(activity: Activity?, hideSystemBars: Boolean) {
+    DisposableEffect(activity, hideSystemBars) {
+        val controller = activity?.window?.let { window ->
+            WindowCompat.getInsetsController(window, window.decorView)
+        }
+        if (hideSystemBars) {
+            controller?.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller?.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose {
+            if (hideSystemBars) controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+}
+
 internal fun readerExitOrientation(
     isFinishing: Boolean,
     isChangingConfigurations: Boolean,
@@ -1468,6 +2003,7 @@ private fun Context.findActivity(): Activity? = when (this) {
 private fun readerColors(
     background: ReaderBackground,
     customBackgroundArgb: Int,
+    customForegroundArgb: Int?,
 ): Pair<Color, Color> = when (background) {
     ReaderBackground.WHITE -> Color(0xFFFFFFFF) to Color(0xFF202124)
     ReaderBackground.PAPER -> Color(0xFFF4F0E6) to Color(0xFF332E28)
@@ -1477,7 +2013,27 @@ private fun readerColors(
     ReaderBackground.CUSTOM -> Color(customBackgroundArgb).let { custom ->
         custom to if (custom.luminance() > 0.5f) Color(0xFF181818) else Color(0xFFF4F4F4)
     }
+}.let { (resolvedBackground, automaticForeground) ->
+    resolvedBackground to customForegroundArgb
+        ?.let { Color(it or 0xFF000000.toInt()) }
+        .let { it ?: automaticForeground }
 }
+
+/**
+ * Maps rendered PDF luminance to the configured foreground/background pair. This changes only the
+ * displayed bitmap; the source document remains untouched. Black becomes [foreground], white
+ * becomes [background], and intermediate shades remain readable between those endpoints.
+ */
+private fun readerPdfColorFilter(background: Color, foreground: Color): ColorFilter? {
+    val backgroundArgb = background.toArgb()
+    val foregroundArgb = foreground.toArgb()
+    if (!readerPdfColorTransformRequired(backgroundArgb, foregroundArgb)) return null
+    return ColorFilter.colorMatrix(
+        ColorMatrix(readerPdfColorMatrixValues(backgroundArgb, foregroundArgb)),
+    )
+}
+
+private const val READER_CENTER_HOTSPOT_SIZE_DP = 132
 
 @Composable
 private fun readerTutorialTarget(content: ReaderContentState): PageTutorialTarget? = when (content) {

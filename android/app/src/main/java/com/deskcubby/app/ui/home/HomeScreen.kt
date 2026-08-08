@@ -159,7 +159,7 @@ fun HomeScreen(
     onOpenStatistics: () -> Unit,
 ) {
     val context = LocalContext.current
-    val organic = settings.visualStyle == VisualStyle.ORGANIC_FUTURE
+    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     val diaries by viewModel.diaries.collectAsStateWithLifecycle()
     val thoughts by viewModel.thoughts.collectAsStateWithLifecycle()
     val thoughtCategories by viewModel.thoughtCategories.collectAsStateWithLifecycle()

@@ -114,16 +114,17 @@ class GamesViewModel @Inject constructor(
         }
     }
 
-    fun record2048Statistics(gameId: String, delta: Game2048.StatisticsDelta) {
+    /**
+     * Records one accepted direction input. [delta] is null when that direction cannot move any
+     * tile, but the input still belongs in the total-move count.
+     */
+    fun record2048MoveAttempt(gameId: String, delta: Game2048.StatisticsDelta?) {
         recordStatistics(
             gameId = gameId,
-            increments = mapOf(
-                GameStatisticMetric.EFFECTIVE_MOVES to delta.effectiveMoves.toLong(),
-                GameStatisticMetric.MERGES to delta.merges.toLong(),
-                GameStatisticMetric.WINS to delta.wins.toLong(),
-                GameStatisticMetric.LOSSES to delta.losses.toLong(),
-            ),
-            maxima = mapOf(GameStatisticMetric.HIGHEST_TILE to delta.highestTile.toLong()),
+            increments = game2048StatisticIncrements(delta),
+            maxima = delta?.let {
+                mapOf(GameStatisticMetric.HIGHEST_TILE to it.highestTile.toLong())
+            }.orEmpty(),
         )
     }
 
@@ -245,5 +246,17 @@ class GamesViewModel @Inject constructor(
             GAME_MINESWEEPER,
             GAME_SPIDER,
         )
+    }
+}
+
+/** Pure policy kept outside the ViewModel so no-op direction inputs remain unit-testable. */
+internal fun game2048StatisticIncrements(
+    delta: Game2048.StatisticsDelta?,
+): Map<String, Long> = buildMap {
+    put(GameStatisticMetric.MOVE_ATTEMPTS, 1L)
+    if (delta != null) {
+        put(GameStatisticMetric.EFFECTIVE_MOVES, delta.effectiveMoves.toLong())
+        put(GameStatisticMetric.MERGES, delta.merges.toLong())
+        put(GameStatisticMetric.WINS, delta.wins.toLong())
     }
 }

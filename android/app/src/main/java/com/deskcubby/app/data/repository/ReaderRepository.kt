@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
@@ -17,10 +18,15 @@ import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,6 +42,8 @@ enum class ReaderOrientation { FOLLOW_SYSTEM, PORTRAIT, LANDSCAPE }
 
 enum class ReaderBackground { WHITE, PAPER, SEPIA, GREEN, NIGHT, CUSTOM }
 
+enum class ReaderLibraryLayout { LIST, GRID }
+
 enum class ReaderChapterDetectionMode { SMART, CUSTOM, SMART_AND_CUSTOM }
 
 data class ReaderPreferences(
@@ -46,6 +54,11 @@ data class ReaderPreferences(
     val paragraphSpacingDp: Float = 10f,
     val pdfZoomPercent: Int = 100,
     val orientation: ReaderOrientation = ReaderOrientation.FOLLOW_SYSTEM,
+    val libraryLayout: ReaderLibraryLayout = ReaderLibraryLayout.LIST,
+    val showProgressPercentage: Boolean = false,
+    val immersiveMode: Boolean = false,
+    /** Null follows the foreground chosen for the active reader background. */
+    val customForegroundArgb: Int? = null,
     val chapterDetectionMode: ReaderChapterDetectionMode =
         ReaderChapterDetectionMode.SMART_AND_CUSTOM,
     val customChapterRegex: String = "",
@@ -63,11 +76,35 @@ data class ReaderBook(
     /** -1 is used only while migrating a schema-v1 paragraph-only progress record. */
     val textPageIndex: Int = 0,
     val pdfPageIndex: Int = 0,
+    /** Persisted SAF image URI. Never convert this value into a filesystem path. */
+    val coverUri: String? = null,
+    /** Full-file SHA-256 used to match the same book imported through another provider/device. */
+    val fingerprint: String? = null,
+    /** Logical TXT page count or physical PDF page count; zero means not measured yet. */
+    val totalPages: Int = 0,
+    val progressUpdatedAt: Long = 0L,
 )
 
 data class ReaderLibraryState(
     val books: List<ReaderBook> = emptyList(),
     val preferences: ReaderPreferences = ReaderPreferences(),
+    /** URI-free bounded records retained so sync may arrive before the matching book is imported. */
+    val progressLedger: List<ReaderProgressRecord> = emptyList(),
+)
+
+data class ReaderProgressRecord(
+    val fingerprint: String,
+    val type: ReaderBookType,
+    val textPageIndex: Int = 0,
+    val textParagraphIndex: Int = 0,
+    val pdfPageIndex: Int = 0,
+    val totalPages: Int = 0,
+    val updatedAt: Long = 0L,
+)
+
+data class ReaderProgressImportResult(
+    val matchedBooks: Int,
+    val updatedBooks: Int,
 )
 
 enum class ReaderStorageIssue { STATE_FILE_DAMAGED, COMMIT_FAILED }
@@ -102,6 +139,16 @@ internal data class ReaderTextLayout(
     val chapters: List<ReaderChapter>,
 )
 
+private data class ReaderFingerprintResult(
+    val fingerprint: String,
+    val byteCount: Long,
+)
+
+private data class MeasuredReaderFingerprint(
+    val uri: String,
+    val fingerprint: String,
+)
+
 @Singleton
 class ReaderRepository @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -110,7 +157,9 @@ class ReaderRepository @Inject constructor(
     private val directory = File(context.filesDir, DIRECTORY_NAME)
     private val file = File(directory, STATE_FILE_NAME)
     private val pendingFile = File(directory, "$STATE_FILE_NAME.pending")
+    private val coverDirectory = File(context.cacheDir, COVER_DIRECTORY_NAME)
     private val mutex = Mutex()
+    private val coverMutex = Mutex()
     private val _state = MutableStateFlow(ReaderLibraryState())
     val state: StateFlow<ReaderLibraryState> = _state.asStateFlow()
     private val _storageIssue = MutableStateFlow<ReaderStorageIssue?>(null)
@@ -135,11 +184,14 @@ class ReaderRepository @Inject constructor(
                     ReaderBookType.TXT
                 else -> throw IllegalArgumentException("请选择 TXT 或 PDF 文件")
             }
-            // Validate that the provider can still be read before adding a library entry.
-            when (type) {
-                ReaderBookType.TXT -> readText(uri, _state.value.preferences)
+            // Validate that the provider can still be read before adding a library entry and keep
+            // a stable page-count denominator for shelf progress. The fingerprint is best-effort:
+            // unusual providers may support a seekable descriptor but not an InputStream.
+            val totalPages = when (type) {
+                ReaderBookType.TXT -> readText(uri, _state.value.preferences).pages.size
                 ReaderBookType.PDF -> readPdfPageCount(uri)
             }
+            val measuredFingerprint = fingerprintOrNull(uri, type)
             val alreadyPersisted = resolver.persistedUriPermissions.any { permission ->
                 permission.isReadPermission && permission.uri == uri
             }
@@ -148,18 +200,34 @@ class ReaderRepository @Inject constructor(
             }
             val now = System.currentTimeMillis()
             val existing = _state.value.books.firstOrNull { it.uri == uri.toString() }
-            val book = existing?.copy(lastOpenedAt = now) ?: ReaderBook(
+            val contentChanged = measuredFingerprint != null &&
+                existing?.fingerprint != null &&
+                measuredFingerprint != existing.fingerprint
+            val book = existing?.copy(
+                title = displayName.substringBeforeLast('.').trim().ifBlank { "Untitled" }.take(240),
+                type = type,
+                lastOpenedAt = now,
+                textParagraphIndex = if (contentChanged) 0 else existing.textParagraphIndex,
+                textPageIndex = if (contentChanged) 0 else existing.textPageIndex,
+                pdfPageIndex = if (contentChanged) 0 else existing.pdfPageIndex,
+                fingerprint = measuredFingerprint ?: existing.fingerprint,
+                totalPages = totalPages,
+                progressUpdatedAt = if (contentChanged) 0L else existing.progressUpdatedAt,
+            ) ?: ReaderBook(
                 id = UUID.randomUUID().toString(),
                 uri = uri.toString(),
                 title = displayName.substringBeforeLast('.').trim().ifBlank { "Untitled" }.take(240),
                 type = type,
                 addedAt = now,
                 lastOpenedAt = now,
+                fingerprint = measuredFingerprint,
+                totalPages = totalPages,
             )
-            val updated = _state.value.copy(
+            val baseState = _state.value.copy(
                 books = (_state.value.books.filterNot { it.id == book.id } + book)
                     .sortedByDescending(ReaderBook::lastOpenedAt),
             )
+            val updated = mergeReaderProgress(baseState, baseState.progressLedger).state
             try {
                 writeVerified(updated)
                 _state.value = updated
@@ -180,12 +248,31 @@ class ReaderRepository @Inject constructor(
 
     suspend fun load(book: ReaderBook): ReaderContent = withContext(Dispatchers.IO) {
         val uri = Uri.parse(book.uri)
-        when (book.type) {
+        val content = when (book.type) {
             ReaderBookType.TXT -> readText(uri, _state.value.preferences).let { layout ->
                 ReaderContent.TextBook(layout.pages, layout.chapters)
             }
             ReaderBookType.PDF -> ReaderContent.PdfBook(readPdfPageCount(uri))
         }
+        val totalPages = when (content) {
+            is ReaderContent.TextBook -> content.pages.size
+            is ReaderContent.PdfBook -> content.pageCount
+        }
+        val fingerprint = book.fingerprint ?: fingerprintOrNull(uri, book.type)
+        try {
+            updateBook(book.id) { current ->
+                current.copy(
+                    fingerprint = fingerprint ?: current.fingerprint,
+                    totalPages = totalPages,
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Reading may continue when optional metadata cannot be committed. The repository's
+            // storageIssue flow still reports a damaged/failed state to the existing UI.
+        }
+        content
     }
 
     suspend fun renderPdfPage(book: ReaderBook, pageIndex: Int, targetWidthPx: Int): Bitmap =
@@ -217,16 +304,39 @@ class ReaderRepository @Inject constructor(
     }
 
     suspend fun saveTextProgress(bookId: String, pageIndex: Int, paragraphIndex: Int) =
-        updateBook(bookId) { book ->
-        book.copy(
-            textPageIndex = pageIndex.coerceIn(0, MAX_TEXT_PAGES - 1),
-            textParagraphIndex = paragraphIndex.coerceIn(0, MAX_PARAGRAPHS - 1),
-        )
-    }
+        updateBookProgress(bookId) { book ->
+            val normalizedPage = pageIndex.coerceIn(0, MAX_TEXT_PAGES - 1)
+            val normalizedParagraph = paragraphIndex.coerceIn(0, MAX_PARAGRAPHS - 1)
+            if (book.textParagraphIndex == normalizedParagraph) {
+                if (book.textPageIndex == normalizedPage) book else {
+                    // Recomputing the local logical page for the same canonical paragraph is not
+                    // a new reading action and must not win a cross-device progress conflict.
+                    book.copy(textPageIndex = normalizedPage)
+                }
+            } else {
+                book.copy(
+                    textPageIndex = normalizedPage,
+                    textParagraphIndex = normalizedParagraph,
+                    progressUpdatedAt = nextReaderProgressTimestamp(book.progressUpdatedAt),
+                )
+            }
+        }
 
-    suspend fun savePdfProgress(bookId: String, pageIndex: Int) = updateBook(bookId) { book ->
-        book.copy(pdfPageIndex = pageIndex.coerceAtLeast(0))
-    }
+    suspend fun savePdfProgress(bookId: String, pageIndex: Int) =
+        updateBookProgress(bookId) { book ->
+            val normalizedPage = pageIndex.coerceIn(
+                0,
+                (book.totalPages - 1).takeIf { it >= 0 } ?: (MAX_PDF_PAGES - 1),
+            )
+            if (book.pdfPageIndex == normalizedPage) {
+                book
+            } else {
+                book.copy(
+                    pdfPageIndex = normalizedPage,
+                    progressUpdatedAt = nextReaderProgressTimestamp(book.progressUpdatedAt),
+                )
+            }
+        }
 
     suspend fun updatePreferences(value: ReaderPreferences) = mutex.withLock {
         withContext(Dispatchers.IO) {
@@ -237,6 +347,186 @@ class ReaderRepository @Inject constructor(
         }
     }
 
+    /**
+     * Returns a bounded shelf cover. A custom SAF URI wins; otherwise PDF page one is rendered into
+     * an app-private, disposable PNG cache. TXT books intentionally have no generated cover.
+     */
+    suspend fun loadCover(book: ReaderBook, widthPx: Int): Bitmap? = withContext(Dispatchers.IO) {
+        val targetWidth = widthPx.coerceIn(MIN_COVER_WIDTH_PX, MAX_COVER_WIDTH_PX)
+        coverMutex.withLock {
+            book.coverUri?.let { rawUri ->
+                val custom = decodeCoverUri(Uri.parse(rawUri), targetWidth)
+                if (custom != null) return@withLock custom
+            }
+            if (book.type != ReaderBookType.PDF) return@withLock null
+            val cacheFile = autoCoverFile(book)
+            decodeCoverFile(cacheFile, targetWidth)?.let { return@withLock it }
+
+            val rendered = renderPdfPage(book, pageIndex = 0, targetWidthPx = AUTO_COVER_WIDTH_PX)
+            try {
+                writeVerifiedCoverCache(cacheFile, rendered)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Returning the rendered page still provides a cover for this session.
+            }
+            scaleCoverBitmap(rendered, targetWidth)
+        }
+    }
+
+    /** Stores only an opaque persistable content URI. Passing null restores the generated cover. */
+    suspend fun setCustomCover(bookId: String, uri: Uri?) = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            prepareForMutationLocked()
+            val existing = _state.value.books.firstOrNull { it.id == bookId } ?: return@withContext
+            val normalized = uri?.also { selected ->
+                require(selected.scheme == ContentResolver.SCHEME_CONTENT) {
+                    "Only document image URIs are supported"
+                }
+                val validation = decodeCoverUri(selected, MIN_COVER_WIDTH_PX)
+                    ?: throw IllegalArgumentException("无法读取所选封面图片")
+                validation.recycle()
+            }?.toString()
+            if (normalized == existing.coverUri) return@withContext
+
+            val alreadyPersisted = uri == null || resolver.persistedUriPermissions.any { permission ->
+                permission.isReadPermission && permission.uri == uri
+            }
+            if (uri != null && !alreadyPersisted) {
+                resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val updated = _state.value.copy(
+                books = _state.value.books.map { book ->
+                    if (book.id == bookId) book.copy(coverUri = normalized) else book
+                },
+            )
+            try {
+                writeVerified(updated)
+                _state.value = updated
+            } catch (error: Exception) {
+                if (uri != null && !alreadyPersisted) releasePersistedReadPermission(uri)
+                throw error
+            }
+            existing.coverUri?.let { old -> releaseIfUnused(Uri.parse(old), updated) }
+        }
+    }
+
+    /**
+     * Exports URI-free progress keyed by full-file SHA-256. Legacy fingerprints are filled only
+     * for books with meaningful progress, newest first, under one cumulative I/O budget. Hashing
+     * happens without holding the state mutex so normal reading progress is not blocked.
+     */
+    suspend fun exportProgressRecords(): List<ReaderProgressRecord> {
+        val candidates = mutex.withLock {
+            withContext(Dispatchers.IO) {
+                ensureInitializedLocked()
+                _state.value.books
+                    .filter { it.fingerprint == null && it.hasMeaningfulProgress() }
+                    .sortedWith(
+                        compareByDescending<ReaderBook>(ReaderBook::progressUpdatedAt)
+                            .thenByDescending(ReaderBook::lastOpenedAt),
+                    )
+            }
+        }
+        val measured = withContext(Dispatchers.IO) {
+            val values = linkedMapOf<String, MeasuredReaderFingerprint>()
+            var remainingBytes = MAX_EXPORT_FINGERPRINT_BYTES
+            for (book in candidates) {
+                currentCoroutineContext().ensureActive()
+                if (remainingBytes <= 0L) break
+                val uri = Uri.parse(book.uri)
+                val declaredSize = runCatching {
+                    resolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
+                }.getOrNull()
+                if (declaredSize != null && declaredSize >= 0L && declaredSize > remainingBytes) {
+                    continue
+                }
+                val result = fingerprintAndSizeOrNull(
+                    uri = uri,
+                    type = book.type,
+                    maxBytes = minOf(remainingBytes, MAX_BOOK_FINGERPRINT_BYTES),
+                )
+                if (result != null) {
+                    remainingBytes -= result.byteCount
+                    values[book.id] = MeasuredReaderFingerprint(
+                        uri = book.uri,
+                        fingerprint = result.fingerprint,
+                    )
+                } else if (declaredSize == null || declaredSize < 0L) {
+                    // An unknown-length provider may have consumed the entire bounded attempt.
+                    remainingBytes = 0L
+                }
+            }
+            values
+        }
+        return mutex.withLock {
+            withContext(Dispatchers.IO) {
+                ensureInitializedLocked()
+                val measuredBooks = _state.value.books.map { book ->
+                    val result = measured[book.id]
+                    if (book.fingerprint != null || result == null || result.uri != book.uri) {
+                        book
+                    } else {
+                        book.copy(fingerprint = result.fingerprint)
+                    }
+                }
+                val base = _state.value.copy(books = measuredBooks)
+                val normalized = mergeReaderProgress(base, base.progressLedger).state
+                if (normalized != _state.value && _storageIssue.value == null) {
+                    try {
+                        writeVerified(normalized)
+                        _state.value = normalized
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // Use the verified in-memory snapshot for this export; COMMIT_FAILED remains
+                        // visible and the previously committed state remains authoritative on disk.
+                    }
+                }
+                mergeReaderProgressLedger(
+                    normalized.books.mapNotNull(ReaderBook::toProgressRecordOrNull) +
+                        normalized.progressLedger,
+                ).sortedWith(
+                    compareBy(ReaderProgressRecord::fingerprint, ReaderProgressRecord::type),
+                )
+            }
+        }
+    }
+
+    suspend fun importProgressRecords(
+        records: List<ReaderProgressRecord>,
+    ): ReaderProgressImportResult = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            prepareForMutationLocked()
+            require(records.size <= MAX_PROGRESS_RECORDS) { "Too many reader progress records" }
+            val merge = mergeReaderProgress(_state.value, records)
+            if (merge.state != _state.value) {
+                writeVerified(merge.state)
+                _state.value = merge.state
+            }
+            merge.result
+        }
+    }
+
+    /**
+     * Transaction rollback hook for a larger backup restore. Unlike importProgressRecords this is
+     * an exact replacement and deliberately ignores LWW timestamps. It never replaces book URIs,
+     * titles, covers, metadata, or reader preferences.
+     */
+    suspend fun replaceProgressRecordsForRollback(records: List<ReaderProgressRecord>) =
+        mutex.withLock {
+            withContext(Dispatchers.IO) {
+                prepareForMutationLocked()
+                require(records.size <= MAX_PROGRESS_RECORDS) {
+                    "Too many reader progress records"
+                }
+                val updated = replaceReaderProgress(_state.value, records)
+                if (updated == _state.value) return@withContext
+                writeVerified(updated)
+                _state.value = updated
+            }
+        }
+
     suspend fun remove(bookId: String) = mutex.withLock {
         withContext(Dispatchers.IO) {
             prepareForMutationLocked()
@@ -244,12 +534,13 @@ class ReaderRepository @Inject constructor(
             val updated = _state.value.copy(books = _state.value.books.filterNot { it.id == bookId })
             writeVerified(updated)
             _state.value = updated
-            if (updated.books.none { it.uri == removed.uri }) {
-                runCatching {
-                    resolver.releasePersistableUriPermission(
-                        Uri.parse(removed.uri),
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                    )
+            releaseIfUnused(Uri.parse(removed.uri), updated)
+            removed.coverUri?.let { releaseIfUnused(Uri.parse(it), updated) }
+            if (removed.fingerprint == null ||
+                updated.books.none { it.fingerprint == removed.fingerprint }
+            ) {
+                coverMutex.withLock {
+                    runCatching { autoCoverFile(removed).delete() }
                 }
             }
         }
@@ -260,14 +551,254 @@ class ReaderRepository @Inject constructor(
             withContext(Dispatchers.IO) {
                 prepareForMutationLocked()
                 if (_state.value.books.none { it.id == bookId }) return@withContext
-                val updated = _state.value.copy(
-                    books = _state.value.books.map { if (it.id == bookId) transform(it) else it }
-                        .sortedByDescending(ReaderBook::lastOpenedAt),
-                )
+                val books = _state.value.books.map { if (it.id == bookId) transform(it) else it }
+                    .sortedByDescending(ReaderBook::lastOpenedAt)
+                val base = _state.value.copy(books = books)
+                val updated = mergeReaderProgress(base, base.progressLedger).state
+                if (updated == _state.value) return@withContext
                 writeVerified(updated)
                 _state.value = updated
             }
         }
+
+    private suspend fun updateBookProgress(
+        bookId: String,
+        transform: (ReaderBook) -> ReaderBook,
+    ) = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            prepareForMutationLocked()
+            val current = _state.value.books.firstOrNull { it.id == bookId } ?: return@withContext
+            val changed = transform(current)
+            if (changed == current) return@withContext
+            val ledger = changed.toProgressRecordOrNull()?.let { record ->
+                mergeReaderProgressLedger(_state.value.progressLedger + record)
+            } ?: _state.value.progressLedger
+            val updated = _state.value.copy(
+                books = _state.value.books.map { if (it.id == bookId) changed else it }
+                    .sortedByDescending(ReaderBook::lastOpenedAt),
+                progressLedger = ledger,
+            )
+            writeVerified(updated)
+            _state.value = updated
+        }
+    }
+
+    private suspend fun fingerprintOrNull(uri: Uri, type: ReaderBookType): String? =
+        fingerprintAndSizeOrNull(uri, type, MAX_BOOK_FINGERPRINT_BYTES)?.fingerprint
+
+    private suspend fun fingerprintAndSizeOrNull(
+        uri: Uri,
+        type: ReaderBookType,
+        maxBytes: Long,
+    ): ReaderFingerprintResult? = try {
+        require(maxBytes >= 0L)
+        resolver.openInputStream(uri)?.use { input ->
+            val digest = MessageDigest.getInstance("SHA-256")
+            digest.update(READER_FINGERPRINT_DOMAIN.toByteArray(StandardCharsets.UTF_8))
+            digest.update(0.toByte())
+            digest.update(type.name.toByteArray(StandardCharsets.UTF_8))
+            digest.update(0.toByte())
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var total = 0L
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val count = input.read(buffer)
+                currentCoroutineContext().ensureActive()
+                if (count < 0) break
+                total += count
+                require(total <= maxBytes) {
+                    "Book is too large to fingerprint safely"
+                }
+                digest.update(buffer, 0, count)
+            }
+            ReaderFingerprintResult(
+                fingerprint = digest.digest().toLowerHex(),
+                byteCount = total,
+            )
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun releaseIfUnused(uri: Uri, state: ReaderLibraryState) {
+        val raw = uri.toString()
+        if (state.books.none { book -> book.uri == raw || book.coverUri == raw }) {
+            releasePersistedReadPermission(uri)
+        }
+    }
+
+    private fun releasePersistedReadPermission(uri: Uri) {
+        runCatching {
+            resolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+    }
+
+    private fun autoCoverFile(book: ReaderBook): File {
+        val key = book.fingerprint?.takeIf(READER_FINGERPRINT_REGEX::matches)
+            ?: MessageDigest.getInstance("SHA-256")
+                .digest(book.id.toByteArray(StandardCharsets.UTF_8))
+                .toLowerHex()
+        return File(coverDirectory, "$key.png")
+    }
+
+    private suspend fun decodeCoverUri(uri: Uri, targetWidth: Int): Bitmap? {
+        val declaredLength = runCatching {
+            resolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
+        }.getOrNull()
+        if (declaredLength != null && declaredLength > MAX_CUSTOM_COVER_BYTES) return null
+        val bytes = try {
+            resolver.openInputStream(uri)?.use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var total = 0
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val count = input.read(buffer)
+                    currentCoroutineContext().ensureActive()
+                    if (count < 0) break
+                    total += count
+                    require(total <= MAX_CUSTOM_COVER_BYTES) { "Reader cover is too large" }
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: OutOfMemoryError) {
+            null
+        } catch (_: Exception) {
+            null
+        } ?: return null
+        return decodeCoverBytes(bytes, targetWidth)
+    }
+
+    private fun decodeCoverFile(target: File, targetWidth: Int): Bitmap? {
+        if (!target.isFile || target.length() !in 1..MAX_COVER_CACHE_BYTES) return null
+        val decoded = decodeCover(
+            targetWidth = targetWidth,
+            open = { FileInputStream(target) },
+        )
+        if (decoded == null) runCatching { target.delete() }
+        return decoded
+    }
+
+    private fun decodeCover(
+        targetWidth: Int,
+        open: () -> java.io.InputStream?,
+    ): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        try {
+            open().use { input ->
+                requireNotNull(input)
+                BitmapFactory.decodeStream(input, null, bounds)
+            }
+        } catch (_: OutOfMemoryError) {
+            return null
+        } catch (_: Exception) {
+            return null
+        }
+        if (bounds.outWidth !in 1..MAX_COVER_SOURCE_EDGE_PX ||
+            bounds.outHeight !in 1..MAX_COVER_SOURCE_EDGE_PX
+        ) return null
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = coverSampleSize(bounds.outWidth, bounds.outHeight, targetWidth)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val decoded = try {
+            open().use { input ->
+                requireNotNull(input)
+                BitmapFactory.decodeStream(input, null, options)
+            }
+        } catch (_: OutOfMemoryError) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+        if (decoded != null && decoded.width.toLong() * decoded.height > MAX_COVER_DECODE_PIXELS) {
+            decoded.recycle()
+            return null
+        }
+        return decoded
+    }
+
+    private fun decodeCoverBytes(bytes: ByteArray, targetWidth: Int): Bitmap? {
+        if (bytes.isEmpty() || bytes.size > MAX_CUSTOM_COVER_BYTES) return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        try {
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        } catch (_: OutOfMemoryError) {
+            return null
+        } catch (_: Exception) {
+            return null
+        }
+        if (bounds.outWidth !in 1..MAX_COVER_SOURCE_EDGE_PX ||
+            bounds.outHeight !in 1..MAX_COVER_SOURCE_EDGE_PX
+        ) return null
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = coverSampleSize(bounds.outWidth, bounds.outHeight, targetWidth)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val decoded = try {
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        } catch (_: OutOfMemoryError) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+        if (decoded != null && decoded.width.toLong() * decoded.height > MAX_COVER_DECODE_PIXELS) {
+            decoded.recycle()
+            return null
+        }
+        return decoded
+    }
+
+    private fun writeVerifiedCoverCache(target: File, bitmap: Bitmap) {
+        require(bitmap.width > 0 && bitmap.height > 0)
+        require(bitmap.width.toLong() * bitmap.height <= MAX_COVER_DECODE_PIXELS)
+        check(coverDirectory.isDirectory || coverDirectory.mkdirs()) {
+            "Could not prepare reader cover cache"
+        }
+        val pending = File(coverDirectory, "${target.name}.${UUID.randomUUID()}.pending")
+        try {
+            FileOutputStream(pending).use { output ->
+                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                    "Could not encode reader cover"
+                }
+                output.flush()
+                output.fd.sync()
+            }
+            check(pending.length() in 1..MAX_COVER_CACHE_BYTES) {
+                "Reader cover cache is too large"
+            }
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            FileInputStream(pending).use { input -> BitmapFactory.decodeStream(input, null, bounds) }
+            check(bounds.outWidth == bitmap.width && bounds.outHeight == bitmap.height) {
+                "Reader cover cache verification failed"
+            }
+            check(bounds.outMimeType.equals("image/png", ignoreCase = true)) {
+                "Reader cover cache format verification failed"
+            }
+            Os.rename(pending.absolutePath, target.absolutePath)
+            check(target.isFile && target.length() in 1..MAX_COVER_CACHE_BYTES) {
+                "Reader cover cache commit verification failed"
+            }
+        } finally {
+            runCatching { if (pending.exists()) pending.delete() }
+        }
+    }
+
+    private fun scaleCoverBitmap(bitmap: Bitmap, targetWidth: Int): Bitmap {
+        if (bitmap.width <= targetWidth) return bitmap
+        val targetHeight = (bitmap.height.toDouble() * targetWidth / bitmap.width)
+            .toInt()
+            .coerceAtLeast(1)
+        if (targetWidth.toLong() * targetHeight > MAX_COVER_DECODE_PIXELS) return bitmap
+        val scaled = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+        if (scaled !== bitmap) bitmap.recycle()
+        return scaled
+    }
 
     private fun readText(uri: Uri, preferences: ReaderPreferences): ReaderTextLayout {
         val bytes = resolver.openInputStream(uri)?.use { input ->
@@ -413,6 +944,7 @@ class ReaderRepository @Inject constructor(
     companion object {
         const val DIRECTORY_NAME = "reader"
         const val STATE_FILE_NAME = "reader-state-v1.json"
+        const val COVER_DIRECTORY_NAME = "reader-covers"
         internal const val MAX_STATE_BYTES = 2 * 1024 * 1024
         private const val MAX_TEXT_BYTES = 32 * 1024 * 1024
         private const val MAX_PARAGRAPHS = 250_000
@@ -420,11 +952,22 @@ class ReaderRepository @Inject constructor(
         private const val MAX_PDF_PAGES = 20_000
         private const val MAX_PDF_WIDTH_PX = 2_048
         private const val MAX_PDF_PIXELS = 8_000_000L
+        private const val MAX_BOOK_FINGERPRINT_BYTES = 512L * 1024L * 1024L
+        private const val MAX_EXPORT_FINGERPRINT_BYTES = 512L * 1024L * 1024L
+        private const val MIN_COVER_WIDTH_PX = 96
+        private const val AUTO_COVER_WIDTH_PX = 600
+        private const val MAX_COVER_WIDTH_PX = 1_024
+        private const val MAX_COVER_SOURCE_EDGE_PX = 100_000
+        private const val MAX_COVER_DECODE_PIXELS = 4_000_000L
+        private const val MAX_COVER_CACHE_BYTES = 12L * 1024L * 1024L
+        private const val MAX_CUSTOM_COVER_BYTES = 32 * 1024 * 1024
+        private const val MAX_PROGRESS_RECORDS = 500
     }
 }
 
 internal fun normalizeReaderPreferences(value: ReaderPreferences): ReaderPreferences = value.copy(
     customBackgroundArgb = value.customBackgroundArgb or 0xFF000000.toInt(),
+    customForegroundArgb = value.customForegroundArgb?.or(0xFF000000.toInt()),
     fontSizeSp = value.fontSizeSp.takeIf(Float::isFinite)?.coerceIn(12f, 38f) ?: 19f,
     lineHeightMultiplier = value.lineHeightMultiplier.takeIf(Float::isFinite)
         ?.coerceIn(1f, 2.4f) ?: 1.6f,
@@ -440,6 +983,210 @@ internal fun normalizeReaderPreferences(value: ReaderPreferences): ReaderPrefere
         MAX_READER_CHAPTER_TITLE_CHARS,
     ),
 )
+
+internal data class ReaderProgressMerge(
+    val state: ReaderLibraryState,
+    val result: ReaderProgressImportResult,
+)
+
+internal fun mergeReaderProgress(
+    state: ReaderLibraryState,
+    records: List<ReaderProgressRecord>,
+): ReaderProgressMerge {
+    val ledger = mergeReaderProgressLedger(
+        state.progressLedger + records.mapNotNull(ReaderProgressRecord::normalizedOrNull),
+    )
+    val newestByBook = ledger
+        .groupBy { it.fingerprint to it.type }
+        .mapValues { (_, matches) ->
+            matches.maxWithOrNull(
+                compareBy<ReaderProgressRecord>(ReaderProgressRecord::updatedAt)
+                    .thenBy(ReaderProgressRecord::progressSortIndex),
+            )!!
+        }
+    var matched = 0
+    var updated = 0
+    val books = state.books.map { book ->
+        val fingerprint = book.fingerprint ?: return@map book
+        val record = newestByBook[fingerprint to book.type] ?: return@map book
+        matched += 1
+        val candidate = when (book.type) {
+            ReaderBookType.TXT -> book.copy(
+                // Logical TXT pages depend on chapter-detection preferences. Paragraph index is
+                // the cross-device canonical position; -1 reuses the existing migration/remap path.
+                textPageIndex = -1,
+                textParagraphIndex = record.textParagraphIndex.coerceIn(0, 249_999),
+                progressUpdatedAt = maxOf(book.progressUpdatedAt, record.updatedAt),
+            )
+            ReaderBookType.PDF -> book.copy(
+                pdfPageIndex = mapReaderProgressPage(
+                    sourceIndex = record.pdfPageIndex,
+                    sourceTotal = record.totalPages,
+                    destinationTotal = book.totalPages,
+                    maximum = 20_000,
+                ),
+                progressUpdatedAt = maxOf(book.progressUpdatedAt, record.updatedAt),
+            )
+        }
+        val shouldUseCandidate = record.updatedAt > book.progressUpdatedAt ||
+            (record.updatedAt == book.progressUpdatedAt &&
+                candidate.progressSortIndex() > book.progressSortIndex())
+        if (!shouldUseCandidate || candidate == book) return@map book
+        updated += 1
+        candidate
+    }
+    val stateChanged = updated > 0 || ledger != state.progressLedger
+    return ReaderProgressMerge(
+        state = if (!stateChanged) state else state.copy(books = books, progressLedger = ledger),
+        result = ReaderProgressImportResult(matchedBooks = matched, updatedBooks = updated),
+    )
+}
+
+internal fun replaceReaderProgress(
+    state: ReaderLibraryState,
+    records: List<ReaderProgressRecord>,
+): ReaderLibraryState {
+    val ledger = mergeReaderProgressLedger(records)
+    val byBook = ledger.associateBy { it.fingerprint to it.type }
+    val books = state.books.map { book ->
+        val fingerprint = book.fingerprint ?: return@map book
+        val record = byBook[fingerprint to book.type] ?: return@map book
+        when (book.type) {
+            ReaderBookType.TXT -> book.copy(
+                textPageIndex = record.textPageIndex.coerceIn(
+                    -1,
+                    ReaderRepository.MAX_TEXT_PAGES - 1,
+                ),
+                textParagraphIndex = record.textParagraphIndex.coerceIn(0, 249_999),
+                progressUpdatedAt = record.updatedAt,
+            )
+            ReaderBookType.PDF -> book.copy(
+                pdfPageIndex = record.pdfPageIndex.coerceIn(
+                    0,
+                    if (book.totalPages > 0) minOf(book.totalPages, 20_000) - 1 else 19_999,
+                ),
+                progressUpdatedAt = record.updatedAt,
+            )
+        }
+    }
+    return state.copy(books = books, progressLedger = ledger)
+}
+
+private fun mergeReaderProgressLedger(
+    records: List<ReaderProgressRecord>,
+): List<ReaderProgressRecord> = records
+    .mapNotNull(ReaderProgressRecord::normalizedOrNull)
+    .groupBy { it.fingerprint to it.type }
+    .values
+    .map { matches ->
+        matches.maxWithOrNull(
+            compareBy<ReaderProgressRecord>(ReaderProgressRecord::updatedAt)
+                .thenBy(ReaderProgressRecord::progressSortIndex),
+        )!!
+    }
+    .sortedWith(
+        compareByDescending<ReaderProgressRecord>(ReaderProgressRecord::updatedAt)
+            .thenBy(ReaderProgressRecord::fingerprint)
+            .thenBy(ReaderProgressRecord::type),
+    )
+    .take(500)
+
+private fun ReaderBook.toProgressRecordOrNull(): ReaderProgressRecord? {
+    val stableFingerprint = fingerprint?.takeIf(READER_FINGERPRINT_REGEX::matches) ?: return null
+    return ReaderProgressRecord(
+        fingerprint = stableFingerprint,
+        type = type,
+        textPageIndex = textPageIndex.coerceIn(-1, ReaderRepository.MAX_TEXT_PAGES - 1),
+        textParagraphIndex = textParagraphIndex.coerceAtLeast(0),
+        pdfPageIndex = pdfPageIndex.coerceAtLeast(0),
+        totalPages = totalPages.coerceAtLeast(0),
+        updatedAt = progressUpdatedAt.coerceAtLeast(0L),
+    )
+}
+
+private fun ReaderProgressRecord.normalizedOrNull(): ReaderProgressRecord? {
+    val normalizedFingerprint = fingerprint.lowercase(Locale.ROOT)
+    if (!READER_FINGERPRINT_REGEX.matches(normalizedFingerprint)) return null
+    return copy(
+        fingerprint = normalizedFingerprint,
+        textPageIndex = textPageIndex.coerceIn(-1, ReaderRepository.MAX_TEXT_PAGES - 1),
+        textParagraphIndex = textParagraphIndex.coerceIn(0, 249_999),
+        pdfPageIndex = pdfPageIndex.coerceIn(0, 19_999),
+        totalPages = totalPages.coerceIn(
+            0,
+            if (type == ReaderBookType.PDF) 20_000 else ReaderRepository.MAX_TEXT_PAGES,
+        ),
+        updatedAt = updatedAt.coerceAtLeast(0L),
+    )
+}
+
+private fun ReaderProgressRecord.progressSortIndex(): Int = when (type) {
+    ReaderBookType.TXT -> textParagraphIndex
+    ReaderBookType.PDF -> pdfPageIndex
+}
+
+private fun ReaderBook.progressSortIndex(): Int = when (type) {
+    ReaderBookType.TXT -> textParagraphIndex.coerceAtLeast(0)
+    ReaderBookType.PDF -> pdfPageIndex.coerceAtLeast(0)
+}
+
+private fun ReaderBook.hasMeaningfulProgress(): Boolean = progressUpdatedAt > 0L || when (type) {
+    ReaderBookType.TXT -> textParagraphIndex > 0 || textPageIndex > 0
+    ReaderBookType.PDF -> pdfPageIndex > 0
+}
+
+private fun nextReaderProgressTimestamp(previous: Long): Long {
+    val now = System.currentTimeMillis().coerceAtLeast(0L)
+    return if (previous == Long.MAX_VALUE) previous else maxOf(now, previous + 1L)
+}
+
+private fun mapReaderProgressPage(
+    sourceIndex: Int,
+    sourceTotal: Int,
+    destinationTotal: Int,
+    maximum: Int,
+): Int {
+    val destinationLimit = if (destinationTotal > 0) {
+        minOf(destinationTotal, maximum) - 1
+    } else {
+        maximum - 1
+    }
+    if (sourceTotal <= 1 || destinationTotal <= 1 || sourceTotal == destinationTotal) {
+        return sourceIndex.coerceIn(0, destinationLimit)
+    }
+    val sourceLimit = sourceTotal - 1L
+    val destinationLast = destinationTotal.coerceAtMost(maximum) - 1L
+    return ((sourceIndex.coerceAtMost(sourceTotal - 1).toLong() * destinationLast +
+        sourceLimit / 2L) / sourceLimit).toInt().coerceIn(0, destinationLimit)
+}
+
+private fun coverSampleSize(width: Int, height: Int, targetWidth: Int): Int {
+    var sample = 1
+    val desiredDecodedWidth = (targetWidth * 2).coerceAtLeast(targetWidth)
+    while (sample <= Int.MAX_VALUE / 2) {
+        val sampledWidth = (width + sample - 1L) / sample
+        val sampledHeight = (height + sample - 1L) / sample
+        if (sampledWidth <= desiredDecodedWidth &&
+            sampledWidth * sampledHeight <= 4_000_000L
+        ) break
+        sample *= 2
+    }
+    return sample
+}
+
+private fun ByteArray.toLowerHex(): String {
+    val digits = "0123456789abcdef"
+    return buildString(size * 2) {
+        for (value in this@toLowerHex) {
+            val unsigned = value.toInt() and 0xFF
+            append(digits[unsigned ushr 4])
+            append(digits[unsigned and 0x0F])
+        }
+    }
+}
+
+private val READER_FINGERPRINT_REGEX = Regex("[a-f0-9]{64}")
+private const val READER_FINGERPRINT_DOMAIN = "DeskCubby.ReaderBook.v1"
 
 internal const val READER_TEXT_PAGE_TARGET_CHARS = 1_800
 
@@ -806,7 +1553,7 @@ internal fun decodeReaderText(bytes: ByteArray): String {
 }
 
 internal object ReaderStateCodec {
-    private const val SCHEMA_VERSION = 4
+    private const val SCHEMA_VERSION = 5
     private const val MAX_BOOKS = 500
     private val idPattern = Regex("[A-Za-z0-9._:-]{1,256}")
 
@@ -822,6 +1569,13 @@ internal object ReaderStateCodec {
                 .put("paragraphSpacingDp", value.preferences.paragraphSpacingDp.toDouble())
                 .put("pdfZoomPercent", value.preferences.pdfZoomPercent)
                 .put("orientation", value.preferences.orientation.name)
+                .put("libraryLayout", value.preferences.libraryLayout.name)
+                .put("showProgressPercentage", value.preferences.showProgressPercentage)
+                .put("immersiveMode", value.preferences.immersiveMode)
+                .put(
+                    "customForegroundArgb",
+                    value.preferences.customForegroundArgb ?: JSONObject.NULL,
+                )
                 .put("chapterDetectionMode", value.preferences.chapterDetectionMode.name)
                 .put("customChapterRegex", value.preferences.customChapterRegex)
                 .put("chapterHeadingMaxChars", value.preferences.chapterHeadingMaxChars),
@@ -840,9 +1594,19 @@ internal object ReaderStateCodec {
                             .put("lastOpenedAt", book.lastOpenedAt)
                             .put("textParagraphIndex", book.textParagraphIndex)
                             .put("textPageIndex", book.textPageIndex)
-                            .put("pdfPageIndex", book.pdfPageIndex),
+                            .put("pdfPageIndex", book.pdfPageIndex)
+                            .put("coverUri", book.coverUri ?: JSONObject.NULL)
+                            .put("fingerprint", book.fingerprint ?: JSONObject.NULL)
+                            .put("totalPages", book.totalPages)
+                            .put("progressUpdatedAt", book.progressUpdatedAt),
                     )
                 }
+            },
+        )
+        .put(
+            "progressLedger",
+            JSONArray().apply {
+                value.progressLedger.forEach { record -> put(record.toJson()) }
             },
         )
         .toString()
@@ -876,6 +1640,26 @@ internal object ReaderStateCodec {
                     preferencesJson.getString("orientation"),
                     ReaderOrientation.FOLLOW_SYSTEM,
                 ),
+                libraryLayout = if (schemaVersion >= 5) {
+                    enumValueOr(
+                        preferencesJson.optString("libraryLayout"),
+                        ReaderLibraryLayout.LIST,
+                    )
+                } else {
+                    ReaderLibraryLayout.LIST
+                },
+                showProgressPercentage = schemaVersion >= 5 &&
+                    preferencesJson.optBoolean("showProgressPercentage", false),
+                immersiveMode = schemaVersion >= 5 &&
+                    preferencesJson.optBoolean("immersiveMode", false),
+                customForegroundArgb = if (schemaVersion >= 5 &&
+                    preferencesJson.has("customForegroundArgb") &&
+                    !preferencesJson.isNull("customForegroundArgb")
+                ) {
+                    preferencesJson.getInt("customForegroundArgb")
+                } else {
+                    null
+                },
                 chapterDetectionMode = if (schemaVersion >= 3) {
                     enumValueOr(
                         preferencesJson.getString("chapterDetectionMode"),
@@ -910,12 +1694,31 @@ internal object ReaderStateCodec {
                 require(ids.add(id) && idPattern.matches(id))
                 require(uri.startsWith("content://") && uri.length <= 8_192 && uris.add(uri))
                 require(title.length <= 240)
+                val type = enumValueOr(item.getString("type"), ReaderBookType.TXT)
+                val coverUri = if (schemaVersion >= 5 &&
+                    item.has("coverUri") && !item.isNull("coverUri")
+                ) {
+                    item.getString("coverUri").also { raw ->
+                        require(raw.startsWith("content://") && raw.length <= 8_192)
+                    }
+                } else {
+                    null
+                }
+                val fingerprint = if (schemaVersion >= 5 &&
+                    item.has("fingerprint") && !item.isNull("fingerprint")
+                ) {
+                    item.getString("fingerprint").also { raw ->
+                        require(READER_FINGERPRINT_REGEX.matches(raw))
+                    }
+                } else {
+                    null
+                }
                 add(
                     ReaderBook(
                         id = id,
                         uri = uri,
                         title = title,
-                        type = enumValueOr(item.getString("type"), ReaderBookType.TXT),
+                        type = type,
                         addedAt = item.getLong("addedAt").coerceAtLeast(0L),
                         lastOpenedAt = item.getLong("lastOpenedAt").coerceAtLeast(0L),
                         textParagraphIndex = item.optInt("textParagraphIndex", 0).coerceAtLeast(0),
@@ -926,11 +1729,69 @@ internal object ReaderStateCodec {
                             -1
                         },
                         pdfPageIndex = item.optInt("pdfPageIndex", 0).coerceAtLeast(0),
+                        coverUri = coverUri,
+                        fingerprint = fingerprint,
+                        totalPages = if (schemaVersion >= 5) {
+                            item.optInt("totalPages", 0).coerceIn(
+                                0,
+                                if (type == ReaderBookType.PDF) 20_000 else {
+                                    ReaderRepository.MAX_TEXT_PAGES
+                                },
+                            )
+                        } else {
+                            0
+                        },
+                        progressUpdatedAt = if (schemaVersion >= 5) {
+                            item.optLong("progressUpdatedAt", 0L).coerceAtLeast(0L)
+                        } else {
+                            0L
+                        },
                     ),
                 )
             }
         }.sortedByDescending(ReaderBook::lastOpenedAt)
-        return ReaderLibraryState(books, preferences)
+        val ledger = if (schemaVersion >= 5) {
+            val array = root.optJSONArray("progressLedger") ?: JSONArray()
+            require(array.length() <= MAX_BOOKS)
+            mergeReaderProgressLedger(
+                buildList {
+                    repeat(array.length()) { index ->
+                        add(array.getJSONObject(index).toProgressRecord())
+                    }
+                },
+            )
+        } else {
+            emptyList()
+        }
+        val decoded = ReaderLibraryState(
+            books = books,
+            preferences = preferences,
+            progressLedger = ledger,
+        )
+        return mergeReaderProgress(decoded, ledger).state
+    }
+
+    private fun ReaderProgressRecord.toJson(): JSONObject = JSONObject()
+        .put("fingerprint", fingerprint)
+        .put("type", type.name)
+        .put("textPageIndex", textPageIndex)
+        .put("textParagraphIndex", textParagraphIndex)
+        .put("pdfPageIndex", pdfPageIndex)
+        .put("totalPages", totalPages)
+        .put("updatedAt", updatedAt)
+
+    private fun JSONObject.toProgressRecord(): ReaderProgressRecord {
+        val fingerprint = getString("fingerprint").lowercase(Locale.ROOT)
+        require(READER_FINGERPRINT_REGEX.matches(fingerprint))
+        return ReaderProgressRecord(
+            fingerprint = fingerprint,
+            type = enumValueOr(getString("type"), ReaderBookType.TXT),
+            textPageIndex = optInt("textPageIndex", 0),
+            textParagraphIndex = optInt("textParagraphIndex", 0),
+            pdfPageIndex = optInt("pdfPageIndex", 0),
+            totalPages = optInt("totalPages", 0),
+            updatedAt = optLong("updatedAt", 0L),
+        ).normalizedOrNull() ?: error("Invalid reader progress record")
     }
 
     private inline fun <reified T : Enum<T>> enumValueOr(raw: String, fallback: T): T =

@@ -22,6 +22,7 @@ import com.deskcubby.app.data.model.BrowserTheme
 import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncServiceType
+import com.deskcubby.app.data.model.CustomThemeSettings
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.LauncherIcon
@@ -339,6 +340,7 @@ class SettingsViewModel @Inject constructor(
     fun setCompactMode(value: Boolean) = launch { repository.setCompactMode(value) }
     fun setAppearanceSettings(
         visualStyle: VisualStyle,
+        customTheme: CustomThemeSettings,
         darkMode: DarkMode,
         appLanguage: AppLanguage,
         themeColorArgb: Int,
@@ -353,6 +355,7 @@ class SettingsViewModel @Inject constructor(
         try {
             repository.setAppearanceSettings(
                 visualStyle = visualStyle,
+                customTheme = customTheme,
                 darkMode = darkMode,
                 appLanguage = appLanguage,
                 themeColorArgb = themeColorArgb,
@@ -1101,15 +1104,15 @@ class SettingsViewModel @Inject constructor(
             "${summary.poemCount} 首诗词、${summary.vaultItemCount} 条收藏夹密文、" +
             "${summary.gameStateCount} 个游戏存档、${summary.gameStatisticCount} 项游戏统计、" +
             "${summary.usageDeviceCount} 台设备的 " +
-            "${summary.usageDayCount} 天使用时间；" +
+            "${summary.usageDayCount} 天使用时间、${summary.readerProgressCount} 本书的阅读进度；" +
             "$actionEn: ${summary.thoughtCount} thoughts, " +
             "${summary.categoryCount} thought categories, ${summary.favoriteCount} bookmarks, " +
             "${summary.dateRecordCount} date records, " +
             "${summary.poetryCategoryCount} poetry categories, ${summary.poemCount} poems, " +
             "${summary.vaultItemCount} encrypted Vault items, " +
             "${summary.gameStateCount} game saves, ${summary.gameStatisticCount} game metrics, " +
-            "and ${summary.usageDayCount} screen-time days " +
-            "from ${summary.usageDeviceCount} devices"
+            "${summary.usageDayCount} screen-time days from ${summary.usageDeviceCount} devices, " +
+            "and reading progress for ${summary.readerProgressCount} books"
 
     private fun launch(block: suspend () -> Unit) = viewModelScope.launch {
         try {

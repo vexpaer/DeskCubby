@@ -8,6 +8,7 @@ import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.statistics.UsageStatisticsRepository
 import com.deskcubby.app.data.statistics.StatisticsScheduler
 import com.deskcubby.app.data.sync.CloudSyncScheduler
+import com.deskcubby.app.plugin.PluginRuntime
 import com.deskcubby.app.widget.DeskCubbyWidgetProvider
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
@@ -26,6 +27,7 @@ class DeskCubbyApplication : Application() {
     @Inject lateinit var statisticsScheduler: StatisticsScheduler
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var usageStatisticsRepository: UsageStatisticsRepository
+    @Inject lateinit var pluginRuntime: PluginRuntime
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
@@ -34,6 +36,17 @@ class DeskCubbyApplication : Application() {
         cloudSyncScheduler.start()
         statisticsScheduler.start()
         DeskCubbyWidgetProvider.requestUpdate(this)
+        if (pluginRuntime.hasPlugins()) {
+            applicationScope.launch {
+                try {
+                    pluginRuntime.start()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // A future optional plugin must never prevent DeskCubby from starting.
+                }
+            }
+        }
         applicationScope.launch {
             try {
                 if (poetryRepository.refresh(force = false) == PoetryRefreshResult.UPDATED) {

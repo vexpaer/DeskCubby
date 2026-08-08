@@ -33,6 +33,15 @@ data class CloudSyncUsageSnapshot(
         "CloudSyncUsageSnapshot(key=$key, bytes=<redacted:${bytes.size}>)"
 }
 
+data class CloudSyncReaderProgressSnapshot(
+    val bytes: ByteArray,
+    val lastModifiedMillis: Long,
+    val localId: String = "reader-progress",
+) {
+    override fun toString(): String =
+        "CloudSyncReaderProgressSnapshot(bytes=<redacted:${bytes.size}>)"
+}
+
 /**
  * JSON downloads are validated and staged for explicit user restore. They are never imported into
  * Room/DataStore merely because a background sync ran.
@@ -58,16 +67,29 @@ interface CloudSyncUsageBridge {
     ): CloudSyncUsageSnapshot
 }
 
+/** URI-free reader progress is merged automatically by book fingerprint and update time. */
+interface CloudSyncReaderProgressBridge {
+    suspend fun snapshot(maxBytes: Long): CloudSyncReaderProgressSnapshot
+
+    suspend fun mergeIncoming(
+        bytes: ByteArray,
+        sha256: String,
+        maxBytes: Long,
+    ): CloudSyncReaderProgressSnapshot
+}
+
 class DiaryCloudSyncLocalStore(
     private val diaryRepository: DiaryFileRepository,
     private val settingsProvider: suspend () -> AppSettings,
     private val configId: String,
     private val jsonBridge: CloudSyncJsonBridge? = null,
     private val usageBridge: CloudSyncUsageBridge? = null,
+    private val readerProgressBridge: CloudSyncReaderProgressBridge? = null,
 ) : CloudSyncLocalStore {
     private val mutex = Mutex()
     private var jsonSnapshot: CloudSyncJsonSnapshot? = null
     private var usageSnapshots: Map<String, CloudSyncUsageSnapshot> = emptyMap()
+    private var readerProgressSnapshot: CloudSyncReaderProgressSnapshot? = null
 
     override suspend fun list(
         selectedContents: Set<CloudSyncContent>,
@@ -124,6 +146,23 @@ class DiaryCloudSyncLocalStore(
         } else {
             usageSnapshots = emptyMap()
         }
+        if (CloudSyncContent.READING_PROGRESS in selectedContents) {
+            val bridge = readerProgressBridge ?: throw CloudSyncConfigurationException(
+                "阅读进度同步尚未连接到阅读服务。",
+            )
+            val snapshot = bridge.snapshot(limits.maxObjectBytes)
+            if (
+                snapshot.bytes.isEmpty() ||
+                snapshot.bytes.size > ReaderProgressJsonCodec.MAX_JSON_BYTES ||
+                snapshot.bytes.size.toLong() > limits.maxObjectBytes
+            ) {
+                throw CloudSyncLimitException("阅读进度超过单文件同步上限。")
+            }
+            readerProgressSnapshot = snapshot
+            result += snapshot.toLocalObject()
+        } else {
+            readerProgressSnapshot = null
+        }
         if (result.size > limits.maxObjects) {
             throw CloudSyncLimitException("同步文件数量超过上限。")
         }
@@ -157,6 +196,18 @@ class DiaryCloudSyncLocalStore(
             }
             return@withLock snapshot.bytes.copyOf()
         }
+        if (objectInfo.content == CloudSyncContent.READING_PROGRESS) {
+            val snapshot = readerProgressSnapshot
+                ?: throw CloudSyncConflictException("阅读进度快照已失效，请重新同步。")
+            if (
+                snapshot.localId != objectInfo.localId ||
+                snapshot.bytes.size.toLong() != objectInfo.size ||
+                sha256(snapshot.bytes) != objectInfo.sha256
+            ) {
+                throw CloudSyncConflictException("阅读进度在同步读取期间发生变化。")
+            }
+            return@withLock snapshot.bytes.copyOf()
+        }
         diaryRepository.readForCloudSync(
             file = objectInfo.toDiaryFile(),
             maxObjectBytes = maxBytes,
@@ -174,6 +225,28 @@ class DiaryCloudSyncLocalStore(
         requireValidSyncKey(key)
         if (bytes.size.toLong() > limits.maxObjectBytes || sha256(bytes) != contentSha256) {
             throw CloudSyncConflictException("远端文件校验失败，未写入本地。")
+        }
+        if (key == READING_PROGRESS_SYNC_KEY) {
+            val bridge = readerProgressBridge ?: throw CloudSyncConfigurationException(
+                "阅读进度同步尚未连接到阅读服务。",
+            )
+            // ReaderRepository performs record-level LWW against its current durable state. This
+            // deliberately merges even when the whole-object scan hash is stale, so a newly saved
+            // local page can never be replaced by an older remote snapshot.
+            val merged = bridge.mergeIncoming(
+                bytes = bytes,
+                sha256 = contentSha256,
+                maxBytes = limits.maxObjectBytes,
+            )
+            if (
+                merged.bytes.isEmpty() ||
+                merged.bytes.size > ReaderProgressJsonCodec.MAX_JSON_BYTES ||
+                merged.bytes.size.toLong() > limits.maxObjectBytes
+            ) {
+                throw CloudSyncLimitException("合并后的阅读进度超过单文件同步上限。")
+            }
+            readerProgressSnapshot = merged
+            return@withLock LocalWriteResult.Applied(merged.toLocalObject())
         }
         if (key.startsWith(USAGE_SYNC_PREFIX)) {
             val bridge = usageBridge ?: throw CloudSyncConfigurationException(
@@ -280,6 +353,8 @@ class DiaryCloudSyncLocalStore(
                 throw CloudSyncException("JSON 备份不能作为日记文件读取。")
             CloudSyncContent.USAGE_STATISTICS ->
                 throw CloudSyncException("使用时间不能作为日记文件读取。")
+            CloudSyncContent.READING_PROGRESS ->
+                throw CloudSyncException("阅读进度不能作为日记文件读取。")
         }
         return DiaryCloudSyncFile(
             area = area,
@@ -317,7 +392,18 @@ class DiaryCloudSyncLocalStore(
         const val JSON_SYNC_KEY = "json/dc.json"
         const val LEGACY_JSON_SYNC_KEY = "json/DeskCubby.json"
         const val USAGE_SYNC_PREFIX = "usage/v1/"
+        const val READING_PROGRESS_SYNC_KEY = "reading/v1/progress.json"
         const val EMPTY_SHA256 =
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
+
+    private fun CloudSyncReaderProgressSnapshot.toLocalObject(): LocalSyncObject =
+        LocalSyncObject(
+            key = READING_PROGRESS_SYNC_KEY,
+            content = CloudSyncContent.READING_PROGRESS,
+            size = bytes.size.toLong(),
+            lastModifiedMillis = lastModifiedMillis.coerceAtLeast(0L),
+            sha256 = sha256(bytes),
+            localId = localId,
+        )
 }

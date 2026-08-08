@@ -30,7 +30,12 @@ import java.time.format.FormatStyle
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withTimeout
 
 internal data class DesktopWidgetText(
     val title: String,
@@ -52,25 +57,47 @@ class DesktopWidgetRenderer @Inject constructor(
     suspend fun update(
         manager: AppWidgetManager,
         appWidgetIds: IntArray,
-    ) {
-        if (appWidgetIds.isEmpty()) return
-        val settings = settingsRepository.settings.first()
-        val poem = poetryRepository.poem.first()
-        val snapshot = DesktopWidgetContentSnapshot(
-            diaries = diaryIndexDao.observeAll().first(),
-            recentThought = thoughtRepository.recent.first().firstOrNull()?.content,
-            dateRecordCount = dateRecordRepository.records.first().size,
-            poemContent = poem.content,
-            poemSource = poem.source,
-        )
-        appWidgetIds.forEach { appWidgetId ->
+    ): Int {
+        if (appWidgetIds.isEmpty()) return 0
+        // AppWidgetProvider broadcasts have a short execution window. Read independent sources
+        // concurrently and degrade individual cards instead of letting one unavailable Room or
+        // DataStore source leave every launcher instance blank.
+        val settings = loadOrNull { settingsRepository.settings.first() } ?: AppSettings()
+        val snapshot = supervisorScope {
+            val diaries = async {
+                loadOrNull { diaryIndexDao.observeAll().first() }.orEmpty()
+            }
+            val recentThought = async {
+                loadOrNull { thoughtRepository.recent.first().firstOrNull()?.content }
+            }
+            val dateRecordCount = async {
+                loadOrNull { dateRecordRepository.records.first().size } ?: 0
+            }
+            val poem = async { loadOrNull { poetryRepository.poem.first() } }
+            val resolvedPoem = poem.await()
+            DesktopWidgetContentSnapshot(
+                diaries = diaries.await(),
+                recentThought = recentThought.await(),
+                dateRecordCount = dateRecordCount.await(),
+                poemContent = resolvedPoem?.content
+                    ?: localized(settings, "打开应用查看", "Open the app to view"),
+                poemSource = resolvedPoem?.source.orEmpty(),
+            )
+        }
+        return appWidgetIds.count { appWidgetId ->
             val config = settings.desktopWidgetConfigs.firstOrNull {
                 it.id == instanceStore.configId(appWidgetId)
             } ?: settings.desktopWidgetConfigs.firstOrNull()
-            manager.updateAppWidget(
-                appWidgetId,
-                render(manager, appWidgetId, config, settings, snapshot),
-            )
+            try {
+                manager.updateAppWidget(
+                    appWidgetId,
+                    render(manager, appWidgetId, config, settings, snapshot),
+                )
+                true
+            } catch (_: RuntimeException) {
+                // A launcher may retire an ID between getAppWidgetIds() and this update.
+                false
+            }
         }
     }
 
@@ -117,7 +144,8 @@ class DesktopWidgetRenderer @Inject constructor(
         views.setTextViewText(R.id.widget_value, text.value)
         views.setTextViewText(R.id.widget_detail, text.detail)
 
-        val options = manager.getAppWidgetOptions(appWidgetId)
+        val options = runCatching { manager.getAppWidgetOptions(appWidgetId) }
+            .getOrDefault(android.os.Bundle.EMPTY)
         val actualWidth = options.getInt(
             AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,
             config.widthCells * APPROX_CELL_DP,
@@ -374,6 +402,16 @@ class DesktopWidgetRenderer @Inject constructor(
     private fun localized(settings: AppSettings, chinese: String, english: String): String =
         if (settings.appLanguage == AppLanguage.ENGLISH) english else chinese
 
+    private suspend fun <T> loadOrNull(block: suspend () -> T): T? = try {
+        withTimeout(DATA_SOURCE_TIMEOUT_MS) { block() }
+    } catch (_: TimeoutCancellationException) {
+        null
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
+
     private fun streakDays(diaries: List<DiaryIndexEntity>, today: LocalDate): Int {
         val dates = diaries.mapNotNull { runCatching { LocalDate.parse(it.dateIso) }.getOrNull() }
             .toSet()
@@ -402,5 +440,6 @@ class DesktopWidgetRenderer @Inject constructor(
         private const val ICON_MIN_WIDTH_DP = 100
         private const val MAX_BACKGROUND_EDGE_PX = 384
         private const val MAX_BACKGROUND_SOURCE_BYTES = 32L * 1024L * 1024L
+        private const val DATA_SOURCE_TIMEOUT_MS = 2_500L
     }
 }

@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "DeskCubby"
 include(":app")
+include(":plugin-api:core")

@@ -7,6 +7,8 @@ import com.deskcubby.app.data.backup.BackupSummary
 import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
+import com.deskcubby.app.data.repository.ReaderProgressRecord
+import com.deskcubby.app.data.repository.ReaderRepository
 import com.deskcubby.app.data.statistics.USAGE_DEVICE_REMOTE_PREFIX
 import com.deskcubby.app.data.statistics.UsageDeviceJsonCodec
 import com.deskcubby.app.data.statistics.UsageDeviceRecord
@@ -18,11 +20,14 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 data class AppCloudSyncStatus(
@@ -51,6 +56,7 @@ class AppCloudSyncService @Inject constructor(
     private val backupRepository: AppBackupRepository,
     private val secretStore: CloudSyncSecretStore,
     usageDeviceRepository: UsageDeviceRepository,
+    readerRepository: ReaderRepository,
 ) {
     private val incomingDirectory = File(context.filesDir, INCOMING_DIRECTORY)
     private val runtimePreferences = context.getSharedPreferences(
@@ -66,6 +72,7 @@ class AppCloudSyncService @Inject constructor(
             backupRepository = backupRepository,
         ),
         usageBridge = AppCloudSyncUsageBridge(usageDeviceRepository),
+        readerProgressBridge = AppCloudSyncReaderProgressBridge(readerRepository),
     )
     private val mutableStatus = MutableStateFlow(
         AppCloudSyncStatus(
@@ -379,6 +386,78 @@ private class AppCloudSyncUsageBridge(
             bytes = bytes,
             lastModifiedMillis = updatedAtEpochMillis,
             localId = deviceId,
+        )
+    }
+}
+
+private class AppCloudSyncReaderProgressBridge(
+    private val repository: ReaderRepository,
+) : CloudSyncReaderProgressBridge {
+    private val mutex = Mutex()
+
+    override suspend fun snapshot(maxBytes: Long): CloudSyncReaderProgressSnapshot =
+        mutex.withLock {
+            repository.exportProgressRecords().toSnapshot(maxBytes)
+        }
+
+    override suspend fun mergeIncoming(
+        bytes: ByteArray,
+        sha256: String,
+        maxBytes: Long,
+    ): CloudSyncReaderProgressSnapshot = mutex.withLock {
+        if (
+            bytes.isEmpty() ||
+            bytes.size > ReaderProgressJsonCodec.MAX_JSON_BYTES ||
+            bytes.size.toLong() > maxBytes ||
+            com.deskcubby.app.data.sync.sha256(bytes) != sha256
+        ) {
+            throw CloudSyncConflictException("远端阅读进度校验失败。")
+        }
+        val incoming = try {
+            ReaderProgressJsonCodec.decode(bytes)
+        } catch (_: Exception) {
+            throw CloudSyncConflictException("远端阅读进度格式无效。")
+        }
+        val rollback = repository.exportProgressRecords()
+        try {
+            repository.importProgressRecords(incoming)
+            repository.exportProgressRecords().toSnapshot(maxBytes)
+        } catch (cancelled: CancellationException) {
+            rollbackOrThrow(rollback, cancelled)
+            throw cancelled
+        } catch (error: Exception) {
+            rollbackOrThrow(rollback, error)
+            throw error
+        }
+    }
+
+    private suspend fun rollbackOrThrow(
+        records: List<ReaderProgressRecord>,
+        original: Throwable,
+    ) {
+        try {
+            withContext(NonCancellable) {
+                repository.replaceProgressRecordsForRollback(records)
+            }
+        } catch (rollbackError: Exception) {
+            original.addSuppressed(rollbackError)
+            throw CloudSyncException(
+                "阅读进度合并失败，且无法恢复同步前快照。",
+                original,
+            )
+        }
+    }
+
+    private fun List<ReaderProgressRecord>.toSnapshot(
+        maxBytes: Long,
+    ): CloudSyncReaderProgressSnapshot {
+        val bytes = ReaderProgressJsonCodec.encode(this)
+        if (bytes.size.toLong() > maxBytes) {
+            throw CloudSyncLimitException("阅读进度超过单文件同步上限。")
+        }
+        return CloudSyncReaderProgressSnapshot(
+            bytes = bytes,
+            lastModifiedMillis = maxOfOrNull(ReaderProgressRecord::updatedAt) ?: 0L,
         )
     }
 }

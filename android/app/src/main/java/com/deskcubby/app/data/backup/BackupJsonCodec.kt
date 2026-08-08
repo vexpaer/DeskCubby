@@ -17,6 +17,9 @@ import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType
+import com.deskcubby.app.data.model.CustomThemeBaseStyle
+import com.deskcubby.app.data.model.CustomThemePalette
+import com.deskcubby.app.data.model.CustomThemeSettings
 import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
 import com.deskcubby.app.data.model.DEFAULT_DESKTOP_WIDGET_CONFIGS
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
@@ -47,6 +50,12 @@ import com.deskcubby.app.data.model.MAX_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MAX_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MAX_VAULT_ROW_HEIGHT_DP
+import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_ANIMATION_SCALE
+import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_BORDER_WIDTH_DP
+import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_CORNER_RADIUS_DP
+import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_ELEVATION_DP
+import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_PANEL_OPACITY
+import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_SPACING_SCALE
 import com.deskcubby.app.data.model.MIN_APP_FONT_SCALE
 import com.deskcubby.app.data.model.MIN_APP_BACKGROUND_BLUR_DP
 import com.deskcubby.app.data.model.MIN_APP_BACKGROUND_OPACITY
@@ -57,13 +66,22 @@ import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_VAULT_ROW_HEIGHT_DP
+import com.deskcubby.app.data.model.MIN_CUSTOM_THEME_ANIMATION_SCALE
+import com.deskcubby.app.data.model.MIN_CUSTOM_THEME_BORDER_WIDTH_DP
+import com.deskcubby.app.data.model.MIN_CUSTOM_THEME_CORNER_RADIUS_DP
+import com.deskcubby.app.data.model.MIN_CUSTOM_THEME_ELEVATION_DP
+import com.deskcubby.app.data.model.MIN_CUSTOM_THEME_PANEL_OPACITY
+import com.deskcubby.app.data.model.MIN_CUSTOM_THEME_SPACING_SCALE
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
+import com.deskcubby.app.data.model.normalized
 import com.deskcubby.app.data.preferences.migrateMealPhotosWidget
 import com.deskcubby.app.data.preferences.migrateDailyRecordsWidget
 import com.deskcubby.app.data.preferences.migrateHomeModulesV26
 import com.deskcubby.app.data.preferences.normalizeThemeSecondaryColors
 import com.deskcubby.app.data.preferences.normalizeNavItems
 import com.deskcubby.app.data.repository.VAULT_KEY_MARKER_ENTITY_ID
+import com.deskcubby.app.data.repository.ReaderBookType
+import com.deskcubby.app.data.repository.ReaderProgressRecord
 import com.deskcubby.app.data.repository.VaultEncryptedBackup
 import com.deskcubby.app.data.repository.VaultEncryptedKeyBackup
 import com.deskcubby.app.data.statistics.MAX_USAGE_DEVICES
@@ -81,7 +99,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 27,
+    val formatVersion: Int = 28,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -98,6 +116,7 @@ data class AppBackup(
     val gameStates: List<GameStateEntity> = emptyList(),
     val gameStatistics: List<GameStatisticEntity> = emptyList(),
     val usageDevices: List<UsageDeviceRecord> = emptyList(),
+    val readerProgress: List<ReaderProgressRecord> = emptyList(),
 )
 
 data class BackupSummary(
@@ -113,10 +132,11 @@ data class BackupSummary(
     val gameStatisticCount: Int = 0,
     val usageDeviceCount: Int = 0,
     val usageDayCount: Int = 0,
+    val readerProgressCount: Int = 0,
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 27
+    const val FORMAT_VERSION: Int = 28
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -159,6 +179,11 @@ object BackupJsonCodec {
     private const val MAX_GAME_STATISTICS = 64
     private const val MAX_GAME_ID_CHARS = 64
     private const val MAX_GAME_SAVE_CHARS = 16 * 1024 * 1024
+    private const val MAX_READER_PROGRESS_RECORDS = 500
+    private const val MAX_READER_TEXT_PAGES = 50_000
+    private const val MAX_READER_TEXT_PARAGRAPHS = 250_000
+    private const val MAX_READER_PDF_PAGES = 20_000
+    private val READER_FINGERPRINT_REGEX = Regex("[0-9a-f]{64}")
     private val SUPPORTED_GAME_IDS = setOf(
         "2048",
         "2048_5",
@@ -190,6 +215,7 @@ object BackupJsonCodec {
         validateGameStates(backup.gameStates)
         validateGameStatistics(backup.gameStatistics)
         validateUsageDevices(backup.usageDevices)
+        validateReaderProgress(backup.readerProgress)
 
         val root = JSONObject()
             .put("format", FORMAT_NAME)
@@ -206,6 +232,7 @@ object BackupJsonCodec {
             .put("gameStates", encodeGameStates(backup.gameStates))
             .put("gameStatistics", encodeGameStatistics(backup.gameStatistics))
             .put("usageDevices", encodeUsageDevices(backup.usageDevices))
+            .put("readerProgress", encodeReaderProgress(backup.readerProgress))
         return root.toString(2).also { encoded ->
             requireWithinSizeLimit(encoded)
             // Keep files produced from locally corrupted state just as strict as imported files.
@@ -296,6 +323,11 @@ object BackupJsonCodec {
         } else {
             emptyList()
         }
+        val readerProgress = if (version >= 28) {
+            decodeReaderProgress(root.requiredArray("readerProgress"))
+        } else {
+            emptyList()
+        }
         return AppBackup(
             formatVersion = version,
             exportedAt = exportedAt,
@@ -310,6 +342,7 @@ object BackupJsonCodec {
             gameStates = gameStates,
             gameStatistics = gameStatistics,
             usageDevices = usageDevices,
+            readerProgress = readerProgress,
         ).also {
             validatePoetryCategoryReferences(it.poems, it.poetryCategories)
         }
@@ -317,6 +350,7 @@ object BackupJsonCodec {
 
     private fun encodeSettings(settings: AppSettings): JSONObject = JSONObject()
         .put("visualStyle", settings.visualStyle.name)
+        .put("customTheme", encodeCustomTheme(settings.customTheme))
         .put("darkMode", settings.darkMode.name)
         .put("appLanguage", settings.appLanguage.name)
         .put("themeColorArgb", settings.themeColorArgb)
@@ -797,6 +831,11 @@ object BackupJsonCodec {
         }
         return AppSettings(
             visualStyle = decodeVisualStyle(json, version),
+            customTheme = if (version >= 28) {
+                decodeCustomTheme(json.requiredObject("customTheme"))
+            } else {
+                defaults.customTheme
+            },
             darkMode = json.requiredEnum("darkMode"),
             appLanguage = json.requiredEnum("appLanguage"),
             themeColorArgb = json.requiredInt("themeColorArgb"),
@@ -1169,8 +1208,93 @@ object BackupJsonCodec {
         require(version >= 7 || visualStyle != VisualStyle.ORGANIC_FUTURE) {
             "visualStyle ${visualStyle.name} requires backup version 7 or newer"
         }
+        require(version >= 28 || visualStyle != VisualStyle.CUSTOM) {
+            "visualStyle ${visualStyle.name} requires backup version 28 or newer"
+        }
         return visualStyle
     }
+
+    private fun encodeCustomTheme(value: CustomThemeSettings): JSONObject {
+        val normalized = value.normalized()
+        return JSONObject()
+            .put("baseStyle", normalized.baseStyle.name)
+            .put("lightPalette", encodeCustomThemePalette(normalized.lightPalette))
+            .put("darkPalette", encodeCustomThemePalette(normalized.darkPalette))
+            .put("cornerRadiusDp", normalized.cornerRadiusDp.toDouble())
+            .put("borderWidthDp", normalized.borderWidthDp.toDouble())
+            .put("elevationDp", normalized.elevationDp.toDouble())
+            .put("panelOpacity", normalized.panelOpacity.toDouble())
+            .put("spacingScale", normalized.spacingScale.toDouble())
+            .put("animationScale", normalized.animationScale.toDouble())
+    }
+
+    private fun encodeCustomThemePalette(value: CustomThemePalette): JSONObject = JSONObject()
+        .put("backgroundArgb", value.backgroundArgb)
+        .put("onBackgroundArgb", value.onBackgroundArgb)
+        .put("surfaceArgb", value.surfaceArgb)
+        .put("onSurfaceArgb", value.onSurfaceArgb)
+        .put("surfaceContainerArgb", value.surfaceContainerArgb)
+        .put("surfaceVariantArgb", value.surfaceVariantArgb)
+        .put("onSurfaceVariantArgb", value.onSurfaceVariantArgb)
+        .put("outlineArgb", value.outlineArgb)
+
+    private fun decodeCustomTheme(json: JSONObject): CustomThemeSettings = CustomThemeSettings(
+        baseStyle = json.requiredEnum<CustomThemeBaseStyle>("baseStyle"),
+        lightPalette = decodeCustomThemePalette(json.requiredObject("lightPalette")),
+        darkPalette = decodeCustomThemePalette(json.requiredObject("darkPalette")),
+        cornerRadiusDp = json.requiredCustomThemeFloat(
+            "cornerRadiusDp",
+            MIN_CUSTOM_THEME_CORNER_RADIUS_DP,
+            MAX_CUSTOM_THEME_CORNER_RADIUS_DP,
+        ),
+        borderWidthDp = json.requiredCustomThemeFloat(
+            "borderWidthDp",
+            MIN_CUSTOM_THEME_BORDER_WIDTH_DP,
+            MAX_CUSTOM_THEME_BORDER_WIDTH_DP,
+        ),
+        elevationDp = json.requiredCustomThemeFloat(
+            "elevationDp",
+            MIN_CUSTOM_THEME_ELEVATION_DP,
+            MAX_CUSTOM_THEME_ELEVATION_DP,
+        ),
+        panelOpacity = json.requiredCustomThemeFloat(
+            "panelOpacity",
+            MIN_CUSTOM_THEME_PANEL_OPACITY,
+            MAX_CUSTOM_THEME_PANEL_OPACITY,
+        ),
+        spacingScale = json.requiredCustomThemeFloat(
+            "spacingScale",
+            MIN_CUSTOM_THEME_SPACING_SCALE,
+            MAX_CUSTOM_THEME_SPACING_SCALE,
+        ),
+        animationScale = json.requiredCustomThemeFloat(
+            "animationScale",
+            MIN_CUSTOM_THEME_ANIMATION_SCALE,
+            MAX_CUSTOM_THEME_ANIMATION_SCALE,
+        ),
+    ).normalized()
+
+    private fun decodeCustomThemePalette(json: JSONObject): CustomThemePalette =
+        CustomThemePalette(
+            backgroundArgb = json.requiredInt("backgroundArgb"),
+            onBackgroundArgb = json.requiredInt("onBackgroundArgb"),
+            surfaceArgb = json.requiredInt("surfaceArgb"),
+            onSurfaceArgb = json.requiredInt("onSurfaceArgb"),
+            surfaceContainerArgb = json.requiredInt("surfaceContainerArgb"),
+            surfaceVariantArgb = json.requiredInt("surfaceVariantArgb"),
+            onSurfaceVariantArgb = json.requiredInt("onSurfaceVariantArgb"),
+            outlineArgb = json.requiredInt("outlineArgb"),
+        )
+
+    private fun JSONObject.requiredCustomThemeFloat(
+        name: String,
+        minimum: Float,
+        maximum: Float,
+    ): Float = requiredFiniteNumber(name).also { value ->
+        require(value in minimum.toDouble()..maximum.toDouble()) {
+            "customTheme.$name is out of range"
+        }
+    }.toFloat()
 
     private fun decodeMealButtonIcons(json: JSONArray, expectedCount: Int): List<String> {
         require(json.length() == expectedCount || json.length() == expectedCount - 1) {
@@ -2004,6 +2128,93 @@ object BackupJsonCodec {
         }
         require(item.value >= 0L && item.updatedAt >= 0L) {
             "gameStatistics[$index] contains a negative value"
+        }
+    }
+
+    private fun encodeReaderProgress(records: List<ReaderProgressRecord>): JSONArray =
+        JSONArray().apply {
+            records.sortedWith(
+                compareBy(ReaderProgressRecord::fingerprint)
+                    .thenBy(ReaderProgressRecord::type),
+            ).forEach { record ->
+                put(
+                    JSONObject()
+                        .put("fingerprint", record.fingerprint)
+                        .put("type", record.type.name)
+                        .put("textPageIndex", record.textPageIndex)
+                        .put("textParagraphIndex", record.textParagraphIndex)
+                        .put("pdfPageIndex", record.pdfPageIndex)
+                        .put("totalPages", record.totalPages)
+                        .put("updatedAt", record.updatedAt),
+                )
+            }
+        }
+
+    private fun decodeReaderProgress(json: JSONArray): List<ReaderProgressRecord> {
+        require(json.length() <= MAX_READER_PROGRESS_RECORDS) {
+            "Backup contains too many reader progress records"
+        }
+        val keys = HashSet<String>(json.length())
+        return buildList {
+            repeat(json.length()) { index ->
+                val item = json.requiredObject(index, "readerProgress")
+                val record = ReaderProgressRecord(
+                    fingerprint = item.requiredString("fingerprint"),
+                    type = item.requiredEnum("type"),
+                    textPageIndex = item.requiredInt("textPageIndex"),
+                    textParagraphIndex = item.requiredInt("textParagraphIndex"),
+                    pdfPageIndex = item.requiredInt("pdfPageIndex"),
+                    totalPages = item.requiredInt("totalPages"),
+                    updatedAt = item.requiredLong("updatedAt"),
+                )
+                val key = "${record.fingerprint}\u0000${record.type.name}"
+                require(keys.add(key)) { "Duplicate reader progress key" }
+                validateReaderProgressRecord(record, index)
+                add(record)
+            }
+        }
+    }
+
+    private fun validateReaderProgress(records: List<ReaderProgressRecord>) {
+        require(records.size <= MAX_READER_PROGRESS_RECORDS) {
+            "Backup contains too many reader progress records"
+        }
+        require(
+            records.map { "${it.fingerprint}\u0000${it.type.name}" }.distinct().size ==
+                records.size,
+        ) { "Backup contains duplicate reader progress keys" }
+        records.forEachIndexed { index, record ->
+            validateReaderProgressRecord(record, index)
+        }
+    }
+
+    private fun validateReaderProgressRecord(record: ReaderProgressRecord, index: Int) {
+        require(READER_FINGERPRINT_REGEX.matches(record.fingerprint)) {
+            "readerProgress[$index].fingerprint is invalid"
+        }
+        require(record.updatedAt >= 0L) {
+            "readerProgress[$index].updatedAt must not be negative"
+        }
+        require(record.textPageIndex in -1 until MAX_READER_TEXT_PAGES) {
+            "readerProgress[$index].textPageIndex is out of range"
+        }
+        require(record.textParagraphIndex in 0 until MAX_READER_TEXT_PARAGRAPHS) {
+            "readerProgress[$index].textParagraphIndex is out of range"
+        }
+        require(record.pdfPageIndex in 0 until MAX_READER_PDF_PAGES) {
+            "readerProgress[$index].pdfPageIndex is out of range"
+        }
+        when (record.type) {
+            ReaderBookType.TXT -> {
+                require(record.totalPages in 0..MAX_READER_TEXT_PAGES) {
+                    "readerProgress[$index].totalPages is out of range for TXT"
+                }
+            }
+            ReaderBookType.PDF -> {
+                require(record.totalPages in 0..MAX_READER_PDF_PAGES) {
+                    "readerProgress[$index].totalPages is out of range for PDF"
+                }
+            }
         }
     }
 

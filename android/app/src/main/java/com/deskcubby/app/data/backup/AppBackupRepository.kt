@@ -26,6 +26,8 @@ import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.preferences.SettingsRepository
+import com.deskcubby.app.data.repository.ReaderProgressRecord
+import com.deskcubby.app.data.repository.ReaderRepository
 import com.deskcubby.app.data.repository.VaultEncryptedBackup
 import com.deskcubby.app.data.repository.VaultRepository
 import com.deskcubby.app.data.statistics.UsageDeviceRecord
@@ -61,6 +63,7 @@ data class AppBackupContent(
     val gameStates: List<GameStateEntity> = emptyList(),
     val gameStatistics: List<GameStatisticEntity> = emptyList(),
     val usageDevices: List<UsageDeviceRecord> = emptyList(),
+    val readerProgress: List<ReaderProgressRecord> = emptyList(),
 )
 
 class AppBackupException(
@@ -87,6 +90,7 @@ class AppBackupRepository @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val vaultRepository: VaultRepository,
     private val usageDeviceRepository: UsageDeviceRepository,
+    private val readerRepository: ReaderRepository,
 ) {
     private val operationMutex = Mutex()
 
@@ -137,6 +141,9 @@ class AppBackupRepository @Inject constructor(
                 gameStates = extras.gameStates,
                 gameStatistics = extras.gameStatistics,
                 usageDevices = extras.usageDevices,
+                // Reader progress deliberately is not observed here: page turns must not cause
+                // an automatic JSON rewrite. Every actual save re-reads it in loadCurrentContent.
+                readerProgress = emptyList(),
             )
         }.flowOn(Dispatchers.IO)
     }
@@ -248,7 +255,10 @@ class AppBackupRepository @Inject constructor(
 
     private suspend fun restoreBackup(backup: AppBackup): BackupSummary {
         val previous = try {
-            loadCurrentContent(includeV20Private = backup.formatVersion >= 20)
+            loadCurrentContent(
+                includeV20Private = backup.formatVersion >= 20,
+                includeReaderProgress = backup.formatVersion >= 28,
+            )
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -279,6 +289,9 @@ class AppBackupRepository @Inject constructor(
             if (backup.formatVersion >= 20) {
                 vaultRepository.restoreEncryptedBackup(backup.vault)
                 usageDeviceRepository.mergeBackup(backup.usageDevices)
+            }
+            if (backup.formatVersion >= 28) {
+                readerRepository.importProgressRecords(backup.readerProgress)
             }
             database.withTransaction {
                 // Game actions can save both their board and statistics while the import
@@ -320,6 +333,7 @@ class AppBackupRepository @Inject constructor(
                 previous = previous,
                 originalError = error,
                 restoreV20Private = backup.formatVersion >= 20,
+                restoreReaderProgress = backup.formatVersion >= 28,
                 restoreDatabase = databaseMayNeedRollback,
             )
             throw error
@@ -328,6 +342,7 @@ class AppBackupRepository @Inject constructor(
                 previous = previous,
                 originalError = error,
                 restoreV20Private = backup.formatVersion >= 20,
+                restoreReaderProgress = backup.formatVersion >= 28,
                 restoreDatabase = databaseMayNeedRollback,
             )
             val message = if (error.suppressed.isNotEmpty()) {
@@ -373,6 +388,7 @@ class AppBackupRepository @Inject constructor(
         previous: AppBackupContent,
         originalError: Throwable,
         restoreV20Private: Boolean,
+        restoreReaderProgress: Boolean,
         restoreDatabase: Boolean,
     ) {
         withContext(NonCancellable + Dispatchers.IO) {
@@ -401,6 +417,11 @@ class AppBackupRepository @Inject constructor(
                 }.exceptionOrNull()?.let(originalError::addSuppressed)
                 runCatching {
                     usageDeviceRepository.replaceAllForRollback(previous.usageDevices)
+                }.exceptionOrNull()?.let(originalError::addSuppressed)
+            }
+            if (restoreReaderProgress) {
+                runCatching {
+                    readerRepository.replaceProgressRecordsForRollback(previous.readerProgress)
                 }.exceptionOrNull()?.let(originalError::addSuppressed)
             }
         }
@@ -691,6 +712,7 @@ class AppBackupRepository @Inject constructor(
 
     private suspend fun loadCurrentContent(
         includeV20Private: Boolean = true,
+        includeReaderProgress: Boolean = true,
     ): AppBackupContent {
         val settings = settingsRepository.settings.first()
         val databaseContent = database.withTransaction {
@@ -715,6 +737,11 @@ class AppBackupRepository @Inject constructor(
         } else {
             emptyList()
         }
+        val readerProgress = if (includeReaderProgress) {
+            readerRepository.exportProgressRecords()
+        } else {
+            emptyList()
+        }
         return AppBackupContent(
             settings = settings,
             thoughts = databaseContent.thoughts,
@@ -727,6 +754,7 @@ class AppBackupRepository @Inject constructor(
             gameStates = databaseContent.gameStates,
             gameStatistics = databaseContent.gameStatistics,
             usageDevices = usageDevices,
+            readerProgress = readerProgress,
         )
     }
 
@@ -801,6 +829,7 @@ class AppBackupRepository @Inject constructor(
         gameStates = gameStates,
         gameStatistics = gameStatistics,
         usageDevices = usageDevices,
+        readerProgress = readerProgress,
     )
 
     private fun AppBackup.toSummary(): BackupSummary = BackupSummary(
@@ -816,6 +845,7 @@ class AppBackupRepository @Inject constructor(
         gameStatisticCount = gameStatistics.size,
         usageDeviceCount = usageDevices.size,
         usageDayCount = usageDevices.sumOf { it.history.days.size },
+        readerProgressCount = readerProgress.size,
     )
 
     private data class BackupDatabaseContent(
