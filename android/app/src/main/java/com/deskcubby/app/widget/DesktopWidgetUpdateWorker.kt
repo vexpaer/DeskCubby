@@ -24,9 +24,9 @@ internal interface DesktopWidgetWorkerEntryPoint {
 }
 
 /**
- * Durable compensation for launcher update broadcasts. ColorOS and some other OEM builds may
- * defer a background AppWidgetProvider even after accepting a widget. This worker still obeys
- * WorkManager and OEM battery limits; it does not try to bypass them.
+ * Durable compensation for launcher update broadcasts. Some launchers may defer a background
+ * AppWidgetProvider even after accepting a widget. This worker still obeys WorkManager and system
+ * battery limits; it does not try to bypass them.
  */
 class DesktopWidgetUpdateWorker(
     appContext: Context,

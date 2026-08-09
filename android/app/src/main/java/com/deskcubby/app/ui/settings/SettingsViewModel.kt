@@ -50,6 +50,7 @@ import com.deskcubby.app.data.repository.AppDataUsageSnapshot
 import com.deskcubby.app.data.sync.AppCloudSyncService
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncSecretStore
+import com.deskcubby.app.data.sync.CloudSyncRunMode
 import com.deskcubby.app.data.sync.PendingCloudSyncJson
 import com.deskcubby.app.data.sync.formatCloudSyncError
 import com.deskcubby.app.data.sync.validateForSync
@@ -715,9 +716,15 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun syncCloudNow() = viewModelScope.launch {
+    fun syncCloudNow() = syncCloud(CloudSyncRunMode.NORMAL)
+
+    fun forceUploadCloudNow() = syncCloud(CloudSyncRunMode.FORCE_UPLOAD)
+
+    fun forceDownloadCloudNow() = syncCloud(CloudSyncRunMode.FORCE_DOWNLOAD)
+
+    private fun syncCloud(mode: CloudSyncRunMode) = viewModelScope.launch {
         try {
-            cloudSyncService.syncEnabled()
+            cloudSyncService.syncEnabled(mode)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {

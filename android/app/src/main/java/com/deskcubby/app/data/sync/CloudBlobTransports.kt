@@ -364,7 +364,22 @@ internal class S3BlobTransport(
             throw missingS3ConditionalValidator()
         }
         val nonMatchingProbe = buildNonMatchingS3Probe(uri, candidates)
-        when (val probe = executeConditionalHead(uri, nonMatchingProbe)) {
+        // Probe with the same method whose conditional semantics we rely on below. Some S3
+        // gateways implement If-Match correctly for GET/PUT but treat HEAD as an unconditional
+        // metadata lookup; using HEAD there produced a false "conditions ignored" diagnosis.
+        // This intentionally wrong validator needs only a rejection status. Keep its response at
+        // the provider-error cap even for a large object, so a gateway that ignores If-Match cannot
+        // make us buffer the object a second time merely to discover that conditions are unsafe.
+        val probe = try {
+            executeConditionalGet(
+                uri = uri,
+                version = nonMatchingProbe,
+                maxBytes = MAX_ERROR_BYTES,
+            ).status
+        } catch (limit: CloudSyncLimitException) {
+            throw oversizedS3ConditionalProbe(limit)
+        }
+        when (probe) {
             404 -> throw remoteVersionConflict()
             409, 412 -> Unit
             200, 204 -> throw CloudSyncException(
@@ -385,7 +400,7 @@ internal class S3BlobTransport(
             val confirmation = executeConditionalGet(
                 uri = uri,
                 version = candidate,
-                maxBytes = verificationReadLimit(expectedBytes),
+                maxBytes = conditionalVerificationReadLimit(expectedBytes),
             )
             when (val status = confirmation.status) {
                 200 -> {
@@ -407,22 +422,6 @@ internal class S3BlobTransport(
             }
         }
         throw remoteVersionConflict()
-    }
-
-    private suspend fun executeConditionalHead(uri: URI, version: String): Int {
-        val signed = signer.sign(
-            method = "HEAD",
-            uri = uri,
-            headers = mapOf("If-Match" to version),
-        )
-        return http.execute(
-            SyncHttpRequest(
-                method = "HEAD",
-                uri = uri,
-                headers = signed.headers.withoutSyntheticHost(),
-                maxResponseBytes = MAX_ERROR_BYTES,
-            ),
-        ).status
     }
 
     private suspend fun executeConditionalGet(
@@ -550,6 +549,16 @@ private fun missingS3ConditionalValidator(): CloudSyncException = CloudSyncExcep
         "version could be derived.",
     errorCode = "SYNC_REMOTE_VALIDATION",
 )
+
+private fun oversizedS3ConditionalProbe(cause: CloudSyncLimitException): CloudSyncException =
+    CloudSyncException(
+        "S3 条件请求探测响应超过 64 KiB，服务可能未执行 If-Match；" +
+            "已停止同步以避免覆盖远端修改。 / The S3 conditional-request probe exceeded " +
+            "64 KiB, so the service may have ignored If-Match; sync was stopped to avoid " +
+            "overwriting remote changes.",
+        cause = cause,
+        errorCode = "SYNC_REMOTE_VALIDATION",
+    )
 
 private fun SyncHttpResponse.toBlobMetadataWithVersion(version: String): BlobMetadata {
     val size = firstHeader("content-length")?.toLongOrNull() ?: -1L
@@ -837,6 +846,9 @@ private suspend fun verifyFallbackWrite(
 
 private fun verificationReadLimit(bytes: ByteArray): Long =
     maxOf(1L, bytes.size.toLong())
+
+private fun conditionalVerificationReadLimit(bytes: ByteArray): Long =
+    maxOf(MAX_ERROR_BYTES, verificationReadLimit(bytes))
 
 private fun remoteVersionConflict(): CloudSyncConflictException = CloudSyncConflictException(
     "云端对象在安全校验期间发生变化，未继续覆盖；请重新同步。 / " +

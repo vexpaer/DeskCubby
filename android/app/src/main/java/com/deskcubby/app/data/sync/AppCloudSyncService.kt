@@ -84,17 +84,19 @@ class AppCloudSyncService @Inject constructor(
     )
     val status: StateFlow<AppCloudSyncStatus> = mutableStatus.asStateFlow()
 
-    suspend fun syncEnabled(): List<CloudSyncConfigRun> {
+    suspend fun syncEnabled(
+        mode: CloudSyncRunMode = CloudSyncRunMode.NORMAL,
+    ): List<CloudSyncConfigRun> {
         val settings = settingsRepository.settings.first()
         if (!settings.cloudSyncEnabled) {
             throw CloudSyncConfigurationException("请先在设置中开启云端同步。")
         }
-        val configs = settings.cloudSyncConfigs
-            .filter(CloudSyncConfig::enabled)
-            .map(secretStore::hydrate)
-        if (configs.isEmpty()) {
+        val storedConfigs = settings.cloudSyncConfigs.filter(CloudSyncConfig::enabled)
+        if (storedConfigs.isEmpty()) {
             throw CloudSyncConfigurationException("没有已启用的云端同步配置。")
         }
+        requireSafeForceDownloadSourceCount(mode, storedConfigs.size)
+        val configs = storedConfigs.map(secretStore::hydrate)
         mutableStatus.value = mutableStatus.value.copy(
             running = true,
             activeConfigId = null,
@@ -103,7 +105,7 @@ class AppCloudSyncService @Inject constructor(
             error = null,
         )
         return try {
-            val runs = coordinator.syncEnabled(configs) { configId, progress ->
+            val runs = coordinator.syncEnabled(configs, mode = mode) { configId, progress ->
                 mutableStatus.update {
                     it.copy(activeConfigId = configId, progress = progress)
                 }
@@ -120,7 +122,13 @@ class AppCloudSyncService @Inject constructor(
                 lastFinishedAt = finishedAt,
                 lastRuns = runs,
                 message = if (failed == 0) {
-                    "云端同步完成 / Cloud sync completed"
+                    when (mode) {
+                        CloudSyncRunMode.NORMAL -> "云端同步完成 / Cloud sync completed"
+                        CloudSyncRunMode.FORCE_UPLOAD ->
+                            "强制上传完成 / Forced upload completed"
+                        CloudSyncRunMode.FORCE_DOWNLOAD ->
+                            "强制下载完成 / Forced download completed"
+                    }
                 } else {
                     "部分云端配置同步失败 / Some cloud sync services failed"
                 },
@@ -242,6 +250,21 @@ class AppCloudSyncService @Inject constructor(
         const val MAX_INCOMING_JSON_BYTES = BackupJsonCodec.MAX_JSON_BYTES.toLong()
         const val RUNTIME_PREFERENCES = "cloud_sync_runtime"
         const val KEY_LAST_FINISHED_AT = "last_finished_at"
+    }
+}
+
+internal fun requireSafeForceDownloadSourceCount(
+    mode: CloudSyncRunMode,
+    enabledSourceCount: Int,
+) {
+    require(enabledSourceCount >= 0)
+    if (mode == CloudSyncRunMode.FORCE_DOWNLOAD && enabledSourceCount != 1) {
+        throw CloudSyncConfigurationException(
+            "强制下载只能使用一个已启用的云端来源；请先停用其他同步服务。 / " +
+                "Force download requires exactly one enabled cloud source; disable the other " +
+                "sync services first.",
+            errorCode = "SYNC_FORCE_DOWNLOAD_SOURCE_COUNT",
+        )
     }
 }
 

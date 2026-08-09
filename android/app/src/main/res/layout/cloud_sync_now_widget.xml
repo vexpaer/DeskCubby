@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/cloud_sync_now_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF42664D"
+    android:gravity="center"
+    android:padding="12dp">
+
+    <TextView
+        android:id="@+id/cloud_sync_now_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:drawablePadding="8dp"
+        android:gravity="center"
+        android:maxLines="2"
+        android:text="@string/cloud_sync_widget_now_preview"
+        android:textColor="#FFFFFFFF"
+        android:textSize="15sp"
+        android:textStyle="bold" />
+</FrameLayout>

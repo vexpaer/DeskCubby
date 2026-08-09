@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.view.View
 import androidx.annotation.RequiresApi
+import androidx.core.view.doOnAttach
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,6 +35,7 @@ import androidx.pdf.PdfDocument
 import androidx.pdf.PdfRect
 import androidx.pdf.SandboxedPdfLoader
 import androidx.pdf.content.PageMatchBounds
+import androidx.pdf.event.RequestFailureEvent
 import androidx.pdf.view.PdfView
 import com.deskcubby.app.data.repository.MAX_READER_CHAPTERS
 import com.deskcubby.app.data.repository.MAX_READER_SEARCH_QUERY_CHARS
@@ -50,6 +52,13 @@ private data class AndroidxPdfSearchMatch(
     val pageIndex: Int,
     val bounds: List<RectF>,
 )
+
+private class AndroidxPdfViewStyleState {
+    var view: PdfView? = null
+    var backgroundArgb: Int? = null
+    var filtered: Boolean? = null
+    var paint: Paint? = null
+}
 
 @RequiresApi(Build.VERSION_CODES.P)
 @Composable
@@ -168,6 +177,7 @@ private fun AndroidxPdfDocumentView(
             null
         }
     }
+    val viewStyleState = remember(document) { AndroidxPdfViewStyleState() }
 
     fun markFirstContentLoaded(view: PdfView) {
         if (firstContentLoaded || view.pdfDocument !== document) return
@@ -181,16 +191,45 @@ private fun AndroidxPdfDocumentView(
     }
 
     fun applyReaderPdfColors(view: PdfView) {
-        if (pdfLayerPaint == null) {
+        // Let the first page arrive without forcing a full-view hardware layer. Several vendor
+        // render pipelines cannot allocate that layer while PdfView is still establishing its
+        // first remote bitmap, which used to turn a valid enhanced document into a false timeout.
+        val activePaint = pdfLayerPaint.takeIf { firstContentLoaded }
+        val backgroundArgb = background.toArgb()
+        val filtered = activePaint != null
+        if (viewStyleState.view === view &&
+            viewStyleState.backgroundArgb == backgroundArgb &&
+            viewStyleState.filtered == filtered &&
+            viewStyleState.paint === activePaint
+        ) {
+            return
+        }
+        if (activePaint == null) {
             view.setBackgroundColor(background.toArgb())
             view.setLayerType(View.LAYER_TYPE_NONE, null)
         } else {
             // The layer paint also filters PdfView's own background. Feed it white so that the
             // same matrix maps the page surround to the requested reader background exactly.
             view.setBackgroundColor(android.graphics.Color.WHITE)
-            view.setLayerType(View.LAYER_TYPE_HARDWARE, pdfLayerPaint)
+            view.setLayerType(View.LAYER_TYPE_HARDWARE, activePaint)
         }
+        viewStyleState.view = view
+        viewStyleState.backgroundArgb = backgroundArgb
+        viewStyleState.filtered = filtered
+        viewStyleState.paint = activePaint
         view.invalidate()
+    }
+
+    fun attachDocument(view: PdfView) {
+        if (view.pdfDocument === document) return
+        try {
+            view.pdfDocument = document
+            view.requestLayout()
+        } catch (_: LinkageError) {
+            view.post { currentOnEnhancedReaderUnavailable() }
+        } catch (_: Exception) {
+            view.post { currentOnEnhancedReaderUnavailable() }
+        }
     }
 
     AndroidView(
@@ -235,12 +274,23 @@ private fun AndroidxPdfDocumentView(
                         override fun onBitmapCleared(pageNum: Int) = Unit
                     },
                 )
+                requestFailedListener = object : PdfView.EventListener {
+                    override fun onEvent(event: androidx.pdf.event.PdfTrackingEvent) {
+                        if (event is RequestFailureEvent && !firstContentLoaded) {
+                            post { currentOnEnhancedReaderUnavailable() }
+                        }
+                    }
+                }
+                // PdfView starts its collectors from onAttachedToWindow. Assigning the document
+                // from AndroidView.update may run before that point and has stalled first-page
+                // loading on some devices, so bind the document only after attachment.
+                doOnAttach { attached -> attachDocument(attached as PdfView) }
                 pdfView = this
             }
         },
         update = { view ->
             applyReaderPdfColors(view)
-            if (view.pdfDocument !== document) view.pdfDocument = document
+            if (view.isAttachedToWindow) attachDocument(view)
         },
         modifier = Modifier.fillMaxSize(),
     )

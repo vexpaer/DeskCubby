@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -210,6 +211,7 @@ import com.deskcubby.app.data.repository.buildAiRequestPreviewJson
 import com.deskcubby.app.data.preferences.MAX_HOME_GREETINGS
 import com.deskcubby.app.data.preferences.MAX_HOME_GREETING_CODE_POINTS
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
+import com.deskcubby.app.data.sync.CloudSyncRunMode
 import com.deskcubby.app.data.sync.PendingCloudSyncJson
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.ColorPickerDialog
@@ -418,6 +420,7 @@ private val homeGameShortcutOptions = listOf(
     HomeWidgetOption("tetris", "俄罗斯方块", "Tetris"),
     HomeWidgetOption("minesweeper", "扫雷", "Minesweeper"),
     HomeWidgetOption("spider", "蜘蛛纸牌", "Spider Solitaire"),
+    HomeWidgetOption("go", "围棋", "Go"),
 )
 
 private val mealButtonOptions = listOf(
@@ -715,6 +718,8 @@ fun SettingsScreen(
                     }
                 },
                 onSyncNow = viewModel::syncCloudNow,
+                onForceUpload = viewModel::forceUploadCloudNow,
+                onForceDownload = viewModel::forceDownloadCloudNow,
                 onRestoreIncomingJson = { fileName ->
                     viewModel.restoreIncomingCloudJson(fileName)
                 },
@@ -1492,6 +1497,8 @@ private fun CloudSyncSettingsPage(
     onCopy: (CloudSyncConfig) -> Unit,
     onDelete: (CloudSyncConfig) -> Unit,
     onSyncNow: () -> Unit,
+    onForceUpload: () -> Unit,
+    onForceDownload: () -> Unit,
     onRestoreIncomingJson: (String) -> Unit,
 ) {
     var enabled by remember(settings.cloudSyncEnabled) {
@@ -1499,6 +1506,8 @@ private fun CloudSyncSettingsPage(
     }
     var deleteCandidate by remember { mutableStateOf<CloudSyncConfig?>(null) }
     var restoreCandidate by remember { mutableStateOf<PendingCloudSyncJson?>(null) }
+    var forcedRunCandidate by remember { mutableStateOf<CloudSyncRunMode?>(null) }
+    val enabledSourceCount = settings.cloudSyncConfigs.count(CloudSyncConfig::enabled)
     RegisterSettingsSave(
         coordinator = saveCoordinator,
         dirty = enabled != settings.cloudSyncEnabled,
@@ -1588,7 +1597,7 @@ private fun CloudSyncSettingsPage(
                     enabled = enabled &&
                         enabled == settings.cloudSyncEnabled &&
                         !status.running,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
                 ) {
                     Icon(Icons.Outlined.Sync, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
@@ -1597,6 +1606,52 @@ private fun CloudSyncSettingsPage(
                         else tr("立即同步", "Sync now"),
                     )
                 }
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    horizontalArrangement = Arrangement.spacedBy(1.dp),
+                ) {
+                    Button(
+                        onClick = {
+                            forcedRunCandidate = CloudSyncRunMode.FORCE_UPLOAD
+                        },
+                        enabled = enabled &&
+                            enabled == settings.cloudSyncEnabled &&
+                            !status.running,
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        shape = SegmentedButtonDefaults.itemShape(0, 2),
+                    ) {
+                        Text(
+                            tr("强制上传", "Force upload"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Button(
+                        onClick = {
+                            forcedRunCandidate = CloudSyncRunMode.FORCE_DOWNLOAD
+                        },
+                        enabled = enabled &&
+                            enabled == settings.cloudSyncEnabled &&
+                            !status.running &&
+                            enabledSourceCount == 1,
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        shape = SegmentedButtonDefaults.itemShape(1, 2),
+                    ) {
+                        Text(
+                            tr("强制下载", "Force download"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Text(
+                    tr(
+                        "强制上传以本机为准，强制下载以云端为准；强制下载仅允许一个已启用来源。两者均不传播删除且仍执行条件校验；应用 JSON 下载仍只会暂存，需手动确认导入。",
+                        "Force upload prefers local data and force download prefers remote data; force download allows only one enabled source. Neither propagates deletions, and conditional checks still apply. Downloaded app JSON is only staged until you confirm an import.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         item {
@@ -1734,6 +1789,51 @@ private fun CloudSyncSettingsPage(
             },
             dismissButton = {
                 TextButton(onClick = { restoreCandidate = null }) {
+                    Text(tr("取消", "Cancel"))
+                }
+            },
+        )
+    }
+    forcedRunCandidate?.let { mode ->
+        val upload = mode == CloudSyncRunMode.FORCE_UPLOAD
+        AlertDialog(
+            onDismissRequest = { forcedRunCandidate = null },
+            title = {
+                Text(
+                    if (upload) tr("确认强制上传？", "Force upload?")
+                    else tr("确认强制下载？", "Force download?"),
+                )
+            },
+            text = {
+                Text(
+                    if (upload) {
+                        tr(
+                            "本机新增项目会上传；同路径内容不同时，将以扫描到的远端版本为条件覆盖远端。远端独有项目不会删除，扫描后发生的远端修改会阻止覆盖。",
+                            "New local items are uploaded. Different items at the same path replace remote data only if its scanned version still matches. Remote-only items are not deleted, and later remote edits stop the overwrite.",
+                        )
+                    } else {
+                        tr(
+                            "强制下载仅使用当前唯一的已启用云端来源。云端新增项目会下载；同路径内容不同时，将仅在本机文件仍匹配扫描快照时采用云端版本。本机独有项目不会删除，并发本机修改会保留并产生冲突副本。",
+                            "Force download uses the single currently enabled cloud source. New remote items are downloaded. Different items at the same path use remote data only while the local file still matches its scanned snapshot. Local-only items are not deleted, and concurrent local edits are preserved with a conflict copy.",
+                        )
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        forcedRunCandidate = null
+                        if (upload) onForceUpload() else onForceDownload()
+                    },
+                ) {
+                    Text(
+                        if (upload) tr("强制上传", "Force upload")
+                        else tr("强制下载", "Force download"),
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { forcedRunCandidate = null }) {
                     Text(tr("取消", "Cancel"))
                 }
             },

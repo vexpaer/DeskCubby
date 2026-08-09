@@ -10,6 +10,7 @@ import com.deskcubby.app.data.statistics.EngagementTimeRepository
 import com.deskcubby.app.data.statistics.GamePersistenceCoordinator
 import com.deskcubby.app.data.statistics.GameStatisticMetric
 import com.deskcubby.app.games.Game2048
+import com.deskcubby.app.games.GoGame
 import com.deskcubby.app.games.MinesweeperGame
 import com.deskcubby.app.games.SnakeGame
 import com.deskcubby.app.games.SpiderSolitaireGame
@@ -168,6 +169,19 @@ class GamesViewModel @Inject constructor(
         enqueueSpiderStatistics(delta)
     }
 
+    fun recordGoStatistics(delta: GoGame.StatisticsDelta) {
+        if (delta.isEmpty) return
+        recordStatistics(
+            gameId = GAME_GO,
+            increments = mapOf(
+                GameStatisticMetric.GO_MOVES_PLAYED to delta.movesPlayed.toLong(),
+                GameStatisticMetric.GO_STONES_CAPTURED to delta.stonesCaptured.toLong(),
+                GameStatisticMetric.GO_PASSES to delta.passes.toLong(),
+                GameStatisticMetric.GO_GAMES_COMPLETED to delta.gamesCompleted.toLong(),
+            ),
+        )
+    }
+
     fun beginPlayTime(gameId: String) {
         engagementTimeRepository.begin(EngagementKind.GAME, gameId)
     }
@@ -237,6 +251,7 @@ class GamesViewModel @Inject constructor(
         const val GAME_TETRIS = "tetris"
         const val GAME_MINESWEEPER = "minesweeper"
         const val GAME_SPIDER = "spider"
+        const val GAME_GO = "go"
         val GAME_IDS = listOf(
             GAME_2048,
             GAME_2048_5,
@@ -245,6 +260,7 @@ class GamesViewModel @Inject constructor(
             GAME_TETRIS,
             GAME_MINESWEEPER,
             GAME_SPIDER,
+            GAME_GO,
         )
     }
 }

@@ -749,6 +749,10 @@ private fun gameMetricLabel(key: String): String = when (key) {
     "spiderCardMoves" -> tr("移动次数", "Card moves")
     "spiderDeals" -> tr("发牌次数", "Deals")
     "spiderUndos" -> tr("撤回次数", "Undos")
+    "goMovesPlayed" -> tr("落子次数", "Stones played")
+    "goStonesCaptured" -> tr("提子总数", "Stones captured")
+    "goPasses" -> tr("停着次数", "Passes")
+    "goGamesCompleted" -> tr("完成棋局", "Games completed")
     else -> key
 }
 
@@ -761,6 +765,7 @@ private fun localizedGameTitle(gameId: String): String = when (gameId) {
     "tetris" -> tr("俄罗斯方块", "Tetris")
     "minesweeper" -> tr("扫雷", "Minesweeper")
     "spider" -> tr("蜘蛛纸牌", "Spider Solitaire")
+    "go" -> tr("围棋", "Go")
     else -> tr("小游戏", "Mini game")
 }
 
@@ -826,7 +831,7 @@ private val GAMES_WITH_WIN_RATE = setOf(
 )
 
 private val GAME_CATALOG_IDS = listOf(
-    "2048", "2048_5", "2048_6", "snake", "tetris", "minesweeper", "spider",
+    "2048", "2048_5", "2048_6", "snake", "tetris", "minesweeper", "spider", "go",
 )
 
 private val GAME_PANEL_ROLES = listOf(PanelRole.STANDARD, PanelRole.FEATURE, PanelRole.MEDIA)
@@ -841,4 +846,5 @@ private val GAME_METRIC_ORDER: Map<String, List<String>> = mapOf(
         "minesCellsRevealed", "minesSwept", "flagsPlaced", "wins", "losses",
     ),
     "spider" to listOf("spiderCardMoves", "spiderDeals", "spiderUndos", "wins", "losses"),
+    "go" to listOf("goMovesPlayed", "goStonesCaptured", "goPasses", "goGamesCompleted"),
 )

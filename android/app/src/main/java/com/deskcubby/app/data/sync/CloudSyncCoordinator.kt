@@ -38,14 +38,16 @@ class CloudSyncCoordinator(
     suspend fun sync(
         config: CloudSyncConfig,
         limits: CloudSyncLimits = CloudSyncLimits(),
+        mode: CloudSyncRunMode = CloudSyncRunMode.NORMAL,
         onProgress: (CloudSyncProgress) -> Unit = {},
     ): CloudSyncRunResult = mutex.withLock {
-        newEngine(config).sync(config, limits, onProgress)
+        newEngine(config).sync(config, limits, mode, onProgress)
     }
 
     suspend fun syncEnabled(
         configs: List<CloudSyncConfig>,
         limits: CloudSyncLimits = CloudSyncLimits(),
+        mode: CloudSyncRunMode = CloudSyncRunMode.NORMAL,
         onProgress: (configId: String, progress: CloudSyncProgress) -> Unit = { _, _ -> },
     ): List<CloudSyncConfigRun> = mutex.withLock {
         buildList {
@@ -54,7 +56,7 @@ class CloudSyncCoordinator(
                     add(
                         CloudSyncConfigRun(
                             configId = config.id,
-                            result = newEngine(config).sync(config, limits) { progress ->
+                            result = newEngine(config).sync(config, limits, mode) { progress ->
                                 onProgress(config.id, progress)
                             },
                         ),

@@ -15,6 +15,8 @@ import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.widget.DeskCubbyWidgetConfigureActivity
 import com.deskcubby.app.widget.DeskCubbyWidgetProvider
+import com.deskcubby.app.widget.CloudSyncForceWidgetProvider
+import com.deskcubby.app.widget.CloudSyncNowWidgetProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.text.Collator
@@ -135,11 +137,10 @@ class DesktopWidgetsViewModel @Inject constructor(
 
     fun requestPin(config: DesktopWidgetConfig, english: Boolean) {
         val manager = AppWidgetManager.getInstance(context)
-        val launcherFamily = desktopWidgetLauncherFamily(Build.MANUFACTURER)
         val pinSupported = runCatching { manager.isRequestPinAppWidgetSupported }
             .getOrDefault(false)
         if (!pinSupported) {
-            _message.value = desktopWidgetManualAddMessage(english, launcherFamily)
+            _message.value = desktopWidgetManualAddMessage(english)
             return
         }
         val accepted = try {
@@ -181,9 +182,38 @@ class DesktopWidgetsViewModel @Inject constructor(
             false
         }
         _message.value = if (accepted) {
-            desktopWidgetPinAcceptedMessage(english, launcherFamily)
+            desktopWidgetPinAcceptedMessage(english)
         } else {
-            desktopWidgetManualAddMessage(english, launcherFamily)
+            desktopWidgetManualAddMessage(english)
+        }
+    }
+
+    fun requestPinSyncWidget(forceActions: Boolean, english: Boolean) {
+        val manager = AppWidgetManager.getInstance(context)
+        val pinSupported = runCatching { manager.isRequestPinAppWidgetSupported }
+            .getOrDefault(false)
+        if (!pinSupported) {
+            _message.value = desktopWidgetManualAddMessage(english)
+            return
+        }
+        val provider = if (forceActions) {
+            CloudSyncForceWidgetProvider::class.java
+        } else {
+            CloudSyncNowWidgetProvider::class.java
+        }
+        val accepted = try {
+            manager.requestPinAppWidget(ComponentName(context, provider), null, null)
+        } catch (_: IllegalStateException) {
+            false
+        } catch (_: SecurityException) {
+            false
+        } catch (_: RuntimeException) {
+            false
+        }
+        _message.value = if (accepted) {
+            desktopWidgetPinAcceptedMessage(english)
+        } else {
+            desktopWidgetManualAddMessage(english)
         }
     }
 
@@ -196,41 +226,25 @@ class DesktopWidgetsViewModel @Inject constructor(
     }
 }
 
-internal enum class DesktopWidgetLauncherFamily {
-    COLOR_OS,
-    GENERIC,
-}
-
-internal fun desktopWidgetLauncherFamily(manufacturer: String): DesktopWidgetLauncherFamily =
-    when (manufacturer.trim().lowercase()) {
-        "oppo", "oneplus", "realme" -> DesktopWidgetLauncherFamily.COLOR_OS
-        else -> DesktopWidgetLauncherFamily.GENERIC
-    }
-
 internal fun desktopWidgetManualAddMessage(
     english: Boolean,
-    family: DesktopWidgetLauncherFamily,
-): String = when {
-    family == DesktopWidgetLauncherFamily.COLOR_OS && english ->
-        "ColorOS did not complete in-app placement. Pinch or touch and hold an empty area of the home screen, open Widgets, and choose DeskCubby. If it is missing, check any launcher-shortcut permission and allow DeskCubby background activity in system settings. The launcher makes the final decision."
-    family == DesktopWidgetLauncherFamily.COLOR_OS ->
-        "ColorOS 未完成应用内放置。请在桌面空白处双指捏合或长按，进入“小组件/插件”，再选择 DeskCubby。若列表中没有，可检查系统是否提供“桌面快捷方式”权限，并允许 DeskCubby 后台活动；最终是否支持由系统桌面决定。"
-    english ->
-        "The launcher did not complete in-app placement. Touch and hold an empty area of the home screen, open Widgets, and choose DeskCubby. The launcher makes the final decision."
-    else ->
-        "桌面未完成应用内放置。请长按桌面空白处，进入“小组件/窗口小工具”，再选择 DeskCubby；最终是否支持由系统桌面决定。"
+): String = if (english) {
+    "The launcher did not complete in-app placement. Pinch or touch and hold an empty area of " +
+        "the home screen, open Widgets, and choose DeskCubby. If it is missing, check the " +
+        "launcher's widget/shortcut permission and the system background-activity setting. " +
+        "The launcher makes the final placement decision."
+} else {
+    "桌面未完成应用内放置。请在桌面空白处双指捏合或长按，进入“小组件/窗口小工具”，" +
+        "再选择 DeskCubby。若列表中没有，请检查桌面的小组件/快捷方式权限及系统后台活动设置；" +
+        "最终放置仍由系统桌面决定。"
 }
 
 internal fun desktopWidgetPinAcceptedMessage(
     english: Boolean,
-    family: DesktopWidgetLauncherFamily,
-): String = when {
-    family == DesktopWidgetLauncherFamily.COLOR_OS && english ->
-        "Sent to ColorOS. Confirm placement; if no prompt appears, pinch the home screen and add DeskCubby from Widgets."
-    family == DesktopWidgetLauncherFamily.COLOR_OS ->
-        "已交给 ColorOS，请确认放置；若没有出现确认窗口，请在桌面双指捏合，从“小组件/插件”中添加 DeskCubby。"
-    english ->
-        "Sent to the launcher. Confirm placement, then resize it there if needed."
-    else ->
-        "已交给桌面，请确认放置；需要时可在桌面继续拖动缩放。"
+): String = if (english) {
+    "Sent to the launcher. Confirm placement; if no prompt appears, open the home-screen " +
+        "Widgets panel and choose DeskCubby. Resize it there if needed."
+} else {
+    "已交给桌面，请确认放置；若没有出现确认窗口，请打开桌面“小组件/窗口小工具”面板选择 " +
+        "DeskCubby。需要时可在桌面继续拖动缩放。"
 }

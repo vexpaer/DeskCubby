@@ -1,7 +1,10 @@
 package com.deskcubby.app.data.preferences
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Process
 import android.provider.DocumentsContract
 import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.MutablePreferences
@@ -118,6 +121,9 @@ class SettingsRepository @Inject constructor(
         val cloudSyncConfigs = stringPreferencesKey("cloud_sync_configs_v1")
         val diaryTreeUri = stringPreferencesKey("diary_tree_uri")
         val mediaTreeUri = stringPreferencesKey("media_tree_uri")
+        // Device-local parent grant used only to validate the scoped child tree URIs created by
+        // the diary page's default-folder initializer. It is not user data and is not backed up.
+        val defaultDiaryFoldersGrantUri = stringPreferencesKey("default_diary_folders_grant_uri")
         val notesTreeUri = stringPreferencesKey("notes_tree_uri")
         val fileNamePattern = stringPreferencesKey("file_name_pattern")
         val markdownTemplate = stringPreferencesKey("markdown_template")
@@ -209,6 +215,7 @@ class SettingsRepository @Inject constructor(
 
     private fun decode(prefs: Preferences): AppSettings {
         val defaults = AppSettings()
+        val defaultDiaryFoldersGrantUri = prefs[Keys.defaultDiaryFoldersGrantUri]
         val nav = decodeNav(prefs[Keys.navItems])
         val cloudSyncConfigs = decodeCloudSyncConfigs(prefs[Keys.cloudSyncConfigs])
         val visibleIds = nav.filter { it.visible || it.id == NavItemId.SETTINGS }.map { it.id }.toSet()
@@ -273,8 +280,12 @@ class SettingsRepository @Inject constructor(
             cloudSyncEnabled = (prefs[Keys.cloudSyncEnabled] ?: false) &&
                 cloudSyncConfigs.any { it.enabled && it.selectedContents.isNotEmpty() },
             cloudSyncConfigs = cloudSyncConfigs,
-            diaryTreeUri = prefs[Keys.diaryTreeUri]?.takeIf(::hasPersistedTreeAccess),
-            mediaTreeUri = prefs[Keys.mediaTreeUri]?.takeIf(::hasPersistedTreeAccess),
+            diaryTreeUri = prefs[Keys.diaryTreeUri]?.takeIf { raw ->
+                hasPersistedTreeAccess(raw, defaultDiaryFoldersGrantUri)
+            },
+            mediaTreeUri = prefs[Keys.mediaTreeUri]?.takeIf { raw ->
+                hasPersistedTreeAccess(raw, defaultDiaryFoldersGrantUri)
+            },
             notesTreeUri = prefs[Keys.notesTreeUri]?.takeIf(::hasPersistedTreeAccess),
             fileNamePattern = (prefs[Keys.fileNamePattern] ?: defaults.fileNamePattern)
                 .let { if (it == "yyyy-MM-dd '日记'") defaults.fileNamePattern else it },
@@ -517,6 +528,24 @@ class SettingsRepository @Inject constructor(
     }
     suspend fun setDiaryTreeUri(value: String) = set(Keys.diaryTreeUri, value)
     suspend fun setMediaTreeUri(value: String) = set(Keys.mediaTreeUri, value)
+    suspend fun setDefaultDiaryFolders(
+        grantTreeUri: String,
+        diaryTreeUri: String,
+        mediaTreeUri: String,
+    ) {
+        require(hasPersistedTreeAccess(grantTreeUri)) { "Default folder grant is unavailable" }
+        require(hasPersistedTreeAccess(diaryTreeUri, grantTreeUri)) {
+            "Default diary folder grant is unavailable"
+        }
+        require(hasPersistedTreeAccess(mediaTreeUri, grantTreeUri)) {
+            "Default media folder grant is unavailable"
+        }
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.defaultDiaryFoldersGrantUri] = grantTreeUri
+            prefs[Keys.diaryTreeUri] = diaryTreeUri
+            prefs[Keys.mediaTreeUri] = mediaTreeUri
+        }
+    }
     suspend fun setNotesTreeUri(value: String) = set(Keys.notesTreeUri, value)
     suspend fun setFileNamePattern(value: String) = set(Keys.fileNamePattern, value)
     suspend fun setMarkdownTemplate(value: String) = set(Keys.markdownTemplate, value)
@@ -862,11 +891,19 @@ class SettingsRepository @Inject constructor(
                 }
             prefs.setOrRemove(
                 Keys.diaryTreeUri,
-                restorableTreeUriOrCurrent(value.diaryTreeUri, prefs[Keys.diaryTreeUri]),
+                restorableTreeUriOrCurrent(
+                    value.diaryTreeUri,
+                    prefs[Keys.diaryTreeUri],
+                    prefs[Keys.defaultDiaryFoldersGrantUri],
+                ),
             )
             prefs.setOrRemove(
                 Keys.mediaTreeUri,
-                restorableTreeUriOrCurrent(value.mediaTreeUri, prefs[Keys.mediaTreeUri]),
+                restorableTreeUriOrCurrent(
+                    value.mediaTreeUri,
+                    prefs[Keys.mediaTreeUri],
+                    prefs[Keys.defaultDiaryFoldersGrantUri],
+                ),
             )
             prefs.setOrRemove(
                 Keys.notesTreeUri,
@@ -984,9 +1021,15 @@ class SettingsRepository @Inject constructor(
         if (value == null) remove(key) else this[key] = value
     }
 
-    private fun restorableTreeUriOrCurrent(imported: String?, current: String?): String? {
+    private fun restorableTreeUriOrCurrent(
+        imported: String?,
+        current: String?,
+        defaultDiaryFoldersGrantUri: String? = null,
+    ): String? {
         if (imported == null) return null
-        return imported.takeIf(::hasPersistedTreeAccess) ?: current
+        return imported.takeIf { raw ->
+            hasPersistedTreeAccess(raw, defaultDiaryFoldersGrantUri)
+        } ?: current
     }
 
     private fun restorableReadUriOrCurrent(imported: String?, current: String?): String? {
@@ -994,16 +1037,35 @@ class SettingsRepository @Inject constructor(
         return imported.takeIf(::hasPersistedReadAccess) ?: current
     }
 
-    private fun hasPersistedTreeAccess(raw: String): Boolean {
+    private fun hasPersistedTreeAccess(
+        raw: String,
+        inheritedGrantRaw: String? = null,
+    ): Boolean {
         val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
         val isTreeUri = runCatching {
             uri.scheme == "content" && DocumentsContract.isTreeUri(uri)
         }.getOrDefault(false)
         if (!isTreeUri) return false
         return runCatching {
-            context.contentResolver.persistedUriPermissions.any { permission ->
+            val permissions = context.contentResolver.persistedUriPermissions
+            if (permissions.any { permission ->
                 permission.uri == uri && permission.isReadPermission && permission.isWritePermission
+            }) return@runCatching true
+
+            val inheritedGrant = inheritedGrantRaw
+                ?.let { Uri.parse(it) }
+                ?.takeIf { grant -> grant.authority == uri.authority }
+                ?: return@runCatching false
+            val grantIsPersisted = permissions.any { permission ->
+                permission.uri == inheritedGrant &&
+                    permission.isReadPermission && permission.isWritePermission
             }
+            if (!grantIsPersisted) return@runCatching false
+
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            context.checkUriPermission(uri, Process.myPid(), Process.myUid(), flags) ==
+                PackageManager.PERMISSION_GRANTED
         }.getOrDefault(false)
     }
 

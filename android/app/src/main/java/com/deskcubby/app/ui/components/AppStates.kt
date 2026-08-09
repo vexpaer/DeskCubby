@@ -23,6 +23,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -98,6 +99,9 @@ fun AppEmptyState(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
     iconSize: Dp = 52.dp,
+    actionEnabled: Boolean = true,
+    secondaryActionLabel: String? = null,
+    onSecondaryAction: (() -> Unit)? = null,
 ) {
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     val content: @Composable (Modifier) -> Unit = { contentModifier ->
@@ -126,7 +130,10 @@ fun AppEmptyState(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
             )
             if (!actionLabel.isNullOrBlank() && onAction != null) {
-                Button(onClick = onAction) { Text(actionLabel) }
+                Button(onClick = onAction, enabled = actionEnabled) { Text(actionLabel) }
+            }
+            if (!secondaryActionLabel.isNullOrBlank() && onSecondaryAction != null) {
+                TextButton(onClick = onSecondaryAction) { Text(secondaryActionLabel) }
             }
         }
     }

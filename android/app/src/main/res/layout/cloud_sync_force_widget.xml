@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal">
+
+    <FrameLayout
+        android:id="@+id/cloud_sync_force_upload"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_marginEnd="1dp"
+        android:layout_weight="1"
+        android:background="#FF42664D"
+        android:gravity="center"
+        android:padding="8dp">
+
+        <TextView
+            android:id="@+id/cloud_sync_force_upload_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:maxLines="2"
+            android:text="@string/cloud_sync_widget_force_upload_preview"
+            android:textColor="#FFFFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <FrameLayout
+        android:id="@+id/cloud_sync_force_download"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_marginStart="1dp"
+        android:layout_weight="1"
+        android:background="#FFC96F4A"
+        android:gravity="center"
+        android:padding="8dp">
+
+        <TextView
+            android:id="@+id/cloud_sync_force_download_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:maxLines="2"
+            android:text="@string/cloud_sync_widget_force_download_preview"
+            android:textColor="#FF000000"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+</LinearLayout>

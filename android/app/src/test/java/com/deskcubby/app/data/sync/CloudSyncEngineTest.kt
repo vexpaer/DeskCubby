@@ -151,6 +151,65 @@ class CloudSyncEngineTest {
     }
 
     @Test
+    fun forceUploadConditionallyReplacesRemoteButDoesNotDeleteRemoteOnlyObjects() = runBlocking {
+        val remoteOnlyKey = "diaries/remote-only.md"
+        val local = FakeLocalStore().apply {
+            put(KEY, LOCAL_BYTES)
+        }
+        val remote = FakeRemoteStore().apply {
+            put(KEY, REMOTE_BYTES, version = "remote-before-force")
+            put(remoteOnlyKey, REMOTE_BYTES)
+        }
+        val state = FakeStateStore()
+
+        val result = engine(local, remote, state).sync(
+            config = config(),
+            mode = CloudSyncRunMode.FORCE_UPLOAD,
+        )
+
+        assertArrayEquals(LOCAL_BYTES, remote.bytes(KEY))
+        assertArrayEquals(REMOTE_BYTES, remote.bytes(remoteOnlyKey))
+        assertEquals("remote-before-force", remote.writeCalls.single().expectedRemoteVersion)
+        assertEquals(
+            mapOf(
+                KEY to CloudSyncItemOutcome.UPLOADED,
+                remoteOnlyKey to CloudSyncItemOutcome.REMOTE_CHANGE_SKIPPED,
+            ),
+            result.reports.associate { it.key to it.outcome },
+        )
+    }
+
+    @Test
+    fun forceDownloadReplacesUnchangedLocalButDoesNotDeleteLocalOnlyObjects() = runBlocking {
+        val localOnlyKey = "diaries/local-only.md"
+        val local = FakeLocalStore().apply {
+            put(KEY, LOCAL_BYTES)
+            put(localOnlyKey, LOCAL_BYTES)
+        }
+        val remote = FakeRemoteStore().apply {
+            put(KEY, REMOTE_BYTES)
+        }
+        val state = FakeStateStore()
+
+        val result = engine(local, remote, state).sync(
+            config = config(direction = CloudSyncDirection.UPLOAD_ONLY),
+            mode = CloudSyncRunMode.FORCE_DOWNLOAD,
+        )
+
+        assertArrayEquals(REMOTE_BYTES, local.bytes(KEY))
+        assertArrayEquals(LOCAL_BYTES, local.bytes(localOnlyKey))
+        assertEquals(hash(LOCAL_BYTES), local.writeCalls.single().expectedLocalSha256)
+        assertTrue(remote.writeCalls.isEmpty())
+        assertEquals(
+            mapOf(
+                KEY to CloudSyncItemOutcome.DOWNLOADED,
+                localOnlyKey to CloudSyncItemOutcome.REMOTE_CHANGE_SKIPPED,
+            ),
+            result.reports.associate { it.key to it.outcome },
+        )
+    }
+
+    @Test
     fun httpEndpointRequiresAnExplicitOptInBeforeTheFactoryIsUsed() {
         val local = FakeLocalStore()
         val remote = FakeRemoteStore()

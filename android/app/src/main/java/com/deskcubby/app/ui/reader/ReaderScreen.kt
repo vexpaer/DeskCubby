@@ -84,6 +84,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -116,6 +117,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -385,7 +387,6 @@ private fun ReaderLibrary(
                             Box {
                                 ReaderCover(
                                     book = book,
-                                    widthPx = 720,
                                     loadCover = loadCover,
                                     modifier = Modifier.fillMaxWidth().aspectRatio(0.7f),
                                 )
@@ -443,8 +444,8 @@ private fun ReaderLibrary(
                 Text(
                     if (book.type == ReaderBookType.PDF) {
                         tr(
-                            "默认自动使用 PDF 第一页；也可以选择一张图片覆盖。",
-                            "The first PDF page is used automatically, or you can override it with an image.",
+                            "默认优先使用系统文档服务提供的安全缩略图；也可以选择一张图片覆盖。",
+                            "A safe thumbnail from the system document service is preferred by default, or you can override it with an image.",
                         )
                     } else {
                         tr(
@@ -578,7 +579,10 @@ private fun ReaderBookPage(
     var pdfSearchResultCount by remember(book.id) { mutableIntStateOf(0) }
     var pdfChapters by remember(book.id) { mutableStateOf<List<ReaderChapter>>(emptyList()) }
     var pdfChapterScanRunning by remember(book.id) { mutableStateOf(false) }
-    var enhancedPdfReaderUnavailable by rememberSaveable(book.id) { mutableStateOf(false) }
+    // A transient sandbox/service timeout belongs only to this reading attempt. Saving this flag
+    // made one cold-start failure permanently force compatibility mode for the rest of the
+    // Activity instance, so users had no way to try the enhanced reader again.
+    var enhancedPdfReaderUnavailable by remember(book.id) { mutableStateOf(false) }
     var pdfFallbackNoticeCount by remember(book.id) { mutableIntStateOf(0) }
     var requestedPage by remember(book.id) { mutableStateOf<Int?>(null) }
     var controlsVisible by rememberSaveable(book.id) {
@@ -616,9 +620,14 @@ private fun ReaderBookPage(
     } else {
         pdfSearchResultCount
     }
+    val context = LocalContext.current
     val platformPdfTextFeaturesAvailable = remember { readerPdfTextFeaturesAvailable() }
+    val enhancedPdfServiceAvailable = remember(context) {
+        readerPdfEnhancedServiceAvailable(context)
+    }
     val pdfRendererMode = selectReaderPdfRendererMode(
         sdkInt = Build.VERSION.SDK_INT,
+        enhancedServiceAvailable = enhancedPdfServiceAvailable,
         enhancedReaderUnavailable = enhancedPdfReaderUnavailable,
     )
     val textLayerAvailable = content !is ReaderContent.PdfBook ||
@@ -631,6 +640,7 @@ private fun ReaderBookPage(
         "增强 PDF 视图未能加载，已自动切换到兼容视图。",
         "The enhanced PDF view could not load. Switched to the compatibility view.",
     )
+    val pdfRetryLabel = tr("重试增强视图", "Retry enhanced view")
     val activity = LocalContext.current.findActivity()
     BackHandler {
         if (drawerState.isOpen) scope.launch { drawerState.close() } else onBack()
@@ -657,7 +667,14 @@ private fun ReaderBookPage(
     }
     LaunchedEffect(pdfFallbackNoticeCount) {
         if (pdfFallbackNoticeCount > 0) {
-            bookSnackbar.showSnackbar(pdfFallbackMessage)
+            val result = bookSnackbar.showSnackbar(
+                message = pdfFallbackMessage,
+                actionLabel = pdfRetryLabel,
+                withDismissAction = true,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                enhancedPdfReaderUnavailable = false
+            }
         }
     }
 
@@ -902,31 +919,31 @@ private fun ReaderBookPage(
 @Composable
 private fun ReaderCover(
     book: ReaderBook,
-    widthPx: Int,
     loadCover: suspend (ReaderBook, Int) -> Bitmap?,
     modifier: Modifier = Modifier,
 ) {
+    var measuredWidthPx by remember(book.id) { mutableIntStateOf(0) }
     val bitmap by produceState<Bitmap?>(
         initialValue = null,
         key1 = book.id,
         key2 = book.coverUri,
-        key3 = "${book.fingerprint}:${book.totalPages}:$widthPx",
+        key3 = "${book.fingerprint}:${book.totalPages}:$measuredWidthPx",
     ) {
+        if (measuredWidthPx <= 0) return@produceState
         value = try {
-            loadCover(book, widthPx)
+            loadCover(book, measuredWidthPx)
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (_: OutOfMemoryError) {
+            null
         } catch (_: Exception) {
             null
         }
     }
-    DisposableEffect(bitmap) {
-        onDispose {
-            bitmap?.takeUnless(Bitmap::isRecycled)?.recycle()
-        }
-    }
     Surface(
-        modifier = modifier,
+        modifier = modifier.onSizeChanged { size ->
+            if (size.width > 0 && size.width != measuredWidthPx) measuredWidthPx = size.width
+        },
         shape = RoundedCornerShape(10.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
     ) {
@@ -1542,9 +1559,6 @@ private fun LegacyPdfPage(
         value = runCatching { viewModel.renderPdfPage(book, page, targetWidthPx) }
     }
     val bitmap = rendered?.getOrNull()
-    DisposableEffect(bitmap) {
-        onDispose { if (bitmap != null && !bitmap.isRecycled) bitmap.recycle() }
-    }
     Box(
         Modifier
             .fillMaxWidth()

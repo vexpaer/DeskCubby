@@ -322,8 +322,52 @@ class CloudBlobTransportsTest {
         val read = checkNotNull(s3Transport(http).get(MANIFEST_STORAGE_NAME, 1_024L, null))
 
         assertEquals("\"same\"", read.metadata.version)
-        assertEquals(listOf("GET", "HEAD", "GET"), http.requests.map { it.method })
+        assertEquals(listOf("GET", "GET", "GET"), http.requests.map { it.method })
+        assertTrue(http.requests[1].header("If-Match").orEmpty().contains("condition-probe"))
+        assertEquals(64L * 1024, http.requests[1].maxResponseBytes)
         assertEquals("\"same\"", http.requests[2].header("If-Match"))
+    }
+
+    @Test
+    fun `S3 nonmatching probe stays at 64 KiB while candidate confirmation allows object size`() =
+        runBlocking {
+            val bytes = ByteArray(96 * 1024) { index -> (index and 0xff).toByte() }
+            val http = QueueHttpExecutor(
+                response(bytes, etag = "unquoted-version"),
+                response(byteArrayOf(), status = 412),
+                response(bytes),
+            )
+
+            val read = checkNotNull(
+                s3Transport(http).get(MANIFEST_STORAGE_NAME, bytes.size.toLong(), null),
+            )
+
+            assertArrayEquals(bytes, read.bytes)
+            assertEquals(64L * 1024, http.requests[1].maxResponseBytes)
+            assertEquals(bytes.size.toLong(), http.requests[2].maxResponseBytes)
+        }
+
+    @Test
+    fun `S3 oversized nonmatching probe maps to remote validation failure`() = runBlocking {
+        val bytes = "remote manifest".toByteArray()
+        var callCount = 0
+        val http = SyncHttpExecutor { request ->
+            when (callCount++) {
+                0 -> response(bytes)
+                else -> {
+                    assertEquals(64L * 1024, request.maxResponseBytes)
+                    throw CloudSyncLimitException("probe response exceeded bound")
+                }
+            }
+        }
+
+        try {
+            s3Transport(http).get(MANIFEST_STORAGE_NAME, 1_024L, null)
+            fail("Expected an oversized condition probe to fail closed")
+        } catch (error: CloudSyncException) {
+            assertEquals("SYNC_REMOTE_VALIDATION", error.errorCode)
+            assertTrue(error.message.orEmpty().contains("probe exceeded 64 KiB"))
+        }
     }
 
     @Test
@@ -390,7 +434,7 @@ class CloudBlobTransportsTest {
             val read = checkNotNull(s3Transport(http).get(MANIFEST_STORAGE_NAME, 1_024L, null))
 
             assertEquals("\"origin\"", read.metadata.version)
-            assertEquals(listOf("GET", "HEAD", "GET", "GET"), http.requests.map { it.method })
+            assertEquals(listOf("GET", "GET", "GET", "GET"), http.requests.map { it.method })
             assertEquals("\"proxy\"", http.requests[2].header("If-Match"))
             assertEquals("\"origin\"", http.requests[3].header("If-Match"))
         }

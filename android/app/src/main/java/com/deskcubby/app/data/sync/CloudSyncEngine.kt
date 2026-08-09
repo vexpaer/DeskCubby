@@ -18,6 +18,19 @@ enum class CloudSyncItemOutcome {
     REMOTE_CHANGE_SKIPPED,
 }
 
+/**
+ * Explicit reconciliation policy for a user-initiated sync run.
+ *
+ * Forced runs intentionally choose one side for objects that exist on both sides, but they never
+ * propagate deletions. Conditional remote writes and local snapshot checks still protect changes
+ * that happen after the run starts.
+ */
+enum class CloudSyncRunMode {
+    NORMAL,
+    FORCE_UPLOAD,
+    FORCE_DOWNLOAD,
+}
+
 data class CloudSyncItemReport(
     val key: String,
     val outcome: CloudSyncItemOutcome,
@@ -55,13 +68,14 @@ class CloudSyncEngine(
     suspend fun sync(
         config: CloudSyncConfig,
         limits: CloudSyncLimits = CloudSyncLimits(),
+        mode: CloudSyncRunMode = CloudSyncRunMode.NORMAL,
         onProgress: (CloudSyncProgress) -> Unit = {},
     ): CloudSyncRunResult = runMutex.withLock {
         val startedAt = System.currentTimeMillis()
         val validated = config.validateForSync()
         try {
             withTimeout(limits.overallTimeoutMillis) {
-                syncWithinTimeout(validated, limits, startedAt, onProgress)
+                syncWithinTimeout(validated, limits, startedAt, mode, onProgress)
             }
         } catch (timeout: TimeoutCancellationException) {
             throw CloudSyncException("同步超时，未完成的文件不会被提交。", timeout)
@@ -74,6 +88,7 @@ class CloudSyncEngine(
         validated: ValidatedCloudSyncConfig,
         limits: CloudSyncLimits,
         startedAt: Long,
+        mode: CloudSyncRunMode,
         onProgress: (CloudSyncProgress) -> Unit,
     ): CloudSyncRunResult {
         val config = validated.source
@@ -106,6 +121,7 @@ class CloudSyncEngine(
                 baseHash = baseHash,
                 remoteStore = remoteStore,
                 limits = limits,
+                mode = mode,
             )
             reports += report
             when (report.outcome) {
@@ -153,10 +169,15 @@ class CloudSyncEngine(
         baseHash: String?,
         remoteStore: CloudSyncRemoteStore,
         limits: CloudSyncLimits,
+        mode: CloudSyncRunMode,
     ): CloudSyncItemReport {
         val key = local?.key ?: checkNotNull(remote).key
         if (local == null) {
-            if (config.direction == CloudSyncDirection.UPLOAD_ONLY) {
+            if (
+                mode == CloudSyncRunMode.FORCE_UPLOAD ||
+                (mode == CloudSyncRunMode.NORMAL &&
+                    config.direction == CloudSyncDirection.UPLOAD_ONLY)
+            ) {
                 return CloudSyncItemReport(key, CloudSyncItemOutcome.REMOTE_CHANGE_SKIPPED)
             }
             val remoteObject = checkNotNull(remote)
@@ -178,6 +199,9 @@ class CloudSyncEngine(
             }
         }
         if (remote == null) {
+            if (mode == CloudSyncRunMode.FORCE_DOWNLOAD) {
+                return CloudSyncItemReport(key, CloudSyncItemOutcome.REMOTE_CHANGE_SKIPPED)
+            }
             val bytes = readLocal(local, limits)
             remoteStore.write(
                 key,
@@ -190,6 +214,36 @@ class CloudSyncEngine(
         }
         if (local.sha256 == remote.sha256) {
             return CloudSyncItemReport(key, CloudSyncItemOutcome.UNCHANGED)
+        }
+
+        if (mode == CloudSyncRunMode.FORCE_UPLOAD) {
+            val bytes = readLocal(local, limits)
+            remoteStore.write(
+                key,
+                bytes,
+                local.sha256,
+                local.lastModifiedMillis,
+                expectedRemoteVersion = remote.version,
+            )
+            return CloudSyncItemReport(key, CloudSyncItemOutcome.UPLOADED)
+        }
+        if (mode == CloudSyncRunMode.FORCE_DOWNLOAD) {
+            val bytes = readRemote(remoteStore, remote, limits)
+            return when (
+                localStore.writeRemote(
+                    key = key,
+                    bytes = bytes,
+                    contentSha256 = remote.sha256,
+                    lastModifiedMillis = remote.lastModifiedMillis,
+                    expectedLocalSha256 = local.sha256,
+                    limits = limits,
+                )
+            ) {
+                is LocalWriteResult.Applied ->
+                    CloudSyncItemReport(key, CloudSyncItemOutcome.DOWNLOADED)
+                is LocalWriteResult.ConflictCopy ->
+                    CloudSyncItemReport(key, CloudSyncItemOutcome.CONFLICT_COPY_SAVED)
+            }
         }
 
         val localChanged = baseHash == null || local.sha256 != baseHash

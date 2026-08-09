@@ -211,6 +211,7 @@ val HOME_GAME_SHORTCUT_IDS: List<String> = listOf(
     "tetris",
     "minesweeper",
     "spider",
+    "go",
 )
 
 val DEFAULT_HOME_GAME_SHORTCUT_IDS: List<String> = listOf(

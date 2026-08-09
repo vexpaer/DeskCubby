@@ -25,6 +25,7 @@ import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
+import com.deskcubby.app.data.model.normalizeHomeGameShortcutIds
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.ReaderProgressRecord
 import com.deskcubby.app.data.repository.ReaderRepository
@@ -266,14 +267,17 @@ class AppBackupRepository @Inject constructor(
         }
         val previousSettings = previous.settings
 
-        val restoredSettings = mergeBackupCloudSyncSettings(
-            imported = mergeLegacyBackupAiApiKeys(
-                imported = backup.settings,
+        val restoredSettings = mergeAndroidOnlyGameShortcut(
+            imported = mergeBackupCloudSyncSettings(
+                imported = mergeLegacyBackupAiApiKeys(
+                    imported = backup.settings,
+                    current = previousSettings,
+                    formatVersion = backup.formatVersion,
+                ),
                 current = previousSettings,
                 formatVersion = backup.formatVersion,
             ),
             current = previousSettings,
-            formatVersion = backup.formatVersion,
         ).copy(
             // Usage access and health-data authorization are device-local grants. Imports
             // never activate sensitive collection on a device that has not confirmed them.
@@ -815,22 +819,25 @@ class AppBackupRepository @Inject constructor(
         }
     }
 
-    private fun AppBackupContent.toBackup(): AppBackup = AppBackup(
-        formatVersion = BackupJsonCodec.FORMAT_VERSION,
-        exportedAt = System.currentTimeMillis(),
-        settings = settings,
-        thoughts = thoughts,
-        categories = categories,
-        favorites = favorites,
-        dateRecords = dateRecords,
-        poetryCategories = poetryCategories,
-        poems = poems,
-        vault = vault,
-        gameStates = gameStates,
-        gameStatistics = gameStatistics,
-        usageDevices = usageDevices,
-        readerProgress = readerProgress,
-    )
+    private fun AppBackupContent.toBackup(): AppBackup {
+        val projected = projectForV28Export()
+        return AppBackup(
+            formatVersion = BackupJsonCodec.FORMAT_VERSION,
+            exportedAt = System.currentTimeMillis(),
+            settings = projected.settings,
+            thoughts = projected.thoughts,
+            categories = projected.categories,
+            favorites = projected.favorites,
+            dateRecords = projected.dateRecords,
+            poetryCategories = projected.poetryCategories,
+            poems = projected.poems,
+            vault = projected.vault,
+            gameStates = projected.gameStates,
+            gameStatistics = projected.gameStatistics,
+            usageDevices = projected.usageDevices,
+            readerProgress = projected.readerProgress,
+        )
+    }
 
     private fun AppBackup.toSummary(): BackupSummary = BackupSummary(
         thoughtCount = thoughts.size,
@@ -875,6 +882,36 @@ class AppBackupRepository @Inject constructor(
         const val BACKUP_MIME_TYPE = "application/json"
         const val MAX_IMPORT_BYTES = BackupJsonCodec.MAX_JSON_BYTES
     }
+}
+
+/**
+ * Android has a local-only Go game that Windows 0.4's v28 whitelist cannot decode. Keep its Room
+ * save, statistics and Home shortcut at runtime, but omit all three from the cross-platform v28
+ * projection until a future backup version can advertise them safely.
+ */
+internal fun AppBackupContent.projectForV28Export(): AppBackupContent = copy(
+    settings = settings.copy(
+        homeGameShortcuts = settings.homeGameShortcuts.filterNot {
+            it == ANDROID_ONLY_GAME_ID
+        },
+    ),
+    gameStates = gameStates.filterNot { it.gameId == ANDROID_ONLY_GAME_ID },
+    gameStatistics = gameStatistics.filterNot { it.gameId == ANDROID_ONLY_GAME_ID },
+)
+
+private const val ANDROID_ONLY_GAME_ID = "go"
+
+/** v28 cannot encode Go, so importing a v28 projection must not clear its local shortcut choice. */
+internal fun mergeAndroidOnlyGameShortcut(
+    imported: AppSettings,
+    current: AppSettings,
+): AppSettings {
+    val selected = if (ANDROID_ONLY_GAME_ID in current.homeGameShortcuts) {
+        imported.homeGameShortcuts + ANDROID_ONLY_GAME_ID
+    } else {
+        imported.homeGameShortcuts
+    }
+    return imported.copy(homeGameShortcuts = normalizeHomeGameShortcutIds(selected))
 }
 
 /**

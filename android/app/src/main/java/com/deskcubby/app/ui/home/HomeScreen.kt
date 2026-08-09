@@ -142,6 +142,7 @@ private val homeGameShortcuts = listOf(
     HomeGameShortcut("tetris", "俄罗斯方块", "Tetris"),
     HomeGameShortcut("minesweeper", "扫雷", "Minesweeper"),
     HomeGameShortcut("spider", "蜘蛛纸牌", "Spider Solitaire"),
+    HomeGameShortcut("go", "围棋", "Go"),
 )
 
 @Composable

@@ -3,6 +3,8 @@ package com.deskcubby.app.data.repository
 import android.content.ContentResolver
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -19,6 +21,7 @@ import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Process
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -156,6 +159,49 @@ sealed interface DiaryCloudSyncWriteResult {
     ) : DiaryCloudSyncWriteResult
 }
 
+data class DefaultDiaryFolderUris(
+    val grantTreeUri: Uri,
+    val diaryTreeUri: Uri,
+    val mediaTreeUri: Uri,
+)
+
+/**
+ * Keeps a child document inside the parent tree URI that granted access.
+ *
+ * Rebuilding this as `/tree/<child-id>` would discard the selected parent tree path and therefore
+ * the prefix grant. A combined `/tree/<parent-id>/document/<child-id>` URI is both a tree-scoped
+ * grant target and, with DocumentFile 1.1+, a child-rooted tree document.
+ */
+internal fun validatedInheritedChildTreeUri(
+    selectedTreeUri: Uri,
+    childDocumentUri: Uri,
+): Uri {
+    require(selectedTreeUri.scheme == ContentResolver.SCHEME_CONTENT)
+    require(childDocumentUri.scheme == ContentResolver.SCHEME_CONTENT)
+    require(selectedTreeUri.authority == childDocumentUri.authority)
+    require(DocumentsContract.isTreeUri(selectedTreeUri))
+    require(DocumentsContract.isTreeUri(childDocumentUri))
+    val selectedTreeId = DocumentsContract.getTreeDocumentId(selectedTreeUri)
+    val inheritedTreeId = DocumentsContract.getTreeDocumentId(childDocumentUri)
+    val childDocumentId = DocumentsContract.getDocumentId(childDocumentUri)
+    require(inheritedTreeId == selectedTreeId)
+    require(childDocumentId != selectedTreeId)
+    return childDocumentUri
+}
+
+private class DocumentFileDefaultDiaryDirectory(
+    val document: DocumentFile,
+) : DefaultDiaryDirectory {
+    override val name: String? get() = document.name
+    override val isDirectory: Boolean get() = document.isDirectory
+
+    override fun children(): List<DefaultDiaryDirectory> =
+        document.listFiles().map(::DocumentFileDefaultDiaryDirectory)
+
+    override fun createDirectory(name: String): DefaultDiaryDirectory? =
+        document.createDirectory(name)?.let(::DocumentFileDefaultDiaryDirectory)
+}
+
 @Singleton
 class DiaryFileRepository @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -164,11 +210,131 @@ class DiaryFileRepository @Inject constructor(
     private val resolver: ContentResolver = context.contentResolver
     private val writeMutex = Mutex()
     private val mediaMutex = Mutex()
+    private val defaultFolderSetupMutex = Mutex()
     private val mealCalendarCacheMutex = Mutex()
     private val mealCalendarContentRevision = AtomicLong(0L)
     private val dirtyMealDiaryRevisions = ConcurrentHashMap<String, AtomicLong>()
 
     fun currentMealCalendarContentRevision(): Long = mealCalendarContentRevision.get()
+
+    /**
+     * Creates the conventional folder layout below a user-confirmed SAF tree and returns scoped
+     * child tree URIs. The selected tree remains the persisted grant; provider document IDs stay
+     * opaque and are only passed back through [DocumentsContract].
+     */
+    suspend fun initializeDefaultFolders(
+        selectedTreeUri: Uri,
+        savedTreeUris: Collection<String?> = emptyList(),
+    ): DefaultDiaryFolderUris =
+        withContext(Dispatchers.IO) {
+            defaultFolderSetupMutex.withLock {
+                require(
+                    selectedTreeUri.scheme == ContentResolver.SCHEME_CONTENT &&
+                        DocumentsContract.isTreeUri(selectedTreeUri),
+                ) { "Invalid SAF tree" }
+
+                val permissionFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                val persistedAccessBefore = persistedGrantAccess(selectedTreeUri)
+                try {
+                    resolver.takePersistableUriPermission(selectedTreeUri, permissionFlags)
+
+                    val selectedRoot = DocumentFile.fromTreeUri(context, selectedTreeUri)
+                        ?: throw DefaultDiaryFolderSetupException()
+                    if (!selectedRoot.isDirectory ||
+                        !selectedRoot.canRead() ||
+                        !selectedRoot.canWrite()
+                    ) {
+                        throw DefaultDiaryFolderSetupException()
+                    }
+
+                    val folders = ensureDefaultDiaryDirectories(
+                        DocumentFileDefaultDiaryDirectory(selectedRoot),
+                    )
+                    val diaryDocument =
+                        (folders.diary as DocumentFileDefaultDiaryDirectory).document
+                    val mediaDocument =
+                        (folders.media as DocumentFileDefaultDiaryDirectory).document
+                    val diaryTreeUri = validatedInheritedChildTreeUri(
+                        selectedTreeUri,
+                        diaryDocument.uri,
+                    )
+                    val mediaTreeUri = validatedInheritedChildTreeUri(
+                        selectedTreeUri,
+                        mediaDocument.uri,
+                    )
+
+                    // A few non-standard providers create directories but do not extend the
+                    // selected tree grant to a child tree URI. Fail before settings are changed.
+                    if (!hasReadWritePermission(diaryTreeUri) ||
+                        !hasReadWritePermission(mediaTreeUri) ||
+                        DocumentFile.fromTreeUri(context, diaryTreeUri)?.isDirectory != true ||
+                        DocumentFile.fromTreeUri(context, mediaTreeUri)?.isDirectory != true
+                    ) {
+                        throw DefaultDiaryFolderSetupException()
+                    }
+
+                    DefaultDiaryFolderUris(
+                        grantTreeUri = selectedTreeUri,
+                        diaryTreeUri = diaryTreeUri,
+                        mediaTreeUri = mediaTreeUri,
+                    )
+                } catch (error: Exception) {
+                    releaseNewDefaultFolderGrantAfterFailure(
+                        selectedTreeUri = selectedTreeUri,
+                        persistedAccessBefore = persistedAccessBefore,
+                        savedTreeUris = savedTreeUris,
+                    )
+                    throw error
+                }
+            }
+        }
+
+    private fun persistedGrantAccess(uri: Uri): DefaultDiaryPersistedGrantAccess? =
+        runCatching {
+            val matching = resolver.persistedUriPermissions.filter { permission ->
+                permission.uri == uri
+            }
+            DefaultDiaryPersistedGrantAccess(
+                read = matching.any { it.isReadPermission },
+                write = matching.any { it.isWritePermission },
+            )
+        }.getOrNull()
+
+    private fun releaseNewDefaultFolderGrantAfterFailure(
+        selectedTreeUri: Uri,
+        persistedAccessBefore: DefaultDiaryPersistedGrantAccess?,
+        savedTreeUris: Collection<String?>,
+    ) {
+        val accessToRelease = defaultDiaryGrantAccessToRelease(
+            before = persistedAccessBefore,
+            after = persistedGrantAccess(selectedTreeUri),
+            referencedBySavedConfiguration = savedTreeUris.any { raw ->
+                raw != null && treeUriUsesGrant(raw, selectedTreeUri)
+            },
+        )
+        val flags = (if (accessToRelease.read) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
+            (if (accessToRelease.write) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+        if (flags != 0) {
+            runCatching { resolver.releasePersistableUriPermission(selectedTreeUri, flags) }
+        }
+    }
+
+    private fun treeUriUsesGrant(raw: String, grantTreeUri: Uri): Boolean = runCatching {
+        val configuredTreeUri = Uri.parse(raw)
+        configuredTreeUri.scheme == ContentResolver.SCHEME_CONTENT &&
+            configuredTreeUri.authority == grantTreeUri.authority &&
+            DocumentsContract.isTreeUri(configuredTreeUri) &&
+            DocumentsContract.getTreeDocumentId(configuredTreeUri) ==
+            DocumentsContract.getTreeDocumentId(grantTreeUri)
+    }.getOrDefault(false)
+
+    private fun hasReadWritePermission(uri: Uri): Boolean {
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        return context.checkUriPermission(uri, Process.myPid(), Process.myUid(), flags) ==
+            PackageManager.PERMISSION_GRANTED
+    }
 
     private fun recordMealCalendarContentChange(diaryUri: Uri? = null) {
         // Mark a known Markdown document before publishing the global revision. A scan that races
@@ -2151,9 +2317,13 @@ class DiaryFileRepository @Inject constructor(
 
     fun hasPersistedAccess(uri: String?): Boolean {
         if (uri == null) return false
-        return resolver.persistedUriPermissions.any {
-            it.uri.toString() == uri && it.isReadPermission && it.isWritePermission
+        val parsed = runCatching { Uri.parse(uri) }.getOrNull() ?: return false
+        val permissions = resolver.persistedUriPermissions.filter {
+            it.isReadPermission && it.isWritePermission
         }
+        return permissions.any { it.uri == parsed } ||
+            permissions.any { it.uri.authority == parsed.authority } &&
+            hasReadWritePermission(parsed)
     }
 
     /**

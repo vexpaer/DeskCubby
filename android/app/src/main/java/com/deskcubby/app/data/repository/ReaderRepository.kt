@@ -5,11 +5,18 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.Build
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.system.Os
+import android.util.Size
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileInputStream
@@ -348,29 +355,35 @@ class ReaderRepository @Inject constructor(
     }
 
     /**
-     * Returns a bounded shelf cover. A custom SAF URI wins; otherwise PDF page one is rendered into
-     * an app-private, disposable PNG cache. TXT books intentionally have no generated cover.
+     * Returns one strictly bounded shelf bitmap. A custom SAF URI wins. For a PDF, an existing
+     * verified cache is reused; otherwise Android 10+ may ask the document provider for a bounded
+     * thumbnail. We deliberately do not open [PdfRenderer] here: entering a two-column shelf must
+     * never parse and render several arbitrary PDFs inside the application process.
      */
     suspend fun loadCover(book: ReaderBook, widthPx: Int): Bitmap? = withContext(Dispatchers.IO) {
-        val targetWidth = widthPx.coerceIn(MIN_COVER_WIDTH_PX, MAX_COVER_WIDTH_PX)
+        val targetSize = readerCoverTargetSize(widthPx)
         coverMutex.withLock {
             book.coverUri?.let { rawUri ->
-                val custom = decodeCoverUri(Uri.parse(rawUri), targetWidth)
-                if (custom != null) return@withLock custom
+                val custom = decodeCoverUri(Uri.parse(rawUri), targetSize.width)
+                if (custom != null) {
+                    return@withLock normalizeCoverBitmap(custom, targetSize)
+                }
             }
             if (book.type != ReaderBookType.PDF) return@withLock null
             val cacheFile = autoCoverFile(book)
-            decodeCoverFile(cacheFile, targetWidth)?.let { return@withLock it }
+            decodeCoverFile(cacheFile, targetSize.width)?.let { cached ->
+                return@withLock normalizeCoverBitmap(cached, targetSize)
+            }
 
-            val rendered = renderPdfPage(book, pageIndex = 0, targetWidthPx = AUTO_COVER_WIDTH_PX)
+            val generated = loadProviderPdfThumbnail(book) ?: return@withLock null
             try {
-                writeVerifiedCoverCache(cacheFile, rendered)
+                writeVerifiedCoverCache(cacheFile, generated)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                // Returning the rendered page still provides a cover for this session.
+                // A cache failure must not discard a thumbnail that is already safe to display.
             }
-            scaleCoverBitmap(rendered, targetWidth)
+            normalizeCoverBitmap(generated, targetSize)
         }
     }
 
@@ -703,7 +716,7 @@ class ReaderRepository @Inject constructor(
             bounds.outHeight !in 1..MAX_COVER_SOURCE_EDGE_PX
         ) return null
         val options = BitmapFactory.Options().apply {
-            inSampleSize = coverSampleSize(bounds.outWidth, bounds.outHeight, targetWidth)
+            inSampleSize = readerCoverSampleSize(bounds.outWidth, bounds.outHeight, targetWidth)
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
         val decoded = try {
@@ -737,7 +750,7 @@ class ReaderRepository @Inject constructor(
             bounds.outHeight !in 1..MAX_COVER_SOURCE_EDGE_PX
         ) return null
         val options = BitmapFactory.Options().apply {
-            inSampleSize = coverSampleSize(bounds.outWidth, bounds.outHeight, targetWidth)
+            inSampleSize = readerCoverSampleSize(bounds.outWidth, bounds.outHeight, targetWidth)
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
         val decoded = try {
@@ -789,15 +802,82 @@ class ReaderRepository @Inject constructor(
         }
     }
 
-    private fun scaleCoverBitmap(bitmap: Bitmap, targetWidth: Int): Bitmap {
-        if (bitmap.width <= targetWidth) return bitmap
-        val targetHeight = (bitmap.height.toDouble() * targetWidth / bitmap.width)
-            .toInt()
-            .coerceAtLeast(1)
-        if (targetWidth.toLong() * targetHeight > MAX_COVER_DECODE_PIXELS) return bitmap
-        val scaled = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
-        if (scaled !== bitmap) bitmap.recycle()
-        return scaled
+    private fun loadProviderPdfThumbnail(book: ReaderBook): Bitmap? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        val uri = Uri.parse(book.uri)
+        if (!documentProviderSupportsThumbnails(uri)) return null
+        val cacheSize = readerCoverTargetSize(AUTO_COVER_WIDTH_PX)
+        val thumbnail = try {
+            resolver.loadThumbnail(uri, Size(cacheSize.width, cacheSize.height), null)
+        } catch (_: OutOfMemoryError) {
+            null
+        } catch (_: Exception) {
+            null
+        } ?: return null
+        if (thumbnail.width.toLong() * thumbnail.height > MAX_COVER_DECODE_PIXELS) {
+            thumbnail.recycle()
+            return null
+        }
+        return normalizeCoverBitmap(thumbnail, cacheSize)
+    }
+
+    private fun documentProviderSupportsThumbnails(uri: Uri): Boolean = try {
+        resolver.query(
+            uri,
+            arrayOf(DocumentsContract.Document.COLUMN_FLAGS),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use false
+            val flagsIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_FLAGS)
+            flagsIndex >= 0 &&
+                (cursor.getLong(flagsIndex) and
+                    DocumentsContract.Document.FLAG_SUPPORTS_THUMBNAIL.toLong()) != 0L
+        } ?: false
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun normalizeCoverBitmap(
+        bitmap: Bitmap,
+        requestedSize: ReaderCoverDimensions,
+    ): Bitmap? {
+        if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) return null
+        val outputSize = readerCoverOutputSize(
+            sourceWidth = bitmap.width,
+            sourceHeight = bitmap.height,
+            requestedWidth = requestedSize.width,
+        )
+        if (bitmap.width == outputSize.width && bitmap.height == outputSize.height) return bitmap
+
+        val sourceAspect = bitmap.width.toDouble() / bitmap.height
+        val desiredAspect = outputSize.width.toDouble() / outputSize.height
+        val source = if (sourceAspect > desiredAspect) {
+            val cropWidth = (bitmap.height * desiredAspect).toInt().coerceIn(1, bitmap.width)
+            val left = (bitmap.width - cropWidth) / 2
+            Rect(left, 0, left + cropWidth, bitmap.height)
+        } else {
+            val cropHeight = (bitmap.width / desiredAspect).toInt().coerceIn(1, bitmap.height)
+            val top = (bitmap.height - cropHeight) / 2
+            Rect(0, top, bitmap.width, top + cropHeight)
+        }
+        val normalized = try {
+            Bitmap.createBitmap(outputSize.width, outputSize.height, Bitmap.Config.ARGB_8888).also {
+                Canvas(it).drawBitmap(
+                    bitmap,
+                    source,
+                    RectF(0f, 0f, outputSize.width.toFloat(), outputSize.height.toFloat()),
+                    COVER_BITMAP_PAINT,
+                )
+            }
+        } catch (_: OutOfMemoryError) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+        if (normalized !== bitmap) bitmap.recycle()
+        return normalized
     }
 
     private fun readText(uri: Uri, preferences: ReaderPreferences): ReaderTextLayout {
@@ -954,14 +1034,15 @@ class ReaderRepository @Inject constructor(
         private const val MAX_PDF_PIXELS = 8_000_000L
         private const val MAX_BOOK_FINGERPRINT_BYTES = 512L * 1024L * 1024L
         private const val MAX_EXPORT_FINGERPRINT_BYTES = 512L * 1024L * 1024L
-        private const val MIN_COVER_WIDTH_PX = 96
-        private const val AUTO_COVER_WIDTH_PX = 600
-        private const val MAX_COVER_WIDTH_PX = 1_024
+        private const val MIN_COVER_WIDTH_PX = READER_COVER_MIN_WIDTH_PX
+        private const val AUTO_COVER_WIDTH_PX = READER_COVER_MAX_WIDTH_PX
         private const val MAX_COVER_SOURCE_EDGE_PX = 100_000
-        private const val MAX_COVER_DECODE_PIXELS = 4_000_000L
-        private const val MAX_COVER_CACHE_BYTES = 12L * 1024L * 1024L
-        private const val MAX_CUSTOM_COVER_BYTES = 32 * 1024 * 1024
+        private const val MAX_COVER_DECODE_PIXELS = READER_COVER_MAX_INTERMEDIATE_PIXELS
+        private const val MAX_COVER_CACHE_BYTES = 4L * 1024L * 1024L
+        private const val MAX_CUSTOM_COVER_BYTES = 16 * 1024 * 1024
         private const val MAX_PROGRESS_RECORDS = 500
+
+        private val COVER_BITMAP_PAINT = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     }
 }
 
@@ -1160,19 +1241,52 @@ private fun mapReaderProgressPage(
         sourceLimit / 2L) / sourceLimit).toInt().coerceIn(0, destinationLimit)
 }
 
-private fun coverSampleSize(width: Int, height: Int, targetWidth: Int): Int {
+internal data class ReaderCoverDimensions(
+    val width: Int,
+    val height: Int,
+)
+
+internal fun readerCoverTargetSize(widthPx: Int): ReaderCoverDimensions {
+    val width = widthPx.coerceIn(READER_COVER_MIN_WIDTH_PX, READER_COVER_MAX_WIDTH_PX)
+    return ReaderCoverDimensions(
+        width = width,
+        height = kotlin.math.ceil(width / READER_COVER_ASPECT_RATIO).toInt(),
+    )
+}
+
+internal fun readerCoverOutputSize(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    requestedWidth: Int,
+): ReaderCoverDimensions {
+    require(sourceWidth > 0 && sourceHeight > 0)
+    val target = readerCoverTargetSize(requestedWidth)
+    val width = minOf(target.width, sourceWidth).coerceAtLeast(1)
+    return ReaderCoverDimensions(
+        width = width,
+        height = kotlin.math.ceil(width / READER_COVER_ASPECT_RATIO).toInt(),
+    )
+}
+
+internal fun readerCoverSampleSize(width: Int, height: Int, targetWidth: Int): Int {
+    require(width > 0 && height > 0)
     var sample = 1
-    val desiredDecodedWidth = (targetWidth * 2).coerceAtLeast(targetWidth)
+    val desiredDecodedWidth = (readerCoverTargetSize(targetWidth).width * 2)
     while (sample <= Int.MAX_VALUE / 2) {
         val sampledWidth = (width + sample - 1L) / sample
         val sampledHeight = (height + sample - 1L) / sample
         if (sampledWidth <= desiredDecodedWidth &&
-            sampledWidth * sampledHeight <= 4_000_000L
+            sampledWidth * sampledHeight <= READER_COVER_MAX_INTERMEDIATE_PIXELS
         ) break
         sample *= 2
     }
     return sample
 }
+
+private const val READER_COVER_MIN_WIDTH_PX = 96
+private const val READER_COVER_MAX_WIDTH_PX = 512
+private const val READER_COVER_MAX_INTERMEDIATE_PIXELS = 1_500_000L
+private const val READER_COVER_ASPECT_RATIO = 0.7
 
 private fun ByteArray.toLowerHex(): String {
     val digits = "0123456789abcdef"

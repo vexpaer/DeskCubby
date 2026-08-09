@@ -214,6 +214,7 @@ internal fun defaultGameStatisticsHubItems(): List<GameStatisticsHubItem> = list
     GameStatisticsHubItem("tetris"),
     GameStatisticsHubItem("minesweeper"),
     GameStatisticsHubItem("spider"),
+    GameStatisticsHubItem("go"),
 )
 
 private fun Iterable<EngagementStatisticsItem>.saturatedDurationSum(): Long =

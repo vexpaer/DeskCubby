@@ -156,9 +156,10 @@ class CloudSyncLimitException(
     message: String,
 ) : CloudSyncException(message, errorCode = "SYNC_LIMIT")
 
-class CloudSyncConfigurationException(
+open class CloudSyncConfigurationException(
     message: String,
-) : CloudSyncException(message, errorCode = "SYNC_CONFIG")
+    errorCode: String = "SYNC_CONFIG",
+) : CloudSyncException(message, errorCode = errorCode)
 
 internal fun formatCloudSyncError(error: Throwable): String {
     val syncError = generateSequence(error) { it.cause }

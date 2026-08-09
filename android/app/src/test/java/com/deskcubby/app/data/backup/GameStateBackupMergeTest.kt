@@ -2,10 +2,41 @@ package com.deskcubby.app.data.backup
 
 import com.deskcubby.app.data.local.GameStateEntity
 import com.deskcubby.app.data.local.GameStatisticEntity
+import com.deskcubby.app.data.model.AppSettings
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class GameStateBackupMergeTest {
+    @Test
+    fun v28ExportProjectionOmitsAndroidOnlyGoDataAndShortcut() {
+        val content = AppBackupContent(
+            settings = AppSettings(homeGameShortcuts = listOf("go", "snake")),
+            thoughts = emptyList(),
+            categories = emptyList(),
+            favorites = emptyList(),
+            dateRecords = emptyList(),
+            poetryCategories = emptyList(),
+            poems = emptyList(),
+            gameStates = listOf(
+                GameStateEntity("go", 8, """{"size":9}""", 2),
+                GameStateEntity("snake", 10, null, 3),
+            ),
+            gameStatistics = listOf(
+                GameStatisticEntity("go", "goStonesCaptured", 8, 2),
+                GameStatisticEntity("snake", "foodEaten", 4, 3),
+            ),
+        )
+
+        val projected = content.projectForV28Export()
+
+        assertEquals(listOf("snake"), projected.settings.homeGameShortcuts)
+        assertEquals(listOf("snake"), projected.gameStates.map(GameStateEntity::gameId))
+        assertEquals(listOf("snake"), projected.gameStatistics.map(GameStatisticEntity::gameId))
+        assertEquals(listOf("go", "snake"), content.settings.homeGameShortcuts)
+        assertEquals(2, content.gameStates.size)
+        assertEquals(2, content.gameStatistics.size)
+    }
+
     @Test
     fun mergeKeepsMaximumScoreAndNewestSave() {
         val local = GameStateEntity(
@@ -36,6 +67,43 @@ class GameStateBackupMergeTest {
         assertEquals(
             listOf(snake, tetris),
             mergeGameStateBackups(listOf(snake), listOf(tetris)),
+        )
+    }
+
+    @Test
+    fun importingV28WithoutGoPreservesLocalGoRoomData() {
+        val localGo = GameStateEntity("go", 9, """{"size":9}""", 3)
+        val importedSnake = GameStateEntity("snake", 10, null, 4)
+        val localGoMetric = GameStatisticEntity("go", "goMovesPlayed", 12, 3)
+        val importedSnakeMetric = GameStatisticEntity("snake", "foodEaten", 4, 4)
+
+        assertEquals(
+            listOf(localGo, importedSnake),
+            mergeGameStateBackups(listOf(localGo), listOf(importedSnake)),
+        )
+        assertEquals(
+            listOf(localGoMetric, importedSnakeMetric),
+            mergeGameStatisticBackups(listOf(localGoMetric), listOf(importedSnakeMetric)),
+        )
+    }
+
+    @Test
+    fun importingV28ProjectionPreservesOnlyTheCurrentDevicesGoShortcutChoice() {
+        val imported = AppSettings(homeGameShortcuts = listOf("2048", "snake"))
+
+        assertEquals(
+            listOf("2048", "snake", "go"),
+            mergeAndroidOnlyGameShortcut(
+                imported = imported,
+                current = AppSettings(homeGameShortcuts = listOf("go")),
+            ).homeGameShortcuts,
+        )
+        assertEquals(
+            listOf("2048", "snake"),
+            mergeAndroidOnlyGameShortcut(
+                imported = imported,
+                current = AppSettings(homeGameShortcuts = listOf("snake")),
+            ).homeGameShortcuts,
         )
     }
 

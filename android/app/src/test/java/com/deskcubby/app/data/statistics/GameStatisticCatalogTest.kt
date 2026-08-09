@@ -30,4 +30,20 @@ class GameStatisticCatalogTest {
         assertEquals(7L, metrics.value(GameStatisticMetric.EFFECTIVE_MOVES))
         assertFalse(metrics.asMap().containsKey(GameStatisticMetric.LOSSES))
     }
+
+    @Test
+    fun `go supports its lifetime feature metrics`() {
+        val expected = setOf(
+            GameStatisticMetric.GO_MOVES_PLAYED,
+            GameStatisticMetric.GO_STONES_CAPTURED,
+            GameStatisticMetric.GO_PASSES,
+            GameStatisticMetric.GO_GAMES_COMPLETED,
+        )
+
+        assertEquals(expected, GameStatisticCatalog.supportedMetricsByGameId["go"])
+        expected.forEach { metric ->
+            assertTrue(GameStatisticCatalog.isActive("go", metric))
+        }
+        assertFalse(GameStatisticCatalog.supports("go", GameStatisticMetric.WINS))
+    }
 }

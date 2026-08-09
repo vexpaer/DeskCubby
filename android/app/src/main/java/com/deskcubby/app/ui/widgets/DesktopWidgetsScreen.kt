@@ -213,6 +213,8 @@ fun DesktopWidgetsScreen(
                 },
                 onDelete = { deleteCandidate = it },
                 onPin = { viewModel.requestPin(it, english) },
+                onPinSyncNow = { viewModel.requestPinSyncWidget(false, english) },
+                onPinForceSync = { viewModel.requestPinSyncWidget(true, english) },
             )
         } else {
             WidgetCardEditor(
@@ -332,6 +334,8 @@ private fun WidgetCardList(
     onEdit: (DesktopWidgetConfig) -> Unit,
     onDelete: (DesktopWidgetConfig) -> Unit,
     onPin: (DesktopWidgetConfig) -> Unit,
+    onPinSyncNow: () -> Unit,
+    onPinForceSync: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -353,6 +357,40 @@ private fun WidgetCardList(
                     modifier = Modifier.padding(16.dp),
                     style = MaterialTheme.typography.bodyMedium,
                 )
+            }
+        }
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        if (english) "Cloud sync widgets" else "云同步小组件",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        if (english) {
+                            "Sync actions run in a network-constrained serial queue. Forced actions " +
+                                "never propagate deletions and still use conditional checks; " +
+                                "force download requires one enabled cloud source."
+                        } else {
+                            "同步动作会在联网约束的串行队列中执行。强制操作不传播删除且仍执行条件校验；强制下载要求仅启用一个云端来源。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(onClick = onPinSyncNow, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (english) "Add Sync now" else "添加“立即同步”")
+                    }
+                    OutlinedButton(onClick = onPinForceSync, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            if (english) "Add Force upload/download"
+                            else "添加“强制上传/下载”",
+                        )
+                    }
+                }
             }
         }
         if (configs.isEmpty()) {

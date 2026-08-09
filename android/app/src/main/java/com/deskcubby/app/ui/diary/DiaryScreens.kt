@@ -3,6 +3,8 @@
 package com.deskcubby.app.ui.diary
 
 import android.net.Uri
+import android.os.Environment
+import android.provider.DocumentsContract
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -174,6 +176,8 @@ fun DiaryListScreen(
     val trash by viewModel.trash.collectAsStateWithLifecycle()
     val expandedMonth by viewModel.expandedMonth.collectAsStateWithLifecycle()
     val operationMessage by viewModel.message.collectAsStateWithLifecycle()
+    val defaultFolderSetupInProgress by
+        viewModel.defaultFolderSetupInProgress.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     val visuals = deskCubbyVisuals
@@ -183,6 +187,17 @@ fun DiaryListScreen(
     var deleteItem by remember { mutableStateOf<DiaryDocument?>(null) }
     var showTrash by remember { mutableStateOf(false) }
     var permanentlyDeleting by remember { mutableStateOf<com.deskcubby.app.data.model.DiaryTrashItem?>(null) }
+    val defaultFolderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        uri?.let(viewModel::initializeDefaultFolders)
+    }
+    val documentsInitialUri = remember {
+        DocumentsContract.buildDocumentUri(
+            "com.android.externalstorage.documents",
+            "primary:${Environment.DIRECTORY_DOCUMENTS}",
+        )
+    }
 
     LaunchedEffect(operationMessage) {
         operationMessage?.let {
@@ -219,7 +234,12 @@ fun DiaryListScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { inner ->
         when {
-            settings.diaryTreeUri == null -> EmptyDiary(onOpenSettings, Modifier.padding(inner))
+            settings.diaryTreeUri == null -> EmptyDiary(
+                onQuickSetup = { defaultFolderPicker.launch(documentsInitialUri) },
+                setupInProgress = defaultFolderSetupInProgress,
+                onSettings = onOpenSettings,
+                modifier = Modifier.padding(inner),
+            )
             state.loading && state.items.isEmpty() -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) { AppLoadingIndicator() }
             state.items.isEmpty() -> AppEmptyState(
                 icon = Icons.Outlined.MenuBook,
@@ -401,16 +421,28 @@ fun DiaryListScreen(
 }
 
 @Composable
-private fun EmptyDiary(onSettings: () -> Unit, modifier: Modifier = Modifier) {
+private fun EmptyDiary(
+    onQuickSetup: () -> Unit,
+    setupInProgress: Boolean,
+    onSettings: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     AppEmptyState(
         icon = Icons.Outlined.CreateNewFolder,
-        title = tr("选择日记目录", "Choose a diary folder"),
+        title = tr("设置日记目录", "Set up diary folders"),
         description = tr(
-            "选择一个包含 Markdown 文件的目录，日记会按月份整理。",
-            "Choose a folder containing Markdown files; diaries will be organized by month.",
+            "确认本机 Documents（文档）目录后，会自动创建 deskcubby/diary 与 deskcubby/media。系统要求你确认一次目录访问。",
+            "Confirm the local Documents folder to create deskcubby/diary and deskcubby/media automatically. Android requires one folder-access confirmation.",
         ),
-        actionLabel = tr("前往设置", "Open settings"),
-        onAction = onSettings,
+        actionLabel = if (setupInProgress) {
+            tr("正在创建…", "Creating…")
+        } else {
+            tr("一键设置默认目录", "Set up default folders")
+        },
+        onAction = onQuickSetup,
+        actionEnabled = !setupInProgress,
+        secondaryActionLabel = tr("手动选择目录", "Choose folders manually"),
+        onSecondaryAction = onSettings,
         modifier = modifier.fillMaxSize(),
         iconSize = 64.dp,
     )

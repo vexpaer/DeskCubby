@@ -245,7 +245,7 @@ class BackupJsonCodecTest {
     }
 
     @Test
-    fun versionTwentySevenRejectsUnknownHomeGameShortcut() {
+    fun versionTwentySevenRejectsUnsupportedHomeGameShortcut() {
         val root = JSONObject(
             BackupJsonCodec.encode(
                 AppBackup(
@@ -260,6 +260,49 @@ class BackupJsonCodecTest {
             .put("homeGameShortcuts", JSONArray(listOf("snake", "unknown")))
 
         assertDecodeRejected(root)
+
+        root.getJSONObject("settings")
+            .put("homeGameShortcuts", JSONArray(listOf("snake", "go")))
+        assertDecodeRejected(root)
+    }
+
+    @Test
+    fun versionTwentyEightRejectsAndroidOnlyGoGamePayloads() {
+        fun currentRoot() = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 28,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+
+        assertDecodeRejected(currentRoot().apply {
+            put(
+                "gameStates",
+                JSONArray().put(
+                    JSONObject()
+                        .put("gameId", "go")
+                        .put("highScore", 0)
+                        .put("saveJson", JSONObject.NULL)
+                        .put("updatedAt", 1),
+                ),
+            )
+        })
+        assertDecodeRejected(currentRoot().apply {
+            put(
+                "gameStatistics",
+                JSONArray().put(
+                    JSONObject()
+                        .put("gameId", "go")
+                        .put("metricKey", "goMovesPlayed")
+                        .put("value", 1)
+                        .put("updatedAt", 1),
+                ),
+            )
+        })
     }
 
     @Test

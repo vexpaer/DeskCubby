@@ -132,7 +132,7 @@ internal suspend fun <T, R> mapConcurrentOrdered(
 class DiaryViewModel @Inject constructor(
     private val repository: DiaryFileRepository,
     private val calorieRepository: CalorieEstimationRepository,
-    settingsRepository: SettingsRepository,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
     val settings: StateFlow<AppSettings> = settingsRepository.settings.stateIn(
         viewModelScope,
@@ -164,6 +164,10 @@ class DiaryViewModel @Inject constructor(
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
+
+    private val _defaultFolderSetupInProgress = MutableStateFlow(false)
+    val defaultFolderSetupInProgress: StateFlow<Boolean> =
+        _defaultFolderSetupInProgress.asStateFlow()
 
     private val saveRequests = MutableSharedFlow<Unit>(
         extraBufferCapacity = 1,
@@ -206,6 +210,38 @@ class DiaryViewModel @Inject constructor(
                     }
                 }
                 .onFailure { _listState.value = DiaryListState(error = it.userMessage()) }
+        }
+    }
+
+    fun initializeDefaultFolders(selectedTreeUri: Uri) {
+        if (_defaultFolderSetupInProgress.value) return
+        _defaultFolderSetupInProgress.value = true
+        viewModelScope.launch {
+            try {
+                val current = settings.value
+                val initialized = repository.initializeDefaultFolders(
+                    selectedTreeUri = selectedTreeUri,
+                    savedTreeUris = listOf(current.diaryTreeUri, current.mediaTreeUri),
+                )
+                settingsRepository.setDefaultDiaryFolders(
+                    grantTreeUri = initialized.grantTreeUri.toString(),
+                    diaryTreeUri = current.diaryTreeUri ?: initialized.diaryTreeUri.toString(),
+                    mediaTreeUri = current.mediaTreeUri ?: initialized.mediaTreeUri.toString(),
+                )
+                _message.value = localized(
+                    "默认日记与媒体目录已设置",
+                    "Default diary and media folders are ready",
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                _message.value = localized(
+                    "无法设置默认目录。请在系统选择器中确认本机 Documents（文档）目录，并允许读写。",
+                    "Could not set up the default folders. Confirm the local Documents folder in the system picker and allow read/write access.",
+                )
+            } finally {
+                _defaultFolderSetupInProgress.value = false
+            }
         }
     }
 

@@ -35,6 +35,11 @@ object GameStatisticMetric {
     const val SPIDER_CARD_MOVES = "spiderCardMoves"
     const val SPIDER_DEALS = "spiderDeals"
     const val SPIDER_UNDOS = "spiderUndos"
+
+    const val GO_MOVES_PLAYED = "goMovesPlayed"
+    const val GO_STONES_CAPTURED = "goStonesCaptured"
+    const val GO_PASSES = "goPasses"
+    const val GO_GAMES_COMPLETED = "goGamesCompleted"
 }
 
 object GameStatisticCatalog {
@@ -45,6 +50,7 @@ object GameStatisticCatalog {
     const val GAME_TETRIS = "tetris"
     const val GAME_MINESWEEPER = "minesweeper"
     const val GAME_SPIDER = "spider"
+    const val GAME_GO = "go"
 
     private val game2048Ids = setOf(GAME_2048, GAME_2048_5, GAME_2048_6)
     private val commonOutcomes = setOf(
@@ -82,6 +88,12 @@ object GameStatisticCatalog {
             GameStatisticMetric.SPIDER_CARD_MOVES,
             GameStatisticMetric.SPIDER_DEALS,
             GameStatisticMetric.SPIDER_UNDOS,
+        ),
+        GAME_GO to setOf(
+            GameStatisticMetric.GO_MOVES_PLAYED,
+            GameStatisticMetric.GO_STONES_CAPTURED,
+            GameStatisticMetric.GO_PASSES,
+            GameStatisticMetric.GO_GAMES_COMPLETED,
         ),
     )
 

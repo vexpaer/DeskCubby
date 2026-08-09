@@ -27,7 +27,6 @@ import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.HomeGreetingTemplate
-import com.deskcubby.app.data.model.HOME_GAME_SHORTCUT_IDS
 import com.deskcubby.app.data.model.Game2048AnimationSpeed
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.NavItemConfig
@@ -203,6 +202,9 @@ object BackupJsonCodec {
         }
         requireValidBrowserUrl(backup.settings.browserHomeUrl, "browserHomeUrl")
         backup.settings.lastBrowserUrl?.let { requireValidBrowserUrl(it, "lastBrowserUrl") }
+        require(backup.settings.homeGameShortcuts.all(SUPPORTED_GAME_IDS::contains)) {
+            "homeGameShortcuts contains an unsupported game"
+        }
         validateEntityKeys(
             thoughts = backup.thoughts,
             categories = backup.categories,
@@ -802,7 +804,7 @@ object BackupJsonCodec {
             json.requiredArray("homeGameShortcuts")
                 .requiredStringList("homeGameShortcuts")
                 .also { items ->
-                    require(items.all(HOME_GAME_SHORTCUT_IDS::contains)) {
+                    require(items.all(SUPPORTED_GAME_IDS::contains)) {
                         "homeGameShortcuts contains an unsupported game"
                     }
                 }
@@ -2123,7 +2125,10 @@ object BackupJsonCodec {
     }
 
     private fun validateGameStatistic(item: GameStatisticEntity, index: Int) {
-        require(GameStatisticCatalog.supports(item.gameId, item.metricKey)) {
+        require(
+            item.gameId in SUPPORTED_GAME_IDS &&
+                GameStatisticCatalog.supports(item.gameId, item.metricKey),
+        ) {
             "gameStatistics[$index] contains an unsupported key"
         }
         require(item.value >= 0L && item.updatedAt >= 0L) {

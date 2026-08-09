@@ -68,7 +68,10 @@
 
         <receiver
             android:name=".widget.DeskCubbyWidgetProvider"
-            android:exported="true">
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/desktop_widget_picker_name">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
@@ -76,6 +79,39 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/desktop_widget_info" />
         </receiver>
+
+        <receiver
+            android:name=".widget.CloudSyncNowWidgetProvider"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/cloud_sync_widget_now_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/cloud_sync_now_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.CloudSyncForceWidgetProvider"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/cloud_sync_widget_force_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/cloud_sync_force_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.CloudSyncWidgetActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
 
         <activity
             android:name=".widget.DeskCubbyWidgetConfigureActivity"

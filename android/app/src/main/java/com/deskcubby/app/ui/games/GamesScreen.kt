@@ -219,6 +219,11 @@ fun GamesScreen(
                         onExit = { launch = null },
                         onStatisticsDelta = viewModel::recordSpiderStatistics,
                     )
+                    GamesViewModel.GAME_GO -> GoPage(
+                        viewModel = viewModel,
+                        resume = current.resume,
+                        onExit = { launch = null },
+                    )
                     else -> GameListPage(viewModel, onLaunch)
                 }
             }
@@ -271,6 +276,14 @@ private fun gameTutorialTarget(launch: GameLaunch?): PageTutorialTarget {
             listOf(
                 tr("点牌堆向每列发牌；所有列都必须至少有一张牌。", "Tap the stock to deal to every column; no column may be empty."),
                 tr("重开按钮会先确认，确认后当前进度不可恢复。", "Restart asks for confirmation because the current run cannot be restored afterward."),
+            ),
+        )
+        GamesViewModel.GAME_GO -> Triple(
+            tr("围棋", "Go"),
+            tr("本地双人轮流落子，支持提子、禁自杀与简单劫。", "Take turns locally with captures, suicide prevention, and simple ko."),
+            listOf(
+                tr("可选择 9、13 或 19 路棋盘。", "Choose a 9, 13, or 19-line board."),
+                tr("双方连续停着会结束棋局，应用不自动判断地域胜负。", "Two consecutive passes end the game; territory is not scored automatically."),
             ),
         )
         else -> Triple(tr("小游戏", "Mini game"), tr("按照页面中的控制开始游戏。", "Use the controls on this page to play."), emptyList())
@@ -350,6 +363,14 @@ private fun GameListPage(viewModel: GamesViewModel, onLaunch: (String, Boolean) 
             viewModel = viewModel,
             onLaunch = onLaunch,
         )
+        GameCard(
+            gameId = GamesViewModel.GAME_GO,
+            title = tr("围棋", "Go"),
+            subtitle = tr("本地双人，支持 9/13/19 路与基本规则", "Local two-player play on 9/13/19 boards with core rules"),
+            bestLabel = tr("最高提子", "Best captures"),
+            viewModel = viewModel,
+            onLaunch = onLaunch,
+        )
     }
 }
 
@@ -358,6 +379,7 @@ private fun GameCard(
     gameId: String,
     title: String,
     subtitle: String,
+    bestLabel: String? = null,
     viewModel: GamesViewModel,
     onLaunch: (String, Boolean) -> Unit,
 ) {
@@ -384,7 +406,7 @@ private fun GameCard(
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        tr("最高分", "Best"),
+                        bestLabel ?: tr("最高分", "Best"),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -414,7 +436,7 @@ private fun GameCard(
 // ---------------------------------------------------------------------------------------------
 
 @Composable
-private fun GameFrame(
+internal fun GameFrame(
     title: String,
     score: Int,
     highScore: Int,
@@ -425,6 +447,8 @@ private fun GameFrame(
     undoVisible: Boolean = false,
     undoEnabled: Boolean = false,
     onUndo: () -> Unit = {},
+    scoreLabel: String? = null,
+    highScoreLabel: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     BackHandler(onBack = onBack)
@@ -464,8 +488,8 @@ private fun GameFrame(
                 .padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            ScoreChip(tr("分数", "Score"), score, Modifier.weight(1f))
-            ScoreChip(tr("最高分", "Best"), highScore, Modifier.weight(1f))
+            ScoreChip(scoreLabel ?: tr("分数", "Score"), score, Modifier.weight(1f))
+            ScoreChip(highScoreLabel ?: tr("最高分", "Best"), highScore, Modifier.weight(1f))
         }
         content()
     }

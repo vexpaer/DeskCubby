@@ -16,15 +16,35 @@ class ReaderPdfPolicyTest {
     fun enhancedRendererFallsBackAfterFailureAndOlderAndroidAlwaysUsesCompatibilityMode() {
         assertEquals(
             ReaderPdfRendererMode.ENHANCED,
-            selectReaderPdfRendererMode(Build.VERSION_CODES.P, enhancedReaderUnavailable = false),
+            selectReaderPdfRendererMode(
+                Build.VERSION_CODES.P,
+                enhancedServiceAvailable = true,
+                enhancedReaderUnavailable = false,
+            ),
         )
         assertEquals(
             ReaderPdfRendererMode.COMPATIBILITY,
-            selectReaderPdfRendererMode(Build.VERSION_CODES.P, enhancedReaderUnavailable = true),
+            selectReaderPdfRendererMode(
+                Build.VERSION_CODES.P,
+                enhancedServiceAvailable = true,
+                enhancedReaderUnavailable = true,
+            ),
         )
         assertEquals(
             ReaderPdfRendererMode.COMPATIBILITY,
-            selectReaderPdfRendererMode(Build.VERSION_CODES.O_MR1, enhancedReaderUnavailable = false),
+            selectReaderPdfRendererMode(
+                Build.VERSION_CODES.O_MR1,
+                enhancedServiceAvailable = true,
+                enhancedReaderUnavailable = false,
+            ),
+        )
+        assertEquals(
+            ReaderPdfRendererMode.COMPATIBILITY,
+            selectReaderPdfRendererMode(
+                Build.VERSION_CODES.P,
+                enhancedServiceAvailable = false,
+                enhancedReaderUnavailable = false,
+            ),
         )
     }
 

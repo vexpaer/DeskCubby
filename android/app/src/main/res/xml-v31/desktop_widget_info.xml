@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:configure="com.deskcubby.app.widget.DeskCubbyWidgetConfigureActivity"
+    android:description="@string/desktop_widget_description"
     android:initialLayout="@layout/desktop_widget"
     android:minHeight="40dp"
     android:minResizeHeight="40dp"
