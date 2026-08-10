@@ -7,7 +7,7 @@ import org.junit.Test
 
 class DesktopWidgetResolutionTest {
     @Test
-    fun placedSnapshotWinsOverReusableDesigns() {
+    fun reusableTemplateWinsWhileItExistsAndSnapshotSurvivesDeletion() {
         val first = DesktopWidgetConfig(id = "first", name = "First")
         val secondSnapshot = DesktopWidgetConfig(
             id = "second",
@@ -15,12 +15,24 @@ class DesktopWidgetResolutionTest {
             showName = false,
             backgroundOpacityPercent = 40,
         )
+        val editedSecond = secondSnapshot.copy(
+            name = "Edited template",
+            backgroundOpacityPercent = 80,
+        )
 
+        assertEquals(
+            editedSecond,
+            resolveDesktopWidgetConfig(
+                storedSnapshot = secondSnapshot,
+                legacyConfigId = "first",
+                reusableConfigs = listOf(first, editedSecond),
+            ),
+        )
         assertEquals(
             secondSnapshot,
             resolveDesktopWidgetConfig(
                 storedSnapshot = secondSnapshot,
-                legacyConfigId = "first",
+                legacyConfigId = null,
                 reusableConfigs = listOf(first),
             ),
         )

@@ -172,6 +172,12 @@ class BackupJsonCodecTest {
                         appPackageName = "com.example.maps",
                         appLabel = "Maps",
                     ),
+                    DesktopWidgetConfig(
+                        id = "cloud-force-card",
+                        name = "强制同步",
+                        contentType = DesktopWidgetContentType.HOME_MODULE,
+                        homeModuleId = "cloud_sync_force",
+                    ),
                 ),
                 musicVisualizerEnabled = true,
                 musicVisualizerStyle = MusicVisualizerStyle.CURVE,
@@ -607,6 +613,48 @@ class BackupJsonCodecTest {
         assertEquals(true, decoded.showIcon)
         assertEquals(DesktopWidgetTextAlignment.START, decoded.textAlignment)
         assertEquals(100, decoded.textScalePercent)
+    }
+
+    @Test
+    fun versionTwentyNineImportsLegacyCloudSyncDesktopWidgetWithoutLosingFields() {
+        val current = DesktopWidgetConfig(
+            id = "legacy-cloud-sync-card",
+            name = "保留旧标题",
+            widthCells = 4,
+            heightCells = 3,
+            backgroundColorArgb = 0xFF102030.toInt(),
+            textColorArgb = 0xFFF0E0D0.toInt(),
+            backgroundImageUri = "content://images/legacy-cloud-sync-background",
+            showName = false,
+            backgroundOpacityPercent = 47,
+            showIcon = false,
+            textAlignment = DesktopWidgetTextAlignment.END,
+            textScalePercent = 135,
+            contentType = DesktopWidgetContentType.HOME_MODULE,
+            homeModuleId = "cloud_sync_now",
+            appPackageName = "com.example.sync",
+            appLabel = "旧同步入口",
+        )
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 29,
+                    settings = AppSettings(desktopWidgetConfigs = listOf(current)),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        root.getJSONObject("settings")
+            .getJSONArray("desktopWidgetConfigs")
+            .getJSONObject(0)
+            .put("homeModuleId", "cloud_sync")
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+            .settings.desktopWidgetConfigs.single()
+
+        assertEquals(29, root.getInt("version"))
+        assertEquals(current, decoded)
     }
 
     @Test
@@ -1524,10 +1572,10 @@ class BackupJsonCodecTest {
     }
 
     @Test
-    fun roundTripPreservesNonEmptyHomeLists() {
+    fun currentBackupMigratesLegacyCloudSyncHomeModuleIds() {
         val settings = AppSettings(
             homeWidgets = listOf("today", "recent_thought", "cloud_sync"),
-            homeWidgetTitles = listOf("calendar", "website"),
+            homeWidgetTitles = listOf("calendar", "cloud_sync", "website"),
         )
 
         val decoded = BackupJsonCodec.decode(
@@ -1541,8 +1589,14 @@ class BackupJsonCodecTest {
             ),
         )
 
-        assertEquals(settings.homeWidgets, decoded.settings.homeWidgets)
-        assertEquals(settings.homeWidgetTitles, decoded.settings.homeWidgetTitles)
+        assertEquals(
+            listOf("today", "recent_thought", "cloud_sync_now", "cloud_sync_force"),
+            decoded.settings.homeWidgets,
+        )
+        assertEquals(
+            listOf("calendar", "cloud_sync_now", "cloud_sync_force", "website"),
+            decoded.settings.homeWidgetTitles,
+        )
     }
 
     @Test

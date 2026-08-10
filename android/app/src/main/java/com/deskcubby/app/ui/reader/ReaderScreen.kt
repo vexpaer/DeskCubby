@@ -627,18 +627,11 @@ private fun ReaderBookPage(
     } else {
         pdfSearchResultCount
     }
-    val context = LocalContext.current
-    val platformPdfTextFeaturesAvailable = remember { readerPdfTextFeaturesAvailable() }
-    val enhancedPdfServiceAvailable = remember(context) {
-        readerPdfEnhancedServiceAvailable(context)
-    }
     val pdfRendererMode = selectReaderPdfRendererMode(
-        sdkInt = Build.VERSION.SDK_INT,
-        enhancedServiceAvailable = enhancedPdfServiceAvailable,
         enhancedReaderUnavailable = enhancedPdfReaderUnavailable,
     )
     val textLayerAvailable = content !is ReaderContent.PdfBook ||
-        (pdfRendererMode == ReaderPdfRendererMode.ENHANCED && platformPdfTextFeaturesAvailable)
+        pdfRendererMode == ReaderPdfRendererMode.ENHANCED
     val chapters = textContent?.chapters ?: pdfChapters
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -856,7 +849,6 @@ private fun ReaderBookPage(
                         pageCount = content.pageCount,
                         preferences = preferences,
                         useEnhancedRenderer = pdfRendererMode == ReaderPdfRendererMode.ENHANCED,
-                        textFeaturesAvailable = textLayerAvailable,
                         background = background,
                         foreground = foreground,
                         contentPadding = inner,
@@ -1360,7 +1352,6 @@ private fun PdfReader(
     pageCount: Int,
     preferences: ReaderPreferences,
     useEnhancedRenderer: Boolean,
-    textFeaturesAvailable: Boolean,
     background: Color,
     foreground: Color,
     contentPadding: PaddingValues,
@@ -1389,12 +1380,11 @@ private fun PdfReader(
         onDispose { viewModel.savePdfProgress(book.id, currentPage) }
     }
     Box(Modifier.fillMaxSize().padding(contentPadding).background(background)) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && useEnhancedRenderer) {
-            AndroidxPdfReader(
+        if (useEnhancedRenderer) {
+            PdfiumPdfReader(
                 uri = android.net.Uri.parse(book.uri),
                 initialPage = currentPage,
                 preferences = preferences,
-                textFeaturesAvailable = textFeaturesAvailable,
                 background = background,
                 foreground = foreground,
                 modifier = Modifier.fillMaxSize(),
@@ -2123,35 +2113,15 @@ private fun readerTutorialTarget(content: ReaderContentState): PageTutorialTarge
             pageId = "reader/pdf",
             title = tr("PDF 阅读", "PDF reader"),
             description = tr(
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    "PDF 以连续页面阅读；增强视图加载超时或不可用时会自动切换到兼容视图。"
-                } else {
-                    "PDF 以从上到下的连续页面阅读；Android 8 使用无文本层的兼容视图。"
-                },
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    "PDF pages form one continuous reader; if the enhanced view times out or is unavailable, the app switches to the compatibility view."
-                } else {
-                    "PDF pages form one continuous vertical reader; Android 8 uses a compatibility view without a text layer."
-                },
+                "PDFium 增强视图以连续页面阅读；加载超时或不可用时会自动切换到系统兼容视图。",
+                "The PDFium enhanced view forms one continuous reader; if it times out or is unavailable, the app switches to the system compatibility view.",
             ),
-            hints = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                listOf(
-                    tr("增强视图支持双指即时缩放；齿轮中可保存 50%–300% 的基准比例。", "The enhanced view supports pinch zoom; save a 50%–300% baseline from the gear."),
-                    if (readerPdfTextFeaturesAvailable()) {
-                        tr("增强视图加载成功后可搜索、高亮和选择内嵌文字，并自动派生目录。", "Once the enhanced view loads, you can search, highlight, and select embedded text, with automatic contents detection.")
-                    } else {
-                        tr("当前系统 PDF 扩展不提供文本选择、搜索或自动目录；仍可按真实页码阅读。", "This system PDF extension does not provide text selection, search, or automatic contents; page-based reading remains available.")
-                    },
-                    tr("纯图片扫描件没有可搜索文字，DeskCubby 不进行 OCR。", "Image-only scans have no searchable text; DeskCubby does not perform OCR."),
-                    tr("离开书籍时会保存当前位置。", "Your current position is saved when you leave the book."),
-                )
-            } else {
-                listOf(
-                    tr("齿轮中可保存 50%–300% 的缩放比例。", "Save a 50%–300% zoom level from the gear."),
-                    tr("兼容视图不提供 PDF 文本选择、搜索与自动目录。", "The compatibility view does not provide PDF text selection, search, or automatic contents."),
-                    tr("离开书籍时会保存当前位置。", "Your current position is saved when you leave the book."),
-                )
-            },
+            hints = listOf(
+                tr("增强视图支持双指即时缩放；齿轮中可保存 50%–300% 的基准比例。", "The enhanced view supports pinch zoom; save a 50%–300% baseline from the gear."),
+                tr("增强视图可搜索内嵌文字并自动派生目录；纯图片扫描件没有可搜索文字，DeskCubby 不进行 OCR。", "The enhanced view can search embedded text and derive contents automatically. Image-only scans have no searchable text; DeskCubby does not perform OCR."),
+                tr("兼容视图不提供搜索或自动目录，但仍可连续阅读并按真实页码保存进度。", "The compatibility view has no search or automatic contents, but still reads continuously and saves the physical page."),
+                tr("离开书籍时会保存当前位置。", "Your current position is saved when you leave the book."),
+            ),
         )
     }
     ReaderContentState.Loading -> null

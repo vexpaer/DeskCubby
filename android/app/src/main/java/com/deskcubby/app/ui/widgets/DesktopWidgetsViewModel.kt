@@ -15,6 +15,9 @@ import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.widget.DeskCubbyWidgetConfigureActivity
 import com.deskcubby.app.widget.DeskCubbyWidgetProvider
+import com.deskcubby.app.widget.DesktopWidgetPinResultReceiver
+import com.deskcubby.app.widget.DesktopWidgetNavigationTokenStore
+import com.deskcubby.app.widget.DesktopWidgetInstanceStore
 import com.deskcubby.app.widget.CloudSyncForceWidgetProvider
 import com.deskcubby.app.widget.CloudSyncNowWidgetProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -41,6 +44,7 @@ data class LaunchableApp(
 class DesktopWidgetsViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
+    private val instanceStore: DesktopWidgetInstanceStore,
 ) : ViewModel() {
     val settings: StateFlow<AppSettings> = settingsRepository.settings.stateIn(
         viewModelScope,
@@ -108,7 +112,13 @@ class DesktopWidgetsViewModel @Inject constructor(
                     current + config
                 }
                 settingsRepository.setDesktopWidgetConfigs(updated)
-                DeskCubbyWidgetProvider.requestUpdate(context)
+                val boundInstanceIds = withContext(Dispatchers.IO) {
+                    instanceStore.refreshTemplateSnapshot(config)
+                }
+                DeskCubbyWidgetProvider.requestUpdate(
+                    context,
+                    boundInstanceIds.takeIf { it.isNotEmpty() },
+                )
                 onDone(true)
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -143,11 +153,13 @@ class DesktopWidgetsViewModel @Inject constructor(
             _message.value = desktopWidgetManualAddMessage(english)
             return
         }
+        val configToken = DesktopWidgetNavigationTokenStore.issueConfigToken(config.id)
+        val callbackToken = DesktopWidgetNavigationTokenStore.issueConfigToken(config.id)
         val accepted = try {
             manager.requestPinAppWidget(
                 ComponentName(context, DeskCubbyWidgetProvider::class.java),
                 Bundle().apply {
-                    putString(DeskCubbyWidgetConfigureActivity.EXTRA_CONFIG_ID, config.id)
+                    putString(DeskCubbyWidgetConfigureActivity.EXTRA_CONFIG_TOKEN, configToken)
                     putInt(
                         AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,
                         config.widthCells * APPROX_WIDGET_CELL_DP,
@@ -160,10 +172,10 @@ class DesktopWidgetsViewModel @Inject constructor(
                 PendingIntent.getBroadcast(
                     context,
                     config.id.hashCode(),
-                    Intent(context, DeskCubbyWidgetProvider::class.java)
-                        .setAction(DeskCubbyWidgetProvider.ACTION_PIN_SUCCEEDED)
+                    Intent(context, DesktopWidgetPinResultReceiver::class.java)
+                        .setAction(DesktopWidgetPinResultReceiver.ACTION_PIN_SUCCEEDED)
                         .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                        .putExtra(DeskCubbyWidgetConfigureActivity.EXTRA_CONFIG_ID, config.id),
+                        .putExtra(DeskCubbyWidgetConfigureActivity.EXTRA_CONFIG_TOKEN, callbackToken),
                     PendingIntent.FLAG_UPDATE_CURRENT or if (
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                     ) {
@@ -180,6 +192,10 @@ class DesktopWidgetsViewModel @Inject constructor(
             false
         } catch (_: RuntimeException) {
             false
+        }
+        if (!accepted) {
+            DesktopWidgetNavigationTokenStore.discardConfigToken(configToken)
+            DesktopWidgetNavigationTokenStore.discardConfigToken(callbackToken)
         }
         _message.value = if (accepted) {
             desktopWidgetPinAcceptedMessage(english)

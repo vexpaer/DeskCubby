@@ -39,6 +39,7 @@ import com.deskcubby.app.data.model.normalizeHomeGameShortcutIds
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.DEFAULT_DESKTOP_WIDGET_CONFIGS
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
+import com.deskcubby.app.data.model.normalizeDesktopWidgetHomeModuleId
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
@@ -1946,9 +1947,7 @@ internal fun normalizeDesktopWidgetConfigs(
                 ?.trim()
                 ?.take(MAX_URL_CHARS)
                 ?.takeIf { it.startsWith("content://") },
-            homeModuleId = item.homeModuleId
-                .takeIf(DESKTOP_WIDGET_HOME_MODULE_IDS::contains)
-                ?: "today",
+            homeModuleId = normalizeDesktopWidgetHomeModuleId(item.homeModuleId),
             appPackageName = packageName,
             appLabel = item.appLabel
                 ?.trim()
@@ -2074,6 +2073,24 @@ internal fun migrateHomeModulesV26(items: List<String>, migrated: Boolean): List
 }
 
 internal fun migrateHomeCloudSyncWidget(items: List<String>, migrated: Boolean): List<String> {
-    if (migrated || "cloud_sync" in items) return items
-    return items + "cloud_sync"
+    val withLegacyWidget = if (
+        migrated ||
+        "cloud_sync" in items ||
+        "cloud_sync_now" in items ||
+        "cloud_sync_force" in items
+    ) {
+        items
+    } else {
+        items + "cloud_sync"
+    }
+    val result = mutableListOf<String>()
+    withLegacyWidget.forEach { item ->
+        if (item == "cloud_sync") {
+            if ("cloud_sync_now" !in result) result += "cloud_sync_now"
+            if ("cloud_sync_force" !in result) result += "cloud_sync_force"
+        } else if (item !in result) {
+            result += item
+        }
+    }
+    return result
 }

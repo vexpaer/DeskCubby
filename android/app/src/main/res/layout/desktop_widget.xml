@@ -22,56 +22,381 @@
         android:visibility="gone" />
 
     <LinearLayout
+        android:id="@+id/widget_foreground"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:gravity="center_vertical"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:padding="12dp">
 
-        <ImageView
-            android:id="@+id/widget_icon"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_marginEnd="10dp"
-            android:contentDescription="@null"
-            android:scaleType="fitCenter" />
+        <LinearLayout
+            android:id="@+id/widget_content_row"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageView
+                android:id="@+id/widget_icon"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginEnd="10dp"
+                android:contentDescription="@null"
+                android:scaleType="fitCenter" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/widget_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/widget_value"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/widget_detail"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="#E6FFFFFF"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <ProgressBar
+            android:id="@+id/widget_year_progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="10dp"
+            android:layout_marginTop="8dp"
+            android:max="100"
+            android:visibility="gone" />
 
         <LinearLayout
-            android:layout_width="0dp"
+            android:id="@+id/widget_calendar_grid"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
-
+            android:orientation="vertical"
+            android:visibility="gone">
             <TextView
-                android:id="@+id/widget_title"
+                android:id="@+id/widget_calendar_month"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:ellipsize="end"
+                android:gravity="center"
                 android:maxLines="1"
                 android:textColor="#FFFFFFFF"
-                android:textSize="12sp"
+                android:textSize="13sp"
                 android:textStyle="bold" />
+            <GridLayout
+                android:id="@+id/widget_calendar_days"
+                android:layout_width="match_parent"
+                android:layout_height="190dp"
+                android:columnCount="7"
+                android:rowCount="7">
+            <TextView android:id="@+id/widget_calendar_mon" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_tue" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_wed" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_thu" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_fri" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_sat" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_sun" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_1" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_2" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_3" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_4" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_5" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_6" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_7" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_8" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_9" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_10" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_11" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_12" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_13" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_14" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_15" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_16" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_17" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_18" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_19" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_20" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_21" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_22" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_23" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_24" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_25" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_26" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_27" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_28" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_29" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_30" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_31" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_32" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_33" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_34" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_35" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_36" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_37" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_38" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_39" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_40" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_41" style="@style/DesktopWidgetCalendarCell" />
+            <TextView android:id="@+id/widget_calendar_day_42" style="@style/DesktopWidgetCalendarCell" />
+            </GridLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/widget_module_list"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+            <TextView android:id="@+id/widget_module_row_1" style="@style/DesktopWidgetListRow" />
+            <TextView android:id="@+id/widget_module_row_2" style="@style/DesktopWidgetListRow" />
+            <TextView android:id="@+id/widget_module_row_3" style="@style/DesktopWidgetListRow" />
+            <TextView android:id="@+id/widget_module_row_4" style="@style/DesktopWidgetListRow" />
+            <TextView android:id="@+id/widget_module_row_5" style="@style/DesktopWidgetListRow" />
+            <TextView android:id="@+id/widget_module_row_6" style="@style/DesktopWidgetListRow" />
+            <TextView android:id="@+id/widget_module_row_7" style="@style/DesktopWidgetListRow" />
+            <TextView android:id="@+id/widget_module_row_8" style="@style/DesktopWidgetListRow" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="38dp"
+                android:orientation="horizontal">
+                <TextView
+                    android:id="@+id/widget_module_footer_primary"
+                    style="@style/DesktopWidgetActionText"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginEnd="4dp"
+                    android:layout_weight="1" />
+                <TextView
+                    android:id="@+id/widget_module_footer_secondary"
+                    style="@style/DesktopWidgetActionText"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/widget_cloud_status"
+            android:layout_width="match_parent"
+            android:layout_height="74dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+            <TextView android:id="@+id/widget_cloud_status_1" style="@style/DesktopWidgetStatusRow" />
+            <TextView android:id="@+id/widget_cloud_status_2" style="@style/DesktopWidgetStatusRow" />
+            <TextView android:id="@+id/widget_cloud_status_3" style="@style/DesktopWidgetStatusRow" />
+            <TextView android:id="@+id/widget_cloud_status_4" style="@style/DesktopWidgetStatusRow" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/widget_poem_actions"
+            android:layout_width="match_parent"
+            android:layout_height="36dp"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal"
+            android:visibility="gone">
 
             <TextView
-                android:id="@+id/widget_value"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
-                android:ellipsize="end"
-                android:maxLines="2"
-                android:textColor="#FFFFFFFF"
-                android:textSize="16sp"
-                android:textStyle="bold" />
+                android:id="@+id/widget_poem_refresh"
+                style="@style/DesktopWidgetActionText"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1" />
 
             <TextView
-                android:id="@+id/widget_detail"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:textColor="#E6FFFFFF"
-                android:textSize="11sp" />
+                android:id="@+id/widget_poem_save"
+                style="@style/DesktopWidgetActionText"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/widget_quick_input_actions"
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/widget_quick_input_field"
+                style="@style/DesktopWidgetActionText"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:gravity="center_vertical|start"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp" />
+
+            <TextView
+                android:id="@+id/widget_quick_input_send"
+                style="@style/DesktopWidgetActionText"
+                android:layout_width="52dp"
+                android:layout_height="match_parent" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/widget_meal_actions_wide"
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
+            android:layout_marginTop="4dp"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <TextView android:id="@+id/widget_meal_wide_breakfast" style="@style/DesktopWidgetMealAction" />
+            <TextView android:id="@+id/widget_meal_wide_lunch" style="@style/DesktopWidgetMealAction" />
+            <TextView android:id="@+id/widget_meal_wide_afternoon_tea" style="@style/DesktopWidgetMealAction" />
+            <TextView android:id="@+id/widget_meal_wide_dinner" style="@style/DesktopWidgetMealAction" />
+            <TextView android:id="@+id/widget_meal_wide_fruit" style="@style/DesktopWidgetMealAction" />
+            <TextView android:id="@+id/widget_meal_wide_late_snack" style="@style/DesktopWidgetMealAction" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/widget_meal_actions_3_by_2"
+            android:layout_width="match_parent"
+            android:layout_height="76dp"
+            android:layout_marginTop="4dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+            <LinearLayout style="@style/DesktopWidgetMealRow">
+                <TextView android:id="@+id/widget_meal_3x2_breakfast" style="@style/DesktopWidgetMealAction" />
+                <TextView android:id="@+id/widget_meal_3x2_lunch" style="@style/DesktopWidgetMealAction" />
+                <TextView android:id="@+id/widget_meal_3x2_afternoon_tea" style="@style/DesktopWidgetMealAction" />
+            </LinearLayout>
+            <LinearLayout style="@style/DesktopWidgetMealRow">
+                <TextView android:id="@+id/widget_meal_3x2_dinner" style="@style/DesktopWidgetMealAction" />
+                <TextView android:id="@+id/widget_meal_3x2_fruit" style="@style/DesktopWidgetMealAction" />
+                <TextView android:id="@+id/widget_meal_3x2_late_snack" style="@style/DesktopWidgetMealAction" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/widget_meal_actions_2_by_3"
+            android:layout_width="match_parent"
+            android:layout_height="114dp"
+            android:layout_marginTop="4dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+            <LinearLayout style="@style/DesktopWidgetMealRow">
+                <TextView android:id="@+id/widget_meal_2x3_breakfast" style="@style/DesktopWidgetMealAction" />
+                <TextView android:id="@+id/widget_meal_2x3_lunch" style="@style/DesktopWidgetMealAction" />
+            </LinearLayout>
+            <LinearLayout style="@style/DesktopWidgetMealRow">
+                <TextView android:id="@+id/widget_meal_2x3_afternoon_tea" style="@style/DesktopWidgetMealAction" />
+                <TextView android:id="@+id/widget_meal_2x3_dinner" style="@style/DesktopWidgetMealAction" />
+            </LinearLayout>
+            <LinearLayout style="@style/DesktopWidgetMealRow">
+                <TextView android:id="@+id/widget_meal_2x3_fruit" style="@style/DesktopWidgetMealAction" />
+                <TextView android:id="@+id/widget_meal_2x3_late_snack" style="@style/DesktopWidgetMealAction" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/widget_cloud_sync_actions"
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal"
+            android:visibility="gone">
+            <TextView
+                android:id="@+id/widget_cloud_sync_now"
+                style="@style/DesktopWidgetActionText"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:visibility="gone" />
+            <TextView
+                android:id="@+id/widget_cloud_sync_upload"
+                style="@style/DesktopWidgetActionText"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:visibility="gone" />
+            <TextView
+                android:id="@+id/widget_cloud_sync_download"
+                style="@style/DesktopWidgetActionText"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:visibility="gone" />
         </LinearLayout>
     </LinearLayout>
+
+    <!-- App shortcuts intentionally use a separate overlay: the activity/alias icon keeps the
+         launcher's normal 48dp visual size and remains geometrically centered in the card. -->
+    <FrameLayout
+        android:id="@+id/widget_app_shortcut_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="0dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/widget_app_shortcut_icon"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="center"
+            android:contentDescription="@null"
+            android:scaleType="fitCenter"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/widget_app_shortcut_fallback"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="2"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textColor="#FFFFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/widget_app_shortcut_name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:textColor="#FFFFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+    </FrameLayout>
 </FrameLayout>

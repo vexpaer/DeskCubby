@@ -4,6 +4,7 @@ package com.deskcubby.app.widget
 
 import android.app.Activity
 import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -65,13 +66,19 @@ class DeskCubbyWidgetConfigureActivity : ComponentActivity() {
             finish()
             return
         }
+        val manager = AppWidgetManager.getInstance(this)
+        val actualProvider = runCatching { manager.getAppWidgetInfo(appWidgetId)?.provider }
+            .getOrNull()
+        if (!isOwnedDesktopWidgetProvider(actualProvider, ComponentName(this, DeskCubbyWidgetProvider::class.java))) {
+            finish()
+            return
+        }
 
         lifecycleScope.launch {
             val settings = settingsRepository.settings.first()
-            val requestedId = intent?.getStringExtra(EXTRA_CONFIG_ID)
-                ?: AppWidgetManager.getInstance(this@DeskCubbyWidgetConfigureActivity)
-                    .getAppWidgetOptions(appWidgetId)
-                    .getString(EXTRA_CONFIG_ID)
+            val configToken = intent?.getStringExtra(EXTRA_CONFIG_TOKEN)
+                ?: manager.getAppWidgetOptions(appWidgetId).getString(EXTRA_CONFIG_TOKEN)
+            val requestedId = DesktopWidgetNavigationTokenStore.consumeConfigId(configToken)
             val requested = settings.desktopWidgetConfigs.firstOrNull { it.id == requestedId }
             if (requested != null) {
                 bindAndFinish(requested)
@@ -137,9 +144,14 @@ class DeskCubbyWidgetConfigureActivity : ComponentActivity() {
     }
 
     companion object {
-        const val EXTRA_CONFIG_ID = "com.deskcubby.app.extra.WIDGET_CONFIG_ID"
+        const val EXTRA_CONFIG_TOKEN = "com.deskcubby.app.extra.WIDGET_CONFIG_TOKEN"
     }
 }
+
+internal fun isOwnedDesktopWidgetProvider(
+    actual: ComponentName?,
+    expected: ComponentName,
+): Boolean = actual == expected
 
 @Composable
 private fun WidgetConfigurationChooser(

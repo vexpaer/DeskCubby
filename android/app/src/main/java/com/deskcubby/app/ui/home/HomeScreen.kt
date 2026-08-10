@@ -176,6 +176,7 @@ fun HomeScreen(
     val poemRefreshing by viewModel.poemRefreshing.collectAsStateWithLifecycle()
     val mealUploadInProgress by viewModel.mealUploadInProgress.collectAsStateWithLifecycle()
     val dailyRecordInProgress by viewModel.dailyRecordInProgress.collectAsStateWithLifecycle()
+    val cloudSyncActionState by viewModel.cloudSyncActionState.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingMealKey by rememberSaveable { mutableStateOf<String?>(null) }
@@ -192,6 +193,14 @@ fun HomeScreen(
             snackbarHostState.showSnackbar(it)
             viewModel.consumeMessage()
         }
+    }
+    LaunchedEffect(
+        cloudSyncStatus.running,
+        cloudSyncStatus.lastFinishedAt,
+        cloudSyncStatus.message,
+        cloudSyncStatus.error,
+    ) {
+        viewModel.reconcileCloudSyncStatus(cloudSyncStatus)
     }
     LaunchedEffect(context.cacheDir) {
         withContext(Dispatchers.IO) {
@@ -362,8 +371,11 @@ fun HomeScreen(
                     onOpenGame = onOpenGame,
                     onOpenStatistics = onOpenStatistics,
                     cloudSyncStatus = cloudSyncStatus,
+                    cloudSyncActionState = cloudSyncActionState,
                     onRunCloudSync = { mode ->
-                        CloudSyncManualScheduler.enqueue(context, mode)
+                        val accepted = CloudSyncManualScheduler.enqueue(context, mode)
+                        viewModel.recordCloudSyncEnqueue(mode, accepted)
+                        accepted
                     },
                 )
             }
@@ -399,6 +411,7 @@ private fun HomeWidget(
     onOpenGame: (String) -> Unit,
     onOpenStatistics: () -> Unit,
     cloudSyncStatus: AppCloudSyncStatus,
+    cloudSyncActionState: HomeCloudSyncActionState,
     onRunCloudSync: (CloudSyncRunMode) -> Boolean,
 ) {
     val today = LocalDate.now()
@@ -615,9 +628,20 @@ private fun HomeWidget(
                 Text(tr("查看统计", "View statistics"))
             }
         }
-        "cloud_sync" -> CloudSyncHomeWidget(
+        "cloud_sync_now" -> CloudSyncHomeWidget(
+            forceActions = false,
             settings = settings,
             status = cloudSyncStatus,
+            actionState = cloudSyncActionState,
+            showTitle = showTitle,
+            showBorder = settings.homeWidgetBordersEnabled,
+            onRun = onRunCloudSync,
+        )
+        "cloud_sync_force" -> CloudSyncHomeWidget(
+            forceActions = true,
+            settings = settings,
+            status = cloudSyncStatus,
+            actionState = cloudSyncActionState,
             showTitle = showTitle,
             showBorder = settings.homeWidgetBordersEnabled,
             onRun = onRunCloudSync,
@@ -627,8 +651,10 @@ private fun HomeWidget(
 
 @Composable
 private fun CloudSyncHomeWidget(
+    forceActions: Boolean,
     settings: AppSettings,
     status: AppCloudSyncStatus,
+    actionState: HomeCloudSyncActionState,
     showTitle: Boolean,
     showBorder: Boolean,
     onRun: (CloudSyncRunMode) -> Boolean,
@@ -636,25 +662,28 @@ private fun CloudSyncHomeWidget(
     val enabledSourceCount = settings.cloudSyncConfigs.count { it.enabled }
     val canRun = settings.cloudSyncEnabled && enabledSourceCount > 0 && !status.running
     var confirmationMode by remember { mutableStateOf<CloudSyncRunMode?>(null) }
-    var queuedMode by remember { mutableStateOf<CloudSyncRunMode?>(null) }
-    var enqueueFailed by remember { mutableStateOf(false) }
 
-    LaunchedEffect(status.running, status.lastFinishedAt, status.message, status.error) {
-        if (status.running || status.message != null || status.error != null) {
-            queuedMode = null
-        }
-    }
-
-    fun enqueue(mode: CloudSyncRunMode) {
-        enqueueFailed = false
-        if (onRun(mode)) {
-            queuedMode = mode
-        } else {
-            enqueueFailed = true
-        }
-    }
-
-    WidgetCard(tr("云端同步", "Cloud sync"), showTitle, showBorder) {
+    WidgetCard(
+        if (forceActions) tr("强制上传 / 下载", "Force upload / download")
+        else tr("立即同步", "Sync now"),
+        showTitle,
+        showBorder,
+    ) {
+        Text(
+            if (forceActions) {
+                tr(
+                    "仅在明确需要以本机或云端为准时使用；不会传播删除，仍会保护并发修改。",
+                    "Use only when explicitly choosing local or cloud data; deletions are not propagated and concurrent edits remain protected.",
+                )
+            } else {
+                tr(
+                    "按已保存的同步方向安全合并所有已启用来源。",
+                    "Safely merge every enabled source using its saved sync direction.",
+                )
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         val progress = status.progress
         val statusText = when {
             status.running -> if (progress != null && progress.totalObjects > 0) {
@@ -665,8 +694,8 @@ private fun CloudSyncHomeWidget(
             } else {
                 tr("正在同步", "Syncing")
             }
-            queuedMode != null -> cloudSyncQueuedLabel(requireNotNull(queuedMode))
-            enqueueFailed -> tr("无法加入同步队列，请稍后重试", "Could not queue the sync; try again")
+            actionState.queuedMode != null -> cloudSyncQueuedLabel(actionState.queuedMode)
+            actionState.enqueueFailed -> tr("无法加入同步队列，请稍后重试", "Could not queue the sync; try again")
             status.error != null -> localizedCloudSyncStatus(status.error, settings.appLanguage)
             !settings.cloudSyncEnabled -> tr("云端同步尚未开启", "Cloud sync is turned off")
             enabledSourceCount == 0 -> tr("没有已启用的同步服务", "No sync service is enabled")
@@ -675,7 +704,7 @@ private fun CloudSyncHomeWidget(
         }
         Text(
             text = statusText,
-            color = if (enqueueFailed || status.error != null) {
+            color = if (actionState.enqueueFailed || status.error != null) {
                 MaterialTheme.colorScheme.error
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
@@ -712,7 +741,7 @@ private fun CloudSyncHomeWidget(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (status.pendingJsonCount > 0) {
+        if (!forceActions && status.pendingJsonCount > 0) {
             Text(
                 tr(
                     "有 ${status.pendingJsonCount} 份云端应用 JSON 待在同步设置中确认",
@@ -727,26 +756,29 @@ private fun CloudSyncHomeWidget(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Button(
-                onClick = { enqueue(CloudSyncRunMode.NORMAL) },
-                enabled = canRun && queuedMode == null,
-            ) {
-                Text(tr("立即同步", "Sync now"))
-            }
-            OutlinedButton(
-                onClick = { confirmationMode = CloudSyncRunMode.FORCE_UPLOAD },
-                enabled = canRun && queuedMode == null,
-            ) {
-                Text(tr("强制上传", "Force upload"))
-            }
-            OutlinedButton(
-                onClick = { confirmationMode = CloudSyncRunMode.FORCE_DOWNLOAD },
-                enabled = canRun && queuedMode == null && enabledSourceCount == 1,
-            ) {
-                Text(tr("强制下载", "Force download"))
+            if (forceActions) {
+                OutlinedButton(
+                    onClick = { confirmationMode = CloudSyncRunMode.FORCE_UPLOAD },
+                    enabled = canRun && actionState.queuedMode == null,
+                ) {
+                    Text(tr("强制上传", "Force upload"))
+                }
+                OutlinedButton(
+                    onClick = { confirmationMode = CloudSyncRunMode.FORCE_DOWNLOAD },
+                    enabled = canRun && actionState.queuedMode == null && enabledSourceCount == 1,
+                ) {
+                    Text(tr("强制下载", "Force download"))
+                }
+            } else {
+                Button(
+                    onClick = { onRun(CloudSyncRunMode.NORMAL) },
+                    enabled = canRun && actionState.queuedMode == null,
+                ) {
+                    Text(tr("立即同步", "Sync now"))
+                }
             }
         }
-        if (settings.cloudSyncEnabled && enabledSourceCount > 1) {
+        if (forceActions && settings.cloudSyncEnabled && enabledSourceCount != 1) {
             Text(
                 tr(
                     "强制下载需要恰好一个已启用的云端来源",
@@ -758,7 +790,7 @@ private fun CloudSyncHomeWidget(
         }
     }
 
-    confirmationMode?.let { mode ->
+    confirmationMode?.takeIf { forceActions }?.let { mode ->
         val upload = mode == CloudSyncRunMode.FORCE_UPLOAD
         AlertDialog(
             onDismissRequest = { confirmationMode = null },
@@ -787,7 +819,7 @@ private fun CloudSyncHomeWidget(
                 TextButton(
                     onClick = {
                         confirmationMode = null
-                        enqueue(mode)
+                        onRun(mode)
                     },
                 ) {
                     Text(

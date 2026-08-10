@@ -14,6 +14,8 @@ import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.sync.CloudSyncManualScheduler
+import com.deskcubby.app.data.sync.CloudSyncManualQueueState
+import com.deskcubby.app.data.sync.AppCloudSyncService
 import com.deskcubby.app.data.sync.CloudSyncRunMode
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -25,6 +27,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 enum class CloudSyncWidgetState {
     IDLE,
@@ -40,44 +44,40 @@ enum class CloudSyncWidgetState {
 class CloudSyncWidgetRenderer @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
+    private val cloudSyncService: AppCloudSyncService,
 ) {
-    suspend fun update(mode: CloudSyncRunMode, state: CloudSyncWidgetState) {
-        val manager = AppWidgetManager.getInstance(context)
-        val settings = loadSettings()
-        when (mode) {
-            CloudSyncRunMode.NORMAL -> updateNow(
+    suspend fun update(mode: CloudSyncRunMode, state: CloudSyncWidgetState) =
+        renderSequencer.serialized {
+            val manager = AppWidgetManager.getInstance(context)
+            val settings = loadSettings()
+            updateNow(
                 manager,
-                manager.getAppWidgetIds(
-                    ComponentName(context, CloudSyncNowWidgetProvider::class.java),
-                ),
+                manager.getAppWidgetIds(ComponentName(context, CloudSyncNowWidgetProvider::class.java)),
                 settings,
                 state,
             )
-            CloudSyncRunMode.FORCE_UPLOAD,
-            CloudSyncRunMode.FORCE_DOWNLOAD,
-            -> updateForce(
+            updateForce(
                 manager,
-                manager.getAppWidgetIds(
-                    ComponentName(context, CloudSyncForceWidgetProvider::class.java),
-                ),
+                manager.getAppWidgetIds(ComponentName(context, CloudSyncForceWidgetProvider::class.java)),
                 settings,
                 activeMode = mode,
                 state = state,
             )
         }
-    }
 
     suspend fun updateNow(
         manager: AppWidgetManager,
         ids: IntArray,
         state: CloudSyncWidgetState = CloudSyncWidgetState.IDLE,
-    ) = updateNow(manager, ids, loadSettings(), state)
+    ) = renderSequencer.serialized { updateNow(manager, ids, loadSettings(), state) }
 
     suspend fun updateForce(
         manager: AppWidgetManager,
         ids: IntArray,
         state: CloudSyncWidgetState = CloudSyncWidgetState.IDLE,
-    ) = updateForce(manager, ids, loadSettings(), activeMode = null, state = state)
+    ) = renderSequencer.serialized {
+        updateForce(manager, ids, loadSettings(), activeMode = null, state = state)
+    }
 
     private fun updateNow(
         manager: AppWidgetManager,
@@ -85,6 +85,9 @@ class CloudSyncWidgetRenderer @Inject constructor(
         settings: AppSettings,
         state: CloudSyncWidgetState,
     ) {
+        val queuedMode = CloudSyncManualQueueState.queuedMode(context)
+        val globallyRunning = cloudSyncService.status.value.running
+        val effectiveState = resolveCloudWidgetState(state, globallyRunning, queuedMode)
         ids.forEach { id ->
             val views = RemoteViews(context.packageName, R.layout.cloud_sync_now_widget)
             val background = opaque(settings.themeColorArgb)
@@ -92,15 +95,22 @@ class CloudSyncWidgetRenderer @Inject constructor(
             views.setTextColor(R.id.cloud_sync_now_text, contentColor(background))
             views.setTextViewText(
                 R.id.cloud_sync_now_text,
-                stateLabel(settings, CloudSyncRunMode.NORMAL, state),
+                stateLabel(settings, CloudSyncRunMode.NORMAL, effectiveState),
             )
             views.setContentDescription(
                 R.id.cloud_sync_now_root,
-                stateLabel(settings, CloudSyncRunMode.NORMAL, state),
+                stateLabel(settings, CloudSyncRunMode.NORMAL, effectiveState),
             )
             views.setOnClickPendingIntent(
                 R.id.cloud_sync_now_root,
-                actionPendingIntent(id, CloudSyncRunMode.NORMAL),
+                actionPendingIntent(id, CloudSyncRunMode.NORMAL).takeIf {
+                    shouldEnableCloudWidgetAction(
+                        syncEnabled = settings.cloudSyncEnabled,
+                        enabledSourceCount = settings.cloudSyncConfigs.count { it.enabled },
+                        busy = effectiveState.isBusy(),
+                        download = false,
+                    )
+                },
             )
             runCatching { manager.updateAppWidget(id, views) }
         }
@@ -113,6 +123,10 @@ class CloudSyncWidgetRenderer @Inject constructor(
         activeMode: CloudSyncRunMode?,
         state: CloudSyncWidgetState,
     ) {
+        val persistedMode = CloudSyncManualQueueState.queuedMode(context)
+        val globallyRunning = cloudSyncService.status.value.running
+        val resolvedActiveMode = activeMode ?: persistedMode
+        val resolvedState = resolveCloudWidgetState(state, globallyRunning, persistedMode)
         ids.forEach { id ->
             val views = RemoteViews(context.packageName, R.layout.cloud_sync_force_widget)
             val uploadBackground = opaque(settings.themeColorArgb)
@@ -129,10 +143,15 @@ class CloudSyncWidgetRenderer @Inject constructor(
                 R.id.cloud_sync_force_download_text,
                 contentColor(downloadBackground),
             )
-            val uploadState = state.takeIf { activeMode == CloudSyncRunMode.FORCE_UPLOAD }
-                ?: CloudSyncWidgetState.IDLE
-            val downloadState = state.takeIf { activeMode == CloudSyncRunMode.FORCE_DOWNLOAD }
-                ?: CloudSyncWidgetState.IDLE
+            val wholeQueueBusy = resolvedState.isBusy() && (
+                resolvedActiveMode == CloudSyncRunMode.NORMAL || resolvedActiveMode == null
+            )
+            val uploadState = resolvedState.takeIf {
+                wholeQueueBusy || resolvedActiveMode == CloudSyncRunMode.FORCE_UPLOAD
+            } ?: CloudSyncWidgetState.IDLE
+            val downloadState = resolvedState.takeIf {
+                wholeQueueBusy || resolvedActiveMode == CloudSyncRunMode.FORCE_DOWNLOAD
+            } ?: CloudSyncWidgetState.IDLE
             val uploadLabel = stateLabel(
                 settings,
                 CloudSyncRunMode.FORCE_UPLOAD,
@@ -147,13 +166,31 @@ class CloudSyncWidgetRenderer @Inject constructor(
             views.setTextViewText(R.id.cloud_sync_force_download_text, downloadLabel)
             views.setContentDescription(R.id.cloud_sync_force_upload, uploadLabel)
             views.setContentDescription(R.id.cloud_sync_force_download, downloadLabel)
+            val enabledSources = settings.cloudSyncConfigs.count { it.enabled }
+            val busy = resolvedState.isBusy()
             views.setOnClickPendingIntent(
                 R.id.cloud_sync_force_upload,
-                actionPendingIntent(id * 2, CloudSyncRunMode.FORCE_UPLOAD),
+                actionPendingIntent(id * 2, CloudSyncRunMode.FORCE_UPLOAD)
+                    .takeIf {
+                        shouldEnableCloudWidgetAction(
+                            settings.cloudSyncEnabled,
+                            enabledSources,
+                            busy,
+                            download = false,
+                        )
+                    },
             )
             views.setOnClickPendingIntent(
                 R.id.cloud_sync_force_download,
-                actionPendingIntent(id * 2 + 1, CloudSyncRunMode.FORCE_DOWNLOAD),
+                actionPendingIntent(id * 2 + 1, CloudSyncRunMode.FORCE_DOWNLOAD)
+                    .takeIf {
+                        shouldEnableCloudWidgetAction(
+                            settings.cloudSyncEnabled,
+                            enabledSources,
+                            busy,
+                            download = true,
+                        )
+                    },
             )
             runCatching { manager.updateAppWidget(id, views) }
         }
@@ -213,11 +250,42 @@ class CloudSyncWidgetRenderer @Inject constructor(
     private fun localized(english: Boolean, chinese: String, englishText: String): String =
         if (english) englishText else chinese
 
+    private fun CloudSyncWidgetState.isBusy(): Boolean =
+        this == CloudSyncWidgetState.QUEUED || this == CloudSyncWidgetState.RUNNING
+
     private fun actionFor(mode: CloudSyncRunMode): String = when (mode) {
         CloudSyncRunMode.NORMAL -> CloudSyncWidgetActionReceiver.ACTION_SYNC_NOW
         CloudSyncRunMode.FORCE_UPLOAD -> CloudSyncWidgetActionReceiver.ACTION_FORCE_UPLOAD
         CloudSyncRunMode.FORCE_DOWNLOAD -> CloudSyncWidgetActionReceiver.ACTION_FORCE_DOWNLOAD
     }
+
+    private companion object {
+        val renderSequencer = CloudWidgetRenderSequencer()
+    }
+}
+
+internal class CloudWidgetRenderSequencer {
+    private val mutex = Mutex()
+
+    suspend fun <T> serialized(block: suspend () -> T): T = mutex.withLock { block() }
+}
+
+internal fun shouldEnableCloudWidgetAction(
+    syncEnabled: Boolean,
+    enabledSourceCount: Int,
+    busy: Boolean,
+    download: Boolean,
+): Boolean = syncEnabled && enabledSourceCount > 0 && !busy && (!download || enabledSourceCount == 1)
+
+internal fun resolveCloudWidgetState(
+    requestedState: CloudSyncWidgetState,
+    globallyRunning: Boolean,
+    queuedMode: CloudSyncRunMode?,
+): CloudSyncWidgetState = when {
+    requestedState != CloudSyncWidgetState.IDLE -> requestedState
+    globallyRunning -> CloudSyncWidgetState.RUNNING
+    queuedMode != null -> CloudSyncWidgetState.QUEUED
+    else -> CloudSyncWidgetState.IDLE
 }
 
 @AndroidEntryPoint
@@ -232,7 +300,9 @@ class CloudSyncNowWidgetProvider : AppWidgetProvider() {
         val pendingResult = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                renderer.updateNow(appWidgetManager, appWidgetIds)
+                runBoundedWidgetBroadcast(WidgetBroadcastTarget.CLOUD_WIDGET_RENDER) {
+                    renderer.updateNow(appWidgetManager, appWidgetIds)
+                }
             } finally {
                 pendingResult.finish()
             }
@@ -252,10 +322,32 @@ class CloudSyncForceWidgetProvider : AppWidgetProvider() {
         val pendingResult = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                renderer.updateForce(appWidgetManager, appWidgetIds)
+                runBoundedWidgetBroadcast(WidgetBroadcastTarget.CLOUD_WIDGET_RENDER) {
+                    renderer.updateForce(appWidgetManager, appWidgetIds)
+                }
             } finally {
                 pendingResult.finish()
             }
+        }
+    }
+}
+
+fun requestIndependentCloudWidgetUpdates(context: Context) {
+    val appContext = context.applicationContext
+    val manager = AppWidgetManager.getInstance(appContext)
+    listOf(
+        CloudSyncNowWidgetProvider::class.java,
+        CloudSyncForceWidgetProvider::class.java,
+    ).forEach { provider ->
+        val component = ComponentName(appContext, provider)
+        val ids = manager.getAppWidgetIds(component)
+        if (ids.isNotEmpty()) {
+            appContext.sendBroadcast(
+                Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE)
+                    .setComponent(component)
+                    .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids),
+            )
         }
     }
 }
@@ -275,12 +367,15 @@ class CloudSyncWidgetActionReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                val state = if (CloudSyncManualScheduler.enqueue(context, mode)) {
-                    CloudSyncWidgetState.QUEUED
-                } else {
-                    CloudSyncWidgetState.FAILED
+                runBoundedWidgetBroadcast(WidgetBroadcastTarget.CLOUD_SYNC_ACTION) {
+                    val accepted = CloudSyncManualScheduler.enqueue(context, mode)
+                    val render = resolveCloudEnqueueRender(
+                        requestedMode = mode,
+                        accepted = accepted,
+                        queuedMode = CloudSyncManualQueueState.queuedMode(context),
+                    )
+                    renderer.update(render.mode, render.state)
                 }
-                renderer.update(mode, state)
             } finally {
                 pendingResult.finish()
             }
@@ -292,4 +387,19 @@ class CloudSyncWidgetActionReceiver : BroadcastReceiver() {
         const val ACTION_FORCE_UPLOAD = "com.deskcubby.app.action.CLOUD_FORCE_UPLOAD"
         const val ACTION_FORCE_DOWNLOAD = "com.deskcubby.app.action.CLOUD_FORCE_DOWNLOAD"
     }
+}
+
+internal data class CloudEnqueueRender(
+    val mode: CloudSyncRunMode,
+    val state: CloudSyncWidgetState,
+)
+
+internal fun resolveCloudEnqueueRender(
+    requestedMode: CloudSyncRunMode,
+    accepted: Boolean,
+    queuedMode: CloudSyncRunMode?,
+): CloudEnqueueRender = when {
+    accepted -> CloudEnqueueRender(requestedMode, CloudSyncWidgetState.QUEUED)
+    queuedMode != null -> CloudEnqueueRender(queuedMode, CloudSyncWidgetState.QUEUED)
+    else -> CloudEnqueueRender(requestedMode, CloudSyncWidgetState.FAILED)
 }

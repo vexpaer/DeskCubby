@@ -13,6 +13,8 @@ import com.deskcubby.app.data.statistics.USAGE_DEVICE_REMOTE_PREFIX
 import com.deskcubby.app.data.statistics.UsageDeviceJsonCodec
 import com.deskcubby.app.data.statistics.UsageDeviceRecord
 import com.deskcubby.app.data.statistics.UsageDeviceRepository
+import com.deskcubby.app.widget.DeskCubbyWidgetProvider
+import com.deskcubby.app.widget.requestIndependentCloudWidgetUpdates
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileOutputStream
@@ -94,6 +96,7 @@ class AppCloudSyncService @Inject constructor(
             message = null,
             error = null,
         )
+        requestGeneralWidgetUpdate()
         return try {
             val settings = settingsRepository.settings.first()
             if (!settings.cloudSyncEnabled) {
@@ -109,6 +112,7 @@ class AppCloudSyncService @Inject constructor(
                 mutableStatus.update {
                     it.copy(activeConfigId = configId, progress = progress)
                 }
+                requestGeneralWidgetUpdate()
             }
             val failed = runs.count { it.errorMessage != null }
             val finishedAt = runs.mapNotNull { it.result?.finishedAtMillis }
@@ -136,9 +140,11 @@ class AppCloudSyncService @Inject constructor(
                     .firstOrNull(),
                 pendingJsonCount = pendingIncomingJson().size,
             )
+            requestGeneralWidgetUpdate()
             runs
         } catch (cancelled: CancellationException) {
             mutableStatus.update { it.copy(running = false, activeConfigId = null, progress = null) }
+            requestGeneralWidgetUpdate()
             throw cancelled
         } catch (error: Exception) {
             mutableStatus.update {
@@ -150,6 +156,7 @@ class AppCloudSyncService @Inject constructor(
                     pendingJsonCount = pendingIncomingJson().size,
                 )
             }
+            requestGeneralWidgetUpdate()
             throw error
         }
     }
@@ -166,9 +173,11 @@ class AppCloudSyncService @Inject constructor(
             message = null,
             error = null,
         )
+        requestGeneralWidgetUpdate()
         return try {
             coordinator.sync(config) { progress ->
                 mutableStatus.update { it.copy(progress = progress) }
+                requestGeneralWidgetUpdate()
             }.also { result ->
                 persistLastFinishedAt(result.finishedAtMillis)
                 mutableStatus.update {
@@ -182,9 +191,11 @@ class AppCloudSyncService @Inject constructor(
                         pendingJsonCount = pendingIncomingJson().size,
                     )
                 }
+                requestGeneralWidgetUpdate()
             }
         } catch (cancelled: CancellationException) {
             mutableStatus.update { it.copy(running = false, activeConfigId = null, progress = null) }
+            requestGeneralWidgetUpdate()
             throw cancelled
         } catch (error: Exception) {
             mutableStatus.update {
@@ -196,6 +207,7 @@ class AppCloudSyncService @Inject constructor(
                     pendingJsonCount = pendingIncomingJson().size,
                 )
             }
+            requestGeneralWidgetUpdate()
             throw error
         }
     }
@@ -207,6 +219,11 @@ class AppCloudSyncService @Inject constructor(
             .sortedByDescending(File::lastModified)
             .map { PendingCloudSyncJson(it.name, it.lastModified(), it.length()) }
     }.getOrDefault(emptyList())
+
+    private fun requestGeneralWidgetUpdate() {
+        DeskCubbyWidgetProvider.requestUpdate(context)
+        requestIndependentCloudWidgetUpdates(context)
+    }
 
     suspend fun restoreIncomingJson(fileName: String): BackupSummary {
         val file = resolveIncomingFile(fileName)
@@ -225,6 +242,7 @@ class AppCloudSyncService @Inject constructor(
         mutableStatus.update {
             it.copy(pendingJsonCount = pendingIncomingJson().size)
         }
+        requestGeneralWidgetUpdate()
         return summary
     }
 

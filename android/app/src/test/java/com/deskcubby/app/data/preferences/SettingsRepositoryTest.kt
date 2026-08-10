@@ -2,11 +2,13 @@ package com.deskcubby.app.data.preferences
 
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
+import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.NavItemConfig
@@ -22,6 +24,48 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SettingsRepositoryTest {
+    @Test
+    fun newInstallDefaultsContainBothCloudSyncHomeModules() {
+        val defaults = AppSettings()
+
+        assertEquals(
+            listOf("cloud_sync_now", "cloud_sync_force"),
+            defaults.homeWidgets.takeLast(2),
+        )
+        assertTrue("cloud_sync_now" in defaults.homeWidgetTitles)
+        assertTrue("cloud_sync_force" in defaults.homeWidgetTitles)
+    }
+
+    @Test
+    fun desktopWidgetCatalogIncludesEveryCurrentHomeModule() {
+        assertEquals(
+            listOf(
+                "calendar",
+                "weather",
+                "poem",
+                "today",
+                "date_records",
+                "streak",
+                "month_diaries",
+                "total_words",
+                "recent_diary",
+                "recent_thought",
+                "quick_input",
+                "daily_records",
+                "meal_photos",
+                "random_diary",
+                "year_progress",
+                "website",
+                "notes",
+                "game_shortcuts",
+                "record_overview",
+                "cloud_sync_now",
+                "cloud_sync_force",
+            ),
+            DESKTOP_WIDGET_HOME_MODULE_IDS,
+        )
+    }
+
     @Test
     fun legacyDefaultCaloriePromptsUpgradeButCustomPromptsStayUntouched() {
         assertEquals(
@@ -365,18 +409,28 @@ class SettingsRepositoryTest {
     }
 
     @Test
-    fun cloudSyncHomeWidgetIsAddedOnceAndRespectsCompletedMigration() {
+    fun cloudSyncHomeWidgetsReplaceLegacyAtSamePositionAndRespectRemoval() {
         val original = listOf("today", "notes")
 
         assertEquals(
-            listOf("today", "notes", "cloud_sync"),
+            listOf("today", "notes", "cloud_sync_now", "cloud_sync_force"),
             migrateHomeCloudSyncWidget(original, migrated = false),
         )
         assertEquals(
-            listOf("today", "cloud_sync"),
-            migrateHomeCloudSyncWidget(listOf("today", "cloud_sync"), migrated = false),
+            listOf("today", "cloud_sync_now", "cloud_sync_force", "notes"),
+            migrateHomeCloudSyncWidget(
+                listOf("today", "cloud_sync", "notes"),
+                migrated = true,
+            ),
         )
         assertEquals(original, migrateHomeCloudSyncWidget(original, migrated = true))
+        assertEquals(
+            listOf("today", "cloud_sync_now"),
+            migrateHomeCloudSyncWidget(
+                listOf("today", "cloud_sync_now"),
+                migrated = false,
+            ),
+        )
     }
 
     @Test
@@ -603,5 +657,20 @@ class SettingsRepositoryTest {
         assertEquals(1, normalized.size)
         assertEquals("valid", normalized.single().id)
         assertEquals("com.example.reader", normalized.single().appPackageName)
+    }
+
+    @Test
+    fun normalizeDesktopWidgetConfigsMigratesLegacyCloudModule() {
+        val normalized = normalizeDesktopWidgetConfigs(
+            listOf(
+                DesktopWidgetConfig(
+                    id = "legacy-cloud",
+                    name = "Legacy cloud",
+                    homeModuleId = "cloud_sync",
+                ),
+            ),
+        ).single()
+
+        assertEquals("cloud_sync_now", normalized.homeModuleId)
     }
 }

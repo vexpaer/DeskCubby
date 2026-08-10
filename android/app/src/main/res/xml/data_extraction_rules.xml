@@ -2,7 +2,7 @@
 <data-extraction-rules>
     <cloud-backup>
         <!-- Room contains device-private usage and Health Connect aggregates. Android cannot
-             exclude individual tables, so explicit DeskCubby JSON remains the backup path. -->
+             exclude individual tables, so explicit DeskCubby v29 JSON remains the backup path. -->
         <exclude
             domain="database"
             path="deskcubby.db" />
@@ -54,6 +54,9 @@
         <exclude
             domain="sharedpref"
             path="cloud_sync_runtime.xml" />
+        <exclude
+            domain="sharedpref"
+            path="cloud_sync_manual_queue.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude
@@ -107,5 +110,8 @@
         <exclude
             domain="sharedpref"
             path="cloud_sync_runtime.xml" />
+        <exclude
+            domain="sharedpref"
+            path="cloud_sync_manual_queue.xml" />
     </device-transfer>
 </data-extraction-rules>

@@ -244,7 +244,18 @@ val DESKTOP_WIDGET_HOME_MODULE_IDS: List<String> = listOf(
     "random_diary",
     "year_progress",
     "website",
+    "notes",
+    "game_shortcuts",
+    "record_overview",
+    "cloud_sync_now",
+    "cloud_sync_force",
 )
+
+fun normalizeDesktopWidgetHomeModuleId(value: String): String = when (value) {
+    "cloud_sync" -> "cloud_sync_now"
+    in DESKTOP_WIDGET_HOME_MODULE_IDS -> value
+    else -> "today"
+}
 
 const val MIN_DESKTOP_WIDGET_CELLS: Int = 1
 const val MAX_DESKTOP_WIDGET_CELLS: Int = 6
@@ -724,7 +735,8 @@ data class AppSettings(
         "notes",
         "game_shortcuts",
         "record_overview",
-        "cloud_sync",
+        "cloud_sync_now",
+        "cloud_sync_force",
     ),
     val homeGameShortcuts: List<String> = DEFAULT_HOME_GAME_SHORTCUT_IDS,
     val homeWidgetTitles: List<String> = listOf(
@@ -747,7 +759,8 @@ data class AppSettings(
         "notes",
         "game_shortcuts",
         "record_overview",
-        "cloud_sync",
+        "cloud_sync_now",
+        "cloud_sync_force",
     ),
     val desktopWidgetConfigs: List<DesktopWidgetConfig> = DEFAULT_DESKTOP_WIDGET_CONFIGS,
 )

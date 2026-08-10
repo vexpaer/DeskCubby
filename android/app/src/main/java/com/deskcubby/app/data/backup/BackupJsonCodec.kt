@@ -81,6 +81,7 @@ import com.deskcubby.app.data.model.normalized
 import com.deskcubby.app.data.preferences.migrateMealPhotosWidget
 import com.deskcubby.app.data.preferences.migrateDailyRecordsWidget
 import com.deskcubby.app.data.preferences.migrateHomeModulesV26
+import com.deskcubby.app.data.preferences.migrateHomeCloudSyncWidget
 import com.deskcubby.app.data.preferences.normalizeThemeSecondaryColors
 import com.deskcubby.app.data.preferences.normalizeNavItems
 import com.deskcubby.app.data.repository.VAULT_KEY_MARKER_ENTITY_ID
@@ -587,7 +588,13 @@ object BackupJsonCodec {
                         100
                     },
                     contentType = item.requiredEnum("contentType"),
-                    homeModuleId = item.requiredString("homeModuleId"),
+                    homeModuleId = item.requiredString("homeModuleId").let { homeModuleId ->
+                        if (version <= 29 && homeModuleId == "cloud_sync") {
+                            "cloud_sync_now"
+                        } else {
+                            homeModuleId
+                        }
+                    },
                     appPackageName = item.requiredNullableString("appPackageName"),
                     appLabel = item.requiredNullableString("appLabel"),
                 )
@@ -824,15 +831,18 @@ object BackupJsonCodec {
 
     private fun decodeSettings(json: JSONObject, version: Int): AppSettings {
         val defaults = AppSettings()
-        val homeWidgets = migrateHomeModulesV26(
-            items = migrateDailyRecordsWidget(
-                items = migrateMealPhotosWidget(
-                    items = json.requiredArray("homeWidgets").requiredStringList("homeWidgets"),
-                    migrated = version >= 4,
+        val homeWidgets = migrateHomeCloudSyncWidget(
+            items = migrateHomeModulesV26(
+                items = migrateDailyRecordsWidget(
+                    items = migrateMealPhotosWidget(
+                        items = json.requiredArray("homeWidgets").requiredStringList("homeWidgets"),
+                        migrated = version >= 4,
+                    ),
+                    migrated = version >= 9,
                 ),
-                migrated = version >= 9,
+                migrated = version >= 26,
             ),
-            migrated = version >= 26,
+            migrated = version >= 29,
         )
         val decodedTitles = json.requiredArray("homeWidgetTitles").requiredStringList("homeWidgetTitles")
         val mealMigratedTitles = if (version < 4 && "meal_photos" !in decodedTitles) {
@@ -840,12 +850,15 @@ object BackupJsonCodec {
         } else {
             decodedTitles
         }
-        val homeWidgetTitles = migrateHomeModulesV26(
-            items = migrateDailyRecordsWidget(
-                items = mealMigratedTitles,
-                migrated = version >= 9,
+        val homeWidgetTitles = migrateHomeCloudSyncWidget(
+            items = migrateHomeModulesV26(
+                items = migrateDailyRecordsWidget(
+                    items = mealMigratedTitles,
+                    migrated = version >= 9,
+                ),
+                migrated = version >= 26,
             ),
-            migrated = version >= 26,
+            migrated = version >= 29,
         )
         val homeGameShortcuts = if (version >= 27) {
             json.requiredArray("homeGameShortcuts")

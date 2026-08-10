@@ -87,6 +87,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.HOME_GAME_SHORTCUT_IDS
 import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
@@ -183,6 +184,8 @@ fun DeskCubbyRoot(
     dateRecordViewModel: DateRecordViewModel = hiltViewModel(),
     dailyRecordViewModel: DailyRecordViewModel = hiltViewModel(),
     externalNavigationRoute: String? = null,
+    externalDiaryUri: String? = null,
+    externalGameId: String? = null,
     onExternalNavigationHandled: () -> Unit = {},
 ) {
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
@@ -248,11 +251,27 @@ fun DeskCubbyRoot(
                 restoreState = false
             }
         }
-        LaunchedEffect(externalNavigationRoute) {
-            externalNavigationRoute
-                ?.takeIf { requested -> NavItemId.entries.any { it.route == requested } }
-                ?.let(navigateMain)
-            if (externalNavigationRoute != null) onExternalNavigationHandled()
+        LaunchedEffect(externalNavigationRoute, externalDiaryUri, externalGameId) {
+            when {
+                !externalDiaryUri.isNullOrBlank() -> {
+                    diaryViewModel.open(externalDiaryUri)
+                    navController.navigate(Routes.EDITOR)
+                }
+                externalGameId != null && externalGameId in HOME_GAME_SHORTCUT_IDS -> {
+                    requestedGameId = externalGameId
+                    navController.navigate(Routes.GAME_SHORTCUT)
+                }
+                externalNavigationRoute == Routes.DAILY_RECORDS_TODAY ->
+                    navController.navigate(Routes.DAILY_RECORDS_TODAY)
+                externalNavigationRoute != null &&
+                    NavItemId.entries.any { it.route == externalNavigationRoute } ->
+                    navigateMain(externalNavigationRoute)
+            }
+            if (
+                externalNavigationRoute != null || externalDiaryUri != null || externalGameId != null
+            ) {
+                onExternalNavigationHandled()
+            }
         }
 
         Scaffold(

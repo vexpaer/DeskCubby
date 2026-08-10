@@ -882,6 +882,11 @@ private fun homeModuleLabel(id: String, english: Boolean): String {
         "random_diary" -> "随机旧日记" to "Random old diary"
         "year_progress" -> "年度进度" to "Year progress"
         "website" -> "网站快捷入口" to "Website shortcut"
+        "notes" -> "笔记" to "Notes"
+        "game_shortcuts" -> "小游戏" to "Mini games"
+        "record_overview" -> "记录概览" to "Record overview"
+        "cloud_sync_now" -> "立即同步" to "Sync now"
+        "cloud_sync_force" -> "强制上传/下载" to "Force upload/download"
         else -> "主页模块" to "Home module"
     }
     return if (english) labels.second else labels.first

@@ -2,7 +2,7 @@ package com.deskcubby.app.widget
 
 import android.appwidget.AppWidgetManager
 import android.content.Context
-import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
+import com.deskcubby.app.data.model.normalizeDesktopWidgetHomeModuleId
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
@@ -17,7 +17,13 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import org.json.JSONObject
 
-/** Device-local, non-backed-up snapshot for each launcher App Widget ID. */
+/**
+ * Device-local, non-backed-up binding and last-known-good snapshot for each launcher App Widget ID.
+ *
+ * The config ID links an instance to a reusable template while that template exists. The complete
+ * snapshot is deliberately retained per [AppWidgetManager.EXTRA_APPWIDGET_ID], so deleting the
+ * reusable template never blanks an already placed launcher instance.
+ */
 @Singleton
 class DesktopWidgetInstanceStore @Inject constructor(
     @ApplicationContext context: Context,
@@ -36,6 +42,7 @@ class DesktopWidgetInstanceStore @Inject constructor(
             ?: raw.takeIf { !it.trimStart().startsWith("{") }
     }
 
+    @Synchronized
     fun bind(appWidgetId: Int, config: DesktopWidgetConfig) {
         require(appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID)
         require(config.id.isNotBlank())
@@ -46,6 +53,37 @@ class DesktopWidgetInstanceStore @Inject constructor(
         )
     }
 
+    /**
+     * Advances the fallback snapshot of every instance bound to [config]'s template.
+     *
+     * Each SharedPreferences key remains scoped to its own App Widget ID; unrelated instances and
+     * instances bound to another template are untouched. Legacy ID-only values are upgraded here.
+     */
+    @Synchronized
+    fun refreshTemplateSnapshot(config: DesktopWidgetConfig): IntArray {
+        require(config.id.isNotBlank())
+        val matchingKeys = preferences.all.asSequence()
+            .mapNotNull { (key, value) ->
+                val appWidgetId = key.removePrefix(KEY_PREFIX)
+                    .takeIf { key.startsWith(KEY_PREFIX) }
+                    ?.toIntOrNull()
+                    ?: return@mapNotNull null
+                val raw = value as? String ?: return@mapNotNull null
+                val boundId = DesktopWidgetInstanceSnapshotCodec.decodeOrNull(raw)?.id
+                    ?: raw.takeIf { !it.trimStart().startsWith("{") }
+                if (boundId == config.id) key to appWidgetId else null
+            }
+            .toList()
+        if (matchingKeys.isEmpty()) return IntArray(0)
+
+        val encoded = DesktopWidgetInstanceSnapshotCodec.encode(config)
+        check(preferences.edit().apply {
+            matchingKeys.forEach { (key, _) -> putString(key, encoded) }
+        }.commit())
+        return matchingKeys.map { (_, appWidgetId) -> appWidgetId }.sorted().toIntArray()
+    }
+
+    @Synchronized
     fun remove(appWidgetIds: IntArray) {
         if (appWidgetIds.isEmpty()) return
         check(preferences.edit().apply {
@@ -53,10 +91,11 @@ class DesktopWidgetInstanceStore @Inject constructor(
         }.commit())
     }
 
-    private fun key(appWidgetId: Int): String = "widget_$appWidgetId"
+    private fun key(appWidgetId: Int): String = "$KEY_PREFIX$appWidgetId"
 
     private companion object {
         const val FILE_NAME = "desktop_widget_instances"
+        const val KEY_PREFIX = "widget_"
     }
 }
 
@@ -90,9 +129,7 @@ internal object DesktopWidgetInstanceSnapshotCodec {
         val name = json.getString("name").trim()
         require(id.isNotBlank() && name.isNotBlank())
         val contentType = enumValueOf<DesktopWidgetContentType>(json.getString("contentType"))
-        val homeModuleId = json.getString("homeModuleId")
-            .takeIf(DESKTOP_WIDGET_HOME_MODULE_IDS::contains)
-            ?: "today"
+        val homeModuleId = normalizeDesktopWidgetHomeModuleId(json.getString("homeModuleId"))
         DesktopWidgetConfig(
             id = id,
             name = name,

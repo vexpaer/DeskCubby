@@ -1,6 +1,7 @@
 package com.deskcubby.app.ui.home
 
 import android.net.Uri
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.deskcubby.app.data.local.DateRecordEntity
@@ -17,7 +18,11 @@ import com.deskcubby.app.data.repository.CalorieEstimationRepository
 import com.deskcubby.app.data.repository.PoetryRepository
 import com.deskcubby.app.data.repository.PoetryBookRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
+import com.deskcubby.app.data.sync.AppCloudSyncStatus
+import com.deskcubby.app.data.sync.CloudSyncRunMode
+import com.deskcubby.app.data.sync.CloudSyncManualQueueState
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharingStarted
@@ -31,6 +36,7 @@ import kotlinx.coroutines.sync.withLock
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
+    @ApplicationContext context: Context,
     diaryIndexDao: DiaryIndexDao,
     private val thoughtRepository: ThoughtRepository,
     dateRecordRepository: DateRecordRepository,
@@ -74,6 +80,23 @@ class HomeViewModel @Inject constructor(
     val message: StateFlow<String?> = _message.asStateFlow()
     private val _dailyRecordInProgress = MutableStateFlow<Set<String>>(emptySet())
     val dailyRecordInProgress: StateFlow<Set<String>> = _dailyRecordInProgress.asStateFlow()
+    private val _cloudSyncActionState = MutableStateFlow(
+        HomeCloudSyncActionState(queuedMode = CloudSyncManualQueueState.queuedMode(context)),
+    )
+    val cloudSyncActionState: StateFlow<HomeCloudSyncActionState> =
+        _cloudSyncActionState.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            CloudSyncManualQueueState.reconcile(context)
+            CloudSyncManualQueueState.queuedModeFlow.collect { queuedMode ->
+                _cloudSyncActionState.value = applyPersistentHomeCloudQueue(
+                    _cloudSyncActionState.value,
+                    queuedMode,
+                )
+            }
+        }
+    }
 
     fun refreshPoem(language: AppLanguage, force: Boolean = true) {
         if (_poemRefreshing.value) return
@@ -249,4 +272,51 @@ class HomeViewModel @Inject constructor(
     fun consumeMessage() {
         _message.value = null
     }
+
+    fun recordCloudSyncEnqueue(mode: CloudSyncRunMode, accepted: Boolean) {
+        _cloudSyncActionState.value = applyPersistentHomeCloudQueue(
+            reduceHomeCloudSyncEnqueue(mode, accepted),
+            CloudSyncManualQueueState.queuedModeFlow.value,
+        )
+    }
+
+    fun reconcileCloudSyncStatus(status: AppCloudSyncStatus) {
+        _cloudSyncActionState.value = reconcileHomeCloudSyncActionState(
+            _cloudSyncActionState.value,
+            status,
+        )
+    }
 }
+
+data class HomeCloudSyncActionState(
+    val queuedMode: CloudSyncRunMode? = null,
+    val enqueueFailed: Boolean = false,
+)
+
+internal fun reduceHomeCloudSyncEnqueue(
+    mode: CloudSyncRunMode,
+    accepted: Boolean,
+): HomeCloudSyncActionState = if (accepted) {
+    HomeCloudSyncActionState(queuedMode = mode)
+} else {
+    HomeCloudSyncActionState(enqueueFailed = true)
+}
+
+internal fun reconcileHomeCloudSyncActionState(
+    current: HomeCloudSyncActionState,
+    status: AppCloudSyncStatus,
+): HomeCloudSyncActionState = if (
+    status.running || status.message != null || status.error != null
+) {
+    current.copy(enqueueFailed = false)
+} else {
+    current
+}
+
+internal fun applyPersistentHomeCloudQueue(
+    current: HomeCloudSyncActionState,
+    queuedMode: CloudSyncRunMode?,
+): HomeCloudSyncActionState = current.copy(
+    queuedMode = queuedMode,
+    enqueueFailed = if (queuedMode != null) false else current.enqueueFailed,
+)

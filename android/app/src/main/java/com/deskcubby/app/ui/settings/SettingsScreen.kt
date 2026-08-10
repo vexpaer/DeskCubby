@@ -410,7 +410,8 @@ private val homeWidgetOptions = listOf(
     HomeWidgetOption("notes", "笔记入口", "Notes shortcut"),
     HomeWidgetOption("game_shortcuts", "小游戏快捷入口", "Mini-game shortcuts"),
     HomeWidgetOption("record_overview", "记录概览", "Record overview"),
-    HomeWidgetOption("cloud_sync", "云端同步", "Cloud sync"),
+    HomeWidgetOption("cloud_sync_now", "立即同步", "Sync now"),
+    HomeWidgetOption("cloud_sync_force", "强制上传/下载", "Force upload/download"),
 )
 
 private val homeGameShortcutOptions = listOf(
@@ -1775,8 +1776,8 @@ private fun CloudSyncSettingsPage(
             text = {
                 Text(
                     tr(
-                        "这会按 v28 备份导入应用设置和结构化数据，恢复自定义主题、Markdown 标题字号、主页小游戏快捷入口、背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Vault 随后保持锁定。日记、笔记、媒体与背景图片文件不会被替换。",
-                        "This imports v28 app settings and structured data, restores the custom theme, Markdown heading sizes, Home mini-game shortcuts, background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. The Vault remains locked, and diary, note, media, and background-image files are not replaced.",
+                        "这会按所选备份的版本导入应用设置和结构化数据；当前格式为 v29，并兼容导入 v1–v28。导入会恢复自定义主题、Markdown 标题字号、主页小游戏快捷入口、背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Vault 随后保持锁定。日记、笔记、媒体与背景图片文件不会被替换。",
+                        "This imports app settings and structured data according to the selected backup version; the current format is v29 and v1–v28 remain accepted. It restores the custom theme, Markdown heading sizes, Home mini-game shortcuts, background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. The Vault remains locked, and diary, note, media, and background-image files are not replaced.",
                     ),
                 )
             },
@@ -2122,8 +2123,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.JSON_BACKUP in selectedContents) {
                     Text(
                         tr(
-                            "v28 应用 JSON 包含自定义主题、Markdown 显示设置、主页小游戏快捷入口、全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "The v28 app JSON contains the custom theme, Markdown display settings, Home mini-game shortcuts, global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                            "v29 应用 JSON 包含自定义主题、Markdown 显示设置、主页小游戏快捷入口、全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "The v29 app JSON contains the custom theme, Markdown display settings, Home mini-game shortcuts, global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2481,8 +2482,8 @@ private fun BackupSettingsPage(
             text = {
                 Text(
                     tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。v28 还会恢复自定义主题、Markdown 标题字号、主页小游戏快捷入口、全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。日记、笔记、媒体和背景图片文件不会被修改。确定继续吗？",
-                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. v28 also restores the custom theme, Markdown heading sizes, Home mini-game shortcuts, global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merges games and per-device screen time while leaving the Vault locked. Diary, note, media, and background-image files are unchanged. Continue?",
+                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。当前 v29（并兼容 v1–v28）还会恢复自定义主题、Markdown 标题字号、主页小游戏快捷入口、全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。日记、笔记、媒体和背景图片文件不会被修改。确定继续吗？",
+                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. Current v29 backups (with v1–v28 still accepted) also restore the custom theme, Markdown heading sizes, Home mini-game shortcuts, global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merge games and per-device screen time while leaving the Vault locked. Diary, note, media, and background-image files are unchanged. Continue?",
                     ),
                 )
             },
@@ -2657,8 +2658,8 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "v28 包含应用设置（含自定义主题、Markdown 标题字号与笔记目录引用、主页小游戏快捷入口、全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。笔记/日记正文、媒体文件、逐页教学确认和背景图片文件不包含在内。",
-                        "v28 includes app settings (including the custom theme, Markdown heading sizes and the notes-folder reference, Home mini-game shortcuts, global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time. Note/diary contents, media files, per-page confirmations, and background-image files are excluded.",
+                        "v29 包含应用设置（含自定义主题、Markdown 标题字号与笔记目录引用、主页小游戏快捷入口、全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。笔记/日记正文、媒体文件、逐页教学确认和背景图片文件不包含在内。",
+                        "v29 includes app settings (including the custom theme, Markdown heading sizes and the notes-folder reference, Home mini-game shortcuts, global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time. Note/diary contents, media files, per-page confirmations, and background-image files are excluded.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -6350,6 +6351,8 @@ private fun AboutSettingsPage(
     viewModel: SettingsViewModel,
 ) {
     val context = LocalContext.current
+    var showThirdPartyLicenses by remember { mutableStateOf(false) }
+    var thirdPartyLicenses by remember { mutableStateOf<String?>(null) }
     val checking by viewModel.updateCheckInProgress.collectAsStateWithLifecycle()
     val result by viewModel.updateCheckResult.collectAsStateWithLifecycle()
     val downloadState by viewModel.updateDownloadState.collectAsStateWithLifecycle()
@@ -6396,6 +6399,16 @@ private fun AboutSettingsPage(
                     Icon(Icons.AutoMirrored.Outlined.MenuBook, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(tr("应用教学", "App tutorial"))
+                }
+                TextButton(
+                    onClick = {
+                        thirdPartyLicenses = readPdfiumNotices(context)
+                        showThirdPartyLicenses = true
+                    },
+                ) {
+                    Icon(Icons.Outlined.Info, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("第三方许可", "Third-party licenses"))
                 }
             }
         }
@@ -6670,7 +6683,53 @@ private fun AboutSettingsPage(
             }
         }
     }
+    if (showThirdPartyLicenses) {
+        AlertDialog(
+            onDismissRequest = { showThirdPartyLicenses = false },
+            title = { Text(tr("第三方许可", "Third-party licenses")) },
+            text = {
+                SelectionContainer {
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 520.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        Text(
+                            thirdPartyLicenses?.takeIf(String::isNotBlank) ?: tr(
+                                "无法读取第三方许可文件。",
+                                "The third-party license file could not be read.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showThirdPartyLicenses = false }) {
+                    Text(tr("关闭", "Close"))
+                }
+            },
+        )
+    }
 }
+
+private fun readPdfiumNotices(context: Context): String? = runCatching {
+    context.assets.open(PDFIUM_NOTICES_ASSET).use { input ->
+        val buffer = ByteArray(PDFIUM_NOTICES_READ_BUFFER_BYTES)
+        val output = java.io.ByteArrayOutputStream()
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            if (count == 0) continue
+            require(output.size() + count <= MAX_PDFIUM_NOTICES_BYTES) {
+                "PDFium notices exceed the supported size"
+            }
+            output.write(buffer, 0, count)
+        }
+        output.toString(Charsets.UTF_8.name())
+    }
+}.getOrNull()
 
 @Composable
 private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
@@ -7140,6 +7199,9 @@ private fun openUrl(context: Context, url: String) {
 
 private const val GITHUB_URL = "https://github.com/vexpaer/DeskCubby"
 private const val TUTORIAL_URL = "https://github.com/vexpaer/DeskCubby/blob/main/TUTORIAL.md"
+private const val PDFIUM_NOTICES_ASSET = "pdfium_NOTICES.txt"
+private const val MAX_PDFIUM_NOTICES_BYTES = 256 * 1024
+private const val PDFIUM_NOTICES_READ_BUFFER_BYTES = 8 * 1024
 
 @Composable
 private fun localizedNavLabel(item: NavItemConfig): String =

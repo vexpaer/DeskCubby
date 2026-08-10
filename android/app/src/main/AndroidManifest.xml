@@ -3,9 +3,6 @@
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <uses-sdk
-        tools:overrideLibrary="androidx.pdf,androidx.pdf.core,androidx.pdf.viewer,androidx.pdf.document.service" />
-
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -81,6 +78,11 @@
         </receiver>
 
         <receiver
+            android:name=".widget.DesktopWidgetPinResultReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <receiver
             android:name=".widget.CloudSyncNowWidgetProvider"
             android:enabled="true"
             android:exported="true"
@@ -112,6 +114,17 @@
             android:name=".widget.CloudSyncWidgetActionReceiver"
             android:enabled="true"
             android:exported="false" />
+
+        <receiver
+            android:name=".widget.DesktopWidgetActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <activity
+            android:name=".widget.DesktopWidgetInteractionActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.DeskCubby.WidgetAction" />
 
         <activity
             android:name=".widget.DeskCubbyWidgetConfigureActivity"

@@ -11,25 +11,27 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.ui.DeskCubbyRoot
 import com.deskcubby.app.widget.DesktopWidgetRenderer
+import com.deskcubby.app.widget.DesktopWidgetNavigationTokenStore
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.MutableStateFlow
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
-    private val externalNavigationRoute = MutableStateFlow<String?>(null)
+    private val externalNavigation = MutableStateFlow(ExternalNavigationRequest())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        externalNavigationRoute.value = intent
-            ?.getStringExtra(DesktopWidgetRenderer.EXTRA_START_ROUTE)
+        externalNavigation.value = intent.toExternalNavigationRequest()
         enableEdgeToEdge()
         setContent {
-            val route = externalNavigationRoute.collectAsStateWithLifecycle().value
+            val request = externalNavigation.collectAsStateWithLifecycle().value
             DeskCubbyRoot(
-                externalNavigationRoute = route,
+                externalNavigationRoute = request.route,
+                externalDiaryUri = request.diaryUri,
+                externalGameId = request.gameId,
                 onExternalNavigationHandled = {
-                    if (externalNavigationRoute.value == route) {
-                        externalNavigationRoute.value = null
+                    if (externalNavigation.value == request) {
+                        externalNavigation.value = ExternalNavigationRequest()
                     }
                 },
             )
@@ -39,11 +41,23 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        externalNavigationRoute.value = intent.getStringExtra(
-            DesktopWidgetRenderer.EXTRA_START_ROUTE,
-        )
+        externalNavigation.value = intent.toExternalNavigationRequest()
     }
+
+    private fun android.content.Intent?.toExternalNavigationRequest() = ExternalNavigationRequest(
+        route = this?.getStringExtra(DesktopWidgetRenderer.EXTRA_START_ROUTE),
+        diaryUri = DesktopWidgetNavigationTokenStore.consumeDiaryUri(
+            this?.getStringExtra(DesktopWidgetRenderer.EXTRA_DIARY_TOKEN),
+        ),
+        gameId = this?.getStringExtra(DesktopWidgetRenderer.EXTRA_GAME_ID),
+    )
 }
+
+private data class ExternalNavigationRequest(
+    val route: String? = null,
+    val diaryUri: String? = null,
+    val gameId: String? = null,
+)
 
 /**
  * Keeps exactly one launcher alias enabled so the launcher label matches the
