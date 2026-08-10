@@ -797,6 +797,8 @@ export function readableError(
     database_busy: "本地数据库正忙，请稍后重试。",
     database_version_unsupported: "数据库来自更高版本，请升级 DeskCubby。",
     invalid_configuration: "云同步配置无效，请检查服务地址、路径和账户字段。",
+    sync_force_download_source_count:
+      "强制下载要求恰好启用一个云端来源，请先停用其他同步服务。",
     cloud_sync_busy: "云同步正在运行，请等待完成或先取消。",
     cloud_credentials_replacement_required:
       "账号绑定字段已变化，请明确替换或清除本机凭据。",
@@ -871,6 +873,8 @@ export function readableError(
       "This database requires a newer version of DeskCubby.",
     invalid_configuration:
       "The cloud sync configuration is invalid. Check the endpoint, path and account fields.",
+    sync_force_download_source_count:
+      "Force download requires exactly one enabled cloud source. Disable the other sync services first.",
     cloud_sync_busy:
       "Cloud sync is running. Wait for it to finish or cancel it first.",
     cloud_credentials_replacement_required:

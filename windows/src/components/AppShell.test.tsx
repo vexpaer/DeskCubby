@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDefaultDesktopNavigationPreferences } from "./desktopNavigation";
 import { useAppStore } from "../store/appStore";
 import { AppShell } from "./AppShell";
+import "../styles/components.css";
 
 function renderShell(initialPath = "/") {
   const router = createMemoryRouter([
@@ -74,9 +75,14 @@ describe("AppShell", () => {
   it("traps the narrow-window drawer and restores focus after Escape", async () => {
     const user = userEvent.setup();
     const { container } = renderShell();
-    const menuButton = screen.getByRole("button", { name: "展开侧栏" });
+    // jsdom does not evaluate the responsive media query that makes this
+    // control visible, so select the stable class to exercise its handler.
+    const menuButton = container.querySelector<HTMLButtonElement>(
+      ".mobile-menu-button",
+    );
+    expect(menuButton).not.toBeNull();
 
-    await user.click(menuButton);
+    await user.click(menuButton!);
     expect(container.querySelector(".app-layout")).toHaveClass(
       "mobile-navigation-is-open",
     );
@@ -115,14 +121,18 @@ describe("AppShell", () => {
     expect(screen.queryByRole("link", { name: "Browser" })).not.toBeInTheDocument();
   });
 
-  it("collapses a category without leaving its links in the tab order", async () => {
+  it("visually collapses a category without leaving its links in the tab order", async () => {
     const user = userEvent.setup();
     renderShell();
 
     const toggle = screen.getByRole("button", { name: "收起分类：记录" });
+    const categoryItems = document.getElementById("navigation-category-capture");
+    expect(categoryItems).not.toBeNull();
+    expect(window.getComputedStyle(categoryItems!).display).toBe("grid");
     await user.click(toggle);
 
     expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(window.getComputedStyle(categoryItems!).display).toBe("none");
     expect(screen.queryByRole("link", { name: "日记" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "设置" })).toBeInTheDocument();
     expect(useAppStore.getState().collapsedNavigationCategoryIds).toContain(

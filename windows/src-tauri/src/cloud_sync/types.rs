@@ -48,6 +48,20 @@ pub enum CloudSyncDirection {
     TwoWay,
 }
 
+/// Explicit reconciliation policy for a user-initiated synchronization run.
+///
+/// Forced modes choose one side only for objects present on both sides. They
+/// never propagate deletions, and the engine still requires the remote version
+/// or local content hash captured by the current inventory scan before a write.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CloudSyncRunMode {
+    #[default]
+    Normal,
+    ForceUpload,
+    ForceDownload,
+}
+
 /// Non-secret metadata. Secret material is always supplied separately through
 /// [`CloudCredentials`] and must never be serialized into Android v28 backup
 /// settings.
@@ -211,6 +225,7 @@ impl fmt::Debug for CloudCredentials {
 #[serde(rename_all = "snake_case")]
 pub enum CloudSyncErrorCode {
     InvalidConfiguration,
+    ForceDownloadSourceCount,
     InvalidInput,
     AuthenticationFailed,
     PermissionDenied,
@@ -249,6 +264,14 @@ impl CloudSyncError {
             CloudSyncErrorCode::InvalidConfiguration,
             "The cloud synchronization configuration is invalid.",
             true,
+        )
+    }
+
+    pub const fn force_download_source_count() -> Self {
+        Self::new(
+            CloudSyncErrorCode::ForceDownloadSourceCount,
+            "Force download requires exactly one enabled cloud source.",
+            false,
         )
     }
 

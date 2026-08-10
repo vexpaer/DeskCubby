@@ -13,8 +13,8 @@ use super::{
         BaseState, CloudCredentials, CloudLocalStore, CloudRemoteStore, CloudRemoteStoreFactory,
         CloudSyncConfig, CloudSyncDirection, CloudSyncError, CloudSyncErrorCode,
         CloudSyncItemOutcome, CloudSyncItemReport, CloudSyncLimits, CloudSyncProgress,
-        CloudSyncRunResult, CloudSyncStateStore, LocalSyncObject, LocalWriteResult,
-        RemoteSyncObject,
+        CloudSyncRunMode, CloudSyncRunResult, CloudSyncStateStore, LocalSyncObject,
+        LocalWriteResult, RemoteSyncObject,
     },
     validation::{
         require_valid_sync_key, selected_prefixes, valid_hash, validate_cloud_sync_config,
@@ -50,6 +50,7 @@ impl CloudSyncEngine {
         config: &CloudSyncConfig,
         credentials: &CloudCredentials,
         limits: CloudSyncLimits,
+        mode: CloudSyncRunMode,
         mut on_progress: F,
     ) -> Result<CloudSyncRunResult, CloudSyncError>
     where
@@ -66,6 +67,7 @@ impl CloudSyncEngine {
                 credentials,
                 limits,
                 started_at,
+                mode,
                 &mut on_progress,
             ),
         )
@@ -86,6 +88,7 @@ impl CloudSyncEngine {
         credentials: &CloudCredentials,
         limits: CloudSyncLimits,
         started_at: i64,
+        mode: CloudSyncRunMode,
         on_progress: &mut (dyn FnMut(CloudSyncProgress) + Send),
     ) -> Result<CloudSyncRunResult, CloudSyncError> {
         let remote = self.remote_factory.create(config, credentials, limits)?;
@@ -141,6 +144,7 @@ impl CloudSyncEngine {
             let report = self
                 .reconcile_one(
                     config.source.direction,
+                    mode,
                     local,
                     remote_object,
                     base_hash,
@@ -197,6 +201,7 @@ impl CloudSyncEngine {
     async fn reconcile_one(
         &self,
         direction: CloudSyncDirection,
+        mode: CloudSyncRunMode,
         local: Option<&LocalSyncObject>,
         remote: Option<&RemoteSyncObject>,
         base_hash: Option<&str>,
@@ -210,7 +215,10 @@ impl CloudSyncEngine {
             .ok_or_else(CloudSyncError::invalid_input)?;
         match (local, remote) {
             (None, Some(remote)) => {
-                if direction == CloudSyncDirection::UploadOnly {
+                if mode == CloudSyncRunMode::ForceUpload
+                    || (mode == CloudSyncRunMode::Normal
+                        && direction == CloudSyncDirection::UploadOnly)
+                {
                     return Ok(report(key, CloudSyncItemOutcome::RemoteChangeSkipped));
                 }
                 let bytes = read_remote(remote_store, remote, limits, budget).await?;
@@ -228,6 +236,9 @@ impl CloudSyncEngine {
                 Ok(report(key, write_outcome(result)))
             }
             (Some(local), None) => {
+                if mode == CloudSyncRunMode::ForceDownload {
+                    return Ok(report(key, CloudSyncItemOutcome::RemoteChangeSkipped));
+                }
                 let bytes = read_local(self.local.as_ref(), local, limits, budget).await?;
                 remote_store
                     .write(key, &bytes, &local.sha256, local.last_modified_millis, None)
@@ -238,6 +249,34 @@ impl CloudSyncEngine {
                 Ok(report(key, CloudSyncItemOutcome::Unchanged))
             }
             (Some(local), Some(remote)) => {
+                if mode == CloudSyncRunMode::ForceUpload {
+                    let bytes = read_local(self.local.as_ref(), local, limits, budget).await?;
+                    remote_store
+                        .write(
+                            key,
+                            &bytes,
+                            &local.sha256,
+                            local.last_modified_millis,
+                            Some(&remote.version),
+                        )
+                        .await?;
+                    return Ok(report(key, CloudSyncItemOutcome::Uploaded));
+                }
+                if mode == CloudSyncRunMode::ForceDownload {
+                    let bytes = read_remote(remote_store, remote, limits, budget).await?;
+                    let result = self
+                        .local
+                        .write_remote(
+                            key,
+                            &bytes,
+                            &remote.sha256,
+                            remote.last_modified_millis,
+                            Some(&local.sha256),
+                            limits,
+                        )
+                        .await?;
+                    return Ok(report(key, write_outcome(result)));
+                }
                 let local_changed = base_hash.is_none_or(|base| local.sha256 != base);
                 let remote_changed = base_hash.is_none_or(|base| remote.sha256 != base);
                 if local_changed && !remote_changed {
@@ -430,13 +469,25 @@ mod tests {
         let state = Arc::new(FakeState::default());
         let engine = engine(local.clone(), remote.clone(), state.clone());
         let first = engine
-            .synchronize(&config(), &CloudCredentials::default(), limits(), |_| {})
+            .synchronize(
+                &config(),
+                &CloudCredentials::default(),
+                limits(),
+                CloudSyncRunMode::Normal,
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(first.reports[0].outcome, CloudSyncItemOutcome::Uploaded);
         local.remove(KEY);
         let second = engine
-            .synchronize(&config(), &CloudCredentials::default(), limits(), |_| {})
+            .synchronize(
+                &config(),
+                &CloudCredentials::default(),
+                limits(),
+                CloudSyncRunMode::Normal,
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(second.reports[0].outcome, CloudSyncItemOutcome::Downloaded);
@@ -452,13 +503,25 @@ mod tests {
         let state = Arc::new(FakeState::default());
         let engine = engine(local.clone(), remote.clone(), state);
         engine
-            .synchronize(&config(), &CloudCredentials::default(), limits(), |_| {})
+            .synchronize(
+                &config(),
+                &CloudCredentials::default(),
+                limits(),
+                CloudSyncRunMode::Normal,
+                |_| {},
+            )
             .await
             .unwrap();
         local.put(KEY, b"local");
         remote.put(KEY, b"remote");
         let result = engine
-            .synchronize(&config(), &CloudCredentials::default(), limits(), |_| {})
+            .synchronize(
+                &config(),
+                &CloudCredentials::default(),
+                limits(),
+                CloudSyncRunMode::Normal,
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -483,12 +546,24 @@ mod tests {
         let mut value = config();
         value.direction = CloudSyncDirection::UploadOnly;
         engine
-            .synchronize(&value, &CloudCredentials::default(), limits(), |_| {})
+            .synchronize(
+                &value,
+                &CloudCredentials::default(),
+                limits(),
+                CloudSyncRunMode::Normal,
+                |_| {},
+            )
             .await
             .unwrap();
         remote.put(KEY, b"remote");
         let result = engine
-            .synchronize(&value, &CloudCredentials::default(), limits(), |_| {})
+            .synchronize(
+                &value,
+                &CloudCredentials::default(),
+                limits(),
+                CloudSyncRunMode::Normal,
+                |_| {},
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -498,6 +573,137 @@ mod tests {
         assert_eq!(
             remote.read_count.load(std::sync::atomic::Ordering::SeqCst),
             0
+        );
+    }
+
+    #[tokio::test]
+    async fn force_upload_conditionally_replaces_remote_without_deleting_remote_only_objects() {
+        const REMOTE_ONLY: &str = "diaries/remote-only.md";
+        let local = Arc::new(FakeLocal::default());
+        local.put(KEY, b"local");
+        let remote = Arc::new(FakeRemote::default());
+        remote.put(KEY, b"remote");
+        remote.put(REMOTE_ONLY, b"remote-only");
+        let state = Arc::new(FakeState::default());
+
+        let result = engine(local, remote.clone(), state)
+            .synchronize(
+                &config(),
+                &CloudCredentials::default(),
+                limits(),
+                CloudSyncRunMode::ForceUpload,
+                |_| {},
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(remote.bytes(KEY), b"local");
+        assert_eq!(remote.bytes(REMOTE_ONLY), b"remote-only");
+        assert_eq!(
+            result
+                .reports
+                .iter()
+                .map(|report| (report.key.as_str(), report.outcome))
+                .collect::<BTreeMap<_, _>>(),
+            BTreeMap::from([
+                (KEY, CloudSyncItemOutcome::Uploaded),
+                (REMOTE_ONLY, CloudSyncItemOutcome::RemoteChangeSkipped),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn force_download_replaces_scanned_local_without_deleting_local_only_objects() {
+        const LOCAL_ONLY: &str = "diaries/local-only.md";
+        let local = Arc::new(FakeLocal::default());
+        local.put(KEY, b"local");
+        local.put(LOCAL_ONLY, b"local-only");
+        let remote = Arc::new(FakeRemote::default());
+        remote.put(KEY, b"remote");
+        let state = Arc::new(FakeState::default());
+        let mut source = config();
+        source.direction = CloudSyncDirection::UploadOnly;
+
+        let result = engine(local.clone(), remote, state)
+            .synchronize(
+                &source,
+                &CloudCredentials::default(),
+                limits(),
+                CloudSyncRunMode::ForceDownload,
+                |_| {},
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(local.bytes(KEY), b"remote");
+        assert_eq!(local.bytes(LOCAL_ONLY), b"local-only");
+        assert_eq!(
+            result
+                .reports
+                .iter()
+                .map(|report| (report.key.as_str(), report.outcome))
+                .collect::<BTreeMap<_, _>>(),
+            BTreeMap::from([
+                (KEY, CloudSyncItemOutcome::Downloaded),
+                (LOCAL_ONLY, CloudSyncItemOutcome::RemoteChangeSkipped),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn force_upload_stops_when_remote_changes_after_inventory_scan() {
+        let local = Arc::new(FakeLocal::default());
+        local.put(KEY, b"local");
+        let remote = Arc::new(FakeRemote::default());
+        remote.put(KEY, b"remote");
+        remote
+            .change_before_next_write
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let error = engine(local, remote.clone(), Arc::new(FakeState::default()))
+            .synchronize(
+                &config(),
+                &CloudCredentials::default(),
+                limits(),
+                CloudSyncRunMode::ForceUpload,
+                |_| {},
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, CloudSyncErrorCode::Conflict);
+        assert_eq!(remote.bytes(KEY), b"concurrent-remote");
+    }
+
+    #[tokio::test]
+    async fn force_download_preserves_concurrent_local_edit_as_conflict_copy() {
+        let local = Arc::new(FakeLocal::default());
+        local.put(KEY, b"local");
+        local
+            .change_before_next_remote_write
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let remote = Arc::new(FakeRemote::default());
+        remote.put(KEY, b"remote");
+
+        let result = engine(local.clone(), remote, Arc::new(FakeState::default()))
+            .synchronize(
+                &config(),
+                &CloudCredentials::default(),
+                limits(),
+                CloudSyncRunMode::ForceDownload,
+                |_| {},
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(local.bytes(KEY), b"concurrent-local");
+        assert_eq!(
+            local.conflicts.lock().unwrap().as_slice(),
+            &[b"remote".to_vec()]
+        );
+        assert_eq!(
+            result.reports[0].outcome,
+            CloudSyncItemOutcome::ConflictCopySaved
         );
     }
 
@@ -581,6 +787,7 @@ mod tests {
     struct FakeLocal {
         entries: StdMutex<BTreeMap<String, Vec<u8>>>,
         conflicts: StdMutex<Vec<Vec<u8>>>,
+        change_before_next_remote_write: std::sync::atomic::AtomicBool,
     }
 
     impl FakeLocal {
@@ -642,6 +849,12 @@ mod tests {
             _: CloudSyncLimits,
         ) -> BoxFuture<'a, Result<LocalWriteResult, CloudSyncError>> {
             Box::pin(async move {
+                if self
+                    .change_before_next_remote_write
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    self.put(key, b"concurrent-local");
+                }
                 let current = self.entries.lock().unwrap().get(key).cloned();
                 let current_hash = current.as_deref().map(sha256_hex);
                 if current_hash.as_deref() == expected {
@@ -671,6 +884,7 @@ mod tests {
         entries: StdMutex<BTreeMap<String, (Vec<u8>, String)>>,
         version: std::sync::atomic::AtomicU64,
         read_count: std::sync::atomic::AtomicU64,
+        change_before_next_write: std::sync::atomic::AtomicBool,
     }
 
     impl FakeRemote {
@@ -683,6 +897,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(key.to_owned(), (bytes.to_vec(), format!("v{version}")));
+        }
+
+        fn bytes(&self, key: &str) -> Vec<u8> {
+            self.entries.lock().unwrap()[key].0.clone()
         }
     }
 
@@ -733,6 +951,12 @@ mod tests {
             expected: Option<&'a RemoteVersion>,
         ) -> BoxFuture<'a, Result<RemoteSyncObject, CloudSyncError>> {
             Box::pin(async move {
+                if self
+                    .change_before_next_write
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    self.put(key, b"concurrent-remote");
+                }
                 let current_version = self
                     .entries
                     .lock()

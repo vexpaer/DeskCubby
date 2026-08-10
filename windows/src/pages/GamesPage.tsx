@@ -4,6 +4,7 @@ import {
   ArrowRight,
   ArrowUp,
   Bomb,
+  Circle,
   CirclePause,
   CirclePlay,
   Gamepad2,
@@ -25,6 +26,7 @@ import {
 } from "react";
 import { useSearchParams } from "react-router-dom";
 
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ErrorState, LoadingState } from "../components/AsyncState";
 import { PageFrame } from "../components/PageFrame";
 import {
@@ -45,16 +47,20 @@ import {
   minesCell,
   move2048,
   moveSpider,
+  newGo,
   newGame2048,
   newMines,
   newSnake,
   newSpider,
   newTetris,
   parseGame2048,
+  parseGo,
   parseMines,
   parseSnake,
   parseSpider,
   parseTetris,
+  passGo,
+  playGo,
   serializeGame,
   spiderCanSelect,
   tetrisPieceCells,
@@ -64,6 +70,9 @@ import {
   undoSpider,
   type Game2048Direction,
   type Game2048State,
+  type GoBoardSize,
+  type GoMoveError,
+  type GoState,
   type MinesState,
   type SnakeDirection,
   type SnakeState,
@@ -80,7 +89,8 @@ type ActiveGame =
   | { id: "snake"; state: SnakeState }
   | { id: "tetris"; state: TetrisState }
   | { id: "minesweeper"; state: MinesState }
-  | { id: "spider"; state: SpiderState };
+  | { id: "spider"; state: SpiderState }
+  | { id: "go"; state: GoState };
 
 const TITLES: Record<GameId, [string, string]> = {
   "2048": ["2048 · 4×4", "2048 · 4×4"],
@@ -90,6 +100,7 @@ const TITLES: Record<GameId, [string, string]> = {
   tetris: ["俄罗斯方块", "Tetris"],
   minesweeper: ["扫雷", "Minesweeper"],
   spider: ["单花色蜘蛛纸牌", "One-suit Spider"],
+  go: ["围棋", "Go"],
 };
 
 function gameTitle(gameId: GameId, language: Language): string {
@@ -111,6 +122,9 @@ function formatDuration(value: string, language: Language): string {
 }
 
 function scoreOf(active: ActiveGame): number {
+  if (active.id === "go") {
+    return active.state.capturedByBlack + active.state.capturedByWhite;
+  }
   if (active.id === "minesweeper") {
     if (!active.state.won) return 0;
     const revealedSafe = active.state.revealed.filter(
@@ -132,6 +146,7 @@ function createGame(gameId: GameId): ActiveGame {
   if (gameId === "snake") return { id: gameId, state: newSnake() };
   if (gameId === "tetris") return { id: gameId, state: newTetris() };
   if (gameId === "minesweeper") return { id: gameId, state: newMines() };
+  if (gameId === "go") return { id: gameId, state: newGo() };
   return { id: gameId, state: newSpider() };
 }
 
@@ -151,6 +166,10 @@ function restoreGame(gameId: GameId, json: string): ActiveGame | null {
   }
   if (gameId === "minesweeper") {
     const state = parseMines(json);
+    return state ? { id: gameId, state } : null;
+  }
+  if (gameId === "go") {
+    const state = parseGo(json);
     return state ? { id: gameId, state } : null;
   }
   const state = parseSpider(json);
@@ -187,15 +206,16 @@ function GameCatalog({
         return (
           <article className="panel game-catalog-card" key={gameId}>
             <span className="game-catalog-icon" aria-hidden="true">
-              {gameId.startsWith("2048") ? <Grid3X3 /> : gameId === "snake" ? <Gamepad2 /> : gameId === "tetris" ? <Layers3 /> : gameId === "minesweeper" ? <Bomb /> : <Spade />}
+              {gameId.startsWith("2048") ? <Grid3X3 /> : gameId === "snake" ? <Gamepad2 /> : gameId === "tetris" ? <Layers3 /> : gameId === "minesweeper" ? <Bomb /> : gameId === "go" ? <Circle /> : <Spade />}
             </span>
             <div>
               <h2>{gameTitle(gameId, language)}</h2>
               <p>
-                {tr(language, "最高分", "High score")} · {meta?.highScore ?? 0}
+                {gameId === "go" ? tr(language, "最高提子", "Best captures") : tr(language, "最高分", "High score")} · {meta?.highScore ?? 0}
               </p>
               <small>
                 {tr(language, "游玩", "Played")} {formatDuration(meta?.totalPlayMillis ?? "0", language)}
+                {gameId === "go" ? tr(language, " · 仅保存在本机", " · Stored only on this PC") : null}
               </small>
             </div>
             <div className="game-card-actions">
@@ -492,6 +512,237 @@ function MinesBoard({
   );
 }
 
+const GO_BOARD_PADDING = 6.5;
+
+function goStarPoints(size: GoBoardSize): Array<[number, number]> {
+  if (size === 9) return [[2, 2], [6, 2], [4, 4], [2, 6], [6, 6]];
+  const points = size === 13 ? [3, 6, 9] : [3, 9, 15];
+  return points.flatMap((y) => points.map((x) => [x, y] as [number, number]));
+}
+
+function goMoveError(error: GoMoveError, language: Language): string {
+  const messages: Record<GoMoveError, [string, string]> = {
+    OUT_OF_BOUNDS: ["请选择棋盘交叉点。", "Choose a board intersection."],
+    OCCUPIED: ["这个交叉点已有棋子。", "That intersection is occupied."],
+    SUICIDE: ["不能下自杀棋。", "Suicide moves are not allowed."],
+    KO: ["简单劫：不能立即还原上一局面。", "Simple ko: the previous position cannot be repeated immediately."],
+    GAME_FINISHED: ["棋局已经结束。", "The game has finished."],
+  };
+  return language === "en" ? messages[error][1] : messages[error][0];
+}
+
+function GoBoard({
+  state,
+  language,
+  onState,
+  onReplace,
+  onPlaying,
+  onExit,
+}: {
+  state: GoState;
+  language: Language;
+  onState: (state: GoState, metrics?: GameMetricDelta, terminal?: boolean) => void;
+  onReplace: (state: GoState) => void;
+  onPlaying: (playing: boolean) => void;
+  onExit: () => void;
+}) {
+  const center = Math.floor(state.size / 2) * state.size + Math.floor(state.size / 2);
+  const [selected, setSelected] = useState(center);
+  const [lastError, setLastError] = useState<GoMoveError | null>(null);
+  const [pendingSize, setPendingSize] = useState<GoBoardSize | null>(null);
+  const intersections = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    setSelected(center);
+    setLastError(null);
+  }, [center, state.size]);
+
+  useEffect(() => {
+    onPlaying(!state.finished);
+    return () => onPlaying(false);
+  }, [onPlaying, state.finished]);
+
+  const coordinate = (index: number) => GO_BOARD_PADDING + ((100 - GO_BOARD_PADDING * 2) * index) / (state.size - 1);
+  const hitSize = Math.min(10.5, 84 / (state.size - 1));
+  const currentName = state.current === 1 ? tr(language, "黑方", "Black") : tr(language, "白方", "White");
+
+  const play = (x: number, y: number) => {
+    const result = playGo(state, x, y);
+    if (!result.accepted) {
+      setLastError(result.error ?? "GAME_FINISHED");
+      return;
+    }
+    setLastError(null);
+    onState(result.state, result.metrics, result.terminal);
+  };
+
+  const pass = () => {
+    const result = passGo(state);
+    if (!result.accepted) {
+      setLastError(result.error ?? "GAME_FINISHED");
+      return;
+    }
+    setLastError(null);
+    onState(result.state, result.metrics, result.terminal);
+  };
+
+  const selectByKeyboard = (index: number, key: string) => {
+    const x = index % state.size;
+    const y = Math.floor(index / state.size);
+    const direction: Record<string, [number, number] | undefined> = {
+      ArrowLeft: [-1, 0], a: [-1, 0], A: [-1, 0],
+      ArrowRight: [1, 0], d: [1, 0], D: [1, 0],
+      ArrowUp: [0, -1], w: [0, -1], W: [0, -1],
+      ArrowDown: [0, 1], s: [0, 1], S: [0, 1],
+    };
+    const delta = direction[key];
+    if (!delta) return false;
+    const nextX = Math.max(0, Math.min(state.size - 1, x + delta[0]));
+    const nextY = Math.max(0, Math.min(state.size - 1, y + delta[1]));
+    const next = nextY * state.size + nextX;
+    setSelected(next);
+    intersections.current[next]?.focus();
+    return true;
+  };
+
+  return (
+    <div className="game-stage go-stage">
+      <div className="go-status panel-subtle" aria-live="polite">
+        <div><span className="go-turn-stone" data-stone={state.current} aria-hidden="true" /><strong>{tr(language, `${currentName}落子`, `${currentName} to play`)}</strong></div>
+        <span>{tr(language, `第 ${state.turnCount + 1} 手`, `Turn ${state.turnCount + 1}`)}</span>
+        <span>{tr(language, `黑提 ${state.capturedByBlack} · 白提 ${state.capturedByWhite}`, `Black captures ${state.capturedByBlack} · White captures ${state.capturedByWhite}`)}</span>
+        {state.passes === 1 ? <small>{tr(language, "上一方已停着；再停一手将结束棋局。", "The last player passed; another pass ends the game.")}</small> : null}
+      </div>
+
+      <div className="go-size-selector" aria-label={tr(language, "棋盘大小", "Board size")}>
+        {([9, 13, 19] as const).map((size) => (
+          <button
+            className={size === state.size ? "button button-primary" : "button button-secondary"}
+            type="button"
+            aria-pressed={size === state.size}
+            key={size}
+            onClick={() => {
+              if (size !== state.size || state.turnCount > 0) setPendingSize(size);
+            }}
+          >
+            {size}×{size}
+          </button>
+        ))}
+      </div>
+
+      <div
+        className="go-board"
+        role="grid"
+        aria-rowcount={state.size}
+        aria-colcount={state.size}
+        aria-label={tr(
+          language,
+          `${state.size}×${state.size} 围棋棋盘，方向键或 WASD 选择交叉点，回车或空格落子。`,
+          `${state.size}×${state.size} Go board. Use Arrow keys or WASD to select an intersection, then Enter or Space to play.`,
+        )}
+      >
+        <svg className="go-board-art" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+          {Array.from({ length: state.size }, (_, index) => {
+            const position = coordinate(index);
+            return (
+              <g key={index}>
+                <line x1={GO_BOARD_PADDING} y1={position} x2={100 - GO_BOARD_PADDING} y2={position} />
+                <line x1={position} y1={GO_BOARD_PADDING} x2={position} y2={100 - GO_BOARD_PADDING} />
+              </g>
+            );
+          })}
+          {goStarPoints(state.size).map(([x, y]) => (
+            <circle className="go-star" cx={coordinate(x)} cy={coordinate(y)} r={state.size === 19 ? 0.72 : 0.95} key={`${x}:${y}`} />
+          ))}
+          {state.board.map((stone, index) => {
+            if (stone === 0) return null;
+            const x = index % state.size;
+            const y = Math.floor(index / state.size);
+            const radius = ((100 - GO_BOARD_PADDING * 2) / (state.size - 1)) * 0.43;
+            const isLast = state.lastMove?.x === x && state.lastMove.y === y;
+            return (
+              <g key={index}>
+                <circle className="go-stone" data-stone={stone} cx={coordinate(x)} cy={coordinate(y)} r={radius} />
+                {isLast ? <circle className="go-last-move" data-stone={stone} cx={coordinate(x)} cy={coordinate(y)} r={radius * 0.22} /> : null}
+              </g>
+            );
+          })}
+        </svg>
+        {state.board.map((stone, index) => {
+          const x = index % state.size;
+          const y = Math.floor(index / state.size);
+          const stoneName = stone === 0
+            ? tr(language, "空位", "empty")
+            : stone === 1
+              ? tr(language, "黑子", "black stone")
+              : tr(language, "白子", "white stone");
+          return (
+            <button
+              className="go-intersection"
+              type="button"
+              role="gridcell"
+              aria-rowindex={y + 1}
+              aria-colindex={x + 1}
+              aria-label={tr(language, `第 ${y + 1} 行第 ${x + 1} 列，${stoneName}`, `Row ${y + 1}, column ${x + 1}, ${stoneName}`)}
+              data-selected={selected === index}
+              disabled={state.finished}
+              key={index}
+              ref={(element) => { intersections.current[index] = element; }}
+              style={{
+                left: `${coordinate(x)}%`,
+                top: `${coordinate(y)}%`,
+                width: `${hitSize}%`,
+                height: `${hitSize}%`,
+              }}
+              tabIndex={selected === index ? 0 : -1}
+              onFocus={() => setSelected(index)}
+              onClick={() => play(x, y)}
+              onKeyDown={(event) => {
+                if (event.key.toLowerCase() === "p") {
+                  event.preventDefault();
+                  pass();
+                } else if (selectByKeyboard(index, event.key)) {
+                  event.preventDefault();
+                }
+              }}
+            />
+          );
+        })}
+      </div>
+
+      {lastError ? <p className="form-error go-error" role="status">{goMoveError(lastError, language)}</p> : null}
+      <div className="go-actions">
+        <button className="button button-primary" type="button" disabled={state.finished} onClick={pass}>{tr(language, "停一手", "Pass")}</button>
+        <button className="button button-secondary" type="button" onClick={() => setPendingSize(state.size)}><RotateCcw size={17} />{tr(language, "清空重开", "Clear & restart")}</button>
+      </div>
+      <p className="game-hint">{tr(language, "连续两次停着结束棋局；本页只记录提子数，不自动判定地域胜负。存档与统计仅保存在这台电脑。", "Two consecutive passes end the game. Captures are tracked; territory is not scored automatically. Saves and statistics stay only on this PC.")}</p>
+
+      <ConfirmDialog
+        open={pendingSize !== null}
+        title={tr(language, "重新开始？", "Start over?")}
+        description={pendingSize === null ? undefined : tr(language, `当前棋局会被清空，并开始一局 ${pendingSize}×${pendingSize} 围棋。`, `The current board will be cleared and a ${pendingSize}×${pendingSize} game will begin.`)}
+        confirmLabel={tr(language, "重开", "Restart")}
+        cancelLabel={tr(language, "取消", "Cancel")}
+        destructive
+        onCancel={() => setPendingSize(null)}
+        onConfirm={() => {
+          if (pendingSize !== null) onReplace(newGo(pendingSize));
+          setPendingSize(null);
+        }}
+      />
+      <ConfirmDialog
+        open={state.finished && pendingSize === null}
+        title={tr(language, "棋局结束", "Game finished")}
+        description={tr(language, `双方连续停着。黑方提子 ${state.capturedByBlack}，白方提子 ${state.capturedByWhite}。请按你们采用的数子或数目规则判断胜负。`, `Both players passed. Black captured ${state.capturedByBlack}; White captured ${state.capturedByWhite}. Use your chosen territory or area rules to determine the result.`)}
+        confirmLabel={tr(language, "再来一局", "Play again")}
+        cancelLabel={tr(language, "返回", "Back")}
+        onCancel={onExit}
+        onConfirm={() => onReplace(newGo(state.size))}
+      />
+    </div>
+  );
+}
+
 function SpiderBoard({
   state,
   language,
@@ -681,7 +932,7 @@ export default function GamesPage() {
 
   if (!active) {
     return (
-      <PageFrame title={tr(language, "小游戏", "Mini games")} description={tr(language, "七种玩法共享 Android v28 存档与特色战绩；游玩时长只保存在这台电脑。", "Seven variants share Android v28 saves and lifetime metrics; play time stays private to this PC.")}>
+      <PageFrame title={tr(language, "小游戏", "Mini games")} description={tr(language, "七种既有玩法可随 Android v28 往返；围棋存档、战绩与全部游玩时长只保存在这台电脑。", "The seven existing variants can round-trip through Android v28; Go saves and records, plus all play time, stay only on this PC.")}>
         {error ? <p className="form-error" role="alert">{error}</p> : null}
         <GameCatalog snapshot={snapshot} language={language} onLaunch={launch} />
       </PageFrame>
@@ -694,7 +945,9 @@ export default function GamesPage() {
       className={active.id === "spider" ? "game-page is-wide" : "game-page"}
       eyebrow={tr(language, "小游戏", "Mini games")}
       title={gameTitle(active.id, language)}
-      description={tr(language, `最高分 ${meta?.highScore ?? 0} · 自动顺序保存`, `High score ${meta?.highScore ?? 0} · Ordered autosave`)}
+      description={active.id === "go"
+        ? tr(language, `最高提子 ${meta?.highScore ?? 0} · 本机自动顺序保存`, `Best captures ${meta?.highScore ?? 0} · Private ordered autosave`)
+        : tr(language, `最高分 ${meta?.highScore ?? 0} · 自动顺序保存`, `High score ${meta?.highScore ?? 0} · Ordered autosave`)}
       actions={<button className="button button-secondary" type="button" onClick={() => setActive(null)}><Save size={17} />{tr(language, "保存并返回", "Save & back")}</button>}
     >
       {error ? <p className="form-error" role="alert">{error}</p> : null}
@@ -721,10 +974,21 @@ export default function GamesPage() {
         <TetrisBoard state={active.state} language={language} onPlaying={setPlaying} onState={(state, metrics, terminal) => update({ id: "tetris", state }, metrics, terminal)} />
       ) : active.id === "minesweeper" ? (
         <MinesBoard state={active.state} language={language} onState={(state, metrics, terminal) => update({ id: "minesweeper", state }, metrics, terminal)} onReplace={(state) => update({ id: "minesweeper", state })} />
+      ) : active.id === "go" ? (
+        <GoBoard
+          state={active.state}
+          language={language}
+          onPlaying={setPlaying}
+          onExit={() => setActive(null)}
+          onState={(state, metrics, terminal) => update({ id: "go", state }, metrics, terminal)}
+          onReplace={(state) => update({ id: "go", state })}
+        />
       ) : active.id === "spider" ? (
         <SpiderBoard state={active.state} language={language} onState={(state, metrics, terminal) => update({ id: "spider", state }, metrics, terminal)} />
       ) : null}
-      <footer className="game-keyboard-hint"><Trophy size={16} />{tr(language, "支持方向键 / WASD；俄罗斯方块空格硬降，P 暂停；蜘蛛纸牌 Ctrl+Z 撤回。", "Arrow keys / WASD supported; Space hard-drops Tetris, P pauses, and Ctrl+Z undoes Spider.")}</footer>
+      <footer className="game-keyboard-hint"><Trophy size={16} />{active.id === "go"
+        ? tr(language, "围棋用方向键 / WASD 选择，Enter / 空格落子，P 停一手。", "For Go, use Arrow keys / WASD to select, Enter / Space to play, and P to pass.")
+        : tr(language, "支持方向键 / WASD；俄罗斯方块空格硬降，P 暂停；蜘蛛纸牌 Ctrl+Z 撤回。", "Arrow keys / WASD supported; Space hard-drops Tetris, P pauses, and Ctrl+Z undoes Spider.")}</footer>
     </PageFrame>
   );
 }

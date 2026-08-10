@@ -26,7 +26,9 @@ pub(crate) const GAME_DTO_VERSION: u32 = 1;
 pub(crate) const MAX_GAME_SAVE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SCORE: i64 = i32::MAX as i64;
 const MAX_PLAY_TIME_DELTA_MILLIS: i64 = 24 * 60 * 60 * 1_000;
-const GAME_IDS: [&str; 7] = [
+/// The Android v28-compatible game whitelist. Never add Windows-private games here without a
+/// coordinated backup format change on both platforms.
+const BACKUP_GAME_IDS: [&str; 7] = [
     "2048",
     "2048_5",
     "2048_6",
@@ -34,6 +36,17 @@ const GAME_IDS: [&str; 7] = [
     "tetris",
     "minesweeper",
     "spider",
+];
+const PRIVATE_GAME_IDS: [&str; 1] = ["go"];
+const RUNTIME_GAME_IDS: [&str; 8] = [
+    "2048",
+    "2048_5",
+    "2048_6",
+    "snake",
+    "tetris",
+    "minesweeper",
+    "spider",
+    "go",
 ];
 
 static GAME_WRITE_MUTEX: Mutex<()> = Mutex::new(());
@@ -97,6 +110,43 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
             game_id TEXT PRIMARY KEY CHECK (
                 game_id IN ('2048', '2048_5', '2048_6', 'snake', 'tetris', 'minesweeper', 'spider')
             ),
+            total_millis INTEGER NOT NULL DEFAULT 0 CHECK (total_millis >= 0),
+            updated_at INTEGER NOT NULL CHECK (updated_at >= 0)
+        );
+        "#,
+    )
+}
+
+/// Adds storage for games that are deliberately private to this Windows installation. Keeping
+/// these rows in separate tables makes exclusion from v28 exports, recovery points, automatic
+/// backups and application-JSON cloud sync structural rather than dependent on call-site filters.
+pub(crate) fn migrate_private(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        r#"
+        CREATE TABLE private_game_states (
+            game_id TEXT PRIMARY KEY CHECK (game_id IN ('go')),
+            high_score INTEGER NOT NULL DEFAULT 0
+                CHECK (high_score BETWEEN 0 AND 2147483647),
+            save_json TEXT CHECK (
+                save_json IS NULL OR (
+                    length(save_json) BETWEEN 2 AND 16777216
+                    AND json_valid(save_json)
+                    AND json_type(save_json) = 'object'
+                )
+            ),
+            updated_at INTEGER NOT NULL CHECK (updated_at >= 0)
+        );
+
+        CREATE TABLE private_game_statistics (
+            game_id TEXT NOT NULL CHECK (game_id IN ('go')),
+            metric_key TEXT NOT NULL CHECK (length(metric_key) BETWEEN 1 AND 64),
+            value INTEGER NOT NULL DEFAULT 0 CHECK (value >= 0),
+            updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
+            PRIMARY KEY (game_id, metric_key)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE private_game_engagement_times (
+            game_id TEXT PRIMARY KEY CHECK (game_id IN ('go')),
             total_millis INTEGER NOT NULL DEFAULT 0 CHECK (total_millis >= 0),
             updated_at INTEGER NOT NULL CHECK (updated_at >= 0)
         );
@@ -221,7 +271,7 @@ pub(crate) fn replace_backup_rows(
 fn validate_backup_states(states: &[GameBackupState]) -> Result<(), DataError> {
     let mut seen = BTreeMap::new();
     for state in states {
-        if !is_game_id(&state.game_id)
+        if !is_backup_game_id(&state.game_id)
             || !(0..=MAX_SCORE).contains(&state.high_score)
             || state.updated_at < 0
             || seen.insert(state.game_id.as_str(), ()).is_some()
@@ -242,7 +292,7 @@ fn validate_backup_statistics(statistics: &[GameBackupStatistic]) -> Result<(), 
     let mut seen = BTreeMap::new();
     for statistic in statistics {
         let key = (statistic.game_id.as_str(), statistic.metric_key.as_str());
-        if !is_game_id(&statistic.game_id)
+        if !is_backup_game_id(&statistic.game_id)
             || !supports_metric(&statistic.game_id, &statistic.metric_key)
             || statistic.value < 0
             || statistic.updated_at < 0
@@ -377,7 +427,7 @@ pub(crate) fn add_game_play_time(
     state: State<'_, AppState>,
     request: GamePlayTimeRequestV1,
 ) -> CommandResult<GamesSnapshotDtoV1> {
-    if request.dto_version != GAME_DTO_VERSION || !is_game_id(&request.game_id) {
+    if request.dto_version != GAME_DTO_VERSION || !is_runtime_game_id(&request.game_id) {
         return Err(SecurityErrorDto::invalid_input());
     }
     let delta = parse_positive_decimal(&request.delta_millis)?;
@@ -397,7 +447,7 @@ fn map_storage_error(_: DataError) -> SecurityErrorDto {
 
 fn validate_action(request: &GameActionRequestV1) -> CommandResult<()> {
     if request.dto_version != GAME_DTO_VERSION
-        || !is_game_id(&request.game_id)
+        || !is_runtime_game_id(&request.game_id)
         || !(0..=MAX_SCORE).contains(&request.score)
         || request.increments.keys().any(|metric| {
             !is_active_metric(&request.game_id, metric) || request.maxima.contains_key(metric)
@@ -461,8 +511,16 @@ fn parse_non_negative_decimal(value: &str) -> CommandResult<i64> {
         .map_err(|_| SecurityErrorDto::invalid_input())
 }
 
-fn is_game_id(game_id: &str) -> bool {
-    GAME_IDS.contains(&game_id)
+fn is_runtime_game_id(game_id: &str) -> bool {
+    RUNTIME_GAME_IDS.contains(&game_id)
+}
+
+fn is_backup_game_id(game_id: &str) -> bool {
+    BACKUP_GAME_IDS.contains(&game_id)
+}
+
+fn is_private_game_id(game_id: &str) -> bool {
+    PRIVATE_GAME_IDS.contains(&game_id)
 }
 
 fn supports_metric(game_id: &str, metric: &str) -> bool {
@@ -482,6 +540,13 @@ fn supports_metric(game_id: &str, metric: &str) -> bool {
             common.contains(&metric)
                 || ["spiderCardMoves", "spiderDeals", "spiderUndos"].contains(&metric)
         }
+        "go" => [
+            "goMovesPlayed",
+            "goStonesCaptured",
+            "goPasses",
+            "goGamesCompleted",
+        ]
+        .contains(&metric),
         _ => false,
     }
 }
@@ -502,52 +567,96 @@ fn apply_action(database: &Database, request: GameActionRequestV1) -> Result<(),
         } else {
             None
         };
-        transaction.execute(
-            r#"
-            INSERT INTO game_states(game_id, high_score, save_json, updated_at)
-            VALUES(?1, ?2, ?3, ?4)
-            ON CONFLICT(game_id) DO UPDATE SET
-                high_score = MAX(game_states.high_score, excluded.high_score),
-                save_json = excluded.save_json,
-                updated_at = excluded.updated_at
-            "#,
-            params![request.game_id, request.score, save_json, now],
-        )?;
+        if is_private_game_id(&request.game_id) {
+            transaction.execute(
+                r#"
+                INSERT INTO private_game_states(game_id, high_score, save_json, updated_at)
+                VALUES(?1, ?2, ?3, ?4)
+                ON CONFLICT(game_id) DO UPDATE SET
+                    high_score = MAX(private_game_states.high_score, excluded.high_score),
+                    save_json = excluded.save_json,
+                    updated_at = excluded.updated_at
+                "#,
+                params![request.game_id, request.score, save_json, now],
+            )?;
+        } else {
+            transaction.execute(
+                r#"
+                INSERT INTO game_states(game_id, high_score, save_json, updated_at)
+                VALUES(?1, ?2, ?3, ?4)
+                ON CONFLICT(game_id) DO UPDATE SET
+                    high_score = MAX(game_states.high_score, excluded.high_score),
+                    save_json = excluded.save_json,
+                    updated_at = excluded.updated_at
+                "#,
+                params![request.game_id, request.score, save_json, now],
+            )?;
+        }
     }
 
     for (metric, raw_delta) in &request.increments {
         let delta = raw_delta
             .parse::<i64>()
             .expect("validated decimal increment");
-        transaction.execute(
-            r#"
-            INSERT INTO game_statistics(game_id, metric_key, value, updated_at)
-            VALUES(?1, ?2, ?3, ?4)
-            ON CONFLICT(game_id, metric_key) DO UPDATE SET
-                value = CASE
-                    WHEN game_statistics.value > 9223372036854775807 - excluded.value
-                        THEN 9223372036854775807
-                    ELSE game_statistics.value + excluded.value
-                END,
-                updated_at = excluded.updated_at
-            "#,
-            params![request.game_id, metric, delta, now],
-        )?;
+        if is_private_game_id(&request.game_id) {
+            transaction.execute(
+                r#"
+                INSERT INTO private_game_statistics(game_id, metric_key, value, updated_at)
+                VALUES(?1, ?2, ?3, ?4)
+                ON CONFLICT(game_id, metric_key) DO UPDATE SET
+                    value = CASE
+                        WHEN private_game_statistics.value > 9223372036854775807 - excluded.value
+                            THEN 9223372036854775807
+                        ELSE private_game_statistics.value + excluded.value
+                    END,
+                    updated_at = excluded.updated_at
+                "#,
+                params![request.game_id, metric, delta, now],
+            )?;
+        } else {
+            transaction.execute(
+                r#"
+                INSERT INTO game_statistics(game_id, metric_key, value, updated_at)
+                VALUES(?1, ?2, ?3, ?4)
+                ON CONFLICT(game_id, metric_key) DO UPDATE SET
+                    value = CASE
+                        WHEN game_statistics.value > 9223372036854775807 - excluded.value
+                            THEN 9223372036854775807
+                        ELSE game_statistics.value + excluded.value
+                    END,
+                    updated_at = excluded.updated_at
+                "#,
+                params![request.game_id, metric, delta, now],
+            )?;
+        }
     }
     for (metric, raw_candidate) in &request.maxima {
         let candidate = raw_candidate
             .parse::<i64>()
             .expect("validated decimal maximum");
-        transaction.execute(
-            r#"
-            INSERT INTO game_statistics(game_id, metric_key, value, updated_at)
-            VALUES(?1, ?2, ?3, ?4)
-            ON CONFLICT(game_id, metric_key) DO UPDATE SET
-                value = MAX(game_statistics.value, excluded.value),
-                updated_at = excluded.updated_at
-            "#,
-            params![request.game_id, metric, candidate, now],
-        )?;
+        if is_private_game_id(&request.game_id) {
+            transaction.execute(
+                r#"
+                INSERT INTO private_game_statistics(game_id, metric_key, value, updated_at)
+                VALUES(?1, ?2, ?3, ?4)
+                ON CONFLICT(game_id, metric_key) DO UPDATE SET
+                    value = MAX(private_game_statistics.value, excluded.value),
+                    updated_at = excluded.updated_at
+                "#,
+                params![request.game_id, metric, candidate, now],
+            )?;
+        } else {
+            transaction.execute(
+                r#"
+                INSERT INTO game_statistics(game_id, metric_key, value, updated_at)
+                VALUES(?1, ?2, ?3, ?4)
+                ON CONFLICT(game_id, metric_key) DO UPDATE SET
+                    value = MAX(game_statistics.value, excluded.value),
+                    updated_at = excluded.updated_at
+                "#,
+                params![request.game_id, metric, candidate, now],
+            )?;
+        }
     }
     transaction.commit()?;
     Ok(())
@@ -556,20 +665,37 @@ fn apply_action(database: &Database, request: GameActionRequestV1) -> Result<(),
 fn add_play_time(database: &Database, game_id: &str, delta: i64) -> Result<(), DataError> {
     let mut connection = database.connect()?;
     let transaction = connection.transaction()?;
-    transaction.execute(
-        r#"
-        INSERT INTO game_engagement_times(game_id, total_millis, updated_at)
-        VALUES(?1, ?2, ?3)
-        ON CONFLICT(game_id) DO UPDATE SET
-            total_millis = CASE
-                WHEN game_engagement_times.total_millis > 9223372036854775807 - excluded.total_millis
-                    THEN 9223372036854775807
-                ELSE game_engagement_times.total_millis + excluded.total_millis
-            END,
-            updated_at = excluded.updated_at
-        "#,
-        params![game_id, delta, now_millis()],
-    )?;
+    if is_private_game_id(game_id) {
+        transaction.execute(
+            r#"
+            INSERT INTO private_game_engagement_times(game_id, total_millis, updated_at)
+            VALUES(?1, ?2, ?3)
+            ON CONFLICT(game_id) DO UPDATE SET
+                total_millis = CASE
+                    WHEN private_game_engagement_times.total_millis > 9223372036854775807 - excluded.total_millis
+                        THEN 9223372036854775807
+                    ELSE private_game_engagement_times.total_millis + excluded.total_millis
+                END,
+                updated_at = excluded.updated_at
+            "#,
+            params![game_id, delta, now_millis()],
+        )?;
+    } else {
+        transaction.execute(
+            r#"
+            INSERT INTO game_engagement_times(game_id, total_millis, updated_at)
+            VALUES(?1, ?2, ?3)
+            ON CONFLICT(game_id) DO UPDATE SET
+                total_millis = CASE
+                    WHEN game_engagement_times.total_millis > 9223372036854775807 - excluded.total_millis
+                        THEN 9223372036854775807
+                    ELSE game_engagement_times.total_millis + excluded.total_millis
+                END,
+                updated_at = excluded.updated_at
+            "#,
+            params![game_id, delta, now_millis()],
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -580,29 +706,56 @@ fn load_snapshot(database: &Database) -> Result<GamesSnapshotDtoV1, DataError> {
 }
 
 fn snapshot_from_connection(connection: &Connection) -> rusqlite::Result<GamesSnapshotDtoV1> {
-    let mut games = Vec::with_capacity(GAME_IDS.len());
-    for game_id in GAME_IDS {
-        let persisted = connection
-            .query_row(
-                "SELECT high_score, save_json, updated_at FROM game_states WHERE game_id = ?1",
-                [game_id],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let total_play_millis = connection
-            .query_row(
-                "SELECT total_millis FROM game_engagement_times WHERE game_id = ?1",
-                [game_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?
-            .unwrap_or(0);
+    let mut games = Vec::with_capacity(RUNTIME_GAME_IDS.len());
+    for game_id in RUNTIME_GAME_IDS {
+        let persisted = if is_private_game_id(game_id) {
+            connection
+                .query_row(
+                    "SELECT high_score, save_json, updated_at FROM private_game_states WHERE game_id = ?1",
+                    [game_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
+                )
+                .optional()?
+        } else {
+            connection
+                .query_row(
+                    "SELECT high_score, save_json, updated_at FROM game_states WHERE game_id = ?1",
+                    [game_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
+                )
+                .optional()?
+        };
+        let total_play_millis = if is_private_game_id(game_id) {
+            connection
+                .query_row(
+                    "SELECT total_millis FROM private_game_engagement_times WHERE game_id = ?1",
+                    [game_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+                .unwrap_or(0)
+        } else {
+            connection
+                .query_row(
+                    "SELECT total_millis FROM game_engagement_times WHERE game_id = ?1",
+                    [game_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+                .unwrap_or(0)
+        };
         let (high_score, save_json, updated_at) = persisted
             .map(|(score, save, updated)| (score, save, Some(updated.to_string())))
             .unwrap_or((0, None, None));
@@ -616,8 +769,10 @@ fn snapshot_from_connection(connection: &Connection) -> rusqlite::Result<GamesSn
     }
 
     let mut statement = connection.prepare(
-        "SELECT game_id, metric_key, value, updated_at
-         FROM game_statistics ORDER BY game_id, metric_key",
+        "SELECT game_id, metric_key, value, updated_at FROM game_statistics
+         UNION ALL
+         SELECT game_id, metric_key, value, updated_at FROM private_game_statistics
+         ORDER BY game_id, metric_key",
     )?;
     let statistics = statement
         .query_map([], |row| {
@@ -689,6 +844,27 @@ mod tests {
         let table_count: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE name = 'game_states'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("table count");
+        assert_eq!(table_count, 0);
+    }
+
+    #[test]
+    fn private_game_migration_is_transactional() {
+        let mut connection = Connection::open_in_memory().expect("connection");
+        {
+            let transaction = connection.transaction().expect("transaction");
+            migrate_private(&transaction).expect("private schema");
+            transaction
+                .execute("INSERT INTO missing_table(value) VALUES(1)", [])
+                .expect_err("force rollback");
+            transaction.rollback().expect("rollback");
+        }
+        let table_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'private_game_%'",
                 [],
                 |row| row.get(0),
             )
@@ -783,6 +959,86 @@ mod tests {
             .expect("tetris state");
         assert_eq!(tetris.total_play_millis, "12345");
         assert!(snapshot.statistics.is_empty());
+    }
+
+    #[test]
+    fn go_runtime_rows_are_durable_but_excluded_from_backup_and_recovery() {
+        let (_directory, database) = database_with_games();
+        let request = action(
+            "go",
+            r#"{"v":1,"size":9,"board":[0],"current":1}"#,
+            3,
+            &[("goMovesPlayed", "1"), ("goStonesCaptured", "3")],
+        );
+        validate_action(&request).expect("valid Go action");
+        apply_action(&database, request).expect("persist Go action");
+        add_play_time(&database, "go", 4_321).expect("Go play time");
+
+        let snapshot = load_snapshot(&database).expect("runtime snapshot");
+        let go = snapshot
+            .games
+            .iter()
+            .find(|game| game.game_id == "go")
+            .expect("Go state");
+        assert_eq!(go.high_score, 3);
+        assert!(go.save_json.is_some());
+        assert_eq!(go.total_play_millis, "4321");
+        assert_eq!(
+            snapshot
+                .statistics
+                .iter()
+                .filter(|statistic| statistic.game_id == "go")
+                .count(),
+            2
+        );
+
+        let connection = database.connect().expect("connection");
+        let (states, statistics) = list_backup_rows(&connection).expect("backup projection");
+        assert!(states.iter().all(|state| state.game_id != "go"));
+        assert!(statistics.iter().all(|statistic| statistic.game_id != "go"));
+        assert!(
+            validate_backup_states(&[GameBackupState {
+                game_id: "go".to_owned(),
+                high_score: 3,
+                save_json: None,
+                updated_at: 1,
+            }])
+            .is_err()
+        );
+        assert!(
+            validate_backup_statistics(&[GameBackupStatistic {
+                game_id: "go".to_owned(),
+                metric_key: "goMovesPlayed".to_owned(),
+                value: 1,
+                updated_at: 1,
+            }])
+            .is_err()
+        );
+
+        let mut invalid = action("go", r#"{"v":1}"#, 0, &[("wins", "1")]);
+        assert!(validate_action(&invalid).is_err());
+        invalid.increments = [("goPasses".to_owned(), "1".to_owned())]
+            .into_iter()
+            .collect();
+        validate_action(&invalid).expect("Go pass metric");
+
+        let mut connection = database.connect().expect("replacement connection");
+        let transaction = connection.transaction().expect("transaction");
+        replace_backup_rows(&transaction, &[], &[]).expect("replace compatible rows");
+        transaction.commit().expect("commit replacement");
+        let snapshot = load_snapshot(&database).expect("snapshot after recovery");
+        assert_eq!(
+            snapshot
+                .games
+                .iter()
+                .find(|game| game.game_id == "go")
+                .expect("Go preserved")
+                .high_score,
+            3
+        );
+        assert!(snapshot.statistics.iter().any(|statistic| {
+            statistic.game_id == "go" && statistic.metric_key == "goStonesCaptured"
+        }));
     }
 
     #[test]

@@ -5,6 +5,7 @@ import {
   Cloud,
   Copy,
   DatabaseBackup,
+  DownloadCloud,
   LoaderCircle,
   Pencil,
   Plus,
@@ -43,6 +44,7 @@ import {
   type CloudSyncConfigV1,
   type CloudSyncContent,
   type CloudSyncDirection,
+  type CloudSyncRunMode,
 } from "../lib/cloudApi";
 import { readableError, tr } from "../lib/ipc";
 import { useAppStore } from "../store/appStore";
@@ -825,6 +827,8 @@ export default function CloudSyncPage() {
   const [notice, setNotice] = useState("");
   const [editing, setEditing] = useState<CloudSyncConfigV1 | "new" | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<CloudSyncConfigV1 | null>(null);
+  const [forcedRunCandidate, setForcedRunCandidate] =
+    useState<CloudSyncRunMode | null>(null);
   const [pendingPreview, setPendingPreview] =
     useState<CloudPendingJsonPreviewV1 | null>(null);
   const globalDirty =
@@ -916,17 +920,26 @@ export default function CloudSyncPage() {
     }
   }
 
-  async function runSync(configId?: string) {
+  async function runSync(
+    configId?: string,
+    mode: CloudSyncRunMode = "NORMAL",
+  ) {
     if (syncing) return;
     setSyncing(true);
     setBusy(`sync:${configId ?? "all"}`);
     setError("");
     try {
-      const result = await cloudApi.run(configId);
+      const result = await cloudApi.run(configId, mode);
+      const action =
+        mode === "FORCE_UPLOAD"
+          ? copy("强制上传", "Force upload")
+          : mode === "FORCE_DOWNLOAD"
+            ? copy("强制下载", "Force download")
+            : copy("同步", "Sync");
       setNotice(
         copy(
-          `同步完成：上传 ${result.uploaded}、下载 ${result.downloaded}、冲突 ${result.conflicts}、跳过 ${result.skipped}。`,
-          `Sync complete: ${result.uploaded} uploaded, ${result.downloaded} downloaded, ${result.conflicts} conflicts and ${result.skipped} skipped.`,
+          `${action}完成：上传 ${result.uploaded}、下载 ${result.downloaded}、冲突 ${result.conflicts}、跳过 ${result.skipped}。`,
+          `${action} complete: ${result.uploaded} uploaded, ${result.downloaded} downloaded, ${result.conflicts} conflicts and ${result.skipped} skipped.`,
         ),
       );
     } catch (reason) {
@@ -990,6 +1003,8 @@ export default function CloudSyncPage() {
       ) ?? [],
     [snapshot],
   );
+  const enabledSourceCount =
+    snapshot?.configs.filter((config) => config.enabled).length ?? 0;
   const syncInProgress = syncing || snapshot?.status.running === true;
 
   if (loading && !snapshot) {
@@ -1059,28 +1074,61 @@ export default function CloudSyncPage() {
                 </p>
               </div>
             </div>
-            <div className="cloud-global-actions">
-              <label className="switch-row">
-                <input
-                  type="checkbox"
-                  checked={globalEnabledDraft}
-                  onChange={(event) => setGlobalEnabledDraft(event.target.checked)}
-                />
-                {globalEnabledDraft ? copy("已开启", "Enabled") : copy("已关闭", "Disabled")}
-              </label>
-              <button
-                className="button-primary"
-                type="button"
-                disabled={!globalDirty || busy === "global"}
-                onClick={() => void saveGlobalEnabled()}
-              >
-                {globalDirty ? <Save aria-hidden="true" size={16} /> : <Check aria-hidden="true" size={16} />}
-                {busy === "global"
-                  ? copy("保存中…", "Saving…")
-                  : globalDirty
-                    ? copy("保存", "Save")
-                    : copy("已保存", "Saved")}
-              </button>
+            <div className="cloud-global-controls">
+              <div className="cloud-global-actions">
+                <label className="switch-row">
+                  <input
+                    type="checkbox"
+                    checked={globalEnabledDraft}
+                    onChange={(event) => setGlobalEnabledDraft(event.target.checked)}
+                  />
+                  {globalEnabledDraft ? copy("已开启", "Enabled") : copy("已关闭", "Disabled")}
+                </label>
+                <button
+                  className="button-primary"
+                  type="button"
+                  disabled={!globalDirty || busy === "global"}
+                  onClick={() => void saveGlobalEnabled()}
+                >
+                  {globalDirty ? <Save aria-hidden="true" size={16} /> : <Check aria-hidden="true" size={16} />}
+                  {busy === "global"
+                    ? copy("保存中…", "Saving…")
+                    : globalDirty
+                      ? copy("保存", "Save")
+                      : copy("已保存", "Saved")}
+                </button>
+              </div>
+              <div className="cloud-global-actions">
+                <button
+                  className="button-secondary"
+                  type="button"
+                  disabled={!!busy || syncInProgress || enabledConfigs.length === 0}
+                  onClick={() => setForcedRunCandidate("FORCE_UPLOAD")}
+                >
+                  <UploadCloud aria-hidden="true" size={16} />
+                  {copy("强制上传", "Force upload")}
+                </button>
+                <button
+                  className="button-secondary"
+                  type="button"
+                  disabled={
+                    !!busy ||
+                    syncInProgress ||
+                    enabledSourceCount !== 1 ||
+                    enabledConfigs.length !== 1
+                  }
+                  onClick={() => setForcedRunCandidate("FORCE_DOWNLOAD")}
+                >
+                  <DownloadCloud aria-hidden="true" size={16} />
+                  {copy("强制下载", "Force download")}
+                </button>
+              </div>
+              <p className="dialog-description cloud-global-note">
+                {copy(
+                  "强制上传以本机为准，强制下载以唯一启用的云端来源为准。两者均不传播删除，且仍执行远端版本和本机快照条件校验；应用 JSON 下载仍只会暂存待确认。",
+                  "Force upload prefers local data; force download prefers the single enabled cloud source. Neither propagates deletions, and remote-version and local-snapshot checks still apply. Downloaded app JSON remains staged for confirmation.",
+                )}
+              </p>
             </div>
           </section>
 
@@ -1257,6 +1305,37 @@ export default function CloudSyncPage() {
         language={language}
         onClose={() => setEditing(null)}
         onSave={saveConfig}
+      />
+      <ConfirmDialog
+        open={forcedRunCandidate !== null}
+        title={
+          forcedRunCandidate === "FORCE_UPLOAD"
+            ? copy("确认强制上传？", "Force upload?")
+            : copy("确认强制下载？", "Force download?")
+        }
+        description={
+          forcedRunCandidate === "FORCE_UPLOAD"
+            ? copy(
+                "本机新增项目会上传；同路径内容不同时，只在远端仍匹配本轮扫描版本时覆盖。远端独有项目不会删除，扫描后的远端修改会阻止覆盖。",
+                "New local items are uploaded. Different items at the same path replace remote data only while its scanned version still matches. Remote-only items are not deleted, and later remote edits stop the overwrite.",
+              )
+            : copy(
+                "仅使用当前唯一启用的云端来源。云端新增项目会下载；同路径内容不同时，只在本机仍匹配扫描快照时采用云端版本。本机独有项目不会删除，并发本机修改会保留并产生冲突副本。",
+                "Only the single enabled cloud source is used. New remote items are downloaded, and different items at the same path use remote data only while the local scan snapshot still matches. Local-only items are not deleted, and concurrent local edits are preserved with a conflict copy.",
+              )
+        }
+        confirmLabel={
+          forcedRunCandidate === "FORCE_UPLOAD"
+            ? copy("强制上传", "Force upload")
+            : copy("强制下载", "Force download")
+        }
+        destructive
+        onCancel={() => setForcedRunCandidate(null)}
+        onConfirm={() => {
+          const mode = forcedRunCandidate;
+          setForcedRunCandidate(null);
+          if (mode) void runSync(undefined, mode);
+        }}
       />
       <ConfirmDialog
         open={deleteCandidate !== null}

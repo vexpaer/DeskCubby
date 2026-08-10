@@ -667,8 +667,8 @@ export default function SettingsPage() {
               icon={Info}
               title="DeskCubby"
               description={tr(
-                "本地优先的跨平台日记与个人记录应用。Windows 版本 0.4.0。",
-                "A local-first cross-platform diary and personal records app. Windows version 0.4.0.",
+                "本地优先的跨平台日记与个人记录应用。Windows 版本 0.5.0。",
+                "A local-first cross-platform diary and personal records app. Windows version 0.5.0.",
               )}
             >
               <button

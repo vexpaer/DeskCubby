@@ -51,6 +51,7 @@ const GAME_TITLES: Record<GameId, [string, string]> = {
   tetris: ["俄罗斯方块", "Tetris"],
   minesweeper: ["扫雷", "Minesweeper"],
   spider: ["蜘蛛纸牌", "Spider"],
+  go: ["围棋", "Go"],
 };
 
 const METRIC_LABELS: Record<string, [string, string]> = {
@@ -71,6 +72,10 @@ const METRIC_LABELS: Record<string, [string, string]> = {
   spiderCardMoves: ["移牌", "Card moves"],
   spiderDeals: ["发牌", "Deals"],
   spiderUndos: ["撤回", "Undos"],
+  goMovesPlayed: ["落子", "Moves played"],
+  goStonesCaptured: ["提子", "Stones captured"],
+  goPasses: ["停着", "Passes"],
+  goGamesCompleted: ["完成棋局", "Games completed"],
 };
 
 function decimal(value: string | null | undefined): bigint | null {
@@ -301,6 +306,7 @@ export default function StatsPage() {
               const metrics = gameMetrics.get(gameId);
               const hasData = Boolean(state?.updatedAt) || Boolean(metrics?.size) || (decimal(state?.totalPlayMillis) ?? 0n) > 0n;
               const is2048 = gameId === "2048" || gameId === "2048_5" || gameId === "2048_6";
+              const isGo = gameId === "go";
               const wins = decimal(metrics?.get("wins"));
               const losses = decimal(metrics?.get("losses"));
               const finished = (wins ?? 0n) + (losses ?? 0n);
@@ -309,10 +315,11 @@ export default function StatsPage() {
                   <header><Trophy size={19} /><h3>{language === "en" ? GAME_TITLES[gameId][1] : GAME_TITLES[gameId][0]}</h3></header>
                   {hasData ? (
                     <dl>
-                      <Metric label={tr(language, "最高分", "High score")} value={number(BigInt(state?.highScore ?? 0), language)} />
+                      <Metric label={isGo ? tr(language, "最高提子", "Best captures") : tr(language, "最高分", "High score")} value={number(BigInt(state?.highScore ?? 0), language)} />
                       <Metric label={tr(language, "游玩时长", "Play time")} value={duration(state?.totalPlayMillis, language)} />
                       {metrics ? [...metrics].filter(([key]) => !(is2048 && key === "losses")).map(([key, value]) => <Metric key={key} label={language === "en" ? METRIC_LABELS[key]?.[1] ?? key : METRIC_LABELS[key]?.[0] ?? key} value={number(decimal(value), language)} />) : null}
-                      {!is2048 && finished > 0n && wins !== null ? <Metric label={tr(language, "胜率", "Win rate")} value={`${Number((wins * 10_000n) / finished) / 100}%`} /> : null}
+                      {!is2048 && !isGo && finished > 0n && wins !== null ? <Metric label={tr(language, "胜率", "Win rate")} value={`${Number((wins * 10_000n) / finished) / 100}%`} /> : null}
+                      {isGo ? <Metric label={tr(language, "存储范围", "Storage scope")} value={tr(language, "仅限本机（不进入 v28）", "This PC only (excluded from v28)")} /> : null}
                     </dl>
                   ) : <p>{unknown}</p>}
                 </article>

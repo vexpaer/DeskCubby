@@ -166,7 +166,12 @@ function MarkdownImage({
     void diaryApi
       .resolveMediaAsset(diaryRelativePath, source)
       .then((resolved) => {
-        if (active) setUrl(resolved);
+        if (!active) return;
+        if (resolved) {
+          setUrl(resolved);
+        } else {
+          setFailed(true);
+        }
       })
       .catch(() => {
         if (active) setFailed(true);

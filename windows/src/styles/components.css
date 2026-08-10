@@ -166,6 +166,10 @@
   gap: var(--space-1);
 }
 
+.navigation-items[hidden] {
+  display: none;
+}
+
 .navigation-link {
   position: relative;
   display: flex;
@@ -3365,6 +3369,18 @@
   gap: var(--space-4);
 }
 
+.cloud-global-controls {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-3);
+  max-width: min(100%, 42rem);
+}
+
+.cloud-global-note {
+  margin: 0;
+  text-align: end;
+}
+
 .cloud-config-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr));
@@ -3868,6 +3884,7 @@
   }
 
   .cloud-global-panel,
+  .cloud-global-controls,
   .cloud-global-actions,
   .usage-controls {
     align-items: stretch;
@@ -3875,8 +3892,19 @@
   }
 
   .cloud-global-actions > .button-primary,
+  .cloud-global-actions > .button-secondary,
   .usage-app-filter {
     width: 100%;
+  }
+
+  .cloud-global-controls {
+    justify-items: stretch;
+    max-width: none;
+    width: 100%;
+  }
+
+  .cloud-global-note {
+    text-align: start;
   }
 
   .cloud-pending-list > li,

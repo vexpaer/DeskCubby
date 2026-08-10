@@ -71,6 +71,11 @@ describe("safe IPC error translations", () => {
     ["ipc_protocol_incompatible", "版本不兼容", "incompatible"],
     ["authentication_failed", "身份验证失败", "authentication failed"],
     ["invalid_configuration", "云同步配置无效", "cloud sync configuration is invalid"],
+    [
+      "sync_force_download_source_count",
+      "恰好启用一个云端来源",
+      "exactly one enabled cloud source",
+    ],
     ["unsupported_remote", "安全同步", "safe sync"],
     ["vault_wrong_password", "密码不正确", "password is incorrect"],
     ["vault_session_changed", "重新解锁", "Unlock it again"],

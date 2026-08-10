@@ -3033,16 +3033,41 @@ fn flatten_meal_days(
 }
 
 fn normalized_markdown_media_name(source: &str) -> Option<String> {
-    let source = source
-        .trim()
-        .trim_start_matches('<')
-        .trim_end_matches('>')
-        .strip_prefix("./")
-        .unwrap_or_else(|| source.trim().trim_start_matches('<').trim_end_matches('>'));
-    if source.contains('%') || source.contains('?') || source.contains('#') {
+    let source = source.trim().trim_start_matches('<').trim_end_matches('>');
+    if source.is_empty() || source.len() > 4 * 1024 || source.contains('?') || source.contains('#')
+    {
         return None;
     }
-    validate_relative_file_name(source, &["jpg", "jpeg", "png", "webp"]).ok()
+    let source = source.strip_prefix("./").unwrap_or(source);
+    let decoded = percent_decode_markdown_target(source)?;
+    validate_relative_file_name(&decoded, &["jpg", "jpeg", "png", "webp"]).ok()
+}
+
+fn percent_decode_markdown_target(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let high = decode_hex_digit(*bytes.get(index + 1)?)?;
+            let low = decode_hex_digit(*bytes.get(index + 2)?)?;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn decode_hex_digit(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn validate_diary_markdown_relative_path(relative_path: &str) -> Result<PathBuf, SecurityError> {
@@ -4790,6 +4815,14 @@ mod tests {
             Some("午餐 01.jpg")
         );
         assert_eq!(
+            normalized_markdown_media_name("%E5%8D%88%E9%A4%90%2001.jpg").as_deref(),
+            Some("午餐 01.jpg")
+        );
+        assert_eq!(
+            normalized_markdown_media_name("./hash%23photo.webp").as_deref(),
+            Some("hash#photo.webp")
+        );
+        assert_eq!(
             normalized_markdown_media_name("./meal.png").as_deref(),
             Some("meal.png")
         );
@@ -4799,8 +4832,12 @@ mod tests {
             r"folder\meal.jpg",
             "file:///C:/secret.jpg",
             "https://example.test/meal.jpg",
-            "meal%2Ejpg",
+            "nested%2Fmeal.jpg",
+            "nested%5Cmeal.jpg",
+            "%2E%2E%2Fsecret.jpg",
+            "bad%2.jpg",
             "meal.jpg?token=secret",
+            "meal.jpg#fragment",
         ] {
             assert!(
                 normalized_markdown_media_name(source).is_none(),

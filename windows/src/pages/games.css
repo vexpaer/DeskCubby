@@ -292,6 +292,150 @@
 .mines-grid button[data-number="7"],
 .mines-grid button[data-number="8"] { color: var(--danger); }
 
+.go-stage {
+  width: min(100%, 58rem);
+}
+
+.go-status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.go-status > div {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+}
+
+.go-status > span:nth-of-type(2),
+.go-status > small {
+  grid-column: 1 / -1;
+}
+
+.go-status small {
+  color: var(--secondary);
+}
+
+.go-turn-stone {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--text) 45%, var(--border));
+  border-radius: 50%;
+  background: #171717;
+}
+
+.go-turn-stone[data-stone="2"] {
+  background: #f7f7f2;
+}
+
+.go-size-selector,
+.go-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.go-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.go-board {
+  position: relative;
+  width: min(100%, 48rem);
+  aspect-ratio: 1;
+  justify-self: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--text) 20%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--secondary) 38%, var(--surface-muted));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--surface) 34%, transparent);
+  touch-action: manipulation;
+}
+
+.go-board-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  color: color-mix(in srgb, var(--text) 72%, transparent);
+  pointer-events: none;
+}
+
+.go-board-art line {
+  stroke: currentColor;
+  stroke-width: 0.28;
+  vector-effect: non-scaling-stroke;
+}
+
+.go-star {
+  fill: currentColor;
+}
+
+.go-stone {
+  stroke: color-mix(in srgb, var(--text) 42%, var(--border));
+  stroke-width: 0.22;
+}
+
+.go-stone[data-stone="1"] {
+  fill: #171717;
+}
+
+.go-stone[data-stone="2"] {
+  fill: #f7f7f2;
+}
+
+.go-last-move[data-stone="1"] {
+  fill: #f7f7f2;
+}
+
+.go-last-move[data-stone="2"] {
+  fill: #171717;
+}
+
+.go-intersection {
+  position: absolute;
+  z-index: 1;
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  transform: translate(-50%, -50%);
+  border: 2px solid transparent;
+  border-radius: 50%;
+  padding: 0;
+  background: transparent;
+  color: transparent;
+  cursor: pointer;
+}
+
+.go-intersection:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--primary) 64%, transparent);
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+}
+
+.go-intersection[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--primary) 70%, transparent);
+}
+
+.go-intersection:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 1px;
+  background: color-mix(in srgb, var(--surface) 24%, transparent);
+}
+
+.go-error {
+  margin: 0;
+  text-align: center;
+}
+
 .spider-stage {
   min-height: 38rem;
   overflow: hidden;
@@ -361,7 +505,7 @@
   text-align: center;
 }
 
-:root[data-visual-theme="organic-future"] :is(.game-catalog-icon, .game-stage, .game-2048-grid, .snake-grid, .mines-grid, .spider-table) {
+:root[data-visual-theme="organic-future"] :is(.game-catalog-icon, .game-stage, .game-2048-grid, .snake-grid, .mines-grid, .go-board, .spider-table) {
   border-radius: 0;
   clip-path: polygon(0 0, calc(100% - 0.8rem) 0, 100% 0.8rem, 100% 100%, 0 100%);
 }
@@ -380,6 +524,8 @@
   .mines-config { grid-template-columns: 1fr; }
   .mines-config .button { grid-column: auto; }
   .game-stage { padding: var(--space-3); }
+  .go-status { grid-template-columns: 1fr; }
+  .go-status > span:nth-of-type(2) { grid-column: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

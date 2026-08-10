@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -349,9 +349,69 @@ describe("CloudSyncPage", () => {
     await user.click(await screen.findByRole("button", { name: "立即同步" }));
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("run_cloud_sync", {
-        request: { schemaVersion: 1, configId: "config-1" },
+        request: { schemaVersion: 1, configId: "config-1", mode: "NORMAL" },
       });
     });
+  });
+
+  it.each([
+    ["强制上传", "确认强制上传？", "FORCE_UPLOAD"],
+    ["强制下载", "确认强制下载？", "FORCE_DOWNLOAD"],
+  ] as const)(
+    "requires explicit confirmation before %s",
+    async (buttonLabel, dialogTitle, mode) => {
+      const user = userEvent.setup();
+      invokeMock.mockImplementation(async (command) => {
+        if (command === "list_cloud_sync_configs") return STATE as never;
+        if (command === "list_pending_cloud_json") return [] as never;
+        if (command === "run_cloud_sync") {
+          return {
+            schemaVersion: 1,
+            uploaded: 1,
+            downloaded: 0,
+            conflicts: 0,
+            skipped: 1,
+          } as never;
+        }
+        throw new Error(`Unexpected command: ${command}`);
+      });
+
+      renderCloud();
+      await user.click(await screen.findByRole("button", { name: buttonLabel }));
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByRole("heading", { name: dialogTitle })).toBeInTheDocument();
+      expect(
+        invokeMock.mock.calls.some(([command]) => command === "run_cloud_sync"),
+      ).toBe(false);
+
+      await user.click(within(dialog).getByRole("button", { name: buttonLabel }));
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith("run_cloud_sync", {
+          request: { schemaVersion: 1, configId: null, mode },
+        });
+      });
+    },
+  );
+
+  it("disables force download unless exactly one cloud source is enabled", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "list_cloud_sync_configs") {
+        return {
+          ...STATE,
+          configs: [
+            CONFIG,
+            { ...CONFIG, id: "config-2", name: "Second WebDAV" },
+          ],
+        } as never;
+      }
+      if (command === "list_pending_cloud_json") return [] as never;
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    renderCloud();
+    expect(
+      await screen.findByRole("button", { name: "强制下载" }),
+    ).toBeDisabled();
   });
 
   it("requires explicit credential replacement after a binding field changes", async () => {

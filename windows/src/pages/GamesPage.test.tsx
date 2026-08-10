@@ -18,7 +18,7 @@ function renderGames(entry = "/games") {
 const snapshot = {
   dtoVersion: 1,
   games: [
-    "2048", "2048_5", "2048_6", "snake", "tetris", "minesweeper", "spider",
+    "2048", "2048_5", "2048_6", "snake", "tetris", "minesweeper", "spider", "go",
   ].map((gameId) => ({
     gameId,
     highScore: 0,
@@ -67,7 +67,7 @@ describe("GamesPage", () => {
     });
   });
 
-  it("offers all seven stable Android game identifiers as playable entries", async () => {
+  it("offers the seven v28 games plus private local Go as playable entries", async () => {
     renderGames();
     expect(await screen.findByRole("heading", { name: "2048 · 4×4" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "2048 · 5×5" })).toBeInTheDocument();
@@ -76,6 +76,54 @@ describe("GamesPage", () => {
     expect(screen.getByRole("heading", { name: "俄罗斯方块" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "扫雷" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "单花色蜘蛛纸牌" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "围棋" })).toBeInTheDocument();
+  });
+
+  it("plays Go with roving keyboard focus and finishes after two passes", async () => {
+    const user = userEvent.setup();
+    renderGames();
+    const heading = await screen.findByRole("heading", { name: "围棋" });
+    const card = heading.closest("article");
+    expect(card).not.toBeNull();
+    await user.click(within(card!).getByRole("button", { name: "开始" }));
+
+    expect(await screen.findByRole("grid", { name: /9×9 围棋棋盘/ })).toBeInTheDocument();
+    const center = screen.getByRole("gridcell", { name: "第 5 行第 5 列，空位" });
+    center.focus();
+    await user.keyboard("{ArrowRight}{Enter}");
+    expect(screen.getByRole("gridcell", { name: "第 5 行第 6 列，黑子" })).toHaveFocus();
+    await user.keyboard("{ArrowRight} ");
+    expect(screen.getByRole("gridcell", { name: "第 5 行第 7 列，白子" })).toHaveFocus();
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "apply_game_action",
+        expect.objectContaining({
+          request: expect.objectContaining({
+            gameId: "go",
+            saveMode: "save",
+            increments: { goMovesPlayed: "1" },
+          }),
+        }),
+      );
+    });
+
+    await user.click(screen.getByRole("button", { name: "停一手" }));
+    await user.click(screen.getByRole("button", { name: "停一手" }));
+    expect(await screen.findByText("棋局结束")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "apply_game_action",
+        expect.objectContaining({
+          request: expect.objectContaining({
+            gameId: "go",
+            saveMode: "finish",
+            saveJson: null,
+            increments: { goGamesCompleted: "1", goPasses: "1" },
+          }),
+        }),
+      );
+    });
   });
 
   it("opens a validated home shortcut and resumes its Android-compatible save", async () => {

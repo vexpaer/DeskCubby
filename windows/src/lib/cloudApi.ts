@@ -10,6 +10,10 @@ export type CloudSyncContent =
   | "USAGE_STATISTICS"
   | "READING_PROGRESS";
 export type CloudSyncDirection = "UPLOAD_ONLY" | "TWO_WAY";
+export type CloudSyncRunMode =
+  | "NORMAL"
+  | "FORCE_UPLOAD"
+  | "FORCE_DOWNLOAD";
 
 export interface CloudSyncConfigV1 {
   id: string;
@@ -135,11 +139,15 @@ export const cloudApi = {
     });
   },
 
-  run(configId?: string): Promise<CloudSyncRunSummaryV1> {
+  run(
+    configId?: string,
+    mode: CloudSyncRunMode = "NORMAL",
+  ): Promise<CloudSyncRunSummaryV1> {
     return invokeCommand("run_cloud_sync", {
       request: {
         schemaVersion: CLOUD_SYNC_DTO_VERSION,
         configId: configId ?? null,
+        mode,
       },
     });
   },

@@ -28,7 +28,7 @@ use crate::{
 use super::{
     BaseState, BoxFuture, CloudCredentials, CloudRemoteStoreFactory, CloudSyncConfig,
     CloudSyncContent, CloudSyncDirection, CloudSyncEngine, CloudSyncError, CloudSyncErrorCode,
-    CloudSyncItemOutcome, CloudSyncLimits, CloudSyncProgress, CloudSyncRunResult,
+    CloudSyncItemOutcome, CloudSyncLimits, CloudSyncProgress, CloudSyncRunMode, CloudSyncRunResult,
     CloudSyncServiceType, CloudSyncStateStore, EncryptedCloudCredentials, FileSystemLocalStore,
     JsonBackupBridge, JsonSnapshot, LocalRoots, LocalSyncObject, LocalWriteResult, PendingJson,
     ReaderProgressBridge, ReaderProgressSnapshot, ReqwestRemoteStoreFactory, UsageStatisticsBridge,
@@ -129,7 +129,7 @@ impl CloudSyncService {
                     Ok(settings) if settings.automatic_sync_enabled => {
                         // Best effort, but the coordinator itself records every
                         // attempted run as SUCCEEDED/FAILED/CANCELLED.
-                        let _ = service.run(None, true).await;
+                        let _ = service.run(None, true, CloudSyncRunMode::Normal).await;
                         Duration::from_secs(
                             u64::try_from(settings.interval_minutes)
                                 .unwrap_or(360)
@@ -206,6 +206,7 @@ impl CloudSyncService {
         &self,
         requested_id: Option<String>,
         scheduled: bool,
+        mode: CloudSyncRunMode,
     ) -> Result<CloudSyncRunSummaryV1, CloudSyncError> {
         let token = Uuid::new_v4().to_string();
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -247,6 +248,7 @@ impl CloudSyncService {
             .into_iter()
             .filter(|config| config.enabled)
             .collect::<Vec<_>>();
+        require_safe_force_download_source_count(mode, configs.len())?;
         if let Some(id) = requested_id.as_deref() {
             configs.retain(|config| config.id == id);
             if configs.is_empty() {
@@ -309,6 +311,7 @@ impl CloudSyncService {
                 &core_config,
                 &credentials,
                 CloudSyncLimits::default(),
+                mode,
                 move |progress| {
                     if let Ok(mut latest) = progress_counters.lock() {
                         latest.transferred_bytes = progress.transferred_bytes;
@@ -915,6 +918,8 @@ pub(crate) struct SetEnabledRequestV1 {
 pub(crate) struct RunRequestV1 {
     schema_version: u32,
     config_id: Option<String>,
+    #[serde(default)]
+    mode: CloudSyncRunMode,
 }
 
 #[derive(Deserialize)]
@@ -1186,10 +1191,22 @@ pub(crate) async fn run_cloud_sync(
     let service = Arc::clone(&state.cloud_sync);
     // The owned task continues terminal-status cleanup even if the invoking
     // webview navigates away and drops its command future.
-    tauri::async_runtime::spawn(async move { service.run(request.config_id, false).await })
-        .await
-        .map_err(|_| SecurityErrorDto::storage_unavailable())?
-        .map_err(map_cloud_error)
+    tauri::async_runtime::spawn(
+        async move { service.run(request.config_id, false, request.mode).await },
+    )
+    .await
+    .map_err(|_| SecurityErrorDto::storage_unavailable())?
+    .map_err(map_cloud_error)
+}
+
+fn require_safe_force_download_source_count(
+    mode: CloudSyncRunMode,
+    enabled_source_count: usize,
+) -> Result<(), CloudSyncError> {
+    if mode == CloudSyncRunMode::ForceDownload && enabled_source_count != 1 {
+        return Err(CloudSyncError::force_download_source_count());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1711,6 +1728,7 @@ fn map_cloud_error(error: CloudSyncError) -> SecurityErrorDto {
 fn error_code(code: CloudSyncErrorCode) -> String {
     match code {
         CloudSyncErrorCode::InvalidConfiguration => "invalid_configuration",
+        CloudSyncErrorCode::ForceDownloadSourceCount => "sync_force_download_source_count",
         CloudSyncErrorCode::InvalidInput => "invalid_input",
         CloudSyncErrorCode::AuthenticationFailed => "authentication_failed",
         CloudSyncErrorCode::PermissionDenied => "permission_denied",
@@ -1735,6 +1753,112 @@ fn millis_to_rfc3339(value: i64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct PanicRemoteFactory;
+
+    impl CloudRemoteStoreFactory for PanicRemoteFactory {
+        fn create(
+            &self,
+            _: &super::super::ValidatedCloudSyncConfig,
+            _: &CloudCredentials,
+            _: CloudSyncLimits,
+        ) -> Result<Arc<dyn super::super::CloudRemoteStore>, CloudSyncError> {
+            panic!("force-download source-count preflight reached the network boundary")
+        }
+    }
+
+    #[tokio::test]
+    async fn force_download_rejects_multiple_sources_before_credentials_content_or_network() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database =
+            Database::open(directory.path().join("deskcubby.db")).expect("test database");
+        for (sort_order, id) in ["first", "second"].into_iter().enumerate() {
+            database
+                .save_cloud_sync_config(
+                    &CloudSyncConfigRecord {
+                        id: id.to_owned(),
+                        name: id.to_owned(),
+                        enabled: true,
+                        service_type: "S3_COMPATIBLE".to_owned(),
+                        endpoint_url: "https://s3.example.test".to_owned(),
+                        remote_path: "DeskCubby".to_owned(),
+                        user_agent: "DeskCubby-Sync/1".to_owned(),
+                        webdav_username: String::new(),
+                        s3_bucket: "bucket".to_owned(),
+                        s3_region: "us-east-1".to_owned(),
+                        s3_path_style: true,
+                        allow_insecure_http: false,
+                        selected_contents_json: r#"["DIARIES"]"#.to_owned(),
+                        direction: "TWO_WAY".to_owned(),
+                        sort_order: i64::try_from(sort_order).unwrap(),
+                        updated_at: 1,
+                    },
+                    CloudSyncSecretMutation::Clear,
+                )
+                .expect("save source without credentials");
+        }
+        let mut service = CloudSyncService::new_with_usage(
+            database.clone(),
+            directory.path().to_path_buf(),
+            Arc::new(|| {}),
+            None,
+        )
+        .expect("cloud service");
+        service.remote_factory = Arc::new(PanicRemoteFactory);
+
+        let error = match service
+            .run(None, false, CloudSyncRunMode::ForceDownload)
+            .await
+        {
+            Ok(_) => panic!("multiple force-download sources were accepted"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, CloudSyncErrorCode::ForceDownloadSourceCount);
+        assert_eq!(error_code(error.code), "sync_force_download_source_count");
+        assert_eq!(
+            error.message,
+            "Force download requires exactly one enabled cloud source."
+        );
+        assert!(
+            database
+                .list_cloud_sync_statuses()
+                .unwrap()
+                .iter()
+                .all(|status| status.last_started_at.is_none())
+        );
+    }
+
+    #[test]
+    fn force_download_source_policy_allows_exactly_one_and_other_modes_allow_many() {
+        require_safe_force_download_source_count(CloudSyncRunMode::ForceDownload, 1).unwrap();
+        require_safe_force_download_source_count(CloudSyncRunMode::Normal, 2).unwrap();
+        require_safe_force_download_source_count(CloudSyncRunMode::ForceUpload, 2).unwrap();
+        assert_eq!(
+            require_safe_force_download_source_count(CloudSyncRunMode::ForceDownload, 2)
+                .unwrap_err()
+                .message,
+            "Force download requires exactly one enabled cloud source."
+        );
+    }
+
+    #[test]
+    fn run_request_accepts_explicit_force_modes_and_defaults_legacy_calls_to_normal() {
+        let forced: RunRequestV1 =
+            serde_json::from_str(r#"{"schemaVersion":1,"configId":null,"mode":"FORCE_DOWNLOAD"}"#)
+                .unwrap();
+        assert_eq!(forced.mode, CloudSyncRunMode::ForceDownload);
+
+        let normal: RunRequestV1 =
+            serde_json::from_str(r#"{"schemaVersion":1,"configId":null}"#).unwrap();
+        assert_eq!(normal.mode, CloudSyncRunMode::Normal);
+        assert!(
+            serde_json::from_str::<RunRequestV1>(
+                r#"{"schemaVersion":1,"configId":null,"mode":"DELETE_REMOTE"}"#
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn runtime_record_rejects_phone_usage_and_duplicate_content() {

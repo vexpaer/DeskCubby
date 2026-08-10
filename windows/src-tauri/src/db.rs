@@ -17,7 +17,7 @@ use crate::models::{
     ThoughtCategoryDraft, ThoughtDraft,
 };
 
-const SCHEMA_VERSION: i32 = 6;
+const SCHEMA_VERSION: i32 = 7;
 const RECOVERY_SNAPSHOT_VERSION: i32 = 1;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 // Android v28 accepts backup documents up to 64 MiB. DPAPI ciphertext adds a
@@ -222,10 +222,21 @@ impl Database {
                 3 => Self::migrate_3_to_4(connection)?,
                 4 => Self::migrate_4_to_5(connection)?,
                 5 => Self::migrate_5_to_6(connection)?,
+                6 => Self::migrate_6_to_7(connection)?,
                 _ => return Err(DataError::UnsupportedVersion),
             }
             version = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         }
+        Ok(())
+    }
+
+    /// Adds Windows-private Go persistence without changing the Android v28-compatible seven-game
+    /// tables. The separate schema makes backup, recovery-point and cloud exclusion fail closed.
+    fn migrate_6_to_7(connection: &mut Connection) -> Result<(), DataError> {
+        let transaction = connection.transaction()?;
+        crate::games::migrate_private(&transaction)?;
+        transaction.pragma_update(None, "user_version", 7)?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -3879,6 +3890,9 @@ mod tests {
             "game_states",
             "game_statistics",
             "game_engagement_times",
+            "private_game_states",
+            "private_game_statistics",
+            "private_game_engagement_times",
             "poetry_categories",
         ] {
             assert!(table_exists(&connection, table), "missing table {table}");
@@ -4123,6 +4137,84 @@ mod tests {
     }
 
     #[test]
+    fn migrates_v6_to_v7_with_separate_private_game_tables() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("deskcubby.db");
+        {
+            let database = Database::open(&path).expect("seed latest database");
+            let connection = database.connect().expect("seed connection");
+            connection
+                .execute_batch(
+                    "DROP TABLE private_game_engagement_times;
+                     DROP TABLE private_game_statistics;
+                     DROP TABLE private_game_states;
+                     PRAGMA user_version = 6;
+                     INSERT INTO game_states(game_id, high_score, save_json, updated_at)
+                     VALUES('tetris', 42, NULL, 7);",
+                )
+                .expect("downgrade fixture to v6");
+        }
+
+        let database = Database::open(&path).expect("migrate v6 to v7");
+        let connection = database.connect().expect("migrated connection");
+        let version: i32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, SCHEMA_VERSION);
+        for table in [
+            "private_game_states",
+            "private_game_statistics",
+            "private_game_engagement_times",
+        ] {
+            assert!(table_exists(&connection, table), "missing table {table}");
+        }
+        let score: i64 = connection
+            .query_row(
+                "SELECT high_score FROM game_states WHERE game_id = 'tetris'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("compatible game preserved");
+        assert_eq!(score, 42);
+        connection
+            .execute(
+                "INSERT INTO private_game_states(game_id, high_score, save_json, updated_at)
+                 VALUES('go', 3, NULL, 8)",
+                [],
+            )
+            .expect("private Go row accepted");
+    }
+
+    #[test]
+    fn migrate_v6_to_v7_rolls_back_on_private_table_collision() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("deskcubby.db");
+        {
+            let database = Database::open(&path).expect("seed latest database");
+            let connection = database.connect().expect("seed connection");
+            connection
+                .execute_batch(
+                    "DROP TABLE private_game_engagement_times;
+                     DROP TABLE private_game_statistics;
+                     DROP TABLE private_game_states;
+                     CREATE TABLE private_game_statistics(value INTEGER);
+                     PRAGMA user_version = 6;",
+                )
+                .expect("create migration collision");
+        }
+
+        assert!(matches!(Database::open(&path), Err(DataError::Sqlite(_))));
+        let connection = Connection::open(&path).expect("inspect failed migration");
+        let version: i32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, 6);
+        assert!(!table_exists(&connection, "private_game_states"));
+        assert!(table_exists(&connection, "private_game_statistics"));
+        assert!(!table_exists(&connection, "private_game_engagement_times"));
+    }
+
+    #[test]
     fn migrates_v5_poems_with_stable_order_and_enforced_category_foreign_key() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("deskcubby.db");
@@ -4133,7 +4225,7 @@ mod tests {
         let version: i32 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("user version");
-        assert_eq!(version, 6);
+        assert_eq!(version, SCHEMA_VERSION);
         assert!(table_exists(&connection, "poetry_categories"));
 
         let poems = database.list_poems().expect("migrated poems");

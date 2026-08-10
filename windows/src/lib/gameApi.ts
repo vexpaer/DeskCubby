@@ -10,6 +10,7 @@ export const GAME_IDS = [
   "tetris",
   "minesweeper",
   "spider",
+  "go",
 ] as const;
 
 export type GameId = (typeof GAME_IDS)[number];

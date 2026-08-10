@@ -37,9 +37,15 @@ describe("StatsPage", () => {
         return {
           dtoVersion: 1,
           games: [
-            "2048", "2048_5", "2048_6", "snake", "tetris", "minesweeper", "spider",
-          ].map((gameId) => ({ gameId, highScore: 0, saveJson: null, updatedAt: null, totalPlayMillis: "0" })),
-          statistics: [],
+            "2048", "2048_5", "2048_6", "snake", "tetris", "minesweeper", "spider", "go",
+          ].map((gameId) => ({
+            gameId,
+            highScore: gameId === "go" ? 4 : 0,
+            saveJson: null,
+            updatedAt: gameId === "go" ? "1" : null,
+            totalPlayMillis: gameId === "go" ? "60000" : "0",
+          })),
+          statistics: [{ gameId: "go", metricKey: "goMovesPlayed", value: "8", updatedAt: "1" }],
         } as never;
       }
       throw new Error(`Unexpected command: ${command}`);
@@ -55,5 +61,15 @@ describe("StatsPage", () => {
     await user.click(screen.getByRole("button", { name: /近 7 天步数/ }));
     expect(screen.getByText("近 7 天步数")).toBeInTheDocument();
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+  });
+
+  it("shows Go capture and lifetime metrics as private local statistics", async () => {
+    const user = userEvent.setup();
+    render(<StatsPage />);
+    await user.click(await screen.findByRole("button", { name: /小游戏/ }));
+    expect(screen.getByRole("heading", { name: "围棋" })).toBeInTheDocument();
+    expect(screen.getByText("最高提子")).toBeInTheDocument();
+    expect(screen.getByText("落子")).toBeInTheDocument();
+    expect(screen.getByText("仅限本机（不进入 v28）")).toBeInTheDocument();
   });
 });

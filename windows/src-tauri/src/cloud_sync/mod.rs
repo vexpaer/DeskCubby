@@ -37,7 +37,7 @@ pub use types::{
     BaseState, BlobMetadata, BlobRead, BlobWriteCondition, BoxFuture, CloudCredentials,
     CloudLocalStore, CloudRemoteStore, CloudRemoteStoreFactory, CloudSyncConfig, CloudSyncContent,
     CloudSyncDirection, CloudSyncError, CloudSyncErrorCode, CloudSyncItemOutcome,
-    CloudSyncItemReport, CloudSyncLimits, CloudSyncProgress, CloudSyncRunResult,
+    CloudSyncItemReport, CloudSyncLimits, CloudSyncProgress, CloudSyncRunMode, CloudSyncRunResult,
     CloudSyncServiceType, CloudSyncStateStore, ConditionalBlobTransport, LocalSyncObject,
     LocalWriteResult, RemoteSyncObject, RemoteVersion,
 };

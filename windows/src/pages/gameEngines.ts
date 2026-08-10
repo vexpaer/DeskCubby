@@ -786,6 +786,234 @@ export function actMines(
 }
 
 // ---------------------------------------------------------------------------
+// Go — JSON-compatible with Android GoGame.toJson(). This is a local-only
+// Windows game: its persistence is intentionally separated from v28 backup rows.
+
+export const GO_BOARD_SIZES = [9, 13, 19] as const;
+export type GoBoardSize = (typeof GO_BOARD_SIZES)[number];
+export type GoStone = 0 | 1 | 2;
+export type GoMoveError = "OUT_OF_BOUNDS" | "OCCUPIED" | "SUICIDE" | "KO" | "GAME_FINISHED";
+
+export interface GoPoint {
+  x: number;
+  y: number;
+}
+
+export interface GoState {
+  v: 1;
+  size: GoBoardSize;
+  board: GoStone[];
+  current: 1 | 2;
+  capturedByBlack: number;
+  capturedByWhite: number;
+  passes: number;
+  finished: boolean;
+  turnCount: number;
+  previousBoard: GoStone[] | null;
+  lastMove: GoPoint | null;
+}
+
+export interface GoAction extends EngineAction<GoState> {
+  accepted: boolean;
+  captured: number;
+  error?: GoMoveError;
+}
+
+const GO_MAX_COUNTER = 10_000_000;
+
+function isGoBoardSize(value: unknown): value is GoBoardSize {
+  return typeof value === "number" && GO_BOARD_SIZES.includes(value as GoBoardSize);
+}
+
+function goBoard(value: unknown, size: GoBoardSize): GoStone[] | null {
+  if (!isIntegerArray(value, size * size) || value.some((stone) => stone < 0 || stone > 2)) {
+    return null;
+  }
+  return value as GoStone[];
+}
+
+function goCounter(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= GO_MAX_COUNTER;
+}
+
+function sameGoBoard(left: GoStone[] | null, right: GoStone[]): boolean {
+  return left !== null && left.length === right.length && left.every((stone, index) => stone === right[index]);
+}
+
+function goNeighbors(index: number, size: GoBoardSize): number[] {
+  const x = index % size;
+  const y = Math.floor(index / size);
+  const result: number[] = [];
+  if (x > 0) result.push(index - 1);
+  if (x < size - 1) result.push(index + 1);
+  if (y > 0) result.push(index - size);
+  if (y < size - 1) result.push(index + size);
+  return result;
+}
+
+function collectGoGroup(board: GoStone[], size: GoBoardSize, start: number): { stones: number[]; hasLiberty: boolean } {
+  const color = board[start];
+  const seen = new Set<number>([start]);
+  const stack = [start];
+  const stones: number[] = [];
+  let hasLiberty = false;
+  while (stack.length) {
+    const current = stack.pop()!;
+    stones.push(current);
+    for (const neighbor of goNeighbors(current, size)) {
+      if (board[neighbor] === 0) {
+        hasLiberty = true;
+      } else if (board[neighbor] === color && !seen.has(neighbor)) {
+        seen.add(neighbor);
+        stack.push(neighbor);
+      }
+    }
+  }
+  return { stones, hasLiberty };
+}
+
+export function newGo(size: GoBoardSize = 9): GoState {
+  if (!isGoBoardSize(size)) throw new Error("Unsupported Go board size");
+  return {
+    v: 1,
+    size,
+    board: Array<GoStone>(size * size).fill(0),
+    current: 1,
+    capturedByBlack: 0,
+    capturedByWhite: 0,
+    passes: 0,
+    finished: false,
+    turnCount: 0,
+    previousBoard: null,
+    lastMove: null,
+  };
+}
+
+export function parseGo(json: string): GoState | null {
+  const value = parseObject(json);
+  if (!value || (value.v ?? 1) !== 1 || !isGoBoardSize(value.size)) return null;
+  const size = value.size;
+  const board = goBoard(value.board, size);
+  const previousBoard = value.previousBoard == null ? null : goBoard(value.previousBoard, size);
+  if (!board || (value.previousBoard != null && !previousBoard)) return null;
+  if (value.current !== 1 && value.current !== 2) return null;
+  if (!goCounter(value.capturedByBlack) || !goCounter(value.capturedByWhite) || !goCounter(value.turnCount)) return null;
+  if (typeof value.passes !== "number" || !Number.isSafeInteger(value.passes) || value.passes < 0 || value.passes > 2 || !isBoolean(value.finished)) return null;
+  const passes = value.passes;
+  if (value.finished !== (passes >= 2)) return null;
+
+  let lastMove: GoPoint | null = null;
+  if (value.lastMove != null) {
+    if (typeof value.lastMove !== "object" || Array.isArray(value.lastMove)) return null;
+    const point = value.lastMove as Record<string, unknown>;
+    if (!Number.isSafeInteger(point.x) || !Number.isSafeInteger(point.y)) return null;
+    const x = Number(point.x);
+    const y = Number(point.y);
+    if (x < 0 || x >= size || y < 0 || y >= size || board[y * size + x] === 0) return null;
+    lastMove = { x, y };
+  }
+
+  return {
+    v: 1,
+    size,
+    board,
+    current: value.current,
+    capturedByBlack: Number(value.capturedByBlack),
+    capturedByWhite: Number(value.capturedByWhite),
+    passes,
+    finished: value.finished,
+    turnCount: Number(value.turnCount),
+    previousBoard,
+    lastMove,
+  };
+}
+
+function rejectedGo(state: GoState, error: GoMoveError): GoAction {
+  return { state, accepted: false, changed: false, terminal: state.finished, captured: 0, error };
+}
+
+export function playGo(state: GoState, x: number, y: number): GoAction {
+  if (state.finished) return rejectedGo(state, "GAME_FINISHED");
+  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= state.size || y < 0 || y >= state.size) {
+    return rejectedGo(state, "OUT_OF_BOUNDS");
+  }
+  const playedIndex = y * state.size + x;
+  if (state.board[playedIndex] !== 0) return rejectedGo(state, "OCCUPIED");
+
+  const before = [...state.board];
+  const candidate = [...before];
+  candidate[playedIndex] = state.current;
+  const opponent: 1 | 2 = state.current === 1 ? 2 : 1;
+  const checked = new Set<number>();
+  let captured = 0;
+  for (const neighbor of goNeighbors(playedIndex, state.size)) {
+    if (candidate[neighbor] !== opponent || checked.has(neighbor)) continue;
+    const group = collectGoGroup(candidate, state.size, neighbor);
+    group.stones.forEach((stone) => checked.add(stone));
+    if (!group.hasLiberty) {
+      group.stones.forEach((stone) => { candidate[stone] = 0; });
+      captured += group.stones.length;
+    }
+  }
+
+  if (!collectGoGroup(candidate, state.size, playedIndex).hasLiberty) return rejectedGo(state, "SUICIDE");
+  if (sameGoBoard(state.previousBoard, candidate)) return rejectedGo(state, "KO");
+
+  const next: GoState = {
+    ...state,
+    board: candidate,
+    current: opponent,
+    capturedByBlack: state.capturedByBlack + (state.current === 1 ? captured : 0),
+    capturedByWhite: state.capturedByWhite + (state.current === 2 ? captured : 0),
+    passes: 0,
+    finished: false,
+    turnCount: state.turnCount + 1,
+    previousBoard: before,
+    lastMove: { x, y },
+  };
+  return {
+    state: next,
+    accepted: true,
+    changed: true,
+    terminal: false,
+    captured,
+    metrics: {
+      increments: {
+        goMovesPlayed: 1,
+        goStonesCaptured: captured,
+      },
+    },
+  };
+}
+
+export function passGo(state: GoState): GoAction {
+  if (state.finished) return rejectedGo(state, "GAME_FINISHED");
+  const passes = state.passes + 1;
+  const finished = passes >= 2;
+  return {
+    state: {
+      ...state,
+      current: state.current === 1 ? 2 : 1,
+      passes,
+      finished,
+      turnCount: state.turnCount + 1,
+      previousBoard: [...state.board],
+      lastMove: null,
+    },
+    accepted: true,
+    changed: true,
+    terminal: finished,
+    captured: 0,
+    metrics: {
+      increments: {
+        goPasses: 1,
+        goGamesCompleted: finished ? 1 : 0,
+      },
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // One-suit Spider Solitaire — Android schemaVersion 2 save format.
 
 export interface SpiderCard {
@@ -1035,6 +1263,7 @@ export function abandonSpiderMetrics(state: SpiderState | null): GameMetricDelta
 
 export function serializeGame(gameId: GameId, state: unknown): string {
   if (gameId === "spider") return spiderJson(state as SpiderState);
+  if (gameId === "go") return JSON.stringify(state as GoState);
   if (gameId === "snake") {
     const snake = state as SnakeState;
     return JSON.stringify({

@@ -36,10 +36,13 @@ describe("DiaryPage file conflict flow", () => {
   const invokeMock = vi.mocked(invoke);
   let conflictReason: "changed" | "deleted";
   let openedDocument = DOCUMENT;
+  let resolveMediaAsset: (source: string) => string | null;
 
   beforeEach(() => {
     conflictReason = "changed";
     openedDocument = DOCUMENT;
+    resolveMediaAsset = (source) =>
+      `http://media.localhost/${source.replace(/^\.\//, "")}`;
     rememberActiveDiary(null);
     useAppStore.setState({
       appearance: {
@@ -64,7 +67,7 @@ describe("DiaryPage file conflict flow", () => {
       }
       if (command === "resolve_media_asset") {
         const source = (args as { source: string }).source;
-        return `http://media.localhost/${source.replace(/^\.\//, "")}` as never;
+        return resolveMediaAsset(source) as never;
       }
       if (command === "select_and_import_diary_image") {
         return {
@@ -114,7 +117,7 @@ describe("DiaryPage file conflict flow", () => {
     openedDocument = {
       ...DOCUMENT,
       content:
-        "# 测试日记\n\n![午餐](<lunch.jpg>)\n\n![随手拍](./snapshot.webp)",
+        "# 测试日记\n\n![午餐](<lunch.jpg>)\n\n![随手拍](./snapshot.webp)\n\n![中文名](<午餐 01.jpg>)",
     };
     const user = userEvent.setup();
     const router = createMemoryRouter(
@@ -131,6 +134,10 @@ describe("DiaryPage file conflict flow", () => {
       "src",
       "http://media.localhost/snapshot.webp",
     );
+    expect(await screen.findByRole("img", { name: "中文名" })).toHaveAttribute(
+      "src",
+      "http://media.localhost/%E5%8D%88%E9%A4%90%2001.jpg",
+    );
     expect(invokeMock).toHaveBeenCalledWith("resolve_media_asset", {
       diaryRelativePath: "2026/2026-07-29.md",
       source: "lunch.jpg",
@@ -139,6 +146,29 @@ describe("DiaryPage file conflict flow", () => {
       diaryRelativePath: "2026/2026-07-29.md",
       source: "./snapshot.webp",
     });
+    expect(invokeMock).toHaveBeenCalledWith("resolve_media_asset", {
+      diaryRelativePath: "2026/2026-07-29.md",
+      source: "%E5%8D%88%E9%A4%90%2001.jpg",
+    });
+  });
+
+  it("finishes loading when a Markdown image cannot be resolved", async () => {
+    openedDocument = {
+      ...DOCUMENT,
+      content: "# 测试日记\n\n![缺失图片](missing.jpg)",
+    };
+    resolveMediaAsset = () => null;
+    const user = userEvent.setup();
+    const router = createMemoryRouter(
+      [{ path: "/diary", element: <DiaryPage /> }],
+      { initialEntries: ["/diary?entry=2026-07-29.md"] },
+    );
+    render(<RouterProvider router={router} />);
+
+    await user.click(await screen.findByRole("button", { name: "预览" }));
+
+    expect(await screen.findByText("图片不可用")).toBeInTheDocument();
+    expect(screen.queryByText("正在读取图片…")).not.toBeInTheDocument();
   });
 
   it("never overwrites an external edit until the user confirms", async () => {

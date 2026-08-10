@@ -3,19 +3,35 @@ import {
   actTetris,
   dealSpider,
   move2048,
+  newGo,
   newMines,
   newSpider,
   newTetris,
   parseGame2048,
+  parseGo,
   parseMines,
   parseSnake,
   parseSpider,
   serializeGame,
+  passGo,
+  playGo,
   tickSnake,
   turnSnake,
   type Game2048State,
+  type GoState,
   type SnakeState,
 } from "./gameEngines";
+
+function goPosition(
+  current: 1 | 2,
+  stones: Array<[x: number, y: number, stone: 1 | 2]>,
+  size: 9 | 13 | 19 = 9,
+): GoState {
+  const state = newGo(size);
+  const board = [...state.board];
+  for (const [x, y, stone] of stones) board[y * size + x] = stone;
+  return { ...state, current, board };
+}
 
 describe("Windows game engines", () => {
   it("uses Android-compatible 2048 merge and statistic semantics", () => {
@@ -124,5 +140,48 @@ describe("Windows game engines", () => {
     const json = serializeGame("spider", dealt.state);
     expect(JSON.parse(json).schemaVersion).toBe(2);
     expect(parseSpider(json)).toEqual(dealt.state);
+  });
+
+  it("matches Android Go capture, suicide and simple-ko rules", () => {
+    const capture = goPosition(1, [
+      [1, 1, 2], [0, 1, 1], [1, 0, 1], [2, 1, 1],
+    ]);
+    const captured = playGo(capture, 1, 2);
+    expect(captured.accepted).toBe(true);
+    expect(captured.captured).toBe(1);
+    expect(captured.state.board[1 * 9 + 1]).toBe(0);
+    expect(captured.state.capturedByBlack).toBe(1);
+    expect(captured.metrics?.increments).toMatchObject({
+      goMovesPlayed: 1,
+      goStonesCaptured: 1,
+    });
+
+    const suicide = goPosition(2, [
+      [1, 0, 1], [0, 1, 1], [2, 1, 1], [1, 2, 1],
+    ]);
+    expect(playGo(suicide, 1, 1)).toMatchObject({ accepted: false, error: "SUICIDE", state: suicide });
+
+    const ko = goPosition(1, [
+      [1, 0, 1], [0, 1, 1], [2, 1, 1], [1, 1, 2],
+      [0, 2, 2], [2, 2, 2], [1, 3, 2],
+    ]);
+    const first = playGo(ko, 1, 2);
+    expect(first.accepted).toBe(true);
+    expect(playGo(first.state, 1, 1)).toMatchObject({ accepted: false, error: "KO" });
+  });
+
+  it("round-trips Go ko history and finishes after two consecutive passes", () => {
+    const first = passGo(newGo(13));
+    expect(first.state.finished).toBe(false);
+    expect(first.metrics?.increments).toMatchObject({ goPasses: 1, goGamesCompleted: 0 });
+    const second = passGo(first.state);
+    expect(second.terminal).toBe(true);
+    expect(second.state.finished).toBe(true);
+    expect(second.metrics?.increments).toMatchObject({ goPasses: 1, goGamesCompleted: 1 });
+    expect(playGo(second.state, 6, 6).error).toBe("GAME_FINISHED");
+
+    const restored = parseGo(serializeGame("go", second.state));
+    expect(restored).toEqual(second.state);
+    expect(parseGo('{"v":1,"size":7}')).toBeNull();
   });
 });
