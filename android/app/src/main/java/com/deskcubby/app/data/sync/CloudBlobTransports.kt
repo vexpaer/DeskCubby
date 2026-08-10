@@ -265,7 +265,7 @@ internal class S3BlobTransport(
             200 -> Unit
             else -> throw s3StatusException("S3 读取", response.status, response.body)
         }
-        val version = resolveReadVersion(uri, response, expectedVersion)
+        val version = resolveReadVersion(response, expectedVersion)
         val metadata = response.toBlobMetadataWithVersion(version)
         return BlobRead(
             metadata = metadata.copy(size = response.body.size.toLong()),
@@ -326,151 +326,55 @@ internal class S3BlobTransport(
     }
 
     /**
-     * S3 ETags are HTTP entity tags, but compatible gateways commonly remove quotes, duplicate a
-     * header while proxying it, or omit it from a successful response. We accept a normal strong
-     * tag directly. Every repaired/derived candidate is first bound to the current object with
-     * conditional requests: a known non-match must fail, then a conditional confirmation GET must
-     * return the same bytes. This keeps If-Match conflict protection intact instead of treating a
-     * content hash as an unconditional write token.
+     * S3-compatible gateways commonly remove ETag quotes, duplicate proxy headers, omit ETag, or
+     * do not implement conditional GET consistently. Keep a bounded, header-safe version token for
+     * best-effort If-Match requests without probing whether the provider enforces that condition.
+     * The manifest and payload SHA-256 checks remain the source of content integrity.
      */
-    private suspend fun resolveReadVersion(
-        uri: URI,
+    private fun resolveReadVersion(
         response: SyncHttpResponse,
         expectedVersion: String?,
     ): String {
-        val resolution = response.s3EntityTagResolution()
         val expected = expectedVersion?.let(::requireStrongRemoteVersion)
-        if (expected != null) {
-            resolution.trustedVersion?.let { returned ->
-                if (returned != expected) throw remoteVersionConflict()
-                return expected
-            }
-            return verifyConditionalS3Version(uri, listOf(expected), response.body)
-        }
+        // ManifestRemoteStore still verifies payload SHA-256 and the decoded manifest entry set.
+        // Returning the requested token avoids rejecting providers that ignore If-Match.
+        if (expected != null) return expected
+        val resolution = response.s3EntityTagResolution()
         resolution.trustedVersion?.let { return it }
-        val candidates = buildList {
-            addAll(resolution.probeCandidates)
-            add(response.body.s3SinglePartEtag())
-        }.distinct()
-        return verifyConditionalS3Version(uri, candidates, response.body)
-    }
-
-    private suspend fun verifyConditionalS3Version(
-        uri: URI,
-        candidates: List<String>,
-        expectedBytes: ByteArray,
-    ): String {
-        if (candidates.isEmpty() || candidates.size > MAX_S3_ETAG_CANDIDATES) {
-            throw missingS3ConditionalValidator()
-        }
-        val nonMatchingProbe = buildNonMatchingS3Probe(uri, candidates)
-        // Probe with the same method whose conditional semantics we rely on below. Some S3
-        // gateways implement If-Match correctly for GET/PUT but treat HEAD as an unconditional
-        // metadata lookup; using HEAD there produced a false "conditions ignored" diagnosis.
-        // This intentionally wrong validator needs only a rejection status. Keep its response at
-        // the provider-error cap even for a large object, so a gateway that ignores If-Match cannot
-        // make us buffer the object a second time merely to discover that conditions are unsafe.
-        val probe = try {
-            executeConditionalGet(
-                uri = uri,
-                version = nonMatchingProbe,
-                maxBytes = MAX_ERROR_BYTES,
-            ).status
-        } catch (limit: CloudSyncLimitException) {
-            throw oversizedS3ConditionalProbe(limit)
-        }
-        when (probe) {
-            404 -> throw remoteVersionConflict()
-            409, 412 -> Unit
-            200, 204 -> throw CloudSyncException(
-                "S3 服务未执行条件请求，已停止同步以避免覆盖远端修改。 / " +
-                    "The S3 service ignored a conditional request; sync was stopped to avoid " +
-                    "overwriting remote changes.",
-                errorCode = "SYNC_REMOTE_VALIDATION",
-            )
-            else -> throw CloudSyncException(
-                "S3 服务无法验证对象版本（HTTP $probe），已停止同步。 / " +
-                    "The S3 service could not validate the object version (HTTP $probe); " +
-                    "sync was stopped.",
-                errorCode = "SYNC_REMOTE_VALIDATION",
-            )
-        }
-        val expectedHash = sha256(expectedBytes)
-        candidates.forEach { candidate ->
-            val confirmation = executeConditionalGet(
-                uri = uri,
-                version = candidate,
-                maxBytes = conditionalVerificationReadLimit(expectedBytes),
-            )
-            when (val status = confirmation.status) {
-                200 -> {
-                    if (confirmation.body.size != expectedBytes.size ||
-                        sha256(confirmation.body) != expectedHash
-                    ) {
-                        throw remoteVersionConflict()
-                    }
-                    return candidate
-                }
-                404 -> throw remoteVersionConflict()
-                409, 412 -> Unit
-                else -> throw CloudSyncException(
-                    "S3 服务无法确认对象版本（HTTP $status），已停止同步。 / " +
-                        "The S3 service could not confirm the object version (HTTP $status); " +
-                        "sync was stopped.",
-                    errorCode = "SYNC_REMOTE_VALIDATION",
-                )
-            }
-        }
-        throw remoteVersionConflict()
-    }
-
-    private suspend fun executeConditionalGet(
-        uri: URI,
-        version: String,
-        maxBytes: Long,
-    ): SyncHttpResponse {
-        val signed = signer.sign(
-            method = "GET",
-            uri = uri,
-            headers = mapOf("If-Match" to version),
-        )
-        return http.execute(
-            SyncHttpRequest(
-                method = "GET",
-                uri = uri,
-                headers = signed.headers.withoutSyntheticHost(),
-                maxResponseBytes = maxBytes,
-            ),
-        )
+        return resolution.compatibleVersions.firstOrNull() ?: response.body.s3SinglePartEtag()
     }
 }
 
 internal data class S3EntityTagResolution(
     val trustedVersion: String?,
-    val probeCandidates: List<String>,
+    val compatibleVersions: List<String>,
 )
 
 /** Parses the common S3/proxy ETag variants without weakening WebDAV's strict parser. */
 internal fun SyncHttpResponse.s3EntityTagResolution(): S3EntityTagResolution {
     val rawValues = headers["etag"].orEmpty()
-    if (rawValues.size > MAX_S3_ETAG_CANDIDATES) throw invalidEntityTag()
-    val splitValues = rawValues.flatMap(::splitS3EntityTagHeader)
-    if (splitValues.size > MAX_S3_ETAG_CANDIDATES || splitValues.any(String::isBlank)) {
-        throw invalidEntityTag()
+    if (rawValues.size > MAX_S3_ETAG_CANDIDATES) return emptyS3EntityTagResolution()
+    val splitValues = runCatching { rawValues.flatMap(::splitS3EntityTagHeader) }
+        .getOrElse { return emptyS3EntityTagResolution() }
+    if (splitValues.size > MAX_S3_ETAG_CANDIDATES) return emptyS3EntityTagResolution()
+    val parsed = splitValues.mapNotNull { raw ->
+        runCatching { parseS3EntityTagCandidate(raw) }.getOrNull()
     }
-    val parsed = splitValues.map(::parseS3EntityTagCandidate)
     val candidates = parsed.map(S3EntityTagCandidate::version).distinct()
-    if (candidates.size > MAX_S3_ETAG_CANDIDATES) throw invalidEntityTag()
-    // Even identical repeated field values are a repaired multi-value response. Keep them as a
-    // probe candidate so only one syntactically valid, quoted response is trusted immediately.
+    if (candidates.size > MAX_S3_ETAG_CANDIDATES) return emptyS3EntityTagResolution()
+    // Only one already-quoted field value is trusted as the direct server version. Repaired,
+    // repeated, or proxy-split values remain bounded compatibility candidates.
     val trusted = parsed.singleOrNull()
         ?.takeIf(S3EntityTagCandidate::trusted)
         ?.version
     return S3EntityTagResolution(
         trustedVersion = trusted,
-        probeCandidates = candidates,
+        compatibleVersions = candidates,
     )
 }
+
+private fun emptyS3EntityTagResolution(): S3EntityTagResolution =
+    S3EntityTagResolution(trustedVersion = null, compatibleVersions = emptyList())
 
 private data class S3EntityTagCandidate(
     val version: String,
@@ -519,9 +423,8 @@ private fun splitS3EntityTagHeader(raw: String): List<String> {
 }
 
 /**
- * Builds only the conventional single-part S3 ETag candidate. MD5 is not used for integrity or
- * authentication here: SHA-256 still verifies the bytes, and this candidate is accepted only
- * after a deliberately non-matching If-Match fails and a matching conditional GET succeeds.
+ * Builds the conventional single-part S3 ETag compatibility token. MD5 is not used for content
+ * integrity or authentication; payload and manifest bytes remain bound by SHA-256.
  */
 private fun ByteArray.s3SinglePartEtag(): String {
     val digest = MessageDigest.getInstance("MD5").digest(this)
@@ -529,36 +432,6 @@ private fun ByteArray.s3SinglePartEtag(): String {
         "%02x".format(Locale.ROOT, byte.toInt() and 0xff)
     }
 }
-
-private fun buildNonMatchingS3Probe(uri: URI, candidates: List<String>): String {
-    val seed = buildString {
-        append(uri.toASCIIString())
-        append('\n')
-        candidates.forEach {
-            append(it)
-            append('\n')
-        }
-    }
-    val suffix = sha256(seed.toByteArray(StandardCharsets.UTF_8)).take(32)
-    return "\"deskcubby-condition-probe-$suffix\""
-}
-
-private fun missingS3ConditionalValidator(): CloudSyncException = CloudSyncException(
-    "S3 服务未提供可验证的对象版本，也无法安全推导条件写入版本。 / " +
-        "The S3 service supplied no verifiable object version and no safe conditional-write " +
-        "version could be derived.",
-    errorCode = "SYNC_REMOTE_VALIDATION",
-)
-
-private fun oversizedS3ConditionalProbe(cause: CloudSyncLimitException): CloudSyncException =
-    CloudSyncException(
-        "S3 条件请求探测响应超过 64 KiB，服务可能未执行 If-Match；" +
-            "已停止同步以避免覆盖远端修改。 / The S3 conditional-request probe exceeded " +
-            "64 KiB, so the service may have ignored If-Match; sync was stopped to avoid " +
-            "overwriting remote changes.",
-        cause = cause,
-        errorCode = "SYNC_REMOTE_VALIDATION",
-    )
 
 private fun SyncHttpResponse.toBlobMetadataWithVersion(version: String): BlobMetadata {
     val size = firstHeader("content-length")?.toLongOrNull() ?: -1L
@@ -846,9 +719,6 @@ private suspend fun verifyFallbackWrite(
 
 private fun verificationReadLimit(bytes: ByteArray): Long =
     maxOf(1L, bytes.size.toLong())
-
-private fun conditionalVerificationReadLimit(bytes: ByteArray): Long =
-    maxOf(MAX_ERROR_BYTES, verificationReadLimit(bytes))
 
 private fun remoteVersionConflict(): CloudSyncConflictException = CloudSyncConflictException(
     "云端对象在安全校验期间发生变化，未继续覆盖；请重新同步。 / " +

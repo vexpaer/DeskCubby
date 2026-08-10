@@ -69,23 +69,34 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_CELLS
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_CELLS
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
 import com.deskcubby.app.ui.components.ColorPickerDialog
 import com.deskcubby.app.ui.theme.tr
 import java.util.UUID
+import kotlin.math.roundToInt
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 
 @Composable
 fun DesktopWidgetsScreen(
@@ -259,8 +270,8 @@ fun DesktopWidgetsScreen(
             text = {
                 Text(
                     tr(
-                        "已放到桌面的实例会显示默认卡片或配置提示，不会从桌面被强制移除。",
-                        "Existing launcher instances will show the default card or a setup message; they are not forcibly removed.",
+                        "已放到桌面的实例保留各自添加时的独立快照，不会被删除或改成其他卡片。",
+                        "Existing launcher instances keep their own placement snapshots; they are not removed or changed into another card.",
                     ),
                 )
             },
@@ -358,6 +369,17 @@ private fun WidgetCardList(
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
+        }
+        item {
+            Text(
+                if (english) {
+                    "Each placed widget keeps an independent snapshot. Long-press it and choose Reconfigure to apply another saved design."
+                } else {
+                    "每个已放置小组件保留独立快照；长按桌面实例并选择“重新配置”可换用其他设计。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -503,6 +525,16 @@ private fun WidgetCardEditor(
         }
         item {
             EditorSection(if (english) "Appearance" else "外观") {
+                WidgetToggle(
+                    label = if (english) "Show card name" else "显示卡片名称",
+                    checked = draft.showName,
+                    onCheckedChange = { onChange(draft.copy(showName = it)) },
+                )
+                WidgetToggle(
+                    label = if (english) "Show icon when space allows" else "空间足够时显示图标",
+                    checked = draft.showIcon,
+                    onCheckedChange = { onChange(draft.copy(showIcon = it)) },
+                )
                 OutlinedButton(onClick = onPickBackgroundColor, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Outlined.ColorLens, null, tint = Color(draft.backgroundColorArgb))
                     Spacer(Modifier.width(8.dp))
@@ -532,6 +564,55 @@ private fun WidgetCardEditor(
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(if (english) "Remove background image" else "移除背景图片") }
                 }
+                Text(
+                    if (english) {
+                        "Background opacity: ${draft.backgroundOpacityPercent}%"
+                    } else {
+                        "背景透明度：${draft.backgroundOpacityPercent}%"
+                    },
+                )
+                Slider(
+                    value = draft.backgroundOpacityPercent.toFloat(),
+                    onValueChange = {
+                        val value = (it / 5f).roundToInt() * 5
+                        onChange(draft.copy(backgroundOpacityPercent = value))
+                    },
+                    valueRange = MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT.toFloat()..
+                        MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT.toFloat(),
+                    steps = 19,
+                )
+                Text(if (english) "Text alignment" else "文字对齐")
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    DesktopWidgetTextAlignment.entries.forEach { alignment ->
+                        val label = when (alignment) {
+                            DesktopWidgetTextAlignment.START -> if (english) "Start" else "左侧"
+                            DesktopWidgetTextAlignment.CENTER -> if (english) "Center" else "居中"
+                            DesktopWidgetTextAlignment.END -> if (english) "End" else "右侧"
+                        }
+                        FilterChip(
+                            selected = draft.textAlignment == alignment,
+                            onClick = { onChange(draft.copy(textAlignment = alignment)) },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                Text(
+                    if (english) "Text size: ${draft.textScalePercent}%"
+                    else "文字大小：${draft.textScalePercent}%",
+                )
+                Slider(
+                    value = draft.textScalePercent.toFloat(),
+                    onValueChange = {
+                        val value = (it / 5f).roundToInt() * 5
+                        onChange(draft.copy(textScalePercent = value))
+                    },
+                    valueRange = MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT.toFloat()..
+                        MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT.toFloat(),
+                    steps = 14,
+                )
             }
         }
         item {
@@ -584,32 +665,54 @@ private fun WidgetPreview(config: DesktopWidgetConfig, english: Boolean) {
             .fillMaxWidth()
             .height(previewHeight)
             .clip(RoundedCornerShape(22.dp))
-            .background(Color(config.backgroundColorArgb)),
+            .background(
+                Color(config.backgroundColorArgb).copy(
+                    alpha = config.backgroundOpacityPercent / 100f,
+                ),
+            ),
     ) {
         config.backgroundImageUri?.let { uri ->
             AsyncImage(
                 model = uri,
                 contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().alpha(config.backgroundOpacityPercent / 100f),
                 contentScale = ContentScale.Crop,
             )
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)))
+            Box(
+                Modifier.fillMaxSize().background(
+                    Color.Black.copy(
+                        alpha = 0.32f * config.backgroundOpacityPercent / 100f,
+                    ),
+                ),
+            )
+        }
+        val textAlign = when (config.textAlignment) {
+            DesktopWidgetTextAlignment.START -> TextAlign.Start
+            DesktopWidgetTextAlignment.CENTER -> TextAlign.Center
+            DesktopWidgetTextAlignment.END -> TextAlign.End
         }
         Column(
-            modifier = Modifier.align(Alignment.CenterStart).padding(16.dp),
+            modifier = Modifier.align(Alignment.CenterStart).fillMaxWidth().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(
-                config.name,
-                color = Color(config.textColorArgb),
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (config.showName) {
+                Text(
+                    config.name,
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color(config.textColorArgb),
+                    fontSize = (16f * config.textScalePercent / 100f).sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = textAlign,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
                 widgetContentSummary(config, english),
+                modifier = Modifier.fillMaxWidth(),
                 color = Color(config.textColorArgb).copy(alpha = 0.88f),
-                style = MaterialTheme.typography.bodySmall,
+                fontSize = (12f * config.textScalePercent / 100f).sp,
+                textAlign = textAlign,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -620,6 +723,21 @@ private fun WidgetPreview(config: DesktopWidgetConfig, english: Boolean) {
             color = Color(config.textColorArgb).copy(alpha = 0.82f),
             style = MaterialTheme.typography.labelSmall,
         )
+    }
+}
+
+@Composable
+private fun WidgetToggle(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

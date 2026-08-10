@@ -121,8 +121,9 @@ interface CloudSyncRemoteStore {
     ): ByteArray
 
     /**
-     * Publishes [bytes] only if the manifest still contains [expectedRemoteVersion]. A null value
-     * means the key must not exist. Implementations must fail closed when conditions are unsupported.
+     * Publishes [bytes] against the manifest version seen during the scan. A null value means the
+     * key was absent. WebDAV requires provider conditions; S3 uses them when supported and keeps
+     * content integrity through the immutable-object and manifest SHA-256 checks.
      */
     suspend fun write(
         key: String,

@@ -62,6 +62,7 @@ data class ReaderPreferences(
     val pdfZoomPercent: Int = 100,
     val orientation: ReaderOrientation = ReaderOrientation.FOLLOW_SYSTEM,
     val libraryLayout: ReaderLibraryLayout = ReaderLibraryLayout.LIST,
+    val showGridBookTitles: Boolean = true,
     val showProgressPercentage: Boolean = false,
     val immersiveMode: Boolean = false,
     /** Null follows the foreground chosen for the active reader background. */
@@ -1667,7 +1668,7 @@ internal fun decodeReaderText(bytes: ByteArray): String {
 }
 
 internal object ReaderStateCodec {
-    private const val SCHEMA_VERSION = 5
+    private const val SCHEMA_VERSION = 6
     private const val MAX_BOOKS = 500
     private val idPattern = Regex("[A-Za-z0-9._:-]{1,256}")
 
@@ -1684,6 +1685,7 @@ internal object ReaderStateCodec {
                 .put("pdfZoomPercent", value.preferences.pdfZoomPercent)
                 .put("orientation", value.preferences.orientation.name)
                 .put("libraryLayout", value.preferences.libraryLayout.name)
+                .put("showGridBookTitles", value.preferences.showGridBookTitles)
                 .put("showProgressPercentage", value.preferences.showProgressPercentage)
                 .put("immersiveMode", value.preferences.immersiveMode)
                 .put(
@@ -1761,6 +1763,11 @@ internal object ReaderStateCodec {
                     )
                 } else {
                     ReaderLibraryLayout.LIST
+                },
+                showGridBookTitles = if (schemaVersion >= 6) {
+                    preferencesJson.optBoolean("showGridBookTitles", true)
+                } else {
+                    true
                 },
                 showProgressPercentage = schemaVersion >= 5 &&
                     preferencesJson.optBoolean("showProgressPercentage", false),

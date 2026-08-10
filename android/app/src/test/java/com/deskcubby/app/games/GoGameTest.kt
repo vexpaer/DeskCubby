@@ -3,6 +3,7 @@ package com.deskcubby.app.games
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -125,6 +126,26 @@ class GoGameTest {
         assertEquals(game.boardSnapshot(), restored.boardSnapshot())
         assertEquals(game.lastMove, restored.lastMove)
         assertEquals(GoGame.MoveError.KO, restored.play(1, 1).error)
+    }
+
+    @Test
+    fun `snapshot copy is detached and preserves the visible position`() {
+        val original = GoGame()
+        assertTrue(original.play(4, 4).accepted)
+
+        val snapshot = original.snapshotCopy()
+
+        assertNotSame(original, snapshot)
+        assertEquals(original.boardSnapshot(), snapshot.boardSnapshot())
+        assertEquals(original.currentPlayer, snapshot.currentPlayer)
+        assertEquals(original.lastMove, snapshot.lastMove)
+        assertEquals(original.turnCount, snapshot.turnCount)
+
+        assertTrue(snapshot.play(0, 0).accepted)
+        assertEquals(GoGame.Stone.EMPTY, original.stoneAt(0, 0))
+        assertEquals(GoGame.Stone.WHITE, snapshot.stoneAt(0, 0))
+        assertEquals(1, original.turnCount)
+        assertEquals(2, snapshot.turnCount)
     }
 
     @Test

@@ -87,16 +87,6 @@ class AppCloudSyncService @Inject constructor(
     suspend fun syncEnabled(
         mode: CloudSyncRunMode = CloudSyncRunMode.NORMAL,
     ): List<CloudSyncConfigRun> {
-        val settings = settingsRepository.settings.first()
-        if (!settings.cloudSyncEnabled) {
-            throw CloudSyncConfigurationException("请先在设置中开启云端同步。")
-        }
-        val storedConfigs = settings.cloudSyncConfigs.filter(CloudSyncConfig::enabled)
-        if (storedConfigs.isEmpty()) {
-            throw CloudSyncConfigurationException("没有已启用的云端同步配置。")
-        }
-        requireSafeForceDownloadSourceCount(mode, storedConfigs.size)
-        val configs = storedConfigs.map(secretStore::hydrate)
         mutableStatus.value = mutableStatus.value.copy(
             running = true,
             activeConfigId = null,
@@ -105,6 +95,16 @@ class AppCloudSyncService @Inject constructor(
             error = null,
         )
         return try {
+            val settings = settingsRepository.settings.first()
+            if (!settings.cloudSyncEnabled) {
+                throw CloudSyncConfigurationException("请先在设置中开启云端同步。")
+            }
+            val storedConfigs = settings.cloudSyncConfigs.filter(CloudSyncConfig::enabled)
+            if (storedConfigs.isEmpty()) {
+                throw CloudSyncConfigurationException("没有已启用的云端同步配置。")
+            }
+            requireSafeForceDownloadSourceCount(mode, storedConfigs.size)
+            val configs = storedConfigs.map(secretStore::hydrate)
             val runs = coordinator.syncEnabled(configs, mode = mode) { configId, progress ->
                 mutableStatus.update {
                     it.copy(activeConfigId = configId, progress = progress)

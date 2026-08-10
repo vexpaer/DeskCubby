@@ -33,6 +33,7 @@ class ReaderRepositoryTest {
                 pdfZoomPercent = 135,
                 orientation = ReaderOrientation.LANDSCAPE,
                 libraryLayout = ReaderLibraryLayout.GRID,
+                showGridBookTitles = false,
                 showProgressPercentage = true,
                 immersiveMode = true,
                 customForegroundArgb = 0xFFABCDEF.toInt(),
@@ -52,7 +53,7 @@ class ReaderRepositoryTest {
             )
             assertTrue(stored.isFile)
             assertTrue(stored.length() in 1..ReaderRepository.MAX_STATE_BYTES.toLong())
-            assertEquals(5, JSONObject(stored.readText(Charsets.UTF_8)).getInt("schemaVersion"))
+            assertEquals(6, JSONObject(stored.readText(Charsets.UTF_8)).getInt("schemaVersion"))
 
             val reloaded = ReaderRepository(isolatedContext)
             assertEquals(ReaderPreferences(), reloaded.state.value.preferences)

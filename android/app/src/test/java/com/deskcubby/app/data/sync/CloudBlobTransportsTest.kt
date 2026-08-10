@@ -289,7 +289,7 @@ class CloudBlobTransportsTest {
     }
 
     @Test
-    fun `S3 accepts quoted multipart but probes identical proxy ETags`() {
+    fun `S3 accepts quoted multipart and bounds compatible proxy ETags`() {
         val multipart = SyncHttpResponse(
             status = 200,
             headers = mapOf("etag" to listOf("\"abc123-17\"")),
@@ -303,11 +303,11 @@ class CloudBlobTransportsTest {
 
         assertEquals("\"abc123-17\"", multipart.trustedVersion)
         assertNull(duplicated.trustedVersion)
-        assertEquals(listOf("\"same\""), duplicated.probeCandidates)
+        assertEquals(listOf("\"same\""), duplicated.compatibleVersions)
     }
 
     @Test
-    fun `S3 proves an identical duplicate ETag before accepting it`() = runBlocking {
+    fun `S3 accepts an identical duplicate ETag without a condition probe`() = runBlocking {
         val bytes = "remote manifest".toByteArray()
         val http = QueueHttpExecutor(
             SyncHttpResponse(
@@ -315,27 +315,21 @@ class CloudBlobTransportsTest {
                 headers = mapOf("etag" to listOf("\"same\", \"same\"", "\"same\"")),
                 body = bytes,
             ),
-            response(byteArrayOf(), status = 412),
-            response(bytes),
         )
 
         val read = checkNotNull(s3Transport(http).get(MANIFEST_STORAGE_NAME, 1_024L, null))
 
         assertEquals("\"same\"", read.metadata.version)
-        assertEquals(listOf("GET", "GET", "GET"), http.requests.map { it.method })
-        assertTrue(http.requests[1].header("If-Match").orEmpty().contains("condition-probe"))
-        assertEquals(64L * 1024, http.requests[1].maxResponseBytes)
-        assertEquals("\"same\"", http.requests[2].header("If-Match"))
+        assertEquals(listOf("GET"), http.requests.map { it.method })
+        assertNull(http.requests.single().header("If-Match"))
     }
 
     @Test
-    fun `S3 nonmatching probe stays at 64 KiB while candidate confirmation allows object size`() =
+    fun `S3 compatible ETag read keeps the configured object limit without extra requests`() =
         runBlocking {
             val bytes = ByteArray(96 * 1024) { index -> (index and 0xff).toByte() }
             val http = QueueHttpExecutor(
                 response(bytes, etag = "unquoted-version"),
-                response(byteArrayOf(), status = 412),
-                response(bytes),
             )
 
             val read = checkNotNull(
@@ -343,35 +337,26 @@ class CloudBlobTransportsTest {
             )
 
             assertArrayEquals(bytes, read.bytes)
-            assertEquals(64L * 1024, http.requests[1].maxResponseBytes)
-            assertEquals(bytes.size.toLong(), http.requests[2].maxResponseBytes)
+            assertEquals("\"unquoted-version\"", read.metadata.version)
+            assertEquals(listOf("GET"), http.requests.map { it.method })
+            assertEquals(bytes.size.toLong(), http.requests.single().maxResponseBytes)
         }
 
     @Test
-    fun `S3 oversized nonmatching probe maps to remote validation failure`() = runBlocking {
+    fun `S3 invalid ETag falls back to a content version without validation failure`() = runBlocking {
         val bytes = "remote manifest".toByteArray()
-        var callCount = 0
-        val http = SyncHttpExecutor { request ->
-            when (callCount++) {
-                0 -> response(bytes)
-                else -> {
-                    assertEquals(64L * 1024, request.maxResponseBytes)
-                    throw CloudSyncLimitException("probe response exceeded bound")
-                }
-            }
-        }
+        val http = QueueHttpExecutor(
+            response(bytes, etag = "\"bad\u0001value\""),
+        )
 
-        try {
-            s3Transport(http).get(MANIFEST_STORAGE_NAME, 1_024L, null)
-            fail("Expected an oversized condition probe to fail closed")
-        } catch (error: CloudSyncException) {
-            assertEquals("SYNC_REMOTE_VALIDATION", error.errorCode)
-            assertTrue(error.message.orEmpty().contains("probe exceeded 64 KiB"))
-        }
+        val read = checkNotNull(s3Transport(http).get(MANIFEST_STORAGE_NAME, 1_024L, null))
+
+        assertEquals(bytes.md5Etag(), read.metadata.version)
+        assertEquals(listOf("GET"), http.requests.map { it.method })
     }
 
     @Test
-    fun `S3 repairs unquoted and weak ETags only as probe candidates`() {
+    fun `S3 repairs unquoted and weak ETags as compatibility versions`() {
         val unquoted = SyncHttpResponse(
             status = 200,
             headers = mapOf("etag" to listOf("abc123-4")),
@@ -389,15 +374,15 @@ class CloudBlobTransportsTest {
         ).s3EntityTagResolution()
 
         assertNull(unquoted.trustedVersion)
-        assertEquals(listOf("\"abc123-4\""), unquoted.probeCandidates)
+        assertEquals(listOf("\"abc123-4\""), unquoted.compatibleVersions)
         assertNull(weak.trustedVersion)
-        assertEquals(listOf("\"proxy-version\""), weak.probeCandidates)
+        assertEquals(listOf("\"proxy-version\""), weak.compatibleVersions)
         assertNull(multiple.trustedVersion)
-        assertEquals(listOf("\"proxy\"", "\"origin\""), multiple.probeCandidates)
+        assertEquals(listOf("\"proxy\"", "\"origin\""), multiple.compatibleVersions)
     }
 
     @Test
-    fun `S3 uses repaired weak and unquoted ETags only after conditional proof`() = runBlocking {
+    fun `S3 uses repaired weak and unquoted ETags without probing provider semantics`() = runBlocking {
         listOf(
             "W/\"weak-version\"" to "\"weak-version\"",
             "multipart-hash-3" to "\"multipart-hash-3\"",
@@ -405,19 +390,17 @@ class CloudBlobTransportsTest {
             val bytes = "remote manifest".toByteArray()
             val http = QueueHttpExecutor(
                 response(bytes, etag = returnedHeader),
-                response(byteArrayOf(), status = 412),
-                response(bytes),
             )
 
             val read = checkNotNull(s3Transport(http).get(MANIFEST_STORAGE_NAME, 1_024L, null))
 
             assertEquals(expectedVersion, read.metadata.version)
-            assertEquals(expectedVersion, http.requests[2].header("If-Match"))
+            assertEquals(listOf("GET"), http.requests.map { it.method })
         }
     }
 
     @Test
-    fun `S3 chooses the only multiple ETag candidate accepted by conditional confirmation`() =
+    fun `S3 uses the first bounded proxy ETag without a condition probe`() =
         runBlocking {
             val bytes = "remote manifest".toByteArray()
             val http = QueueHttpExecutor(
@@ -426,17 +409,12 @@ class CloudBlobTransportsTest {
                     headers = mapOf("etag" to listOf("\"proxy\", \"origin\"")),
                     body = bytes,
                 ),
-                response(byteArrayOf(), status = 412),
-                response(byteArrayOf(), status = 412),
-                response(bytes, status = 200),
             )
 
             val read = checkNotNull(s3Transport(http).get(MANIFEST_STORAGE_NAME, 1_024L, null))
 
-            assertEquals("\"origin\"", read.metadata.version)
-            assertEquals(listOf("GET", "GET", "GET", "GET"), http.requests.map { it.method })
-            assertEquals("\"proxy\"", http.requests[2].header("If-Match"))
-            assertEquals("\"origin\"", http.requests[3].header("If-Match"))
+            assertEquals("\"proxy\"", read.metadata.version)
+            assertEquals(listOf("GET"), http.requests.map { it.method })
         }
 
     @Test
@@ -483,20 +461,44 @@ class CloudBlobTransportsTest {
         }
 
     @Test
-    fun `S3 missing ETag fails closed when the service ignores If-Match`() = runBlocking {
+    fun `S3 read is not blocked when the service ignores If-Match`() = runBlocking {
         val bytes = "remote manifest".toByteArray()
         val http = QueueHttpExecutor(
             response(bytes),
-            response(byteArrayOf(), status = 200),
+        )
+        val expectedVersion = "\"known-version\""
+
+        val read = checkNotNull(
+            s3Transport(http).get(MANIFEST_STORAGE_NAME, 1_024L, expectedVersion),
         )
 
-        try {
-            s3Transport(http).get(MANIFEST_STORAGE_NAME, 1_024L, null)
-            fail("Expected ignored If-Match to fail closed")
-        } catch (error: CloudSyncException) {
-            assertEquals("SYNC_REMOTE_VALIDATION", error.errorCode)
-            assertTrue(error.message.orEmpty().contains("ignored a conditional request"))
-        }
+        assertArrayEquals(bytes, read.bytes)
+        assertEquals(expectedVersion, read.metadata.version)
+        assertEquals(expectedVersion, http.requests.single().header("If-Match"))
+        assertEquals(listOf("GET"), http.requests.map { it.method })
+    }
+
+    @Test
+    fun `S3 write ignored condition still verifies uploaded bytes by SHA`() = runBlocking {
+        val bytes = "forced local manifest".toByteArray()
+        val expectedVersion = "\"previous-version\""
+        val http = QueueHttpExecutor(
+            response(byteArrayOf(), status = 200),
+            response(bytes),
+        )
+
+        val written = s3Transport(http).put(
+            storageName = MANIFEST_STORAGE_NAME,
+            bytes = bytes,
+            sha256 = sha256(bytes),
+            condition = BlobWriteCondition.MustMatch(expectedVersion),
+        )
+
+        assertEquals(bytes.md5Etag(), written.version)
+        assertEquals(listOf("PUT", "GET"), http.requests.map { it.method })
+        assertEquals(expectedVersion, http.requests[0].header("If-Match"))
+        assertNull(http.requests[1].header("If-Match"))
+        assertArrayEquals(bytes, checkNotNull(http.requests[0].body))
     }
 
     private fun webDavTransport(http: SyncHttpExecutor): WebDavBlobTransport =

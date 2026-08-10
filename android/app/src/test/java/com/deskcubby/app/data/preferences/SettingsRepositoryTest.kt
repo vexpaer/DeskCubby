@@ -365,6 +365,21 @@ class SettingsRepositoryTest {
     }
 
     @Test
+    fun cloudSyncHomeWidgetIsAddedOnceAndRespectsCompletedMigration() {
+        val original = listOf("today", "notes")
+
+        assertEquals(
+            listOf("today", "notes", "cloud_sync"),
+            migrateHomeCloudSyncWidget(original, migrated = false),
+        )
+        assertEquals(
+            listOf("today", "cloud_sync"),
+            migrateHomeCloudSyncWidget(listOf("today", "cloud_sync"), migrated = false),
+        )
+        assertEquals(original, migrateHomeCloudSyncWidget(original, migrated = true))
+    }
+
+    @Test
     fun homeGameShortcutsDropUnknownDuplicatesAndKeepCatalogOrder() {
         assertEquals(
             listOf("2048", "tetris", "spider"),
@@ -542,6 +557,8 @@ class SettingsRepositoryTest {
                     heightCells = 99,
                     backgroundColorArgb = 0x00112233,
                     textColorArgb = 0x00445566,
+                    backgroundOpacityPercent = 999,
+                    textScalePercent = 1,
                     backgroundImageUri = " file:///private/image.jpg ",
                     homeModuleId = "not-a-module",
                     appLabel = " App\rName ",
@@ -555,6 +572,8 @@ class SettingsRepositoryTest {
         assertEquals(6, normalized.heightCells)
         assertEquals(0xFF112233.toInt(), normalized.backgroundColorArgb)
         assertEquals(0xFF445566.toInt(), normalized.textColorArgb)
+        assertEquals(100, normalized.backgroundOpacityPercent)
+        assertEquals(75, normalized.textScalePercent)
         assertEquals(null, normalized.backgroundImageUri)
         assertEquals("today", normalized.homeModuleId)
         assertEquals("App Name", normalized.appLabel)

@@ -26,12 +26,17 @@ import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.Game2048AnimationSpeed
 import com.deskcubby.app.data.model.LauncherIcon
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.MusicVisualizerStyle
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
 import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.PoetryTextAlignment
 import com.deskcubby.app.data.model.RssSubscription
@@ -98,7 +103,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 28,
+    val formatVersion: Int = 29,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -135,7 +140,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 28
+    const val FORMAT_VERSION: Int = 29
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -524,6 +529,11 @@ object BackupJsonCodec {
                     .put("backgroundColorArgb", item.backgroundColorArgb)
                     .put("textColorArgb", item.textColorArgb)
                     .putNullable("backgroundImageUri", item.backgroundImageUri)
+                    .put("showName", item.showName)
+                    .put("backgroundOpacityPercent", item.backgroundOpacityPercent)
+                    .put("showIcon", item.showIcon)
+                    .put("textAlignment", item.textAlignment.name)
+                    .put("textScalePercent", item.textScalePercent)
                     .put("contentType", item.contentType.name)
                     .put("homeModuleId", item.homeModuleId)
                     .putNullable("appPackageName", item.appPackageName)
@@ -532,7 +542,10 @@ object BackupJsonCodec {
         }
     }
 
-    private fun decodeDesktopWidgetConfigs(json: JSONArray): List<DesktopWidgetConfig> {
+    private fun decodeDesktopWidgetConfigs(
+        json: JSONArray,
+        version: Int,
+    ): List<DesktopWidgetConfig> {
         require(json.length() <= MAX_DESKTOP_WIDGET_CONFIGS) {
             "Too many desktop widget configurations"
         }
@@ -548,6 +561,31 @@ object BackupJsonCodec {
                     backgroundColorArgb = item.requiredInt("backgroundColorArgb"),
                     textColorArgb = item.requiredInt("textColorArgb"),
                     backgroundImageUri = item.requiredNullableString("backgroundImageUri"),
+                    showName = if (version >= 29) {
+                        item.requiredBoolean("showName")
+                    } else {
+                        true
+                    },
+                    backgroundOpacityPercent = if (version >= 29) {
+                        item.requiredInt("backgroundOpacityPercent")
+                    } else {
+                        100
+                    },
+                    showIcon = if (version >= 29) {
+                        item.requiredBoolean("showIcon")
+                    } else {
+                        true
+                    },
+                    textAlignment = if (version >= 29) {
+                        item.requiredEnum<DesktopWidgetTextAlignment>("textAlignment")
+                    } else {
+                        DesktopWidgetTextAlignment.START
+                    },
+                    textScalePercent = if (version >= 29) {
+                        item.requiredInt("textScalePercent")
+                    } else {
+                        100
+                    },
                     contentType = item.requiredEnum("contentType"),
                     homeModuleId = item.requiredString("homeModuleId"),
                     appPackageName = item.requiredNullableString("appPackageName"),
@@ -579,6 +617,15 @@ object BackupJsonCodec {
         require(config.heightCells in MIN_DESKTOP_WIDGET_CELLS..MAX_DESKTOP_WIDGET_CELLS) {
             "$field.heightCells is out of range"
         }
+        require(
+            config.backgroundOpacityPercent in
+                MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT..
+                MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT,
+        ) { "$field.backgroundOpacityPercent is out of range" }
+        require(
+            config.textScalePercent in
+                MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT..MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT,
+        ) { "$field.textScalePercent is out of range" }
         config.backgroundImageUri?.let { uri ->
             require(uri.length <= MAX_URL_CHARS && uri.startsWith("content://")) {
                 "$field.backgroundImageUri is invalid"
@@ -1198,7 +1245,10 @@ object BackupJsonCodec {
             homeGameShortcuts = homeGameShortcuts,
             homeWidgetTitles = homeWidgetTitles,
             desktopWidgetConfigs = if (version >= 22) {
-                decodeDesktopWidgetConfigs(json.requiredArray("desktopWidgetConfigs"))
+                decodeDesktopWidgetConfigs(
+                    json.requiredArray("desktopWidgetConfigs"),
+                    version,
+                )
             } else {
                 DEFAULT_DESKTOP_WIDGET_CONFIGS
             },

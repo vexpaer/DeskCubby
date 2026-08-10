@@ -187,6 +187,7 @@ fun DeskCubbyRoot(
 ) {
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val ready by settingsViewModel.ready.collectAsStateWithLifecycle()
+    val cloudSyncStatus by settingsViewModel.cloudSyncStatus.collectAsStateWithLifecycle()
     DeskCubbyTheme(settings) {
         AppBackground(settings) {
         if (!ready) {
@@ -324,6 +325,7 @@ fun DeskCubbyRoot(
                         HomeScreen(
                             padding = padding,
                             settings = settings,
+                            cloudSyncStatus = cloudSyncStatus,
                             viewModel = homeViewModel,
                             onOpenDiary = { uri -> diaryViewModel.open(uri); navController.navigate(Routes.EDITOR) },
                             onOpenThoughts = { navController.navigate(NavItemId.THOUGHT.route) },

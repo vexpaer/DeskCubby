@@ -35,7 +35,6 @@ import androidx.pdf.PdfDocument
 import androidx.pdf.PdfRect
 import androidx.pdf.SandboxedPdfLoader
 import androidx.pdf.content.PageMatchBounds
-import androidx.pdf.event.RequestFailureEvent
 import androidx.pdf.view.PdfView
 import com.deskcubby.app.data.repository.MAX_READER_CHAPTERS
 import com.deskcubby.app.data.repository.MAX_READER_SEARCH_QUERY_CHARS
@@ -274,13 +273,6 @@ private fun AndroidxPdfDocumentView(
                         override fun onBitmapCleared(pageNum: Int) = Unit
                     },
                 )
-                requestFailedListener = object : PdfView.EventListener {
-                    override fun onEvent(event: androidx.pdf.event.PdfTrackingEvent) {
-                        if (event is RequestFailureEvent && !firstContentLoaded) {
-                            post { currentOnEnhancedReaderUnavailable() }
-                        }
-                    }
-                }
                 // PdfView starts its collectors from onAttachedToWindow. Assigning the document
                 // from AndroidView.update may run before that point and has stalled first-page
                 // loading on some devices, so bind the document only after attachment.

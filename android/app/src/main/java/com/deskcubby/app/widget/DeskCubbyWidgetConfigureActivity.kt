@@ -103,7 +103,9 @@ class DeskCubbyWidgetConfigureActivity : ComponentActivity() {
         if (finishingConfiguration) return
         finishingConfiguration = true
         lifecycleScope.launch {
-            instanceStore.bind(appWidgetId, config.id)
+            // Store the complete design per App Widget ID. Editing or deleting another reusable
+            // design must never silently turn every launcher instance into the same card.
+            instanceStore.bind(appWidgetId, config)
             val manager = AppWidgetManager.getInstance(this@DeskCubbyWidgetConfigureActivity)
             // A configuration activity does not receive an initial APPWIDGET_UPDATE on every
             // launcher. Render directly before RESULT_OK so OEM launchers never commit a blank

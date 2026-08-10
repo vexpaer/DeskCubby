@@ -105,6 +105,27 @@ class GoGame private constructor(
 
     fun boardSnapshot(): List<Stone> = cells.map { Stone.fromCode(it) ?: Stone.EMPTY }
 
+    /**
+     * Returns a detached copy of the current position.
+     *
+     * [GoGame] deliberately keeps its move implementation mutable, but UI state holders must
+     * publish a new object after a successful move so observers such as Compose can reliably
+     * detect the change. Both board arrays are copied to keep later moves on either instance from
+     * leaking into the other one.
+     */
+    fun snapshotCopy(): GoGame = GoGame(
+        size = size,
+        cells = cells.copyOf(),
+        currentPlayer = currentPlayer,
+        capturedByBlack = capturedByBlack,
+        capturedByWhite = capturedByWhite,
+        consecutivePasses = consecutivePasses,
+        isFinished = isFinished,
+        turnCount = turnCount,
+        previousCells = previousCells?.copyOf(),
+        lastMove = lastMove,
+    )
+
     fun play(x: Int, y: Int): MoveResult {
         if (isFinished) return rejected(MoveError.GAME_FINISHED)
         if (x !in 0 until size || y !in 0 until size) {

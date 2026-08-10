@@ -7,6 +7,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.TypedValue
+import android.view.Gravity
 import android.view.View
 import android.widget.RemoteViews
 import androidx.core.graphics.drawable.toBitmap
@@ -18,6 +20,7 @@ import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DateRecordRepository
@@ -85,9 +88,20 @@ class DesktopWidgetRenderer @Inject constructor(
             )
         }
         return appWidgetIds.count { appWidgetId ->
-            val config = settings.desktopWidgetConfigs.firstOrNull {
-                it.id == instanceStore.configId(appWidgetId)
-            } ?: settings.desktopWidgetConfigs.firstOrNull()
+            val storedSnapshot = instanceStore.snapshot(appWidgetId)
+            val legacyConfigId = if (storedSnapshot == null) {
+                instanceStore.configId(appWidgetId)
+            } else {
+                null
+            }
+            val config = resolveDesktopWidgetConfig(
+                storedSnapshot = storedSnapshot,
+                legacyConfigId = legacyConfigId,
+                reusableConfigs = settings.desktopWidgetConfigs,
+            )
+            if (storedSnapshot == null && legacyConfigId != null && config != null) {
+                instanceStore.bind(appWidgetId, config)
+            }
             try {
                 manager.updateAppWidget(
                     appWidgetId,
@@ -116,17 +130,19 @@ class DesktopWidgetRenderer @Inject constructor(
             views.setTextColor(R.id.widget_detail, 0xFFFFFFFF.toInt())
             views.setTextViewText(
                 R.id.widget_title,
-                localized(settings, "小卡片", "Widget"),
+                localized(settings, "配置小卡片", "Configure widget"),
             )
             views.setTextViewText(
                 R.id.widget_value,
-                localized(settings, "请先在 DeskCubby 中创建卡片", "Create a card in DeskCubby"),
+                localized(settings, "点按选择这个桌面实例的内容", "Tap to choose this instance"),
             )
             views.setViewVisibility(R.id.widget_detail, View.GONE)
             views.setViewVisibility(R.id.widget_background_image, View.GONE)
+            views.setViewVisibility(R.id.widget_scrim, View.GONE)
+            views.setViewVisibility(R.id.widget_icon, View.GONE)
             views.setOnClickPendingIntent(
                 R.id.widget_root,
-                deskCubbyPendingIntent(appWidgetId, NavItemId.WIDGETS.route),
+                configurePendingIntent(appWidgetId),
             )
             return views
         }
@@ -136,13 +152,34 @@ class DesktopWidgetRenderer @Inject constructor(
         } else {
             homeModuleText(config.homeModuleId, settings, snapshot)
         }
-        views.setInt(R.id.widget_root, "setBackgroundColor", config.backgroundColorArgb)
+        val backgroundAlpha = config.backgroundOpacityPercent * 255 / 100
+        views.setInt(
+            R.id.widget_root,
+            "setBackgroundColor",
+            config.backgroundColorArgb.withAlpha(backgroundAlpha),
+        )
         views.setTextColor(R.id.widget_title, config.textColorArgb)
         views.setTextColor(R.id.widget_value, config.textColorArgb)
         views.setTextColor(R.id.widget_detail, config.textColorArgb)
         views.setTextViewText(R.id.widget_title, config.name.ifBlank { text.title })
         views.setTextViewText(R.id.widget_value, text.value)
         views.setTextViewText(R.id.widget_detail, text.detail)
+        views.setViewVisibility(
+            R.id.widget_title,
+            if (config.showName) View.VISIBLE else View.GONE,
+        )
+        val gravity = when (config.textAlignment) {
+            DesktopWidgetTextAlignment.START -> Gravity.START
+            DesktopWidgetTextAlignment.CENTER -> Gravity.CENTER_HORIZONTAL
+            DesktopWidgetTextAlignment.END -> Gravity.END
+        }
+        listOf(R.id.widget_title, R.id.widget_value, R.id.widget_detail).forEach { viewId ->
+            views.setInt(viewId, "setGravity", gravity)
+        }
+        val textScale = config.textScalePercent / 100f
+        views.setTextViewTextSize(R.id.widget_title, TypedValue.COMPLEX_UNIT_SP, 12f * textScale)
+        views.setTextViewTextSize(R.id.widget_value, TypedValue.COMPLEX_UNIT_SP, 16f * textScale)
+        views.setTextViewTextSize(R.id.widget_detail, TypedValue.COMPLEX_UNIT_SP, 11f * textScale)
 
         val options = runCatching { manager.getAppWidgetOptions(appWidgetId) }
             .getOrDefault(android.os.Bundle.EMPTY)
@@ -161,7 +198,7 @@ class DesktopWidgetRenderer @Inject constructor(
         )
         views.setViewVisibility(
             R.id.widget_icon,
-            if (actualWidth >= ICON_MIN_WIDTH_DP) View.VISIBLE else View.GONE,
+            if (config.showIcon && actualWidth >= ICON_MIN_WIDTH_DP) View.VISIBLE else View.GONE,
         )
 
         val background = config.backgroundImageUri?.let { raw ->
@@ -169,9 +206,14 @@ class DesktopWidgetRenderer @Inject constructor(
         }
         if (background != null) {
             views.setImageViewBitmap(R.id.widget_background_image, background)
+            views.setInt(R.id.widget_background_image, "setImageAlpha", backgroundAlpha)
             views.setViewVisibility(R.id.widget_background_image, View.VISIBLE)
             views.setViewVisibility(R.id.widget_scrim, View.VISIBLE)
-            views.setInt(R.id.widget_scrim, "setBackgroundColor", 0x52000000)
+            views.setInt(
+                R.id.widget_scrim,
+                "setBackgroundColor",
+                0x52000000.withAlpha(0x52 * config.backgroundOpacityPercent / 100),
+            )
         } else {
             views.setViewVisibility(R.id.widget_background_image, View.GONE)
             views.setViewVisibility(R.id.widget_scrim, View.GONE)
@@ -350,6 +392,15 @@ class DesktopWidgetRenderer @Inject constructor(
         )
     }
 
+    private fun configurePendingIntent(appWidgetId: Int): PendingIntent = PendingIntent.getActivity(
+        context,
+        appWidgetId,
+        Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE)
+            .setClass(context, DeskCubbyWidgetConfigureActivity::class.java)
+            .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
     private fun loadBackgroundBitmap(rawUri: String, widthDp: Int, heightDp: Int): Bitmap? =
         runCatching {
             val uri = Uri.parse(rawUri)
@@ -443,3 +494,13 @@ class DesktopWidgetRenderer @Inject constructor(
         private const val DATA_SOURCE_TIMEOUT_MS = 2_500L
     }
 }
+
+private fun Int.withAlpha(alpha: Int): Int =
+    (this and 0x00FFFFFF) or (alpha.coerceIn(0, 255) shl 24)
+
+internal fun resolveDesktopWidgetConfig(
+    storedSnapshot: DesktopWidgetConfig?,
+    legacyConfigId: String?,
+    reusableConfigs: List<DesktopWidgetConfig>,
+): DesktopWidgetConfig? = storedSnapshot
+    ?: legacyConfigId?.let { id -> reusableConfigs.firstOrNull { it.id == id } }

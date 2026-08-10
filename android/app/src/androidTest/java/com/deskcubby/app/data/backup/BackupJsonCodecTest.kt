@@ -22,6 +22,7 @@ import com.deskcubby.app.data.model.CustomThemeSettings
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
 import com.deskcubby.app.data.model.DEFAULT_MARKDOWN_HEADING_SIZES_SP
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.Game2048AnimationSpeed
@@ -162,6 +163,11 @@ class BackupJsonCodecTest {
                         backgroundColorArgb = 0xFF102030.toInt(),
                         textColorArgb = 0xFFF0E0D0.toInt(),
                         backgroundImageUri = "content://images/widget-background",
+                        showName = false,
+                        backgroundOpacityPercent = 45,
+                        showIcon = false,
+                        textAlignment = DesktopWidgetTextAlignment.CENTER,
+                        textScalePercent = 125,
                         contentType = DesktopWidgetContentType.APP_SHORTCUT,
                         appPackageName = "com.example.maps",
                         appLabel = "Maps",
@@ -193,7 +199,7 @@ class BackupJsonCodecTest {
 
         val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
 
-        assertEquals(28, decoded.formatVersion)
+        assertEquals(29, decoded.formatVersion)
         assertEquals(vault, decoded.vault)
         assertEquals(gameStates, decoded.gameStates)
         assertEquals(gameStatistics, decoded.gameStatistics)
@@ -568,6 +574,42 @@ class BackupJsonCodecTest {
     }
 
     @Test
+    fun versionTwentyEightDefaultsNewDesktopWidgetAppearanceFields() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 28,
+                    settings = AppSettings(
+                        desktopWidgetConfigs = listOf(
+                            DesktopWidgetConfig(id = "legacy-card", name = "Legacy card"),
+                        ),
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        val card = root.getJSONObject("settings")
+            .getJSONArray("desktopWidgetConfigs")
+            .getJSONObject(0)
+        root.put("version", 28)
+        card.remove("showName")
+        card.remove("backgroundOpacityPercent")
+        card.remove("showIcon")
+        card.remove("textAlignment")
+        card.remove("textScalePercent")
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+            .settings.desktopWidgetConfigs.single()
+
+        assertEquals(true, decoded.showName)
+        assertEquals(100, decoded.backgroundOpacityPercent)
+        assertEquals(true, decoded.showIcon)
+        assertEquals(DesktopWidgetTextAlignment.START, decoded.textAlignment)
+        assertEquals(100, decoded.textScalePercent)
+    }
+
+    @Test
     fun versionTwentyTwoDefaultsMusicVisualizationAnd2048Speed() {
         val root = JSONObject(
             BackupJsonCodec.encode(
@@ -903,7 +945,7 @@ class BackupJsonCodecTest {
 
         val decoded = BackupJsonCodec.decode(encoded)
 
-        assertEquals(28, decoded.formatVersion)
+        assertEquals(29, decoded.formatVersion)
         assertEquals(VisualStyle.CUSTOM, decoded.settings.visualStyle)
         assertEquals(customTheme, decoded.settings.customTheme)
     }
@@ -1484,7 +1526,7 @@ class BackupJsonCodecTest {
     @Test
     fun roundTripPreservesNonEmptyHomeLists() {
         val settings = AppSettings(
-            homeWidgets = listOf("today", "recent_thought"),
+            homeWidgets = listOf("today", "recent_thought", "cloud_sync"),
             homeWidgetTitles = listOf("calendar", "website"),
         )
 

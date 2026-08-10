@@ -48,11 +48,13 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.WbSunny
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -89,6 +91,9 @@ import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.DailyPoem
+import com.deskcubby.app.data.sync.AppCloudSyncStatus
+import com.deskcubby.app.data.sync.CloudSyncManualScheduler
+import com.deskcubby.app.data.sync.CloudSyncRunMode
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalCompactMode
 import com.deskcubby.app.ui.daily.DailyEventRecorder
@@ -100,6 +105,7 @@ import com.deskcubby.app.ui.thought.ThoughtCategoryPickerDialog
 import com.deskcubby.app.ui.thought.ThoughtSendButton
 import com.deskcubby.app.ui.thought.categoryIdOrNullForUi
 import java.io.File
+import java.text.DateFormat
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -149,6 +155,7 @@ private val homeGameShortcuts = listOf(
 fun HomeScreen(
     padding: PaddingValues,
     settings: AppSettings,
+    cloudSyncStatus: AppCloudSyncStatus,
     viewModel: HomeViewModel,
     onOpenDiary: (String) -> Unit,
     onOpenThoughts: () -> Unit,
@@ -354,6 +361,10 @@ fun HomeScreen(
                     onOpenNotes = onOpenNotes,
                     onOpenGame = onOpenGame,
                     onOpenStatistics = onOpenStatistics,
+                    cloudSyncStatus = cloudSyncStatus,
+                    onRunCloudSync = { mode ->
+                        CloudSyncManualScheduler.enqueue(context, mode)
+                    },
                 )
             }
             item { Spacer(Modifier.height(20.dp)) }
@@ -387,6 +398,8 @@ private fun HomeWidget(
     onOpenNotes: () -> Unit,
     onOpenGame: (String) -> Unit,
     onOpenStatistics: () -> Unit,
+    cloudSyncStatus: AppCloudSyncStatus,
+    onRunCloudSync: (CloudSyncRunMode) -> Boolean,
 ) {
     val today = LocalDate.now()
     val locale = if (settings.appLanguage == AppLanguage.ENGLISH) Locale.ENGLISH else Locale.SIMPLIFIED_CHINESE
@@ -602,7 +615,206 @@ private fun HomeWidget(
                 Text(tr("查看统计", "View statistics"))
             }
         }
+        "cloud_sync" -> CloudSyncHomeWidget(
+            settings = settings,
+            status = cloudSyncStatus,
+            showTitle = showTitle,
+            showBorder = settings.homeWidgetBordersEnabled,
+            onRun = onRunCloudSync,
+        )
     }
+}
+
+@Composable
+private fun CloudSyncHomeWidget(
+    settings: AppSettings,
+    status: AppCloudSyncStatus,
+    showTitle: Boolean,
+    showBorder: Boolean,
+    onRun: (CloudSyncRunMode) -> Boolean,
+) {
+    val enabledSourceCount = settings.cloudSyncConfigs.count { it.enabled }
+    val canRun = settings.cloudSyncEnabled && enabledSourceCount > 0 && !status.running
+    var confirmationMode by remember { mutableStateOf<CloudSyncRunMode?>(null) }
+    var queuedMode by remember { mutableStateOf<CloudSyncRunMode?>(null) }
+    var enqueueFailed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(status.running, status.lastFinishedAt, status.message, status.error) {
+        if (status.running || status.message != null || status.error != null) {
+            queuedMode = null
+        }
+    }
+
+    fun enqueue(mode: CloudSyncRunMode) {
+        enqueueFailed = false
+        if (onRun(mode)) {
+            queuedMode = mode
+        } else {
+            enqueueFailed = true
+        }
+    }
+
+    WidgetCard(tr("云端同步", "Cloud sync"), showTitle, showBorder) {
+        val progress = status.progress
+        val statusText = when {
+            status.running -> if (progress != null && progress.totalObjects > 0) {
+                tr(
+                    "正在同步 ${progress.completedObjects}/${progress.totalObjects}",
+                    "Syncing ${progress.completedObjects}/${progress.totalObjects}",
+                )
+            } else {
+                tr("正在同步", "Syncing")
+            }
+            queuedMode != null -> cloudSyncQueuedLabel(requireNotNull(queuedMode))
+            enqueueFailed -> tr("无法加入同步队列，请稍后重试", "Could not queue the sync; try again")
+            status.error != null -> localizedCloudSyncStatus(status.error, settings.appLanguage)
+            !settings.cloudSyncEnabled -> tr("云端同步尚未开启", "Cloud sync is turned off")
+            enabledSourceCount == 0 -> tr("没有已启用的同步服务", "No sync service is enabled")
+            status.message != null -> localizedCloudSyncStatus(status.message, settings.appLanguage)
+            else -> tr("已就绪", "Ready")
+        }
+        Text(
+            text = statusText,
+            color = if (enqueueFailed || status.error != null) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (status.running) {
+            if (progress != null && progress.totalObjects > 0) {
+                LinearProgressIndicator(
+                    progress = {
+                        progress.completedObjects.toFloat()
+                            .div(progress.totalObjects.toFloat())
+                            .coerceIn(0f, 1f)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        }
+        status.lastFinishedAt?.let { finishedAt ->
+            val locale = if (settings.appLanguage == AppLanguage.ENGLISH) {
+                Locale.ENGLISH
+            } else {
+                Locale.SIMPLIFIED_CHINESE
+            }
+            val formatted = remember(finishedAt, locale) {
+                DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, locale)
+                    .format(java.util.Date(finishedAt))
+            }
+            Text(
+                tr("上次完成：$formatted", "Last completed: $formatted"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (status.pendingJsonCount > 0) {
+            Text(
+                tr(
+                    "有 ${status.pendingJsonCount} 份云端应用 JSON 待在同步设置中确认",
+                    "${status.pendingJsonCount} cloud app JSON backup(s) await confirmation in sync settings",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+        }
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(
+                onClick = { enqueue(CloudSyncRunMode.NORMAL) },
+                enabled = canRun && queuedMode == null,
+            ) {
+                Text(tr("立即同步", "Sync now"))
+            }
+            OutlinedButton(
+                onClick = { confirmationMode = CloudSyncRunMode.FORCE_UPLOAD },
+                enabled = canRun && queuedMode == null,
+            ) {
+                Text(tr("强制上传", "Force upload"))
+            }
+            OutlinedButton(
+                onClick = { confirmationMode = CloudSyncRunMode.FORCE_DOWNLOAD },
+                enabled = canRun && queuedMode == null && enabledSourceCount == 1,
+            ) {
+                Text(tr("强制下载", "Force download"))
+            }
+        }
+        if (settings.cloudSyncEnabled && enabledSourceCount > 1) {
+            Text(
+                tr(
+                    "强制下载需要恰好一个已启用的云端来源",
+                    "Force download requires exactly one enabled cloud source",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+
+    confirmationMode?.let { mode ->
+        val upload = mode == CloudSyncRunMode.FORCE_UPLOAD
+        AlertDialog(
+            onDismissRequest = { confirmationMode = null },
+            title = {
+                Text(
+                    if (upload) tr("确认强制上传？", "Force upload?")
+                    else tr("确认强制下载？", "Force download?"),
+                )
+            },
+            text = {
+                Text(
+                    if (upload) {
+                        tr(
+                            "同路径内容不同时将以本机版本覆盖远端，但不会删除远端独有项目；并发远端修改仍会阻止覆盖。",
+                            "Different items at the same path use the local version. Remote-only items are kept, and concurrent remote edits still stop the overwrite.",
+                        )
+                    } else {
+                        tr(
+                            "同路径内容不同时将采用唯一云端来源的版本，但不会删除本机独有项目；并发本机修改仍会保留。",
+                            "Different items at the same path use the single cloud source. Local-only items are kept, and concurrent local edits are still preserved.",
+                        )
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmationMode = null
+                        enqueue(mode)
+                    },
+                ) {
+                    Text(
+                        if (upload) tr("强制上传", "Force upload")
+                        else tr("强制下载", "Force download"),
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmationMode = null }) {
+                    Text(tr("取消", "Cancel"))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun cloudSyncQueuedLabel(mode: CloudSyncRunMode): String = when (mode) {
+    CloudSyncRunMode.NORMAL -> tr("同步已加入队列", "Sync queued")
+    CloudSyncRunMode.FORCE_UPLOAD -> tr("强制上传已加入队列", "Forced upload queued")
+    CloudSyncRunMode.FORCE_DOWNLOAD -> tr("强制下载已加入队列", "Forced download queued")
+}
+
+private fun localizedCloudSyncStatus(value: String, language: AppLanguage): String {
+    val parts = value.split(" / ", limit = 2)
+    return if (language == AppLanguage.ENGLISH && parts.size == 2) parts[1] else parts[0]
 }
 
 @Composable

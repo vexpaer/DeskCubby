@@ -22,8 +22,8 @@ enum class CloudSyncItemOutcome {
  * Explicit reconciliation policy for a user-initiated sync run.
  *
  * Forced runs intentionally choose one side for objects that exist on both sides, but they never
- * propagate deletions. Conditional remote writes and local snapshot checks still protect changes
- * that happen after the run starts.
+ * propagate deletions. Local snapshot checks remain strict; remote transports send provider
+ * conditions when supported, while S3 compatibility still verifies manifest/payload content.
  */
 enum class CloudSyncRunMode {
     NORMAL,

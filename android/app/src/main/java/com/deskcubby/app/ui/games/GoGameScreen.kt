@@ -42,6 +42,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
@@ -64,7 +65,6 @@ internal fun GoPage(
     val gameId = GamesViewModel.GAME_GO
     val meta by viewModel.meta(gameId).collectAsStateWithLifecycle()
     var engine by remember { mutableStateOf<GoGame?>(null) }
-    var revision by remember { mutableIntStateOf(0) }
     var lastError by remember { mutableStateOf<GoGame.MoveError?>(null) }
     var pendingRestartSize by remember { mutableStateOf<Int?>(null) }
 
@@ -105,7 +105,6 @@ internal fun GoPage(
     fun replaceGame(size: Int) {
         val replacement = GoGame(size)
         engine = replacement
-        revision += 1
         lastError = null
         pendingRestartSize = null
         viewModel.saveProgress(gameId, replacement.toJson(), 0)
@@ -118,7 +117,6 @@ internal fun GoPage(
         onExit()
     }
 
-    val boardRevision = revision
     GameFrame(
         title = tr("围棋", "Go"),
         score = current.captureScore(),
@@ -147,16 +145,18 @@ internal fun GoPage(
             )
             GoBoard(
                 game = current,
-                revision = boardRevision,
                 onPlay = { x, y ->
                     val result = current.play(x, y)
                     if (result.accepted) {
-                        revision += 1
+                        val updated = current.snapshotCopy()
+                        engine = updated
                         lastError = null
                         viewModel.recordGoStatistics(result.statisticsDelta)
-                        saveOrFinish(current)
+                        saveOrFinish(updated)
+                        true
                     } else {
                         lastError = result.error
+                        false
                     }
                 },
                 modifier = Modifier
@@ -179,10 +179,11 @@ internal fun GoPage(
                     onClick = {
                         val result = current.pass()
                         if (result.accepted) {
-                            revision += 1
+                            val updated = current.snapshotCopy()
+                            engine = updated
                             lastError = null
                             viewModel.recordGoStatistics(result.statisticsDelta)
-                            saveOrFinish(current)
+                            saveOrFinish(updated)
                         }
                     },
                     enabled = !current.isFinished,
@@ -335,10 +336,9 @@ private fun GoSizeSelector(selectedSize: Int, onSelect: (Int) -> Unit) {
 }
 
 @Composable
-private fun GoBoard(
+internal fun GoBoard(
     game: GoGame,
-    revision: Int,
-    onPlay: (x: Int, y: Int) -> Unit,
+    onPlay: (x: Int, y: Int) -> Boolean,
     modifier: Modifier = Modifier,
 ) {
     var accessibilityX by remember(game.size) { mutableIntStateOf(game.size / 2) }
@@ -377,12 +377,11 @@ private fun GoBoard(
                 contentDescription = boardDescription
                 stateDescription =
                     "$turnDescription；$selectedIntersectionDescription；$selectedStoneDescription"
-                onClick(label = placeStoneLabel) {
-                    if (game.isFinished) {
-                        false
-                    } else {
+                if (game.isFinished) {
+                    disabled()
+                } else {
+                    onClick(label = placeStoneLabel) {
                         onPlay(accessibilityX, accessibilityY)
-                        true
                     }
                 }
                 customActions = listOf(
@@ -412,45 +411,40 @@ private fun GoBoard(
                     },
                 )
             }
-            .pointerInput(game.size, revision, game.isFinished) {
+            .pointerInput(game) {
                 detectTapGestures { tap ->
                     if (game.isFinished) return@detectTapGestures
-                    val side = min(size.width, size.height).toFloat()
-                    val boardPadding = side * BOARD_PADDING_FRACTION
-                    val spacing = (side - boardPadding * 2f) / (game.size - 1)
-                    val x = ((tap.x - boardPadding) / spacing).roundToInt()
-                    val y = ((tap.y - boardPadding) / spacing).roundToInt()
-                    if (x !in 0 until game.size || y !in 0 until game.size) {
-                        return@detectTapGestures
-                    }
-                    val centerX = boardPadding + x * spacing
-                    val centerY = boardPadding + y * spacing
-                    val deltaX = tap.x - centerX
-                    val deltaY = tap.y - centerY
-                    val hitRadius = spacing * 0.48f
-                    if (deltaX * deltaX + deltaY * deltaY <= hitRadius * hitRadius) {
-                        onPlay(x, y)
-                    }
+                    goIntersectionForTap(
+                        tapX = tap.x,
+                        tapY = tap.y,
+                        boardWidth = size.width.toFloat(),
+                        boardHeight = size.height.toFloat(),
+                        boardSize = game.size,
+                    )?.let { point -> onPlay(point.x, point.y) }
                 }
             },
     ) {
-        val side = min(size.width, size.height)
-        val boardPadding = side * BOARD_PADDING_FRACTION
-        val spacing = (side - boardPadding * 2f) / (game.size - 1)
+        val geometry = goBoardGeometry(
+            boardWidth = size.width,
+            boardHeight = size.height,
+            boardSize = game.size,
+        ) ?: return@Canvas
+        val spacing = geometry.spacing
         val lineWidth = (spacing * 0.055f).coerceIn(1.dp.toPx(), 2.dp.toPx())
 
         repeat(game.size) { index ->
-            val position = boardPadding + index * spacing
+            val x = geometry.originX + index * spacing
+            val y = geometry.originY + index * spacing
             drawLine(
                 lineColor,
-                Offset(boardPadding, position),
-                Offset(side - boardPadding, position),
+                Offset(geometry.originX, y),
+                Offset(geometry.lastX, y),
                 lineWidth,
             )
             drawLine(
                 lineColor,
-                Offset(position, boardPadding),
-                Offset(position, side - boardPadding),
+                Offset(x, geometry.originY),
+                Offset(x, geometry.lastY),
                 lineWidth,
             )
         }
@@ -459,8 +453,8 @@ private fun GoBoard(
                 color = lineColor,
                 radius = (spacing * 0.10f).coerceAtLeast(2.dp.toPx()),
                 center = Offset(
-                    boardPadding + point.x * spacing,
-                    boardPadding + point.y * spacing,
+                    geometry.originX + point.x * spacing,
+                    geometry.originY + point.y * spacing,
                 ),
             )
         }
@@ -469,8 +463,8 @@ private fun GoBoard(
                 val stone = game.stoneAt(x, y)
                 if (stone != GoGame.Stone.EMPTY) {
                     val center = Offset(
-                        boardPadding + x * spacing,
-                        boardPadding + y * spacing,
+                        geometry.originX + x * spacing,
+                        geometry.originY + y * spacing,
                     )
                     val radius = spacing * 0.43f
                     val fill = if (stone == GoGame.Stone.BLACK) {
@@ -496,6 +490,75 @@ private fun GoBoard(
             }
         }
     }
+}
+
+internal data class GoBoardGeometry(
+    val originX: Float,
+    val originY: Float,
+    val lastX: Float,
+    val lastY: Float,
+    val spacing: Float,
+)
+
+/** Shared by drawing and hit testing so a visible intersection is always the playable one. */
+internal fun goBoardGeometry(
+    boardWidth: Float,
+    boardHeight: Float,
+    boardSize: Int,
+): GoBoardGeometry? {
+    if (
+        !boardWidth.isFinite() ||
+        !boardHeight.isFinite() ||
+        boardWidth <= 0f ||
+        boardHeight <= 0f ||
+        boardSize < 2
+    ) {
+        return null
+    }
+    val side = min(boardWidth, boardHeight)
+    val left = (boardWidth - side) / 2f
+    val top = (boardHeight - side) / 2f
+    val padding = side * BOARD_PADDING_FRACTION
+    val spacing = (side - padding * 2f) / (boardSize - 1)
+    if (!spacing.isFinite() || spacing <= 0f) return null
+    return GoBoardGeometry(
+        originX = left + padding,
+        originY = top + padding,
+        lastX = left + side - padding,
+        lastY = top + side - padding,
+        spacing = spacing,
+    )
+}
+
+/**
+ * Snaps a tap to its nearest intersection. The half-spacing boundary gives every visible grid
+ * cell a continuous target instead of leaving dead zones between tiny circular hit areas.
+ */
+internal fun goIntersectionForTap(
+    tapX: Float,
+    tapY: Float,
+    boardWidth: Float,
+    boardHeight: Float,
+    boardSize: Int,
+): GoGame.Point? {
+    if (!tapX.isFinite() || !tapY.isFinite()) return null
+    val geometry = goBoardGeometry(boardWidth, boardHeight, boardSize) ?: return null
+    val edgeAllowance = geometry.spacing / 2f
+    if (
+        tapX < geometry.originX - edgeAllowance ||
+        tapX > geometry.lastX + edgeAllowance ||
+        tapY < geometry.originY - edgeAllowance ||
+        tapY > geometry.lastY + edgeAllowance
+    ) {
+        return null
+    }
+    val x = ((tapX - geometry.originX) / geometry.spacing)
+        .roundToInt()
+        .coerceIn(0, boardSize - 1)
+    val y = ((tapY - geometry.originY) / geometry.spacing)
+        .roundToInt()
+        .coerceIn(0, boardSize - 1)
+    return GoGame.Point(x, y)
 }
 
 private fun GoGame.captureScore(): Int = capturedByBlack + capturedByWhite

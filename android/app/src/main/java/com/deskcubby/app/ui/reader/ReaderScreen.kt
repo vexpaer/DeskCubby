@@ -130,6 +130,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
@@ -414,13 +415,19 @@ private fun ReaderLibrary(
                                     }
                                 }
                             }
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                book.title,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                fontWeight = FontWeight.SemiBold,
-                            )
+                            if (preferences.showGridBookTitles ||
+                                preferences.showProgressPercentage
+                            ) {
+                                Spacer(Modifier.height(8.dp))
+                            }
+                            if (preferences.showGridBookTitles) {
+                                Text(
+                                    book.title,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
                             if (preferences.showProgressPercentage) {
                                 Text(
                                     tr("进度 ", "Progress ") +
@@ -954,14 +961,25 @@ private fun ReaderCover(
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
+        } else if (book.type == ReaderBookType.TXT) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(18.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = book.title,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 6,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Icon(
-                    if (book.type == ReaderBookType.PDF) {
-                        Icons.Outlined.PictureAsPdf
-                    } else {
-                        Icons.AutoMirrored.Outlined.MenuBook
-                    },
+                    Icons.Outlined.PictureAsPdf,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(28.dp),
@@ -999,6 +1017,29 @@ private fun ReaderShelfSettingsDialog(
                         leadingIcon = { Icon(Icons.Outlined.GridView, contentDescription = null) },
                         label = { Text(tr("两列封面", "Two-column covers")) },
                     )
+                }
+                if (draft.libraryLayout == ReaderLibraryLayout.GRID) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(tr("显示封面下方书名", "Show titles below covers"))
+                            Text(
+                                tr(
+                                    "关闭后隐藏两列封面下方的书名；无图片的 TXT 默认封面仍会显示书名。",
+                                    "Hide titles below the two-column covers. TXT books without an image still show their title on the default cover.",
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = draft.showGridBookTitles,
+                            onCheckedChange = { draft = draft.copy(showGridBookTitles = it) },
+                        )
+                    }
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),

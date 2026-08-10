@@ -41,12 +41,17 @@ import com.deskcubby.app.data.model.DEFAULT_DESKTOP_WIDGET_CONFIGS
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.Game2048AnimationSpeed
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
 import com.deskcubby.app.data.model.MAX_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
 import com.deskcubby.app.data.model.MIN_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.DailyEventTemplate
@@ -203,6 +208,7 @@ class SettingsRepository @Inject constructor(
         val mealPhotosWidgetMigrated = booleanPreferencesKey("meal_photos_widget_migrated")
         val dailyRecordsWidgetMigrated = booleanPreferencesKey("daily_records_widget_migrated")
         val homeModulesV26Migrated = booleanPreferencesKey("home_modules_v26_migrated")
+        val homeCloudSyncWidgetMigrated = booleanPreferencesKey("home_cloud_sync_widget_migrated")
         val homeWidgetTitles = stringPreferencesKey("home_widget_titles")
         val desktopWidgetConfigs = stringPreferencesKey("desktop_widget_configs_v1")
     }
@@ -412,15 +418,18 @@ class SettingsRepository @Inject constructor(
             homeWidgets = if (prefs[Keys.homeWidgets] == null) {
                 defaults.homeWidgets
             } else {
-                migrateHomeModulesV26(
-                    items = migrateDailyRecordsWidget(
-                        items = migrateMealPhotosWidget(
-                            items = decodeWidgets(prefs[Keys.homeWidgets], defaults.homeWidgets),
-                            migrated = prefs[Keys.mealPhotosWidgetMigrated] == true,
+                migrateHomeCloudSyncWidget(
+                    items = migrateHomeModulesV26(
+                        items = migrateDailyRecordsWidget(
+                            items = migrateMealPhotosWidget(
+                                items = decodeWidgets(prefs[Keys.homeWidgets], defaults.homeWidgets),
+                                migrated = prefs[Keys.mealPhotosWidgetMigrated] == true,
+                            ),
+                            migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
                         ),
-                        migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
+                        migrated = prefs[Keys.homeModulesV26Migrated] == true,
                     ),
-                    migrated = prefs[Keys.homeModulesV26Migrated] == true,
+                    migrated = prefs[Keys.homeCloudSyncWidgetMigrated] == true,
                 )
             },
             homeGameShortcuts = if (prefs[Keys.homeGameShortcuts] == null) {
@@ -433,15 +442,18 @@ class SettingsRepository @Inject constructor(
             homeWidgetTitles = if (prefs[Keys.homeWidgetTitles] == null) {
                 defaults.homeWidgetTitles
             } else {
-                migrateHomeModulesV26(
-                    items = migrateDailyRecordsWidget(
-                        items = decodeStringList(
-                            prefs[Keys.homeWidgetTitles],
-                            defaults.homeWidgetTitles,
+                migrateHomeCloudSyncWidget(
+                    items = migrateHomeModulesV26(
+                        items = migrateDailyRecordsWidget(
+                            items = decodeStringList(
+                                prefs[Keys.homeWidgetTitles],
+                                defaults.homeWidgetTitles,
+                            ),
+                            migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
                         ),
-                        migrated = prefs[Keys.dailyRecordsWidgetMigrated] == true,
+                        migrated = prefs[Keys.homeModulesV26Migrated] == true,
                     ),
-                    migrated = prefs[Keys.homeModulesV26Migrated] == true,
+                    migrated = prefs[Keys.homeCloudSyncWidgetMigrated] == true,
                 )
             },
             desktopWidgetConfigs = decodeDesktopWidgetConfigs(
@@ -727,6 +739,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.mealPhotosWidgetMigrated] = true
             prefs[Keys.dailyRecordsWidgetMigrated] = true
             prefs[Keys.homeModulesV26Migrated] = true
+            prefs[Keys.homeCloudSyncWidgetMigrated] = true
             prefs[Keys.homeWidgetTitles] = encodeStringList(visibleWidgetTitles.distinct())
             prefs[Keys.mealButtonsUseIcons] = mealButtonsUseIcons
             prefs[Keys.mealButtonIcons] = encodeStringList(normalizeMealButtonIcons(mealButtonIcons))
@@ -738,6 +751,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.mealPhotosWidgetMigrated] = true
             prefs[Keys.dailyRecordsWidgetMigrated] = true
             prefs[Keys.homeModulesV26Migrated] = true
+            prefs[Keys.homeCloudSyncWidgetMigrated] = true
         }
     }
     suspend fun setHomeWidgetTitles(value: List<String>) =
@@ -1006,6 +1020,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.mealPhotosWidgetMigrated] = true
             prefs[Keys.dailyRecordsWidgetMigrated] = true
             prefs[Keys.homeModulesV26Migrated] = true
+            prefs[Keys.homeCloudSyncWidgetMigrated] = true
             prefs[Keys.homeWidgetTitles] = encodeStringList(value.homeWidgetTitles.distinct())
             prefs[Keys.desktopWidgetConfigs] = encodeDesktopWidgetConfigs(
                 restoredDesktopWidgetConfigs,
@@ -1274,6 +1289,15 @@ class SettingsRepository @Inject constructor(
                             } else {
                                 item.optString("backgroundImageUri").takeIf(String::isNotBlank)
                             },
+                            showName = item.optBoolean("showName", true),
+                            backgroundOpacityPercent = item.optInt(
+                                "backgroundOpacityPercent",
+                                100,
+                            ),
+                            showIcon = item.optBoolean("showIcon", true),
+                            textAlignment = item.optString("textAlignment")
+                                .enumValueOr(DesktopWidgetTextAlignment.START),
+                            textScalePercent = item.optInt("textScalePercent", 100),
                             contentType = item.optString("contentType")
                                 .enumValueOr(DesktopWidgetContentType.HOME_MODULE),
                             homeModuleId = item.optString("homeModuleId", "today"),
@@ -1313,6 +1337,11 @@ class SettingsRepository @Inject constructor(
                         .put("backgroundColorArgb", item.backgroundColorArgb)
                         .put("textColorArgb", item.textColorArgb)
                         .put("backgroundImageUri", item.backgroundImageUri ?: JSONObject.NULL)
+                        .put("showName", item.showName)
+                        .put("backgroundOpacityPercent", item.backgroundOpacityPercent)
+                        .put("showIcon", item.showIcon)
+                        .put("textAlignment", item.textAlignment.name)
+                        .put("textScalePercent", item.textScalePercent)
                         .put("contentType", item.contentType.name)
                         .put("homeModuleId", item.homeModuleId)
                         .put("appPackageName", item.appPackageName ?: JSONObject.NULL)
@@ -1905,6 +1934,14 @@ internal fun normalizeDesktopWidgetConfigs(
             ),
             backgroundColorArgb = opaqueArgb(item.backgroundColorArgb),
             textColorArgb = opaqueArgb(item.textColorArgb),
+            backgroundOpacityPercent = item.backgroundOpacityPercent.coerceIn(
+                MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT,
+                MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT,
+            ),
+            textScalePercent = item.textScalePercent.coerceIn(
+                MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT,
+                MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT,
+            ),
             backgroundImageUri = item.backgroundImageUri
                 ?.trim()
                 ?.take(MAX_URL_CHARS)
@@ -2034,4 +2071,9 @@ internal fun migrateDailyRecordsWidget(items: List<String>, migrated: Boolean): 
 internal fun migrateHomeModulesV26(items: List<String>, migrated: Boolean): List<String> {
     if (migrated) return items
     return (items + listOf("notes", "game_shortcuts", "record_overview")).distinct()
+}
+
+internal fun migrateHomeCloudSyncWidget(items: List<String>, migrated: Boolean): List<String> {
+    if (migrated || "cloud_sync" in items) return items
+    return items + "cloud_sync"
 }

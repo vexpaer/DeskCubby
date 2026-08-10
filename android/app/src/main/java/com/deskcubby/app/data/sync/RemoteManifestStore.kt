@@ -45,10 +45,11 @@ internal interface ConditionalBlobTransport {
 /**
  * Remote inventory shared by WebDAV and S3.
  *
- * Payloads are immutable, content-addressed blobs. The small manifest is the only mutable object
- * and is published only with a single valid strong ETag (or If-None-Match for first creation).
- * A cancelled or racing upload can therefore leave an unreferenced blob, but an unverifiable
- * provider or detected race is never reported as a successful publish.
+ * Payloads are immutable, content-addressed blobs. The small manifest is the only mutable object;
+ * transports send a version condition when the provider supports it, and S3 compatibility still
+ * binds transferred content to SHA-256 when a gateway omits or ignores conditional semantics.
+ * A cancelled or racing upload can therefore leave an unreferenced blob, but it never deletes an
+ * existing manifest entry merely because the corresponding local file is absent.
  */
 internal class ManifestRemoteStore(
     private val transport: ConditionalBlobTransport,

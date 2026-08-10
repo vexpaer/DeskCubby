@@ -203,6 +203,8 @@ enum class PoetryTextAlignment { START, CENTER }
 
 enum class DesktopWidgetContentType { HOME_MODULE, APP_SHORTCUT }
 
+enum class DesktopWidgetTextAlignment { START, CENTER, END }
+
 val HOME_GAME_SHORTCUT_IDS: List<String> = listOf(
     "2048",
     "2048_5",
@@ -246,6 +248,10 @@ val DESKTOP_WIDGET_HOME_MODULE_IDS: List<String> = listOf(
 
 const val MIN_DESKTOP_WIDGET_CELLS: Int = 1
 const val MAX_DESKTOP_WIDGET_CELLS: Int = 6
+const val MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT: Int = 0
+const val MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT: Int = 100
+const val MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT: Int = 75
+const val MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT: Int = 150
 
 /** A reusable design that can be bound to one or more launcher App Widget instances. */
 data class DesktopWidgetConfig(
@@ -256,6 +262,11 @@ data class DesktopWidgetConfig(
     val backgroundColorArgb: Int = 0xFF263238.toInt(),
     val textColorArgb: Int = 0xFFFFFFFF.toInt(),
     val backgroundImageUri: String? = null,
+    val showName: Boolean = true,
+    val backgroundOpacityPercent: Int = 100,
+    val showIcon: Boolean = true,
+    val textAlignment: DesktopWidgetTextAlignment = DesktopWidgetTextAlignment.START,
+    val textScalePercent: Int = 100,
     val contentType: DesktopWidgetContentType = DesktopWidgetContentType.HOME_MODULE,
     val homeModuleId: String = "today",
     val appPackageName: String? = null,
@@ -713,6 +724,7 @@ data class AppSettings(
         "notes",
         "game_shortcuts",
         "record_overview",
+        "cloud_sync",
     ),
     val homeGameShortcuts: List<String> = DEFAULT_HOME_GAME_SHORTCUT_IDS,
     val homeWidgetTitles: List<String> = listOf(
@@ -735,6 +747,7 @@ data class AppSettings(
         "notes",
         "game_shortcuts",
         "record_overview",
+        "cloud_sync",
     ),
     val desktopWidgetConfigs: List<DesktopWidgetConfig> = DEFAULT_DESKTOP_WIDGET_CONFIGS,
 )

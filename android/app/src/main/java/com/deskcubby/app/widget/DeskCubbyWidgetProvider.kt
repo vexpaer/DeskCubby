@@ -5,17 +5,20 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import com.deskcubby.app.data.preferences.SettingsRepository
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 
 @AndroidEntryPoint
 class DeskCubbyWidgetProvider : AppWidgetProvider() {
     @Inject lateinit var renderer: DesktopWidgetRenderer
     @Inject lateinit var instanceStore: DesktopWidgetInstanceStore
+    @Inject lateinit var settingsRepository: SettingsRepository
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
@@ -26,12 +29,21 @@ class DeskCubbyWidgetProvider : AppWidgetProvider() {
         )
         val configId = intent.getStringExtra(DeskCubbyWidgetConfigureActivity.EXTRA_CONFIG_ID)
         if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID || configId.isNullOrBlank()) return
-        // A launcher configuration activity may already have made an explicit selection. Keep
-        // that choice; otherwise bind the design from the in-app pin request.
-        if (instanceStore.configId(appWidgetId) == null) {
-            instanceStore.bind(appWidgetId, configId)
+        val pendingResult = goAsync()
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            try {
+                // A launcher configuration activity may already have stored an independent
+                // snapshot. The pin callback only fills the gap for launchers that skip it.
+                if (instanceStore.snapshot(appWidgetId) == null) {
+                    settingsRepository.settings.first().desktopWidgetConfigs
+                        .firstOrNull { it.id == configId }
+                        ?.let { instanceStore.bind(appWidgetId, it) }
+                }
+                requestUpdate(context, intArrayOf(appWidgetId))
+            } finally {
+                pendingResult.finish()
+            }
         }
-        requestUpdate(context, intArrayOf(appWidgetId))
     }
 
     override fun onEnabled(context: Context) {

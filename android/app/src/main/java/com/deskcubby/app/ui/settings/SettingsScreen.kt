@@ -410,6 +410,7 @@ private val homeWidgetOptions = listOf(
     HomeWidgetOption("notes", "笔记入口", "Notes shortcut"),
     HomeWidgetOption("game_shortcuts", "小游戏快捷入口", "Mini-game shortcuts"),
     HomeWidgetOption("record_overview", "记录概览", "Record overview"),
+    HomeWidgetOption("cloud_sync", "云端同步", "Cloud sync"),
 )
 
 private val homeGameShortcutOptions = listOf(

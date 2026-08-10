@@ -2,32 +2,55 @@ package com.deskcubby.app.widget
 
 import android.appwidget.AppWidgetManager
 import android.content.Context
+import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
+import com.deskcubby.app.data.model.DesktopWidgetConfig
+import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_CELLS
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_CELLS
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import org.json.JSONObject
 
-/** Device-local binding between launcher widget IDs and reusable card designs. */
+/** Device-local, non-backed-up snapshot for each launcher App Widget ID. */
 @Singleton
 class DesktopWidgetInstanceStore @Inject constructor(
     @ApplicationContext context: Context,
 ) {
     private val preferences = context.getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
 
-    fun configId(appWidgetId: Int): String? = preferences
+    fun snapshot(appWidgetId: Int): DesktopWidgetConfig? = preferences
         .getString(key(appWidgetId), null)
-        ?.takeIf(String::isNotBlank)
+        ?.let(DesktopWidgetInstanceSnapshotCodec::decodeOrNull)
 
-    fun bind(appWidgetId: Int, configId: String) {
+    /** Returns the ID from a current snapshot or a pre-snapshot legacy binding. */
+    fun configId(appWidgetId: Int): String? {
+        val raw = preferences.getString(key(appWidgetId), null)?.takeIf(String::isNotBlank)
+            ?: return null
+        return DesktopWidgetInstanceSnapshotCodec.decodeOrNull(raw)?.id
+            ?: raw.takeIf { !it.trimStart().startsWith("{") }
+    }
+
+    fun bind(appWidgetId: Int, config: DesktopWidgetConfig) {
         require(appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID)
-        require(configId.isNotBlank())
-        preferences.edit().putString(key(appWidgetId), configId).apply()
+        require(config.id.isNotBlank())
+        check(
+            preferences.edit()
+                .putString(key(appWidgetId), DesktopWidgetInstanceSnapshotCodec.encode(config))
+                .commit(),
+        )
     }
 
     fun remove(appWidgetIds: IntArray) {
         if (appWidgetIds.isEmpty()) return
-        preferences.edit().apply {
+        check(preferences.edit().apply {
             appWidgetIds.forEach { remove(key(it)) }
-        }.apply()
+        }.commit())
     }
 
     private fun key(appWidgetId: Int): String = "widget_$appWidgetId"
@@ -35,4 +58,75 @@ class DesktopWidgetInstanceStore @Inject constructor(
     private companion object {
         const val FILE_NAME = "desktop_widget_instances"
     }
+}
+
+internal object DesktopWidgetInstanceSnapshotCodec {
+    private const val SCHEMA_VERSION = 1
+
+    fun encode(config: DesktopWidgetConfig): String = JSONObject()
+        .put("schemaVersion", SCHEMA_VERSION)
+        .put("id", config.id)
+        .put("name", config.name)
+        .put("widthCells", config.widthCells)
+        .put("heightCells", config.heightCells)
+        .put("backgroundColorArgb", config.backgroundColorArgb)
+        .put("textColorArgb", config.textColorArgb)
+        .put("backgroundImageUri", config.backgroundImageUri ?: JSONObject.NULL)
+        .put("showName", config.showName)
+        .put("backgroundOpacityPercent", config.backgroundOpacityPercent)
+        .put("showIcon", config.showIcon)
+        .put("textAlignment", config.textAlignment.name)
+        .put("textScalePercent", config.textScalePercent)
+        .put("contentType", config.contentType.name)
+        .put("homeModuleId", config.homeModuleId)
+        .put("appPackageName", config.appPackageName ?: JSONObject.NULL)
+        .put("appLabel", config.appLabel ?: JSONObject.NULL)
+        .toString()
+
+    fun decodeOrNull(raw: String): DesktopWidgetConfig? = runCatching {
+        val json = JSONObject(raw)
+        require(json.getInt("schemaVersion") == SCHEMA_VERSION)
+        val id = json.getString("id").trim()
+        val name = json.getString("name").trim()
+        require(id.isNotBlank() && name.isNotBlank())
+        val contentType = enumValueOf<DesktopWidgetContentType>(json.getString("contentType"))
+        val homeModuleId = json.getString("homeModuleId")
+            .takeIf(DESKTOP_WIDGET_HOME_MODULE_IDS::contains)
+            ?: "today"
+        DesktopWidgetConfig(
+            id = id,
+            name = name,
+            widthCells = json.getInt("widthCells").coerceIn(
+                MIN_DESKTOP_WIDGET_CELLS,
+                MAX_DESKTOP_WIDGET_CELLS,
+            ),
+            heightCells = json.getInt("heightCells").coerceIn(
+                MIN_DESKTOP_WIDGET_CELLS,
+                MAX_DESKTOP_WIDGET_CELLS,
+            ),
+            backgroundColorArgb = json.getInt("backgroundColorArgb") or 0xFF000000.toInt(),
+            textColorArgb = json.getInt("textColorArgb") or 0xFF000000.toInt(),
+            backgroundImageUri = json.optString("backgroundImageUri")
+                .takeIf { !json.isNull("backgroundImageUri") && it.startsWith("content://") },
+            showName = json.optBoolean("showName", true),
+            backgroundOpacityPercent = json.optInt("backgroundOpacityPercent", 100).coerceIn(
+                MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT,
+                MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT,
+            ),
+            showIcon = json.optBoolean("showIcon", true),
+            textAlignment = runCatching {
+                enumValueOf<DesktopWidgetTextAlignment>(json.optString("textAlignment"))
+            }.getOrDefault(DesktopWidgetTextAlignment.START),
+            textScalePercent = json.optInt("textScalePercent", 100).coerceIn(
+                MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT,
+                MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT,
+            ),
+            contentType = contentType,
+            homeModuleId = homeModuleId,
+            appPackageName = json.optString("appPackageName")
+                .takeIf { !json.isNull("appPackageName") && it.isNotBlank() },
+            appLabel = json.optString("appLabel")
+                .takeIf { !json.isNull("appLabel") && it.isNotBlank() },
+        )
+    }.getOrNull()
 }
