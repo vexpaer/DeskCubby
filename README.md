@@ -4,44 +4,44 @@
 
 DeskCubby 是一个本地优先的跨平台个人记录应用。Android 端使用 Kotlin/Jetpack Compose，Windows 端使用 Tauri 2 + React/TypeScript + Rust；两个客户端都把 Markdown 日记和媒体保存在用户自己选择的目录中，应用数据库只保存结构化记录、设置与可重建索引。
 
-当前版本：Android **0.13.0**；Windows **0.5.0**。
+当前版本：Android **0.13.0**；Windows **0.6.0**。
 
 仓库按平台拆分：完整 Android 工程位于 `android/`，Windows 工程位于 `windows/`；`README.md`、`TUTORIAL.md`、`overview.md`、许可证等项目级文档继续保留在仓库根目录。
 
-## Windows 0.5.0
+## Windows 0.6.0
 
-Windows 客户端支持 Windows 10/11 x64。0.5.0 支持 Android v28 数据格式，左侧竖栏在任何宽屏高度都可独立滚动，底部设置入口始终固定可达；分组标题会连同下面的页面按钮一起折叠，窄窗口仍可收起为抽屉。界面同时支持中文/英文、系统明暗模式、字号缩放，以及 Material、Liquid Glass、Organic Future 三套主题。应用 Logo 使用透明 512×512 像素画，并以最近邻缩放生成整套 Windows 图标。Android 0.13.0 继续导出 v29；Windows 0.5.0 暂不接受这一未来格式，请勿用它导入 Android 0.13.0 新导出的完整应用 JSON。
+Windows 客户端支持 Windows 10/11 x64。0.6.0 支持 Android v1–v29 数据格式并统一导出 v29，左侧竖栏在任何宽屏高度都可独立滚动，底部设置入口始终固定可达；分组标题会连同下面的页面按钮一起折叠，窄窗口仍可收起为抽屉。界面同时支持中文/英文、系统明暗模式、字号缩放，以及 Material、Liquid Glass、Organic Future 三套主题。应用 Logo 使用透明 512×512 像素画，并以最近邻缩放生成整套 Windows 图标。阅读页的 PDF 改为在应用内用 pdf.js 渲染（WebView2 不内置 PDF 查看器），不再依赖系统查看器。
 
 Android 专属的内置浏览器和桌面小卡片设计器不在 Windows 制作；其余主要页面均可从左侧栏或「更多」进入：
 
 - 首页、日记、吃历、日常记录、小巧思、日期记录和诗词本：保留文件优先的数据边界、分类与排序、回收站、外部修改冲突、每日诗词及主页模块/小游戏快捷入口设置。日记与笔记文件都只在用户选择的根目录内原地读写；日记预览会显示媒体根目录中由相对 Markdown 链接引用的图片，支持中文和空格文件名，缺失或无法解析时显示“图片不可用”而不会永久停在读取状态。
 - 笔记：选择普通目录作为 Obsidian 风格笔记库，浏览文件夹、创建/重命名 Markdown、源码编辑/预览、插图与外部修改冲突处理；Rust 会拒绝 `..`、绝对路径、保留设备名及越出根目录的链接。
-- 阅读：本机 TXT/PDF 书架、进度、目录、搜索、字号/行距/背景和 PDF 缩放。使用与 Android 完全一致的完整文件指纹，并可通过每个云配置中单独勾选的 `reading/v1/progress.json` 同步同一本书的进度；书架路径与 Android URI 仍不会互相写入。
+- 阅读：本机 TXT/PDF 书架、进度、目录、搜索、字号/行距/背景和 PDF 缩放；PDF 在应用内用 pdf.js 连续渲染（数据仍经受限只读协议按需获取），不再依赖 WebView2 的 PDF 查看能力。使用与 Android 完全一致的完整文件指纹，并可通过每个云配置中单独勾选的 `reading/v1/progress.json` 同步同一本书的进度；书架路径与 Android URI 仍不会互相写入。
 - RSS：管理 HTTPS 订阅、刷新和阅读文章。网络读取限制重定向、私网地址、DOCTYPE、响应体、并发与超时；文章列表不作为长期备份数据。
-- AI 与吃历热量：使用 Android v28 中同结构的 OpenAI-compatible 模型配置及明文 API Key，支持聊天、历史、日记/小巧思上下文和饮食图片估算。Key 只放入 Authorization 请求头，不写日志或错误；HTTP 端点必须由用户为可信本地服务明确允许。
+- AI 与吃历热量：使用 Android v29 中同结构的 OpenAI-compatible 模型配置及明文 API Key，支持聊天、历史、日记/小巧思上下文和饮食图片估算。Key 只放入 Authorization 请求头，不写日志或错误；HTTP 端点必须由用户为可信本地服务明确允许。
 - 收藏夹：PBKDF2-HMAC-SHA256（120,000 次）+ AES-256-GCM，本机密码、明文和派生密钥都留在 Rust 边界，解锁密钥只驻留会话内存。Windows Vault 与 Android Vault 不混用，且不进入自动备份、恢复点或云同步。
-- 小游戏与统计：提供 4×4/5×5/6×6 2048、贪吃蛇、俄罗斯方块、扫雷、蜘蛛纸牌和本地双人 9/13/19 路围棋。围棋实现提子、禁自杀、简单劫和连续两次停着结束，只显示双方提子数，不自动判定地域胜负；围棋存档、最高提子、特色统计和游玩时长放在独立 Windows 私有表中，不进入 v28、恢复点、自动备份或应用 JSON 云同步。既有七个游戏/变体仍按 Android v28 字段往返；2048 支持 `moveAttempts` 总操作次数，旧 `losses` 仅兼容读取和往返，不再新增或展示。
-- 手机使用时间与健康：两个页面都**只显示、不采集**。手机使用时间可导入兼容快照/只读链接，或只读下载用户明确启用的专用云 usage 对象并按设备合并；健康页只读取用户明确选择的兼容文件。Windows 不调用活动统计或健康采集 API，不会写入、改名或删除来源文件；读取失败会保留上次有效快照。两类明细都不进入 Windows v28、自动备份、恢复点或应用 JSON 云上传，Windows 也绝不上传 usage 对象。
-- 设置与备份：设置层级、三套主题、背景图参数、主页模块、日记标题字号、诗词/吃历、收藏夹行高、AI、应用数据和教学总开关尽量与 Android 对齐。桌面导航设置可控制全部 18 个主页面的显隐、分类和顺序，可新建、重命名、排序或删除分类；侧栏分类可折叠，折叠后其页面按钮会同时从布局和键盘顺序中移除。可编辑子页使用本地草稿、右上角保存、恢复本页默认值和未保存离开确认。备份支持 Android v1–v28 预览导入并统一导出 v28。
+- 小游戏与统计：提供 4×4/5×5/6×6 2048、贪吃蛇、俄罗斯方块、扫雷、蜘蛛纸牌和本地双人 9/13/19 路围棋。围棋实现提子、禁自杀、简单劫和连续两次停着结束，只显示双方提子数，不自动判定地域胜负；围棋存档、最高提子、特色统计和游玩时长放在独立 Windows 私有表中，不进入 v29、恢复点、自动备份或应用 JSON 云同步。既有七个游戏/变体仍按 Android v29 字段往返；2048 支持 `moveAttempts` 总操作次数，旧 `losses` 仅兼容读取和往返，不再新增或展示。
+- 手机使用时间与健康：两个页面都**只显示、不采集**。手机使用时间可导入兼容快照/只读链接，或只读下载用户明确启用的专用云 usage 对象并按设备合并；健康页只读取用户明确选择的兼容文件。Windows 不调用活动统计或健康采集 API，不会写入、改名或删除来源文件；读取失败会保留上次有效快照。两类明细都不进入 Windows v29、自动备份、恢复点或应用 JSON 云上传，Windows 也绝不上传 usage 对象。
+- 设置与备份：设置层级、三套主题、背景图参数、主页模块、日记标题字号、诗词/吃历、收藏夹行高、AI、应用数据和教学总开关尽量与 Android 对齐。桌面导航设置可控制全部 18 个主页面的显隐、分类和顺序，可新建、重命名、排序或删除分类；侧栏分类可折叠，折叠后其页面按钮会同时从布局和键盘顺序中移除。可编辑子页使用本地草稿、右上角保存、恢复本页默认值和未保存离开确认。备份支持 Android v1–v29 预览导入并统一导出 v29。
 - 吃历显示设置：滤镜开关、亮度/对比度/饱和度/色温/色调、每行图片数量、说明文字和日期卡片单列/双列布局会持久保存。双列按日期列表中点分成左右两列，每天及其全部餐食保持完整；窄窗口自动回退为一列，原图不会被滤镜改写。
-- WebDAV/S3：日记、媒体、应用 JSON 与阅读进度可选择仅上传或双向同步；云同步页新增需要确认的“强制上传 / 强制下载”。强制上传可作用于多个已启用端点；强制下载只允许恰好一个已启用来源。两者都不传播删除，远端覆盖仍绑定扫描版本，本机覆盖仍绑定本机快照，应用 JSON 下载仍只暂存待确认。多设备使用时间对象只会由 Windows 下载并按设备合并，绝不上传。凭据使用当前 Windows 用户的 DPAPI 加密，不回传前端或写入 v28；默认要求 HTTPS，HTTP 只允许用户为可信局域网明确确认。S3 通道可在条件请求探测和同字节回读校验通过后兼容未加引号、弱、多个或缺失 ETag；WebDAV 仍严格要求单个强 ETag。
+- WebDAV/S3：日记、媒体、应用 JSON 与阅读进度可选择仅上传或双向同步；云同步页新增需要确认的“强制上传 / 强制下载”。强制上传可作用于多个已启用端点；强制下载只允许恰好一个已启用来源。两者都不传播删除，远端覆盖仍绑定扫描版本，本机覆盖仍绑定本机快照，应用 JSON 下载仍只暂存待确认。多设备使用时间对象只会由 Windows 下载并按设备合并，绝不上传。凭据使用当前 Windows 用户的 DPAPI 加密，不回传前端或写入 v29；默认要求 HTTPS，HTTP 只允许用户为可信局域网明确确认。S3 通道可在条件请求探测和同字节回读校验通过后兼容未加引号、弱、多个或缺失 ETag；WebDAV 仍严格要求单个强 ETag。
 - 关于与更新：仅 updater 配置完整的正式包会在启动约 60 秒后首次检查，此后跨重启至少间隔 24 小时且只提示。下载、Tauri `.sig` 验证和安装均需用户确认。正式 GitHub Release 必须通过 Tauri updater 私钥签名；Authenticode 为可选增强，未配置证书时安装包仍可正式发布，但 Windows SmartScreen 可能显示“未知发布者”。
 
 Windows 数据库位于 `%LOCALAPPDATA%\com.deskcubby.windows\deskcubby.db`，启用 WAL、外键、事务迁移与 busy timeout。日记和媒体目录不会被整份复制进应用私有目录；保存前使用 SHA-256 文件版本检测外部修改，冲突时提供“重新加载、覆盖、另存副本”。若文件被外部删除，“重新加载”会接受删除并关闭当前编辑，“覆盖”可安全重建同名文件，“另存副本”则把草稿保存为新文件。
 
-### Windows v28 数据兼容
+### Windows v29 数据兼容
 
-- 可直接预览和导入 Android v1–v28 JSON；旧版在内存中安全补齐为 v28，Windows 导出、自动备份和云端应用 JSON 统一写 `version: 28`。单个 JSON 上限为 64 MiB，并校验数组数量、字符串长度、枚举、重复 ID、关联关系及 v28 专属结构。
+- 可直接预览和导入 Android v1–v29 JSON；旧版在内存中安全补齐为 v29（含 `desktopWidgetConfigs` 的五个外观字段默认值和 `cloud_sync` → `cloud_sync_now` 迁移），Windows 导出、自动备份和云端应用 JSON 统一写 `version: 29`。单个 JSON 上限为 64 MiB，并校验数组数量、字符串长度、枚举、重复 ID、关联关系及 v29 专属结构。
 - 导入前只显示统计与警告；用户勾选确认后才替换 Windows 管理的设置与结构化记录，失败回滚并保留导入前恢复点。日记、媒体、笔记和阅读正文不在这一事务中被覆盖。
 - Android 的 `content://` URI 始终作为不透明兼容字段保留；Windows 目录另存本机设置且绝不写回这些 URI。内置浏览器及未来未知字段通过当前 Windows 用户的 DPAPI 兼容影子往返。
-- Android v28 的 Vault `active`/`pending`/`items`、`usageDevices` 与健康明细会在进入 Windows 兼容影子前清除；Windows Vault 私有表、usage/health 缓存、本机来源路径和云凭据同样不会进入手动导出、自动备份、恢复点或应用 JSON 云上传。
+- Android v29 的 Vault `active`/`pending`/`items`、`usageDevices` 与健康明细会在进入 Windows 兼容影子前清除；Windows Vault 私有表、usage/health 缓存、本机来源路径和云凭据同样不会进入手动导出、自动备份、恢复点或应用 JSON 云上传。
 - `cloudSyncConfigs` 默认由兼容影子保留；用户在 Windows 新建、编辑、复制或删除云配置后，才由 Windows 覆盖同字段的非秘密配置，并保留相同 ID 的未知兄弟字段。每次入影子和导出仍递归清除 WebDAV/S3 凭据、DPAPI 载荷、来源路径等本机私有值。
-- v28 的 `CUSTOM/customTheme` 会严格验证并保存在 DPAPI 兼容影子中；Windows 当前按其 `baseStyle` 渲染，未主动改风格时仍会无损导出 `CUSTOM`。根级最多 500 条 URI-free `readerProgress` 会按书籍指纹和更新时间合并到 Windows 阅读账本；`moveAttempts` 正常往返，旧 `losses` 只作兼容。
-- AI API Key 依照 Android 产品格式是普通明文字段，会随 v28 导入、导出和云端应用 JSON 保存；请把备份视为敏感文件，不要放入公开或不可信目录。
+- v29 的 `CUSTOM/customTheme` 会严格验证并保存在 DPAPI 兼容影子中；Windows 当前按其 `baseStyle` 渲染，未主动改风格时仍会无损导出 `CUSTOM`。根级最多 500 条 URI-free `readerProgress` 会按书籍指纹和更新时间合并到 Windows 阅读账本；`moveAttempts` 正常往返，旧 `losses` 只作兼容。
+- AI API Key 依照 Android 产品格式是普通明文字段，会随 v29 导入、导出和云端应用 JSON 保存；请把备份视为敏感文件，不要放入公开或不可信目录。
 
-### Windows 0.5.0 平台边界
+### Windows 0.6.0 平台边界
 
-Windows 不制作 Android 内置浏览器或桌面小卡片，也不读取 Android Room 数据库、`content://` URI 或系统级 Android 权限。Windows 与 Android 都提供围棋，但两端棋局与战绩各自只留在本机并从 v28 投影排除；Android 的主页围棋快捷入口同样只留在 Android 本机，Windows 仍从小游戏页进入围棋。Windows 还以独立私有表把围棋排除在恢复点、自动备份和应用 JSON 云同步之外。手机使用时间和健康只显示用户带到 Windows 的数据，绝不在 Windows 端采集或上传；阅读书架/路径、AI 会话、RSS 文章缓存、Windows Vault 与 usage/health 缓存属于本机数据，不随 v28 迁移。只有 URI-free 阅读位置可通过 v28 或可选阅读进度对象合并。
+Windows 不制作 Android 内置浏览器或桌面小卡片，也不读取 Android Room 数据库、`content://` URI 或系统级 Android 权限。Windows 与 Android 都提供围棋，但两端棋局与战绩各自只留在本机并从 v29 投影排除；Android 的主页围棋快捷入口同样只留在 Android 本机，Windows 仍从小游戏页进入围棋。Windows 还以独立私有表把围棋排除在恢复点、自动备份和应用 JSON 云同步之外。手机使用时间和健康只显示用户带到 Windows 的数据，绝不在 Windows 端采集或上传；阅读书架/路径、AI 会话、RSS 文章缓存、Windows Vault 与 usage/health 缓存属于本机数据，不随 v29 迁移。只有 URI-free 阅读位置可通过 v29 或可选阅读进度对象合并。
 
 ## Android 0.13.0 当前功能
 
@@ -174,7 +174,7 @@ Android 端已增加内部 Kotlin Plugin API 基础层：独立 `:plugin-api:cor
 ### 备份
 
 - 支持选择自动备份目录、立即保存、手动导入和导出单个 JSON 文件；自动备份使用 `dc.json`，手动导出默认使用 `DC-yyyy-MM-dd.json`，并继续识别旧版 `DeskCubby*.json`。“设置 → 应用数据 → 查看整体 JSON”可查看当前完整备份快照。
-- 当前备份格式为 v29，最大 64 MiB，并继续安全导入 v1–v28。v29 在 v28 的受控 Custom 主题和最多 500 条 URI-free 阅读进度基础上，为每个桌面信息卡增加名称显隐、0%–100% 背景透明度、图标显隐、文字对齐和 75%–150% 字号；导入旧版时使用显示名称/图标、100% 背景、不缩放且左侧对齐的兼容默认。进度仍只含书籍 SHA-256 指纹、TXT/PDF 类型、位置、总页数和更新时间，不含书名、URI、封面或正文。Windows 0.5.0 只接受到 v28，暂不能导入 Android 0.13.0 导出的 v29。
+- 当前备份格式为 v29，最大 64 MiB，并继续安全导入 v1–v28。v29 在 v28 的受控 Custom 主题和最多 500 条 URI-free 阅读进度基础上，为每个桌面信息卡增加名称显隐、0%–100% 背景透明度、图标显隐、文字对齐和 75%–150% 字号；导入旧版时使用显示名称/图标、100% 背景、不缩放且左侧对齐的兼容默认。进度仍只含书籍 SHA-256 指纹、TXT/PDF 类型、位置、总页数和更新时间，不含书名、URI、封面或正文。Windows 0.6.0 可导入 Android 0.13.0 导出的 v29。
 - Vault 密码/明文/派生密钥、WebDAV 密码、S3 用户名/Key/Session Token、AI 对话历史及冻结上下文、笔记/日记正文、媒体文件、背景图片文件、阅读书架/封面/偏好、阅读与小游戏总时长、健康历史和系统权限不进入 JSON。v29 导入后 Vault 保持锁定；既有七个游戏/变体同 ID 最高分取较大值，较新存档胜出，特色统计逐项取较大值；围棋存档、最高提子、特色统计和主页围棋快捷入口从 v29 投影排除，只保存在 Android 本机。使用时间按设备和日期合并，本机设备 ID 不会被导入文件覆盖。
 - v29 仍包含两个统计功能的普通开关字段，但导入时会强制关闭手机使用时间和健康统计，云同步也保持关闭；音乐可视化设置会恢复，但录音权限必须由设备本机重新授予。旧备份缺少 Custom 主题、阅读进度或新增桌面卡片外观字段时使用安全默认值并保留本机进度；更早版本的逐项兼容规则继续有效。
 - 导入 v11 及更早备份时，仅为配置 ID 与 API 地址都一致的 AI 配置保留本机已有 Key。
@@ -256,6 +256,10 @@ PDFium Android 封装采用 Apache License 2.0，PDFium 引擎采用 BSD 风格�
 同版修复增强 PDF 被首屏前非致命 AndroidX `RequestFailureEvent` 误判失败的问题；文档打开、视图绑定和 30 秒首屏超时仍安全回退兼容视图。S3 移除条件 GET 执行语义探针及相应验证阻断，兼容忽略条件请求或返回非标准 ETag 的服务；`If-Match` / `If-None-Match` 继续尽力发送，409/412、manifest/payload SHA-256、内容寻址与无可信写入 ETag 时的同字节回读校验仍保留。
 
 云同步现在作为真实应用首页模块提供立即同步、需确认的强制上传/下载、进度、上次完成时间和待处理应用 JSON 状态，不再只依赖系统桌面组件。桌面信息卡按 App Widget ID 保存完整实例快照，多个实例可显示不同设计，并新增名称/图标显隐、0%–100% 背景透明度、左中右对齐和 75%–150% 字号。备份升至 v29 并继续导入 v1–v28；Windows 0.5.0 暂不能导入 v29。应用升级为 0.12.0（versionCode 26），Room 保持 v12，Windows 源码与版本保持 0.5.0。
+
+0.6.0（2026-08-11）修复桌面端无法显示 PDF 的问题：WebView2 不内置 PDF 查看器，原 `<iframe>` 连续查看器显示空白，现改为 pdf.js（`pdfjs-dist`）在应用内 canvas 渲染。PDF 数据仍通过受限 `http://reader.localhost/{bookId}.pdf` 只读协议按需获取（Rust 侧支持 HTTP Range 并返回 CORS 头），前端不获得文件系统权限；支持按容器宽度自适应和阅读设置里的 50%–300% 基准缩放、页码导航，书签恢复的页码超过实际页数时自动钳制，加载或渲染失败可重试。CSP 相应放开 `connect-src http://reader.localhost` 与 `worker-src 'self' blob:`。
+
+同版把数据兼容追平 Android 0.13.0：备份边界从 Android v1–v28 升级为 v1–v29 并统一导出 v29。旧版导入时在内存中安全升级——按 Android 0.13.0 语义为 `desktopWidgetConfigs` 每项补齐 `showName`/`backgroundOpacityPercent`/`showIcon`/`textAlignment`/`textScalePercent` 默认值，并把旧 `cloud_sync` 主页模块改写为 `cloud_sync_now`；合法 `homeModuleId` 扩展为与 Android 同源的 21 项（新增 `notes`/`game_shortcuts`/`record_overview`/`cloud_sync_now`/`cloud_sync_force`），并校验 v29 五个外观字段的范围与枚举。导入/导出、恢复点、DPAPI 兼容影子、私有字段清洗和 `configs_managed` 所有权门保持不变。Windows 版本升级为 0.6.0，Android 保持 0.13.0，交换格式保持 v29。
 
 0.5.0（2026-08-10）追平 Android 0.11.0 的桌面可共用能力：Windows 云同步页加入需要显式确认的“强制上传 / 强制下载”。强制上传可依次处理多个已启用端点；强制下载只接受恰好一个已启用来源。两种模式都不传播删除，远端写入仍绑定扫描版本，本机写入仍绑定扫描快照，并发修改不会被静默覆盖；远端应用 JSON 仍只暂存待预览确认。
 
@@ -383,7 +387,7 @@ pnpm package:portable
 
 - 原始 Release EXE：`windows/src-tauri/target/release/deskcubby-windows.exe`（显式 target 构建时位于 `target/x86_64-pc-windows-msvc/release/`）
 - NSIS 安装包：`windows/src-tauri/target/release/bundle/nsis/`
-- 便携测试文件与校验值：`windows/artifacts/DeskCubby-0.5.0-windows-x64-portable.exe` 和同名 `.sha256`
+- 便携测试文件与校验值：`windows/artifacts/DeskCubby-0.6.0-windows-x64-portable.exe` 和同名 `.sha256`
 
 也可显式构建一个仅供本地测试、禁止发布的未签名包：
 
@@ -396,14 +400,14 @@ cd .\windows
 
 ```powershell
 cd .\windows
-.\scripts\build-release.ps1 -Mode SignedRelease -ReleaseTag windows-v0.5.0
+.\scripts\build-release.ps1 -Mode SignedRelease -ReleaseTag windows-v0.6.0
 ```
 
 成功的 `SignedRelease` 会产生：
 
-- `windows/artifacts/DeskCubby-0.5.0-windows-x64-setup.exe`
-- `windows/artifacts/DeskCubby-0.5.0-windows-x64-portable.exe`
-- `windows/artifacts/DeskCubby-0.5.0-windows-x64-setup.exe.sig`
+- `windows/artifacts/DeskCubby-0.6.0-windows-x64-setup.exe`
+- `windows/artifacts/DeskCubby-0.6.0-windows-x64-portable.exe`
+- `windows/artifacts/DeskCubby-0.6.0-windows-x64-setup.exe.sig`
 - `windows/artifacts/SHA256SUMS.txt`
 - `windows/artifacts/latest.json`
 
@@ -411,7 +415,7 @@ Tauri updater 的 minisign 私钥签名是正式发布的强制安全边界，�
 
 `.github/workflows/windows-release.yml` 在精确的 `windows-vX.Y.Z` tag 上执行 `SignedRelease`，校验五个资产后创建 **draft** GitHub Release：portable EXE、setup EXE、setup `.sig`、`SHA256SUMS.txt` 和 `latest.json`。工作流上传前后都会核对精确资产集合、大小和 GitHub SHA-256 digest，不覆盖已发布、不完整或包含未知资产的 Release。人工复核并发布版本 Release 后，才可把已验证的 `latest.json` 提升到独立 `windows-stable` 通道，避免与同仓库 Android Release 争用全局 `latest`。
 
-检入的基础配置故意不含 updater 公钥或端点，因此普通本地 0.5.0 构建仍是更新未配置的测试产物，也可能显示“未知发布者”。`SignedRelease` 与 CI 可以在没有 Windows 代码签名证书 Secrets 的情况下构建正式 Release，但仍必须提供 updater 公钥、HTTPS endpoint、Tauri updater 私钥和非空私钥密码；缺少任一项或安装包 `.sig` 验证失败时都会失败关闭。Windows 0.1.0 没有 updater 插件，已有用户必须先手动安装一个 updater-enabled 正式版本，之后才可使用应用内更新。
+检入的基础配置故意不含 updater 公钥或端点，因此普通本地 0.6.0 构建仍是更新未配置的测试产物，也可能显示“未知发布者”。`SignedRelease` 与 CI 可以在没有 Windows 代码签名证书 Secrets 的情况下构建正式 Release，但仍必须提供 updater 公钥、HTTPS endpoint、Tauri updater 私钥和非空私钥密码；缺少任一项或安装包 `.sig` 验证失败时都会失败关闭。Windows 0.1.0 没有 updater 插件，已有用户必须先手动安装一个 updater-enabled 正式版本，之后才可使用应用内更新。
 
 ## 使用边界
 

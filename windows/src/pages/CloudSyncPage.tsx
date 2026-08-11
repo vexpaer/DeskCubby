@@ -444,8 +444,8 @@ function ConfigDialog({
                   />
                   <small className="form-hint">
                     {copy(
-                      "与 Android v28 使用相同的可配置请求标识；不能为空或包含控制字符。",
-                      "Uses the same configurable request identifier as Android v28; it cannot be blank or contain control characters.",
+  "与 Android v29 使用相同的可配置请求标识；不能为空或包含控制字符。",
+  "Uses the same configurable request identifier as Android v29; it cannot be blank or contain control characters.",
                     )}
                   </small>
                 </label>
@@ -1021,8 +1021,8 @@ export default function CloudSyncPage() {
       eyebrow={copy("设置 → 应用数据", "Settings → App data")}
       title={copy("WebDAV / S3 云同步", "WebDAV / S3 cloud sync")}
       description={copy(
-        "同步日记、媒体与 Android v28 应用 JSON；手机使用时间仅按需从 Android usage 对象下载并显示。本地文件仍是最终来源。",
-        "Sync diaries, media and Android v28 app JSON; phone screen time is downloaded from Android usage objects only when selected. Local files remain the source of truth.",
+  "同步日记、媒体与 Android v29 应用 JSON；手机使用时间仅按需从 Android usage 对象下载并显示。本地文件仍是最终来源。",
+  "Sync diaries, media and Android v29 app JSON; phone screen time is downloaded from Android usage objects only when selected. Local files remain the source of truth.",
       )}
       actions={
         <>

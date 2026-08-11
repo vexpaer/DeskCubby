@@ -19,13 +19,13 @@ use crate::{
 };
 use uuid::Uuid;
 
-pub const FORMAT_VERSION: i32 = 28;
+pub const FORMAT_VERSION: i32 = 29;
 pub const MAX_JSON_BYTES: usize = 64 * 1024 * 1024;
 
 // Recovery points currently encode the encrypted compatibility shadow as a
 // JSON byte array. In the worst case that representation is materially larger
 // than the 64 MiB Android source document, so this separate bounded envelope
-// must accommodate a valid maximum-size v28 shadow.
+// must accommodate a valid maximum-size v29 shadow.
 pub(crate) const MAX_RECOVERY_POINT_BYTES: usize = 320 * 1024 * 1024;
 const MAX_RECOVERY_READER_STATE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_THOUGHTS: usize = 50_000;
@@ -67,7 +67,7 @@ const MAX_PACKAGE_NAME_CHARS: usize = 255;
 const MAX_ZONE_ID_CHARS: usize = 128;
 const MAX_FOREGROUND_MILLIS_PER_APP_DAY: i64 = 26 * 60 * 60 * 1_000;
 
-/// Credential-free cloud-sync metadata shared with Android v28 backups.
+/// Credential-free cloud-sync metadata shared with Android v29 backups.
 ///
 /// Passwords, S3 access keys, secret keys and session tokens deliberately do
 /// not exist on this DTO. They are device-local secrets and must be persisted
@@ -121,7 +121,7 @@ pub(crate) enum ReaderProgressBookType {
     Pdf,
 }
 
-/// URI-free Android v28 reader-progress row. Book titles, paths, content URIs,
+/// URI-free Android v29 reader-progress row. Book titles, paths, content URIs,
 /// cover metadata and document bytes deliberately do not exist on this DTO.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -192,7 +192,7 @@ pub struct ValidatedBackup {
     root: Value,
 }
 
-/// A validated v28 import whose compatibility-shadow bytes have had
+/// A validated v29 import whose compatibility-shadow bytes have had
 /// device-local private fields removed.
 ///
 /// `backup.source_sha256` is the digest of `canonical_bytes`, not of the
@@ -212,7 +212,7 @@ pub(crate) struct PreparedV18Import {
     pub(crate) usage_devices: Vec<Value>,
     pub(crate) merge_usage_devices: bool,
     /// Only Android v28 and newer own the cross-device reader-progress
-    /// container. Older backups are upgraded to a canonical v28 shadow with
+    /// container. Older backups are upgraded to a canonical v29 shadow with
     /// an empty `readerProgress` array, but importing one must not erase or
     /// otherwise touch the Windows reader ledger.
     pub(crate) merge_reader_progress: bool,
@@ -271,13 +271,13 @@ pub fn parse_v18(json_text: &str) -> Result<ValidatedBackup, BackupError> {
     }
     let source_format_version = required_i32(root_object, "version")?;
     if !(1..=FORMAT_VERSION).contains(&source_format_version) {
-        return Err(invalid("Windows requires an Android v1-v28 backup"));
+        return Err(invalid("Windows requires an Android v1-v29 backup"));
     }
     let exported_at = required_i64(root_object, "exportedAt")?;
     require_nonnegative(exported_at, "exportedAt")?;
 
     if source_format_version < FORMAT_VERSION {
-        root = upgrade_legacy_backup_to_v28(root, source_format_version, exported_at)?;
+        root = upgrade_legacy_backup_to_v29(root, source_format_version, exported_at)?;
     }
     let root_object = root
         .as_object()
@@ -351,9 +351,9 @@ pub fn parse_v18(json_text: &str) -> Result<ValidatedBackup, BackupError> {
 /// Android's decoder accepts every historical backup version and materializes
 /// newer fields from `AppSettings` defaults before restoring. Windows keeps a
 /// lossless compatibility shadow, so legacy input is upgraded once at the
-/// boundary into an Android-readable v28 document while unrelated unknown
+/// boundary into an Android-readable v29 document while unrelated unknown
 /// siblings remain untouched.
-fn upgrade_legacy_backup_to_v28(
+fn upgrade_legacy_backup_to_v29(
     mut root: Value,
     version: i32,
     exported_at: i64,
@@ -367,7 +367,7 @@ fn upgrade_legacy_backup_to_v28(
     let defaults = default_root(&ManagedSettings::default(), exported_at);
     let default_root_object = defaults
         .as_object()
-        .ok_or_else(|| invalid("Internal v28 default root is invalid"))?;
+        .ok_or_else(|| invalid("Internal v29 default root is invalid"))?;
     let default_settings = required_object(default_root_object, "settings")?;
     let mut upgraded_settings = default_settings.clone();
     for (key, value) in original_settings {
@@ -388,6 +388,7 @@ fn upgrade_legacy_backup_to_v28(
     }
     migrate_legacy_settings(&mut upgraded_settings, default_settings, version)?;
     root_object.insert("settings".to_owned(), Value::Object(upgraded_settings));
+    upgrade_desktop_widget_configs(root_object, version)?;
 
     if version < 2 {
         root_object.insert("dateRecords".to_owned(), json!([]));
@@ -419,6 +420,54 @@ fn upgrade_legacy_backup_to_v28(
     migrate_legacy_poems(root_object, version)?;
     root_object.insert("version".to_owned(), Value::from(FORMAT_VERSION));
     Ok(root)
+}
+
+/// Android 0.13.0 rewrites a legacy `cloud_sync` home module to its v29
+/// `cloud_sync_now` successor on every decode, and materializes the five v29
+/// desktop-widget appearance fields (`showName`, `backgroundOpacityPercent`,
+/// `showIcon`, `textAlignment`, `textScalePercent`) for backups older than
+/// v29. Windows applies the same upgrades to the compatibility shadow so a
+/// re-exported document stays readable by the Android 0.13.0 decoder.
+fn upgrade_desktop_widget_configs(
+    root: &mut Map<String, Value>,
+    version: i32,
+) -> Result<(), BackupError> {
+    // Versions older than v22 never carried the field; the settings default
+    // merge above already materialized the canonical array for them.
+    let Some(settings) = root.get_mut("settings").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
+    let Some(items) = settings.get_mut("desktopWidgetConfigs") else {
+        return Ok(());
+    };
+    let Some(items) = items.as_array_mut() else {
+        return Err(invalid("desktopWidgetConfigs must be an array"));
+    };
+    for (index, item) in items.iter_mut().enumerate() {
+        let object = item
+            .as_object_mut()
+            .ok_or_else(|| invalid(format!("desktopWidgetConfigs[{index}] must be an object")))?;
+        if object.get("homeModuleId").and_then(Value::as_str) == Some("cloud_sync") {
+            object.insert(
+                "homeModuleId".to_owned(),
+                Value::String("cloud_sync_now".to_owned()),
+            );
+        }
+        if version < 29 {
+            for (field, default) in [
+                ("showName", Value::Bool(true)),
+                ("backgroundOpacityPercent", Value::from(100)),
+                ("showIcon", Value::Bool(true)),
+                ("textAlignment", Value::String("START".to_owned())),
+                ("textScalePercent", Value::from(100)),
+            ] {
+                if !object.contains_key(field) {
+                    object.insert(field.to_owned(), default);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_legacy_required_shape(
@@ -872,7 +921,7 @@ fn migrate_legacy_poems(root: &mut Map<String, Value>, version: i32) -> Result<(
     Ok(())
 }
 
-/// Validate and canonicalize an imported Android v28 backup before it becomes
+/// Validate and canonicalize an imported Android v29 backup before it becomes
 /// the encrypted compatibility shadow.
 ///
 /// This is the single import-side privacy boundary: private fields and cloud
@@ -945,9 +994,9 @@ pub fn import_v18_transaction(
     })
 }
 
-/// Merge Windows-managed data into a decrypted v28 compatibility shadow.
+/// Merge Windows-managed data into a decrypted v29 compatibility shadow.
 ///
-/// Passing `None` creates a complete Android-readable v28 document with safe
+/// Passing `None` creates a complete Android-readable v29 document with safe
 /// defaults for postponed modules. Local Windows folder paths are never written
 /// into Android `content://` URI fields.
 #[allow(dead_code)]
@@ -960,14 +1009,14 @@ pub fn export_v18_merged(
 }
 
 /// Merge Windows-managed data and optional credential-free cloud metadata into
-/// a decrypted v28 compatibility shadow.
+/// a decrypted v29 compatibility shadow.
 ///
 /// `cloud_sync_configs = None` preserves imported credential-free cloud
 /// metadata and its unknown fields. Passing `Some` makes Windows the owner of
 /// `cloudSyncConfigs`, preserves unknown sibling fields for matching IDs, and
 /// disables Android cloud/usage collection toggles. Both paths unconditionally
 /// remove non-format Windows private fields and device-local cloud credentials,
-/// and emit the required v28 Vault/usage containers only in their empty forms.
+/// and emit the required v29 Vault/usage containers only in their empty forms.
 pub fn export_v18_merged_with_cloud_configs(
     database: &Database,
     decrypted_shadow: Option<&[u8]>,
@@ -1073,7 +1122,7 @@ pub(crate) fn export_v18_merged_with_cloud_configs_and_reader_progress(
     }
 
     // Reassert the private-data boundary after all managed overlays. Android
-    // v28 still sees the required fields, but Windows never emits Vault
+    // v29 still sees the required fields, but Windows never emits Vault
     // ciphertext/metadata or phone-usage samples in application JSON.
     scrub_excluded_private_backup_fields(root_object)?;
 
@@ -1415,7 +1464,7 @@ fn decode_managed_settings(settings: &Map<String, Value>) -> Result<ManagedSetti
 
     let mut decoded = ManagedSettings {
         // Windows currently renders the same three base styles as Android. A
-        // v28 CUSTOM selection remains owned by the compatibility shadow, while
+        // v29 CUSTOM selection remains owned by the compatibility shadow, while
         // its bounded baseStyle is used for the local Windows appearance.
         visual_style: windows_visual_style(settings)?,
         dark_mode: required_string(settings, "darkMode")?.to_owned(),
@@ -1573,7 +1622,7 @@ fn overlay_managed_root_field(target: &mut Map<String, Value>, key: &str, manage
 }
 
 /// Exact known private keys are removed while unrelated future fields remain
-/// untouched. Required Android v28 Vault and usage containers are retained in
+/// untouched. Required Android v29 Vault and usage containers are retained in
 /// their canonical empty forms so the document stays schema-compatible.
 fn scrub_excluded_private_backup_fields(root: &mut Map<String, Value>) -> Result<(), BackupError> {
     const PRIVATE_BACKUP_FIELDS: [&str; 12] = [
@@ -2902,7 +2951,7 @@ fn validate_home_game_shortcuts(items: &[Value]) -> Result<(), BackupError> {
 }
 
 fn validate_desktop_widget_configs(items: &[Value]) -> Result<(), BackupError> {
-    const HOME_MODULE_IDS: [&str; 16] = [
+    const HOME_MODULE_IDS: [&str; 21] = [
         "calendar",
         "weather",
         "poem",
@@ -2919,6 +2968,11 @@ fn validate_desktop_widget_configs(items: &[Value]) -> Result<(), BackupError> {
         "random_diary",
         "year_progress",
         "website",
+        "notes",
+        "game_shortcuts",
+        "record_overview",
+        "cloud_sync_now",
+        "cloud_sync_force",
     ];
     if items.len() > MAX_DESKTOP_WIDGET_CONFIGS {
         return Err(invalid("Too many desktop widget configurations"));
@@ -2953,6 +3007,22 @@ fn validate_desktop_widget_configs(items: &[Value]) -> Result<(), BackupError> {
         }
         required_i32(item, "backgroundColorArgb")?;
         required_i32(item, "textColorArgb")?;
+        // v29 appearance fields mirror Android's DesktopWidgetConfig validation.
+        required_bool(item, "showName")?;
+        let background_opacity = required_i32(item, "backgroundOpacityPercent")?;
+        if !(0..=100).contains(&background_opacity) {
+            return Err(invalid(format!(
+                "desktopWidgetConfigs[{index}].backgroundOpacityPercent is out of range"
+            )));
+        }
+        required_bool(item, "showIcon")?;
+        require_enum(item, "textAlignment", &["START", "CENTER", "END"])?;
+        let text_scale = required_i32(item, "textScalePercent")?;
+        if !(75..=150).contains(&text_scale) {
+            return Err(invalid(format!(
+                "desktopWidgetConfigs[{index}].textScalePercent is out of range"
+            )));
+        }
         if let Some(uri) = validate_nullable_string(item, "backgroundImageUri", MAX_URL_CHARS)? {
             if !uri.starts_with("content://") {
                 return Err(invalid(format!(
@@ -3089,7 +3159,7 @@ fn decode_cloud_sync_configs(items: &[Value]) -> Result<Vec<CloudSyncConfig>, Ba
 
 /// Validate credential-free cloud metadata before it is persisted or exported.
 ///
-/// The limits and enum set intentionally mirror Android v28.
+/// The limits and enum set intentionally mirror Android v29.
 pub fn validate_cloud_sync_configs(configs: &[CloudSyncConfig]) -> Result<(), BackupError> {
     validate_cloud_sync_configs_inner(configs)
 }
@@ -3504,6 +3574,11 @@ fn default_root(settings: &ManagedSettings, exported_at: i64) -> Value {
             "backgroundColorArgb": 0xFF263238u32 as i32,
             "textColorArgb": -1,
             "backgroundImageUri": null,
+            "showName": true,
+            "backgroundOpacityPercent": 100,
+            "showIcon": true,
+            "textAlignment": "START",
+            "textScalePercent": 100,
             "contentType": "HOME_MODULE",
             "homeModuleId": "today",
             "appPackageName": null,
@@ -4216,6 +4291,25 @@ mod tests {
                     .remove("moreDescription");
             }
         }
+        if version < 29 {
+            if let Some(items) = settings
+                .get_mut("desktopWidgetConfigs")
+                .and_then(Value::as_array_mut)
+            {
+                for item in items {
+                    let widget = item.as_object_mut().expect("widget");
+                    for field in [
+                        "showName",
+                        "backgroundOpacityPercent",
+                        "showIcon",
+                        "textAlignment",
+                        "textScalePercent",
+                    ] {
+                        widget.remove(field);
+                    }
+                }
+            }
+        }
         let root = root.as_object_mut().expect("root");
         for (introduced, fields) in [
             (2, &["dateRecords"][..]),
@@ -4486,9 +4580,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_and_previews_v28() {
+    fn parses_and_previews_v29() {
         let backup = parse_v18(&valid_json()).expect("parse");
-        assert_eq!(backup.preview().format_version, 28);
+        assert_eq!(backup.preview().format_version, 29);
         assert_eq!(backup.preview().thought_count, 0);
         assert_eq!(backup.preview().reader_progress_count, 0);
     }
@@ -4507,6 +4601,163 @@ mod tests {
             assert!(parsed.root["settings"]["customTheme"].is_object());
             assert!(parsed.root["readerProgress"].is_array());
         }
+    }
+
+    fn widget_item(id: &str) -> Value {
+        json!({
+            "id": id,
+            "name": "Widget",
+            "widthCells": 2,
+            "heightCells": 2,
+            "backgroundColorArgb": 0xFF263238u32 as i32,
+            "textColorArgb": -1,
+            "backgroundImageUri": null,
+            "showName": true,
+            "backgroundOpacityPercent": 100,
+            "showIcon": true,
+            "textAlignment": "START",
+            "textScalePercent": 100,
+            "contentType": "HOME_MODULE",
+            "homeModuleId": "today",
+            "appPackageName": null,
+            "appLabel": null
+        })
+    }
+
+    #[test]
+    fn v28_widget_configs_gain_v29_defaults_and_cloud_sync_is_rewritten() {
+        let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
+        root["version"] = Value::from(28);
+        let mut legacy = widget_item("legacy-widget");
+        let legacy_object = legacy.as_object_mut().expect("widget object");
+        for field in [
+            "showName",
+            "backgroundOpacityPercent",
+            "showIcon",
+            "textAlignment",
+            "textScalePercent",
+        ] {
+            legacy_object.remove(field);
+        }
+        legacy_object.insert(
+            "homeModuleId".to_owned(),
+            Value::String("cloud_sync".to_owned()),
+        );
+        root["settings"]["desktopWidgetConfigs"] = json!([legacy, widget_item("second")]);
+        let source = serde_json::to_string_pretty(&root).expect("source");
+
+        let parsed = parse_v18(&source).expect("v28 widget upgrade");
+        assert_eq!(parsed.root["version"], 29);
+        let widgets = parsed.root["settings"]["desktopWidgetConfigs"]
+            .as_array()
+            .expect("widgets");
+        assert_eq!(widgets.len(), 2);
+        for widget in widgets {
+            assert_eq!(widget["showName"], true);
+            assert_eq!(widget["backgroundOpacityPercent"], 100);
+            assert_eq!(widget["showIcon"], true);
+            assert_eq!(widget["textAlignment"], "START");
+            assert_eq!(widget["textScalePercent"], 100);
+        }
+        assert_eq!(widgets[0]["homeModuleId"], "cloud_sync_now");
+        assert_eq!(widgets[1]["homeModuleId"], "today");
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let database = Database::open(directory.path().join("deskcubby.db")).expect("database");
+        import_v18_transaction(&database, &parsed, Some(b"encrypted-shadow")).expect("import");
+        let exported =
+            export_v18_merged(&database, Some(source.as_bytes()), 45).expect("merged export");
+        let output: Value = serde_json::from_str(&exported).expect("output");
+        assert_eq!(output["version"], 29);
+        assert_eq!(
+            output["settings"]["desktopWidgetConfigs"][0]["homeModuleId"],
+            "cloud_sync_now"
+        );
+        parse_v18(&exported).expect("Android-readable v29 output");
+    }
+
+    #[test]
+    fn v29_widget_configs_with_new_home_modules_round_trip() {
+        let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
+        let mut force = widget_item("sync-force");
+        force["homeModuleId"] = Value::String("cloud_sync_force".to_owned());
+        let mut notes = widget_item("notes-widget");
+        notes["homeModuleId"] = Value::String("notes".to_owned());
+        notes["textAlignment"] = Value::String("CENTER".to_owned());
+        notes["backgroundOpacityPercent"] = json!(37);
+        notes["textScalePercent"] = json!(125);
+        notes["showName"] = Value::Bool(false);
+        notes["showIcon"] = Value::Bool(false);
+        root["settings"]["desktopWidgetConfigs"] = json!([force, notes]);
+        let source = serde_json::to_string_pretty(&root).expect("source");
+
+        let parsed = parse_v18(&source).expect("v29 parse");
+        assert_eq!(parsed.root["version"], 29);
+        let widgets = parsed.root["settings"]["desktopWidgetConfigs"]
+            .as_array()
+            .expect("widgets");
+        assert_eq!(widgets[0]["homeModuleId"], "cloud_sync_force");
+        assert_eq!(widgets[1]["homeModuleId"], "notes");
+        assert_eq!(widgets[1]["textAlignment"], "CENTER");
+        assert_eq!(widgets[1]["backgroundOpacityPercent"], 37);
+        assert_eq!(widgets[1]["textScalePercent"], 125);
+        assert_eq!(widgets[1]["showName"], false);
+        assert_eq!(widgets[1]["showIcon"], false);
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let database = Database::open(directory.path().join("deskcubby.db")).expect("database");
+        import_v18_transaction(&database, &parsed, Some(b"encrypted-shadow")).expect("import");
+        let exported =
+            export_v18_merged(&database, Some(source.as_bytes()), 46).expect("merged export");
+        let output: Value = serde_json::from_str(&exported).expect("output");
+        assert_eq!(
+            output["settings"]["desktopWidgetConfigs"][1]["textAlignment"],
+            "CENTER"
+        );
+        assert_eq!(
+            output["settings"]["desktopWidgetConfigs"][1]["backgroundOpacityPercent"],
+            37
+        );
+        assert_eq!(
+            output["settings"]["desktopWidgetConfigs"][1]["textScalePercent"],
+            125
+        );
+        parse_v18(&exported).expect("Android-readable v29 output");
+    }
+
+    #[test]
+    fn v29_widget_configs_reject_missing_or_invalid_appearance_fields() {
+        for (field, value) in [
+            ("backgroundOpacityPercent", json!(101)),
+            ("backgroundOpacityPercent", json!(-1)),
+            ("textScalePercent", json!(74)),
+            ("textScalePercent", json!(151)),
+            ("textAlignment", Value::String("LEFT".to_owned())),
+            ("showName", Value::String("yes".to_owned())),
+            ("showIcon", json!(1)),
+        ] {
+            let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
+            root["settings"]["desktopWidgetConfigs"][0][field] = value;
+            assert!(
+                parse_v18(&root.to_string()).is_err(),
+                "accepted invalid desktop widget {field}"
+            );
+        }
+
+        // A v29 document is rejected when a v29-only field is missing entirely.
+        let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
+        root["settings"]["desktopWidgetConfigs"][0]
+            .as_object_mut()
+            .expect("widget")
+            .remove("textScalePercent");
+        assert!(parse_v18(&root.to_string()).is_err());
+
+        // An unsupported home module is rejected even though the item is otherwise
+        // fully v29-shaped.
+        let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
+        root["settings"]["desktopWidgetConfigs"][0]["homeModuleId"] =
+            Value::String("nope".to_owned());
+        assert!(parse_v18(&root.to_string()).is_err());
     }
 
     #[test]
@@ -4540,13 +4791,13 @@ mod tests {
             }
         ]);
         let source = serde_json::to_string_pretty(&root).expect("source");
-        let parsed = parse_v18(&source).expect("v28 parse");
+        let parsed = parse_v18(&source).expect("v29 parse");
         assert_eq!(parsed.settings.visual_style, "LIQUID_GLASS");
         assert_eq!(parsed.reader_progress.len(), 2);
         assert_eq!(parsed.preview().reader_progress_count, 2);
         assert!(
             prepare_v18_import_for_shadow(&source)
-                .expect("prepare v28 import")
+                .expect("prepare v29 import")
                 .merge_reader_progress
         );
 
@@ -4555,7 +4806,7 @@ mod tests {
         import_v18_transaction(&database, &parsed, Some(b"encrypted-shadow")).expect("import");
         let output = export_v18_merged(&database, Some(source.as_bytes()), 29).expect("export");
         let output: Value = serde_json::from_str(&output).expect("output");
-        assert_eq!(output["version"], 28);
+        assert_eq!(output["version"], 29);
         assert_eq!(output["settings"]["visualStyle"], "CUSTOM");
         assert_eq!(
             output["settings"]["customTheme"]["futureThemeToken"],
@@ -4748,7 +4999,7 @@ mod tests {
     }
 
     #[test]
-    fn android_v27_golden_upgrades_to_v28_and_survives_windows_edit_and_export() {
+    fn android_v27_golden_upgrades_to_v29_and_survives_windows_edit_and_export() {
         let source = include_str!("../test-data/android-v27-golden.json");
         let parsed = parse_v18(source).expect("parse Android golden");
         assert_eq!(parsed.thoughts.len(), 1);
@@ -4821,10 +5072,10 @@ mod tests {
             output["thoughts"][0]["futureThoughtField"],
             golden["thoughts"][0]["futureThoughtField"]
         );
-        assert_eq!(output["version"], 28);
+        assert_eq!(output["version"], 29);
         assert!(output["settings"]["customTheme"].is_object());
         assert_eq!(output["readerProgress"], json!([]));
-        parse_v18(&exported).expect("Android-readable v28 output");
+        parse_v18(&exported).expect("Android-readable v29 output");
     }
 
     #[test]
@@ -4995,11 +5246,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v18_is_upgraded_to_v28_without_losing_unknown_fields_or_ai_keys() {
+    fn legacy_v18_is_upgraded_to_v29_without_losing_unknown_fields_or_ai_keys() {
         let source = include_str!("../test-data/android-v18-golden.json");
         let parsed = parse_v18(source).expect("parse Android v18 golden");
         assert_eq!(parsed.preview().format_version, 18);
-        assert_eq!(parsed.root["version"], 28);
+        assert_eq!(parsed.root["version"], 29);
         assert_eq!(
             parsed.root["settings"]["cloudSyncConfigs"][0]["userAgent"],
             "DeskCubby-Sync/1"
@@ -5022,10 +5273,10 @@ mod tests {
 
         let prepared = prepare_v18_import_for_shadow(source).expect("prepare legacy import");
         assert!(!prepared.merge_reader_progress);
-        assert_eq!(prepared.backup.preview().format_version, 28);
+        assert_eq!(prepared.backup.preview().format_version, 29);
         let canonical: Value =
-            serde_json::from_slice(&prepared.canonical_bytes).expect("canonical v28");
-        assert_eq!(canonical["version"], 28);
+            serde_json::from_slice(&prepared.canonical_bytes).expect("canonical v29");
+        assert_eq!(canonical["version"], 29);
         parse_v18(std::str::from_utf8(&prepared.canonical_bytes).expect("UTF-8"))
             .expect("canonical output is Android-readable");
     }
@@ -5070,7 +5321,7 @@ mod tests {
         root["version"] = Value::from(0);
         assert!(parse_v18(&root.to_string()).is_err());
 
-        root["version"] = Value::from(29);
+        root["version"] = Value::from(30);
         assert!(parse_v18(&root.to_string()).is_err());
 
         root["version"] = Value::from(FORMAT_VERSION);

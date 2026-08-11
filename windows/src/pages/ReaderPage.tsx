@@ -44,6 +44,7 @@ import {
 } from "../lib/readerApi";
 import { useAppStore } from "../store/appStore";
 import "../styles/reader.css";
+import ReaderPdfViewer from "./readerPdfViewer";
 
 const DEFAULT_READER_PREFERENCES: ReaderPreferencesV1 = {
   background: "paper",
@@ -325,7 +326,7 @@ function ReaderSettings({
       <div className="panel-header reader-settings-header">
         <div>
           <h2 id="reader-settings-title">{copy("阅读设置", "Reader settings")}</h2>
-          <p>{copy("阅读设置仅保存在这台电脑；无路径、无书名的阅读进度可进入 v28 备份，并可通过已启用的阅读进度对象同步。", "Reader settings stay on this PC. Path-free, title-free progress can enter v28 backups and sync through the enabled reader-progress object.")}</p>
+          <p>{copy("阅读设置仅保存在这台电脑；无路径、无书名的阅读进度可进入 v29 备份，并可通过已启用的阅读进度对象同步。", "Reader settings stay on this PC. Path-free, title-free progress can enter v29 backups and sync through the enabled reader-progress object.")}</p>
         </div>
         <div className="row">
           <button className="button-ghost" type="button" disabled={busy} onClick={onReset}>
@@ -433,6 +434,7 @@ export default function ReaderPage() {
   const [settingsError, setSettingsError] = useState("");
   const [settingsDiscardConfirm, setSettingsDiscardConfirm] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<ReaderBookV1 | null>(null);
+  const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
   const progressSequence = useRef(0);
 
   const settingsDirty = useMemo(
@@ -465,6 +467,7 @@ export default function ReaderPage() {
         ? Math.min(next.book.textPageIndex, Math.max(next.pages.length - 1, 0))
         : Math.min(next.book.pdfPageIndex, MAX_PDF_PAGE_INDEX),
     );
+    setPdfPageCount(null);
     setSearchQuery("");
     setSearchMatchIndex(0);
     setNotice("");
@@ -706,9 +709,26 @@ export default function ReaderPage() {
     activeDocument?.kind === "pdf"
       ? safeReaderPdfUrl(activeDocument.assetUrl, activeDocument.book.id)
       : null;
-  const pdfUrl = pdfBaseUrl
-    ? `${pdfBaseUrl}#page=${pageIndex + 1}&zoom=${activeDocument?.preferences.pdfZoomPercent ?? 100}`
-    : null;
+  const pdfPageInputMax = pdfPageCount
+    ? Math.min(pdfPageCount, MAX_PDF_PAGE_INDEX + 1)
+    : MAX_PDF_PAGE_INDEX + 1;
+  const pdfLastPageIndex = pdfPageCount
+    ? Math.min(pdfPageCount - 1, MAX_PDF_PAGE_INDEX)
+    : MAX_PDF_PAGE_INDEX;
+
+  // The pdf.js viewer reports the total page count only after the document has
+  // been loaded through the restricted reader URL. Clamp a bookmark-restored
+  // page index that exceeds the real document size once the count is known.
+  const handlePdfPageCount = useCallback((count: number) => {
+    const safeCount = Math.max(count, 0);
+    setPdfPageCount(safeCount);
+    setPageIndex((page) => Math.min(Math.max(page, 0), Math.max(safeCount - 1, 0)));
+  }, []);
+
+  const handlePdfRenderFailed = useCallback(
+    (reason: unknown) => setError(readerErrorMessage(reason, language)),
+    [language],
+  );
   const readerStyle = {
     "--reader-font-size": `${activeDocument?.preferences.fontSizePx ?? 19}px`,
     "--reader-line-height": activeDocument?.preferences.lineHeightMultiplier ?? 1.6,
@@ -745,7 +765,7 @@ export default function ReaderPage() {
           ? activeDocument.kind === "txt"
             ? copy(`第 ${pageIndex + 1} / ${currentTextPageCount} 逻辑页 · ${progressPercent}%`, `Logical page ${pageIndex + 1} of ${currentTextPageCount} · ${progressPercent}%`)
             : copy(`已保存到第 ${pageIndex + 1} 页`, `Saved at page ${pageIndex + 1}`)
-          : copy("显式打开本机 TXT/PDF；书架路径、阅读设置和时长保持本机私有，无路径、无书名的进度可进入 v28 备份及可选云同步。", "Explicitly open local TXT/PDF files. Library paths, settings, and reading time remain private; path-free, title-free progress can enter v28 backups and optional cloud sync.")
+          : copy("显式打开本机 TXT/PDF；书架路径、阅读设置和时长保持本机私有，无路径、无书名的进度可进入 v29 备份及可选云同步。", "Explicitly open local TXT/PDF files. Library paths, settings, and reading time remain private; path-free, title-free progress can enter v29 backups and optional cloud sync.")
       }
       actions={
         activeDocument ? (
@@ -901,10 +921,10 @@ export default function ReaderPage() {
                 ) : (
                   <label className="reader-page-input reader-pdf-page-input">
                     <span>{copy("保存页码", "Saved page")}</span>
-                    <input type="number" min="1" max={MAX_PDF_PAGE_INDEX + 1} value={pageIndex + 1} onChange={(event) => setPageIndex(Math.min(Math.max(Number(event.target.value || 1) - 1, 0), MAX_PDF_PAGE_INDEX))} />
+                    <input type="number" min="1" max={pdfPageInputMax} value={pageIndex + 1} onChange={(event) => setPageIndex(Math.min(Math.max(Number(event.target.value || 1) - 1, 0), pdfLastPageIndex))} />
                   </label>
                 )}
-                <button className="icon-button" type="button" disabled={activeDocument.kind === "txt" ? pageIndex >= currentTextPageCount - 1 : pageIndex >= MAX_PDF_PAGE_INDEX} onClick={() => setPageIndex((page) => Math.min(page + 1, activeDocument.kind === "txt" ? currentTextPageCount - 1 : MAX_PDF_PAGE_INDEX))} aria-label={copy("下一页", "Next page")}><ChevronRight aria-hidden="true" size={19} /></button>
+                <button className="icon-button" type="button" disabled={activeDocument.kind === "txt" ? pageIndex >= currentTextPageCount - 1 : pageIndex >= pdfLastPageIndex} onClick={() => setPageIndex((page) => Math.min(page + 1, activeDocument.kind === "txt" ? currentTextPageCount - 1 : pdfLastPageIndex))} aria-label={copy("下一页", "Next page")}><ChevronRight aria-hidden="true" size={19} /></button>
                 {activeDocument.kind === "txt" ? (
                   <button className="button-ghost button-small" type="button" onClick={() => void copyCurrentPage()}><Clipboard aria-hidden="true" size={16} />{copy("复制当前页", "Copy page")}</button>
                 ) : <output className="reader-pdf-zoom">{activeDocument.preferences.pdfZoomPercent}%</output>}
@@ -914,12 +934,19 @@ export default function ReaderPage() {
                 <div className={`reader-text-surface background-${activeDocument.preferences.background}`} style={activeDocument.preferences.background === "custom" ? { background: argbToCss(activeDocument.preferences.customBackgroundArgb) } : undefined}>
                   <HighlightedPage document={activeDocument} pageIndex={pageIndex} matches={textMatches} currentMatchIndex={searchMatchIndex} paragraphSpacing={activeDocument.preferences.paragraphSpacingPx} />
                 </div>
-              ) : pdfUrl ? (
+              ) : pdfBaseUrl ? (
                 <div className="reader-pdf-surface">
                   <div className="reader-pdf-note" role="note">
-                    {copy("PDF 由 Windows WebView2 的连续查看器显示；使用查看器工具栏或 Ctrl+F 搜索，拖选文字后按 Ctrl+C 复制。应用只保存上方页码。", "PDF uses the continuous Windows WebView2 viewer. Search with its toolbar or Ctrl+F; select text and press Ctrl+C to copy. The app saves only the page number above.")}
+                    {copy("PDF 在应用内渲染；可通过阅读设置调整基准缩放，应用只保存上方页码。", "PDF renders in-app; adjust the base zoom in reader settings. The app saves only the page number above.")}
                   </div>
-                  <iframe key={pdfUrl} title={copy(`${activeDocument.book.title} PDF 连续阅读`, `${activeDocument.book.title} continuous PDF reader`)} src={pdfUrl} referrerPolicy="no-referrer" />
+                  <ReaderPdfViewer
+                    assetUrl={pdfBaseUrl}
+                    pageIndex={pageIndex}
+                    zoomPercent={activeDocument.preferences.pdfZoomPercent}
+                    language={language}
+                    onPageCountChanged={handlePdfPageCount}
+                    onRenderFailed={handlePdfRenderFailed}
+                  />
                 </div>
               ) : (
                 <div className="panel"><ErrorState title={copy("无法显示 PDF", "PDF cannot be displayed")} description={copy("后端返回了无效的阅读地址；绝对路径未被使用。", "The backend returned an invalid reader URL; no absolute path was used.")} /></div>

@@ -374,8 +374,8 @@ export default function AiPage() {
       title={t("AI 对话", "AI chat")}
       eyebrow={t("OpenAI 兼容接口 · 本地会话", "OpenAI-compatible · Local history")}
       description={t(
-        "会话只保存在这台电脑，不进入 v28 备份或云同步。",
-        "Conversations stay on this PC and are excluded from v28 backup and cloud sync.",
+  "会话只保存在这台电脑，不进入 v29 备份或云同步。",
+  "Conversations stay on this PC and are excluded from v29 backup and cloud sync.",
       )}
       actions={
         <>

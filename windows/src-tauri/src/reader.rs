@@ -2133,7 +2133,8 @@ fn serve_reader_pdf(book: &StoredReaderBook, request: &Request<Vec<u8>>) -> Resp
         .header(header::CONTENT_TYPE, "application/pdf")
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, response_length.to_string())
-        .header(header::CONTENT_DISPOSITION, "inline");
+        .header(header::CONTENT_DISPOSITION, "inline")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
     if status == StatusCode::PARTIAL_CONTENT {
         builder = builder.header(
             header::CONTENT_RANGE,
@@ -2642,5 +2643,45 @@ mod tests {
 
         mutation.rollback().unwrap();
         assert_eq!(load_reader_state(root.path()).unwrap(), original);
+    }
+
+    #[test]
+    fn serve_reader_pdf_adds_cors_header_to_ok_and_range_responses() {
+        let root = tempdir().unwrap();
+        let pdf_path = root.path().join("book.pdf");
+        fs::write(&pdf_path, b"%PDF-test-abcdefgh").unwrap();
+        let book = stored_book(&pdf_path, ReaderBookType::Pdf);
+
+        let range_request = Request::builder()
+            .method(Method::GET)
+            .uri("http://reader.localhost/book.pdf")
+            .header(header::RANGE, "bytes=2-5")
+            .body(Vec::new())
+            .expect("range request");
+        let response = serve_reader_pdf(&book, &range_request);
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .expect("cors header"),
+            "*"
+        );
+
+        let full_request = Request::builder()
+            .method(Method::GET)
+            .uri("http://reader.localhost/book.pdf")
+            .body(Vec::new())
+            .expect("full request");
+        let response = serve_reader_pdf(&book, &full_request);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .expect("cors header"),
+            "*"
+        );
+        assert_eq!(response.body().as_slice(), b"%PDF-test-abcdefgh");
     }
 }

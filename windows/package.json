@@ -1,7 +1,7 @@
 {
   "name": "deskcubby-windows",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -33,6 +33,7 @@
     "@tauri-apps/api": "^2.8.0",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.536.0",
+    "pdfjs-dist": "^6.2.108",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0",

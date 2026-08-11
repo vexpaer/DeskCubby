@@ -12,6 +12,29 @@ import type {
 import { useAppStore } from "../store/appStore";
 import ReaderPage from "./ReaderPage";
 
+// The in-app pdf.js viewer needs a real canvas and pdf.js worker, which jsdom
+// does not provide. The URL-boundary behavior of ReaderPage is asserted against
+// a mock of the viewer component; pdf.js itself is mocked in
+// ReaderPage.pdfViewer.test.tsx.
+vi.mock("./readerPdfViewer", () => ({
+  default: ({
+    assetUrl,
+    pageIndex,
+    zoomPercent,
+  }: {
+    assetUrl: string;
+    pageIndex: number;
+    zoomPercent: number;
+  }) => (
+    <div
+      data-testid="reader-pdf-viewer"
+      data-url={assetUrl}
+      data-page-index={pageIndex}
+      data-zoom={zoomPercent}
+    />
+  ),
+}));
+
 const PREFERENCES: ReaderPreferencesV1 = {
   background: "paper",
   customBackgroundArgb: -724762,
@@ -168,7 +191,7 @@ describe("ReaderPage", () => {
     });
   });
 
-  it("uses only an opaque reader URL for continuous native PDF viewing", async () => {
+  it("renders PDFs through the in-app viewer using only an opaque reader URL", async () => {
     const user = userEvent.setup();
     const library: ReaderLibraryV1 = {
       ...EMPTY_LIBRARY,
@@ -190,13 +213,18 @@ describe("ReaderPage", () => {
 
     renderReader();
     await user.click(await screen.findByRole("button", { name: "打开《研究报告》" }));
-    const frame = await screen.findByTitle("研究报告 PDF 连续阅读");
-    expect(frame).toHaveAttribute(
-      "src",
-      `http://reader.localhost/${PDF_BOOK.id}.pdf#page=5&zoom=150`,
+    const viewer = await screen.findByTestId("reader-pdf-viewer");
+    // The viewer receives the restricted URL only — no #page/zoom fragment and
+    // no filesystem path, so pdf.js can fetch pages through the Rust protocol.
+    expect(viewer).toHaveAttribute(
+      "data-url",
+      `http://reader.localhost/${PDF_BOOK.id}.pdf`,
     );
-    expect(screen.getByText(/Ctrl\+F 搜索/)).toBeInTheDocument();
-    expect(frame.getAttribute("src")).not.toContain("C:");
+    expect(viewer).toHaveAttribute("data-page-index", "4");
+    expect(viewer).toHaveAttribute("data-zoom", "150");
+    expect(screen.getByText(/PDF 在应用内渲染/)).toBeInTheDocument();
+    expect(viewer.getAttribute("data-url")).not.toContain("C:");
+    expect(viewer.getAttribute("data-url")).not.toContain("#page");
   });
 
   it("restores a settings draft and saves it only after the top-right action", async () => {

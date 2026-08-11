@@ -467,8 +467,8 @@ export function HomeSettings({
           icon={Home}
           title={tr("主页模块", "Home modules")}
           description={tr(
-            "选择 Windows 首页显示的模块；列表顺序使用 Android v28 的稳定模块 ID。",
-            "Choose Home modules. The list uses the stable module IDs from Android v28.",
+  "选择 Windows 首页显示的模块；列表顺序使用 Android v29 的稳定模块 ID。",
+  "Choose Home modules. The list uses the stable module IDs from Android v29.",
           )}
         />
         <div className="settings-option-grid">
@@ -1089,7 +1089,7 @@ export function AppDataSettings({
       <aside className="panel compatibility-note">
         <ShieldCheck size={20} aria-hidden="true" />
         <div>
-          <h2>{tr("Android v28 兼容", "Android v28 compatibility")}</h2>
+          <h2>{tr("Android v29 兼容", "Android v29 compatibility")}</h2>
           <p>{tr(
             "Windows 目录和本机背景路径保持独立；导出时不会覆盖 Android 的 content URI 字段。",
             "Windows folders and local background paths remain separate and never overwrite Android content URI fields on export.",

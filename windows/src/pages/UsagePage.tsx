@@ -250,7 +250,7 @@ export default function UsagePage() {
         eyebrow={copy("只读显示 · 不采集 Windows", "Read only · No Windows tracking")}
         title={copy("手机使用时间", "Phone screen time")}
         description={copy(
-          "只显示 Android v28、设备云对象或旧 v4 的导入/只读链接数据。",
+          "只显示 Android v29、设备云对象或旧 v4 的导入/只读链接数据。",
           "Displays imported or read-only linked Android v28, device-cloud or legacy v4 data.",
         )}
       >
