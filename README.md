@@ -1,199 +1,201 @@
 # DeskCubby
 
-[前往 GitHub Releases 下载最新版](https://github.com/vexpaer/DeskCubby/releases)
+**English** | [简体中文](README.zh-CN.md)
 
-DeskCubby 是一个本地优先的跨平台个人记录应用。Android 端使用 Kotlin/Jetpack Compose，Windows 端使用 Tauri 2 + React/TypeScript + Rust；两个客户端都把 Markdown 日记和媒体保存在用户自己选择的目录中，应用数据库只保存结构化记录、设置与可重建索引。
+[Download the latest version from GitHub Releases](https://github.com/vexpaer/DeskCubby/releases)
 
-当前版本：Android **0.13.0**；Windows **0.6.0**。
+DeskCubby is a local-first, cross-platform personal journaling and knowledge-management app. The Android client is built with Kotlin and Jetpack Compose; the Windows client uses Tauri 2, React/TypeScript, and Rust. Both clients keep Markdown journals and media in directories chosen by the user. Their application databases contain only structured records, settings, and rebuildable indexes.
 
-仓库按平台拆分：完整 Android 工程位于 `android/`，Windows 工程位于 `windows/`；`README.md`、`TUTORIAL.md`、`overview.md`、许可证等项目级文档继续保留在仓库根目录。
+Current versions: Android **0.13.0** and Windows **0.6.0**.
+
+The repository is split by platform: the complete Android project lives in `android/` and the Windows project in `windows/`. Project-level documentation, including `README.md`, `README.zh-CN.md`, `TUTORIAL.md`, `overview.md`, and the license, remains at the repository root.
 
 ## Windows 0.6.0
 
-Windows 客户端支持 Windows 10/11 x64。0.6.0 支持 Android v1–v29 数据格式并统一导出 v29，左侧竖栏在任何宽屏高度都可独立滚动，底部设置入口始终固定可达；分组标题会连同下面的页面按钮一起折叠，窄窗口仍可收起为抽屉。界面同时支持中文/英文、系统明暗模式、字号缩放，以及 Material、Liquid Glass、Organic Future 三套主题。应用 Logo 使用透明 512×512 像素画，并以最近邻缩放生成整套 Windows 图标。阅读页的 PDF 改为在应用内用 pdf.js 渲染（WebView2 不内置 PDF 查看器），不再依赖系统查看器。
+The Windows client supports Windows 10/11 x64. Version 0.6.0 accepts Android data formats v1–v29 and always exports v29. On wide layouts, the sidebar scrolls independently at every window height while Settings stays pinned at the bottom; collapsing a group also collapses its page buttons, and narrow windows can still turn the sidebar into a drawer. The UI supports Chinese and English, system light/dark mode, font scaling, and the Material, Liquid Glass, and Organic Future themes. The app logo is a transparent 512×512 pixel-art image, with the full Windows icon set generated through nearest-neighbor scaling. PDFs are rendered inside the app with pdf.js because WebView2 does not include a PDF viewer.
 
-Android 专属的内置浏览器和桌面小卡片设计器不在 Windows 制作；其余主要页面均可从左侧栏或「更多」进入：
+The Android-only built-in browser and home-screen widget designer are not reproduced on Windows. All other major pages are available from the sidebar or More:
 
-- 首页、日记、吃历、日常记录、小巧思、日期记录和诗词本：保留文件优先的数据边界、分类与排序、回收站、外部修改冲突、每日诗词及主页模块/小游戏快捷入口设置。日记与笔记文件都只在用户选择的根目录内原地读写；日记预览会显示媒体根目录中由相对 Markdown 链接引用的图片，支持中文和空格文件名，缺失或无法解析时显示“图片不可用”而不会永久停在读取状态。
-- 笔记：选择普通目录作为 Obsidian 风格笔记库，浏览文件夹、创建/重命名 Markdown、源码编辑/预览、插图与外部修改冲突处理；Rust 会拒绝 `..`、绝对路径、保留设备名及越出根目录的链接。
-- 阅读：本机 TXT/PDF 书架、进度、目录、搜索、字号/行距/背景和 PDF 缩放；PDF 在应用内用 pdf.js 连续渲染（数据仍经受限只读协议按需获取），不再依赖 WebView2 的 PDF 查看能力。使用与 Android 完全一致的完整文件指纹，并可通过每个云配置中单独勾选的 `reading/v1/progress.json` 同步同一本书的进度；书架路径与 Android URI 仍不会互相写入。
-- RSS：管理 HTTPS 订阅、刷新和阅读文章。网络读取限制重定向、私网地址、DOCTYPE、响应体、并发与超时；文章列表不作为长期备份数据。
-- AI 与吃历热量：使用 Android v29 中同结构的 OpenAI-compatible 模型配置及明文 API Key，支持聊天、历史、日记/小巧思上下文和饮食图片估算。Key 只放入 Authorization 请求头，不写日志或错误；HTTP 端点必须由用户为可信本地服务明确允许。
-- 收藏夹：PBKDF2-HMAC-SHA256（120,000 次）+ AES-256-GCM，本机密码、明文和派生密钥都留在 Rust 边界，解锁密钥只驻留会话内存。Windows Vault 与 Android Vault 不混用，且不进入自动备份、恢复点或云同步。
-- 小游戏与统计：提供 4×4/5×5/6×6 2048、贪吃蛇、俄罗斯方块、扫雷、蜘蛛纸牌和本地双人 9/13/19 路围棋。围棋实现提子、禁自杀、简单劫和连续两次停着结束，只显示双方提子数，不自动判定地域胜负；围棋存档、最高提子、特色统计和游玩时长放在独立 Windows 私有表中，不进入 v29、恢复点、自动备份或应用 JSON 云同步。既有七个游戏/变体仍按 Android v29 字段往返；2048 支持 `moveAttempts` 总操作次数，旧 `losses` 仅兼容读取和往返，不再新增或展示。
-- 手机使用时间与健康：两个页面都**只显示、不采集**。手机使用时间可导入兼容快照/只读链接，或只读下载用户明确启用的专用云 usage 对象并按设备合并；健康页只读取用户明确选择的兼容文件。Windows 不调用活动统计或健康采集 API，不会写入、改名或删除来源文件；读取失败会保留上次有效快照。两类明细都不进入 Windows v29、自动备份、恢复点或应用 JSON 云上传，Windows 也绝不上传 usage 对象。
-- 设置与备份：设置层级、三套主题、背景图参数、主页模块、日记标题字号、诗词/吃历、收藏夹行高、AI、应用数据和教学总开关尽量与 Android 对齐。桌面导航设置可控制全部 18 个主页面的显隐、分类和顺序，可新建、重命名、排序或删除分类；侧栏分类可折叠，折叠后其页面按钮会同时从布局和键盘顺序中移除。可编辑子页使用本地草稿、右上角保存、恢复本页默认值和未保存离开确认。备份支持 Android v1–v29 预览导入并统一导出 v29。
-- 吃历显示设置：滤镜开关、亮度/对比度/饱和度/色温/色调、每行图片数量、说明文字和日期卡片单列/双列布局会持久保存。双列按日期列表中点分成左右两列，每天及其全部餐食保持完整；窄窗口自动回退为一列，原图不会被滤镜改写。
-- WebDAV/S3：日记、媒体、应用 JSON 与阅读进度可选择仅上传或双向同步；云同步页新增需要确认的“强制上传 / 强制下载”。强制上传可作用于多个已启用端点；强制下载只允许恰好一个已启用来源。两者都不传播删除，远端覆盖仍绑定扫描版本，本机覆盖仍绑定本机快照，应用 JSON 下载仍只暂存待确认。多设备使用时间对象只会由 Windows 下载并按设备合并，绝不上传。凭据使用当前 Windows 用户的 DPAPI 加密，不回传前端或写入 v29；默认要求 HTTPS，HTTP 只允许用户为可信局域网明确确认。S3 通道可在条件请求探测和同字节回读校验通过后兼容未加引号、弱、多个或缺失 ETag；WebDAV 仍严格要求单个强 ETag。
-- 关于与更新：仅 updater 配置完整的正式包会在启动约 60 秒后首次检查，此后跨重启至少间隔 24 小时且只提示。下载、Tauri `.sig` 验证和安装均需用户确认。正式 GitHub Release 必须通过 Tauri updater 私钥签名；Authenticode 为可选增强，未配置证书时安装包仍可正式发布，但 Windows SmartScreen 可能显示“未知发布者”。
+- Home, Journals, Meal Calendar, Daily Records, Quick Thoughts, Date Records, and Poetry Book preserve file-first data boundaries, categories and ordering, trash, external-edit conflict handling, daily poetry, and configurable home/game shortcuts. Journal and note files are edited in place only within roots selected by the user. Journal previews resolve relative Markdown images from the selected media root, including Chinese names and spaces; missing or invalid images show “Image unavailable” instead of remaining stuck in a loading state.
+- Notes lets the user select a normal directory as an Obsidian-style vault, browse folders, create or rename Markdown files, edit source or preview rendered content, insert images, and resolve external edits. Rust rejects `..`, absolute paths, reserved device names, and links that escape the selected root.
+- Reading provides a local TXT/PDF bookshelf, progress, table of contents, search, typography/background controls, and PDF zoom. pdf.js continuously renders PDFs in the app while data is fetched on demand through a restricted read-only protocol. Full-file fingerprints are identical to Android, and each cloud configuration can independently synchronize progress for the same book through `reading/v1/progress.json`. Windows paths and Android URIs are never written into one another.
+- RSS manages HTTPS feeds, refreshes them, and opens articles for reading. Network access limits redirects, private-network addresses, DOCTYPE declarations, response size, concurrency, and time. Article lists are not long-term backup data.
+- AI and Meal Calendar calories use the same OpenAI-compatible model configuration structure and plaintext API Key fields as Android v29. They support chat, history, journal/Quick Thoughts context, and food-photo estimation. Keys appear only in Authorization headers, never logs or errors. HTTP endpoints require explicit approval as trusted local services.
+- Vault uses PBKDF2-HMAC-SHA256 with 120,000 iterations and AES-256-GCM. Passwords, plaintext, and derived keys remain behind the Rust boundary, and the unlocked key exists only in session memory. Windows and Android Vaults are separate, and the Windows Vault is excluded from automatic backups, restore points, and cloud sync.
+- Games and Statistics include 4×4/5×5/6×6 2048, Snake, Tetris, Minesweeper, Spider Solitaire, and local two-player Go on 9×9, 13×13, or 19×19 boards. Go supports captures, suicide prevention, simple ko, and ending after two consecutive passes; it displays capture counts but does not adjudicate territory. Go saves, record captures, detailed statistics, and play time live in private Windows tables and are excluded from v29, restore points, automatic backups, and application-JSON cloud sync. The existing seven games/variants continue to round-trip through Android v29 fields. 2048 records total `moveAttempts`; legacy `losses` are read and preserved only for compatibility.
+- Phone Usage and Health are **display-only and never collect data**. Phone Usage can import a compatible snapshot, maintain a read-only link, or download explicitly enabled per-device usage cloud objects. Health reads only a compatible file explicitly selected by the user. Windows never calls activity or health collection APIs and never writes, renames, or deletes source files; a failed refresh retains the last valid snapshot. Neither detail set enters Windows v29, automatic backups, restore points, or application-JSON uploads, and Windows never uploads usage objects.
+- Settings and Backups mirror Android where practical: settings hierarchy, themes, background parameters, home modules, journal heading sizes, poetry/Meal Calendar controls, Vault row height, AI, app data, and the tutorial master switch. Desktop Navigation controls visibility, grouping, and order for all 18 main pages and can create, rename, reorder, or delete categories. Collapsed categories are removed from both layout and keyboard order. Editable subpages use local drafts, a top-right Save action, per-page defaults, and confirmation before leaving unsaved changes. Backups preview-import Android v1–v29 and always export v29.
+- Meal Calendar display settings persist filter enablement, brightness, contrast, saturation, temperature, tint, images per row, captions, and one- or two-column date-card layout. Two-column mode splits the date list at its midpoint while keeping each day and all its meals together; narrow windows fall back to one column. Filters never rewrite source images.
+- WebDAV/S3 can synchronize journals, media, application JSON, and reading progress in upload-only or bidirectional modes. The cloud page also provides confirmed Force Upload and Force Download actions. Force Upload may target several enabled endpoints; Force Download requires exactly one enabled source. Neither propagates deletions. Remote overwrites remain tied to scan versions, local overwrites to local snapshots, and downloaded application JSON remains pending until confirmation. Windows only downloads and merges multi-device usage objects—it never uploads them. Credentials are encrypted with DPAPI for the current Windows user and are never returned to the frontend or written to v29. HTTPS is required by default; HTTP needs explicit trusted-LAN approval. After conditional-request probing and same-byte read-back validation, the S3 path tolerates unquoted, weak, multiple, or missing ETags; WebDAV still requires exactly one strong ETag.
+- About and Updates checks for updates roughly 60 seconds after startup only in production packages with a complete updater configuration, then waits at least 24 hours across restarts and only shows a notification. Downloading, validating the Tauri `.sig`, and installing all require user confirmation. Production GitHub Releases must carry a Tauri-updater signature. Authenticode is optional; without it, a valid release may still show “Unknown publisher” in Windows SmartScreen.
 
-Windows 数据库位于 `%LOCALAPPDATA%\com.deskcubby.windows\deskcubby.db`，启用 WAL、外键、事务迁移与 busy timeout。日记和媒体目录不会被整份复制进应用私有目录；保存前使用 SHA-256 文件版本检测外部修改，冲突时提供“重新加载、覆盖、另存副本”。若文件被外部删除，“重新加载”会接受删除并关闭当前编辑，“覆盖”可安全重建同名文件，“另存副本”则把草稿保存为新文件。
+The Windows database is stored at `%LOCALAPPDATA%\com.deskcubby.windows\deskcubby.db` with WAL, foreign keys, transactional migrations, and a busy timeout enabled. Journal and media directories are not copied wholesale into private app storage. Before saving, DeskCubby compares a SHA-256 file version to detect external edits and offers Reload, Overwrite, or Save a Copy. If a file was deleted externally, Reload accepts the deletion and closes the editor, Overwrite safely recreates the file, and Save a Copy writes the draft under a new name.
 
-### Windows v29 数据兼容
+### Windows v29 data compatibility
 
-- 可直接预览和导入 Android v1–v29 JSON；旧版在内存中安全补齐为 v29（含 `desktopWidgetConfigs` 的五个外观字段默认值和 `cloud_sync` → `cloud_sync_now` 迁移），Windows 导出、自动备份和云端应用 JSON 统一写 `version: 29`。单个 JSON 上限为 64 MiB，并校验数组数量、字符串长度、枚举、重复 ID、关联关系及 v29 专属结构。
-- 导入前只显示统计与警告；用户勾选确认后才替换 Windows 管理的设置与结构化记录，失败回滚并保留导入前恢复点。日记、媒体、笔记和阅读正文不在这一事务中被覆盖。
-- Android 的 `content://` URI 始终作为不透明兼容字段保留；Windows 目录另存本机设置且绝不写回这些 URI。内置浏览器及未来未知字段通过当前 Windows 用户的 DPAPI 兼容影子往返。
-- Android v29 的 Vault `active`/`pending`/`items`、`usageDevices` 与健康明细会在进入 Windows 兼容影子前清除；Windows Vault 私有表、usage/health 缓存、本机来源路径和云凭据同样不会进入手动导出、自动备份、恢复点或应用 JSON 云上传。
-- `cloudSyncConfigs` 默认由兼容影子保留；用户在 Windows 新建、编辑、复制或删除云配置后，才由 Windows 覆盖同字段的非秘密配置，并保留相同 ID 的未知兄弟字段。每次入影子和导出仍递归清除 WebDAV/S3 凭据、DPAPI 载荷、来源路径等本机私有值。
-- v29 的 `CUSTOM/customTheme` 会严格验证并保存在 DPAPI 兼容影子中；Windows 当前按其 `baseStyle` 渲染，未主动改风格时仍会无损导出 `CUSTOM`。根级最多 500 条 URI-free `readerProgress` 会按书籍指纹和更新时间合并到 Windows 阅读账本；`moveAttempts` 正常往返，旧 `losses` 只作兼容。
-- AI API Key 依照 Android 产品格式是普通明文字段，会随 v29 导入、导出和云端应用 JSON 保存；请把备份视为敏感文件，不要放入公开或不可信目录。
+- Android v1–v29 JSON can be previewed and imported directly. Earlier versions are safely upgraded to v29 in memory, including defaults for the five `desktopWidgetConfigs` appearance fields and the `cloud_sync` → `cloud_sync_now` migration. Windows exports, automatic backups, and cloud application JSON always write `version: 29`. A JSON file is limited to 64 MiB and validated for array counts, string lengths, enums, duplicate IDs, relationships, and v29-specific structure.
+- An import first displays statistics and warnings. Windows-managed settings and structured records are replaced only after the user confirms; failure rolls the transaction back and retains a pre-import restore point. Journal, media, note, and book contents are not replaced by this transaction.
+- Android `content://` URIs remain opaque compatibility fields. Windows directories are stored in local settings and are never written back into those URI fields. Built-in-browser state and unknown future fields round-trip through a DPAPI-protected compatibility shadow bound to the current Windows user.
+- Android v29 Vault `active`/`pending`/`items`, `usageDevices`, and health details are removed before data enters the Windows compatibility shadow. Windows Vault tables, usage/health caches, local source paths, and cloud credentials are likewise excluded from manual exports, automatic backups, restore points, and application-JSON cloud uploads.
+- `cloudSyncConfigs` remains owned by the compatibility shadow until the user creates, edits, copies, or deletes a cloud configuration on Windows. Windows then replaces only the non-secret portion of that field while preserving unknown sibling fields with the same ID. Every shadow write and export still recursively strips WebDAV/S3 credentials, DPAPI payloads, source paths, and other local-only private values.
+- v29 `CUSTOM/customTheme` is strictly validated and stored in the DPAPI compatibility shadow. Windows currently renders its `baseStyle` and, unless the user explicitly changes styles, exports `CUSTOM` without loss. Up to 500 root-level URI-free `readerProgress` entries merge into the Windows reading ledger by book fingerprint and timestamp. `moveAttempts` round-trips normally; legacy `losses` remain compatibility-only.
+- By Android product design, an AI API Key is an ordinary plaintext field and is preserved through v29 import, export, and cloud application JSON. Treat every backup as sensitive and never place it in a public or untrusted location.
 
-### Windows 0.6.0 平台边界
+### Windows 0.6.0 platform boundaries
 
-Windows 不制作 Android 内置浏览器或桌面小卡片，也不读取 Android Room 数据库、`content://` URI 或系统级 Android 权限。Windows 与 Android 都提供围棋，但两端棋局与战绩各自只留在本机并从 v29 投影排除；Android 的主页围棋快捷入口同样只留在 Android 本机，Windows 仍从小游戏页进入围棋。Windows 还以独立私有表把围棋排除在恢复点、自动备份和应用 JSON 云同步之外。手机使用时间和健康只显示用户带到 Windows 的数据，绝不在 Windows 端采集或上传；阅读书架/路径、AI 会话、RSS 文章缓存、Windows Vault 与 usage/health 缓存属于本机数据，不随 v29 迁移。只有 URI-free 阅读位置可通过 v29 或可选阅读进度对象合并。
+Windows does not implement Android's built-in browser or home-screen widget designer, and it does not read Android Room databases, `content://` URIs, or Android system permissions. Both platforms include Go, but games and records remain local to each device and are excluded from the v29 projection; Android's Go home shortcut is also local-only, while Windows enters Go from Games. Dedicated private Windows tables additionally exclude Go from restore points, automatic backups, and application-JSON cloud sync. Phone Usage and Health only display data brought to Windows by the user and are never collected or uploaded on Windows. Bookshelf paths, AI sessions, RSS article caches, Windows Vault, and usage/health caches are local data that do not migrate through v29. Only URI-free reading positions can merge through v29 or an optional reading-progress object.
 
-## Android 0.13.0 当前功能
+## Android 0.13.0 features
 
-Android 端已增加内部 Kotlin Plugin API 基础层：独立 `:plugin-api:core` module 提供插件生命周期、统一 `PluginContext`，以及日记、Markdown 笔记库、媒体、同步、AI、Compose UI contribution 和插件独立存储接口；`:app` 中的 Adapter 继续委托现有 Repository/Service。它是供后续新功能使用的旁路入口，当前没有生产插件，也没有迁移既有 Screen、ViewModel 或 Repository 调用链；Plugin API 本身不改变现有页面、交互、Room v12、Markdown 或 `dc-media.json` v2。架构与扩展步骤见 [android/plugin-api/README.md](android/plugin-api/README.md)。
+Android includes an internal Kotlin Plugin API foundation. The independent `:plugin-api:core` module defines plugin lifecycle, a unified `PluginContext`, and APIs for journals, Markdown note libraries, media, sync, AI, Compose UI contributions, and plugin-private storage. Adapters in `:app` continue to delegate to existing repositories and services. This is a side-channel extension point for future features: there are currently no production plugins, and existing Screen, ViewModel, and Repository call paths have not been migrated. The Plugin API itself does not change existing pages, interactions, Room v12, Markdown files, or `dc-media.json` v2. See [android/plugin-api/README.md](android/plugin-api/README.md) for the architecture and extension workflow.
 
-### 界面与导航
+### Interface and navigation
 
-- Jetpack Compose 界面，提供 Material、Liquid Glass、Organic Future 和受控的 Custom 四种视觉风格，支持明暗模式、中英文和 RTL/系统安全区域。Custom 仍通过 Compose 主题角色渲染，不加载 CSS、脚本、网络资源或任意选择器。
-- 三套预设风格共享一个主颜色和 2–5 个副颜色；Custom 可分别设置浅色/深色的页面背景、背景文字、基础/卡片/次级表面、正文/次要文字和边框，并选择 Material、Glass 或 Organic 作为基础渲染。还可调整 0–40dp 全局圆角、0–4dp 面板边框、0–16dp 阴影、65%–100% 面板不透明度、75%–135% 内容间距及 0%–200% 页面切换动效；保存时会修正不可读的低对比度组合。
-- 主题主/副颜色、小巧思分类颜色和重点背景色都提供 HSV 取色器、紧凑的同行滑杆标签、蜂窝色盘，也支持直接输入 #RRGGBB。
-- 外观设置提供紧凑模式，收窄主页与设置列表的间距；还可通过 SAF 选择一张全局背景图片，分别调整 0–100% 可见度与 0–40dp 模糊，图片文件不复制进应用。设置主页顶部提供设置搜索，可按名称或关键词直达对应设置页。
-- 首页组件可增删、排序和单独控制标题显示，并提供小巧思、日常记录、饮食图片、笔记入口、小游戏直达、日记/小巧思/日期记录概览，以及独立的“立即同步”和“强制上传/下载”两个云同步模块；两张卡共享队列、进度、上次完成时间和待确认应用 JSON 状态，强制操作仍需确认且强制下载只接受一个启用来源。“设置 → 子页面设置 → 主页 → 小游戏快捷入口”可从三种 2048、贪吃蛇、俄罗斯方块、扫雷、蜘蛛纸牌和围棋中任意选择。左上角默认提供 24 条简短中性问候，按日期稳定轮换并完整显示。“设置 → 子页面设置 → 主页 → 主页问候”可修改用户名、复制 `{name}` 占位符，以及增加、修改或删除中英文问候语。
-- 主页饮食图片按钮单击直接拍照，长按打开选图；模块不再显示操作提示语。
-- 底部导航可修改名称、图标、显示状态、顺序、默认启动页和标签显示方式；设置入口不可隐藏。选中按钮不再绘制椭圆底色，让底栏音乐可视化保持连续。可视化支持直方图、波形或平滑曲线；频谱类样式可选自适应频率，或手动设置 20–20,000 Hz 的最低/最高频率，经对数频带重采样后不再只堆在左侧低频区域。取得 Android 录音权限后，可视化器只读取系统当前音频会话的频谱/波形用于实时绘制，不保存或上传音频；退到后台、权限缺失或系统关闭动画时会停止捕获。
-- “导航/More”聚合页可收纳不想直接放在底栏的其他主页面。底栏可见性在“设置 → 底部导航”管理，导航页收纳与描述统一在“设置 → 子页面设置 → 导航页”管理，避免重复开关。聚合页使用左右列分别按真实卡片高度排列的双列瀑布流，并可用卡片上的四点手柄直接拖动排序。
-- 软件教学模式默认开启：第一次进入每个主页面、嵌套路由、设置子页、阅读状态页或具体小游戏时，会显示不可误触关闭的中英文蒙版说明；每页确认只保存在当前设备，可在“设置 → 关于 → 页面教学”关闭或重置全部确认。
-- 首次启动的预设仍保持简洁：底栏只有主页、日记、小巧思、导航和设置；主页默认显示“今天、每日诗词、快速输入、饮食图片、年度进度、笔记、小游戏、记录概览、立即同步、强制上传/下载”十个模块。旧版单一 `cloud_sync` 模块会在原位置展开成这两项；用户此前已主动移除云同步时不会重新添加。
-- 设置子页使用右上角保存，并可用重置按钮把本页全部草稿恢复为默认值后再保存；存在未保存修改时返回会先弹出确认提示。
-- 应用冷启动开屏底色固定为黑色，避免系统启动窗口先闪白。
-- “导航 → 小卡片”设计页可保存多套桌面信息组件，设置 1–6 格的自定义宽高、常用尺寸、背景/文字颜色和 SAF 背景图片，并复刻全部 21 个主页模块或启动另一应用。每个系统桌面实例独立保存绑定模板 ID 和最后有效快照；在设计器保存模板后，所有仍绑定该模板的实例立即跟随更新，不同模板和重新配置过的实例互不串联，模板删除后已放置实例保留最后快照。应用快捷卡优先读取目标启动 Activity/alias 图标并回退应用图标，以正常桌面图标大小 48dp 居中显示。大尺寸卡按模块复刻完整月历、日期记录最多四项及新增/查看、最近日记/小巧思逐条直达、最多四项日常记录实际录入及管理、随机日记具体直达、小游戏逐项直达，以及包含运行/进度/上次结果/错误/待确认 JSON 的两个云同步模块；诗词、六餐图片和快速输入保留各自直接操作。1×1、1×2 等不合适尺寸仍退化为整卡跳转，`RemoteViews` 无法承载的真实输入由非导出私有 Activity 完成。
+- The Jetpack Compose UI offers Material, Liquid Glass, Organic Future, and a controlled Custom style. It supports light/dark mode, Chinese and English, RTL, and system safe areas. Custom styles still render through Compose theme roles and never load CSS, scripts, network resources, or arbitrary selectors.
+- The three presets share one primary color and two to five accent colors. Custom separately configures light and dark page background/on-background, base/card/secondary surfaces, primary/secondary text, and borders, with Material, Glass, or Organic as its rendering base. It also controls 0–40 dp global radius, 0–4 dp panel border, 0–16 dp shadow, 65%–100% panel opacity, 75%–135% content spacing, and 0%–200% page-transition motion. Saving repairs unreadable low-contrast combinations.
+- Primary/accent theme colors, Quick Thoughts category colors, and highlighted backgrounds all offer an HSV picker, compact inline slider labels, a honeycomb palette, and direct `#RRGGBB` input.
+- Appearance settings include Compact Mode for tighter Home and Settings spacing. A global background image can be selected through SAF with independent 0%–100% visibility and 0–40 dp blur; the image is not copied into the app. Settings search at the top of the root Settings page jumps to pages by name or keyword.
+- Home modules can be added, removed, ordered, and given individual title visibility. Available modules include Quick Thoughts, Daily Records, food photos, Notes, game shortcuts, journal/Quick Thoughts/date-record summaries, and separate Sync Now and Force Upload/Download cards. Both sync cards share queue, progress, last-completion, and pending application-JSON state; forced operations still require confirmation, and Force Download accepts only one enabled source. “Settings → Subpage settings → Home → Game shortcuts” can select any combination of three 2048 variants, Snake, Tetris, Minesweeper, Spider Solitaire, and Go. The upper-left greeting rotates deterministically by date through 24 short neutral defaults without truncation. “Settings → Subpage settings → Home → Home greetings” edits the user name, copies the `{name}` placeholder, and adds, edits, or deletes Chinese/English greetings.
+- On Home, tapping the food-photo button opens the camera; long-pressing opens the image picker. The module no longer displays an instruction caption.
+- Bottom navigation supports custom labels, icons, visibility, order, startup page, and label presentation; Settings cannot be hidden. The selected item no longer draws a pill background so the music visualizer remains continuous. The visualizer offers bars, waveform, or smooth curve. Spectrum styles can use adaptive frequencies or a manual 20–20,000 Hz range with logarithmic resampling, preventing all energy from clustering at the left. After Android recording permission is granted, it reads only the current system audio session's spectrum/waveform for live drawing, never stores or uploads audio, and stops in the background, without permission, or when system animations are disabled.
+- The Navigation/More hub collects main pages not placed directly in the bottom bar. Bottom-bar visibility is managed under “Settings → Bottom navigation”; hub membership and descriptions live under “Settings → Subpage settings → Navigation” to avoid duplicate switches. Cards use a two-column masonry layout based on their true heights and can be reordered directly through four-dot handles.
+- Page tutorials are enabled by default. The first visit to each main page, nested route, Settings subpage, reading state, or individual game shows a bilingual overlay that cannot be dismissed accidentally. Confirmations stay only on the current device; “Settings → About → Page tutorials” can disable the mode or reset all confirmations.
+- First-run defaults stay compact: the bottom bar contains Home, Journals, Quick Thoughts, Navigation, and Settings. Home initially shows Today, Daily Poem, Quick Input, Food Photos, Year Progress, Notes, Games, Record Overview, Sync Now, and Force Upload/Download. A legacy single `cloud_sync` module expands into the two new entries in place; it is not re-added for users who had already removed cloud sync.
+- Settings subpages save from the top-right. Reset restores every draft value on that page to its default before saving, and leaving with unsaved changes requires confirmation.
+- The cold-start splash background is always black to avoid a white system-window flash.
+- “Navigation → Widgets” can save multiple home-screen widget designs with custom dimensions from 1–6 cells, common presets, background/text colors, an SAF background image, replicas of all 21 Home modules, or another-app launch actions. Every widget instance independently stores its template ID and last valid snapshot. Saving a template immediately refreshes all instances still bound to it; separate templates and reconfigured instances do not leak state into one another, and deleting a template leaves placed instances on their last snapshot. App shortcuts prefer the target launcher Activity/alias icon, fall back to the application icon, and center it at the normal 48 dp launcher size. Large widgets reproduce the full calendar, up to four Date Records with add/view actions, direct links to recent journals and Quick Thoughts, actual input for up to four Daily Records plus management, direct random-journal and per-game actions, and two cloud-sync modules with running state, progress, last result, error, and pending JSON. Poetry, six meal-photo actions, and Quick Input retain direct actions. Unsuitable sizes such as 1×1 or 1×2 degrade to opening the app; real input that `RemoteViews` cannot host is handled by a private, non-exported Activity.
 
-### 日记、媒体与日常记录
+### Journals, media, and Daily Records
 
-- 通过 Storage Access Framework 持久授权日记和媒体目录，不把 `content://` URI 转换成文件路径。
-- 尚未配置日记目录时，日记空状态提供“一键设置默认目录”：系统选择器会定位到本机 Documents，用户仍需确认一次 SAF 读写授权；成功后应用创建或复用 `Documents/deskcubby/diary` 与 `Documents/deskcubby/media`，验证两个子目录可访问后再同时保存。也可继续选择“手动选择目录”。
-- 支持 Markdown 日记扫描、月份分组、今日日记、模板、文件名格式、源码编辑、阅读预览和自动保存。阅读预览保留 CommonMark 标题、粗体、斜体、列表、引用、代码与安全链接；“设置 → 子页面设置 → 日记与媒体 → Markdown 阅读预览”可分别调整 H1–H6 的 12–48sp 字号。
-- Markdown 中独占一行的媒体可拖动排序；源码和阅读预览中的媒体都提供删除按钮，确认后删除当前日记内该文件的全部引用和媒体文件，并尽力清理对应侧车元数据。删除前仍执行 SHA-256 外部修改检测，日记或媒体文件主操作失败都不会误报成功。
-- 日记设置可选择在导入图片时把未压缩的原图另存到系统相册的 DeskCubby 相簿（API 29+ 无需权限；API 26–28 依赖安装时授予的存储权限，失败不影响日记内的保存）。
-- 日记支持软删除、恢复和永久删除；软删除会先复制到独立回收站并回读校验。
-- 日常记录使用支持换行的多行模板和输入框，`xx` 代表可快速选中替换的内容；编辑后的完整多行内容可直接追加到当前日记或今日日记。
-- 日记编辑页和首页都可快速打开、填写并发送日常记录。
+- Storage Access Framework grants persistent access to journal and media directories; `content://` URIs are never converted to file-system paths.
+- When no journal directory is configured, the empty state offers “Set up default directories.” The system picker opens at local Documents and still requires the user to confirm SAF read/write access. DeskCubby then creates or reuses `Documents/deskcubby/diary` and `Documents/deskcubby/media`, verifies both children, and saves them together only after success. Manual directory selection remains available.
+- Markdown journal scanning, month grouping, today's journal, templates, filename format, source editing, reading preview, and autosave are supported. The preview preserves CommonMark headings, bold, italic, lists, quotes, code, and safe links. “Settings → Subpage settings → Journals and media → Markdown reading preview” independently adjusts H1–H6 from 12–48 sp.
+- Media on standalone Markdown lines can be reordered by dragging. Both source and preview provide media delete controls; after confirmation they remove every reference to that file from the current journal, remove the media file, and best-effort clean its sidecar metadata. SHA-256 external-edit checks still run first, and a failed primary journal or media action is never reported as successful.
+- Journal settings can optionally save an uncompressed source photo to the system Gallery's DeskCubby album during import. API 29+ needs no permission; API 26–28 uses storage permission granted at installation. Gallery failure does not prevent the journal copy from being saved.
+- Journals support soft delete, restore, and permanent delete. Soft delete first copies content into a separate trash area and verifies it by reading it back.
+- Daily Records use multiline templates and multiline input. `xx` marks a region that can be selected quickly for replacement. The fully edited multiline value can be appended to the current journal or today's journal.
+- Daily Records can be opened, filled, and submitted quickly from both the journal editor and Home.
 
-### Obsidian 兼容笔记
+### Obsidian-compatible Notes
 
-- “笔记”默认收纳在“导航”页，可通过 SAF 直接选择 Obsidian 仓库或普通文件夹；应用原地浏览真实目录，不复制仓库，也不会按日期或月份重排笔记。
-- 目录先显示文件夹、再显示 `.md` 文件，分别按正常名称顺序排列；支持面包屑导航，以及新建、重命名和确认删除文件夹/Markdown 笔记。其他类型的文件原样保留但不出现在列表中。
-- 笔记编辑器提供 Markdown 源码与共享阅读预览，并在停止输入约 900 ms 后自动保存。保存使用 SHA-256 外部修改检测；若 Obsidian 同时改动文件，可加载磁盘版本、明确覆盖或另存 DeskCubby 冲突副本。
-- 标准 Markdown 图片和 Obsidian `![[Wiki 嵌入]]` 都可预览。上传媒体时每次先选图片、再由用户选择当前笔记库内的目标文件夹；复制与回读校验成功后插入相对链接，不会复用日记媒体目录。
+- Notes is placed in Navigation by default. SAF can select an Obsidian vault or any regular folder; DeskCubby browses real files in place, does not copy the vault, and does not regroup notes by date or month.
+- Folders appear before `.md` files, each in natural name order. Breadcrumb navigation and confirmed create, rename, and delete operations are available for folders and Markdown notes. Other file types remain untouched but are not listed.
+- The note editor provides Markdown source and the shared reading preview, then autosaves roughly 900 ms after typing stops. Saving uses SHA-256 external-edit detection. If Obsidian changed the file concurrently, the user can load the disk version, explicitly overwrite it, or save a DeskCubby conflict copy.
+- Standard Markdown images and Obsidian `![[Wiki embeds]]` are both previewed. Every media upload first selects an image and then asks the user to choose a destination folder inside the current note library. A relative link is inserted only after copy and read-back validation; the journal media directory is never reused.
 
-### 阅读
+### Reading
 
-- “阅读”可从导航/More 页面进入，通过 SAF 导入 TXT 或 PDF；只保存持久读取授权和阅读状态，不复制或改写原书文件。TXT 支持 UTF-8、UTF-16 与 GB18030 回退解码；PDF 增强视图改用 PDFium，通过 SAF 文件描述符直接打开，连续纵向按需渲染并支持缩放、真实页码、双色显示、文字搜索跳页和文本目录扫描。PDFium 打开失败、页数异常、首个恢复/可见页渲染失败、native 链接或内存失败、首屏等待超过 30 秒时，会自动切换到系统 `PdfRenderer` 连续兼容视图，并可从提示条重试增强视图。失败回退不会损坏或改写原文件。
-- TXT 智能规则会扫描整本书，识别更多中英文章节/卷/回/幕、带空格或装饰符的“第 1 章”、Chapter/Part/Book/Section/Episode、罗马数字、序章/尾声、数字标题、Markdown 标题和括号标题；连续目录条目与后文同名正文标题会合并并保留正文位置。阅读设置可选“仅智能 / 仅自定义 / 智能 + 自定义”，输入匹配整行的正则，并调整章节标题最长字符数。
-- TXT 支持整书搜索、上一项/下一项跳转、高亮结果和长按选择复制。PDFium 增强视图支持双指缩放，并可在阅读设置保存 50%–300% 的基准比例；含可提取文字的 PDF 可搜索并自动扫描目录，纯图片扫描件不伪造文字结果。系统兼容视图仍可按真实页码/进度连续阅读，但不提供 PDFium 的文字搜索和目录能力。
-- TXT 与 PDF 都可选择 5 种预设背景或任意自定义背景，并可把前景/字体颜色设为自动或任意自定义色。PDF 采用只影响显示的双色映射，因此夜间背景配浅色前景可得到黑底白字，原 PDF 不会被改写；TXT 另可调整 12–38sp 字号、1.0–2.4 倍行距和 0–36dp 段距。兼容 PDF 的所有页面共用同一个横向偏移，左右查看放大页面后不会只移动当前一页。
-- 阅读设置可开启“全屏纯净模式”：正文扩展到安全区域，默认隐藏书名、工具栏、页码和系统栏，点屏幕中央可唤醒或再次隐藏组件。方向仍可选跟随系统、锁定竖屏或锁定横屏。
-- 书架右上角设置可在现有列表与两列封面间切换，并独立决定是否显示封面下方书名和阅读进度百分比。关闭书名后仅隐藏封面下方重复标题；没有手动图片的 TXT 会把书名直接居中写在默认封面上，因此仍可辨认。封面继续按卡片实际宽度限制解码、输出像素与缓存大小；PDF 优先使用已验证缓存或系统文档提供方的安全缩略图，无法取得时显示类型占位。PDF/TXT 都可选择一张 SAF 图片手动覆盖，移除后恢复安全缩略图或默认封面，不改动原书。
-- 每本书的 URI、封面、页/段进度及全局阅读偏好写入应用私有 schema-v6 JSON，并继续兼容 v1–v5；v6 只增加两列封面下方书名开关，旧状态默认继续显示。前台阅读每 30 秒检查点保存，离开或退到后台时再次保存。完整书籍字节和类型生成 SHA-256 指纹，并维护不含 URI/书名/封面/正文的有界进度账本。DeskCubby v29 JSON 会携带这部分进度记录；另一设备恢复后，无论先恢复还是先导入，只要通过 SAF 导入内容完全相同的 TXT/PDF，就会按最新记录跳到相同位置。书架、封面、显示偏好和阅读时长仍不进入应用 JSON 或 Android 系统备份。
+- Reading is available from Navigation/More and imports TXT or PDF through SAF. DeskCubby stores only persistent read permission and reading state; it never copies or rewrites the book. TXT falls back through UTF-8, UTF-16, and GB18030 decoding. The enhanced PDF view uses PDFium directly over an SAF file descriptor, continuously and lazily renders pages, and supports zoom, true page numbers, two-color mapping, text search with navigation, and text-based table-of-contents scanning. If PDFium cannot open the file, returns an invalid page count, fails to render the restored/first visible page, hits native-link or memory failure, or takes over 30 seconds to show the first page, DeskCubby switches safely to a continuous system `PdfRenderer` compatibility view. A banner can retry the enhanced view. Fallback never damages or rewrites the source file.
+- Smart TXT rules scan the entire book and recognize more Chinese and English chapter/volume/section/act forms, spaced or decorated “Chapter 1” forms, Chapter/Part/Book/Section/Episode, Roman numerals, prologues/epilogues, numeric titles, Markdown headings, and bracketed titles. Consecutive table-of-contents entries and later body headings with the same name are merged while preserving the body location. Reading settings choose Smart only, Custom only, or Smart + Custom; accept a whole-line regular expression; and set the maximum heading length.
+- TXT supports full-book search, previous/next result navigation, highlights, and long-press selection/copy. The enhanced PDF view supports pinch zoom and saves a 50%–300% baseline scale. PDFs with extractable text support search and automatic contents scanning; image-only scans do not fabricate text results. The system compatibility view still reads continuously by true page number/progress but lacks PDFium text search and contents.
+- TXT and PDF offer five preset backgrounds or any custom background, with automatic or custom foreground/text color. PDF uses display-only two-color mapping, so a dark background with a light foreground can produce white text on black without changing the file. TXT additionally controls 12–38 sp font size, 1.0–2.4× line spacing, and 0–36 dp paragraph spacing. All pages in compatibility PDF mode share the same horizontal offset, so panning a zoomed document does not move only the current page.
+- Optional Distraction-free Fullscreen expands content into safe areas and initially hides the book title, toolbar, page indicator, and system bars. Tapping the center shows or hides controls. Orientation can follow the system, lock portrait, or lock landscape.
+- Bookshelf settings switch between a list and two-column covers and independently control the title below each cover and progress percentage. Hiding the title only removes the duplicated caption; a TXT without a custom image draws its title directly onto the default cover. Cover decoding, output pixels, and cache size are limited using the card's measured width. PDFs prefer a verified cache or a safe thumbnail from the document provider and otherwise show a type placeholder. Either TXT or PDF can use an SAF image as a manual cover; removing it restores the safe thumbnail/default without touching the book.
+- Per-book URI, cover, page/paragraph position, and global reading preferences are stored in a private schema-v6 JSON file compatible with v1–v5. v6 adds only the title-below-cover option and defaults older state to visible. Foreground reading checkpoints every 30 seconds and saves again when leaving or backgrounding. A SHA-256 fingerprint combines all book bytes and its type, and a bounded ledger stores progress without URI, title, cover, or content. DeskCubby v29 JSON includes that ledger. On another device, whether restore happens before or after import, selecting a byte-identical TXT/PDF through SAF resumes from the newest position. Bookshelf entries, covers, display preferences, and reading time remain excluded from application JSON and Android system backup.
 
-### 饮食记录与 AI 热量估算
+### Meal Calendar and AI calorie estimation
 
-- 饮食分类固定为早餐、午餐、下午茶、晚餐、水果、夜宵，默认图标为 `🥪 🍱 🍹 🍜 🍊 🍤`。
-- “吃历”按日期展示饮食照片，可设置图片高度上限和是否显示文字说明；点击照片可全屏放大查看（双指缩放、双击切换倍率），放大时显示热量与拍摄地点（如有）。加载时对日记目录和媒体目录各执行一次 SAF 子项元数据快照，并复用有界的 Markdown 图片引用缓存；从滤镜/进度页返回会直接使用已加载结果，日记或媒体内容由应用修改后才自动失效，手动刷新仍可强制重读外部编辑。
-- 吃历可按包含首尾日期的日范围导出 PNG 长图。导出沿用当前餐别筛选、滤镜、每行图片数量与说明显示设置，生成前检查高度/像素上限，写入后回读校验。
-- 吃历支持图片自动换行：可选每行 2 张、3 张或“2+3 自动”——自动模式混合每行 2/3 张，保证最后一行不留空位（4=2+2、5=3+2、7=3+2+2）。
-- 吃历右上角提供餐别筛选（漏斗图标）：勾选想显示的餐别（如只勾早餐则只显示早餐照片），筛选为会话内状态。
-- 照片滤镜按钮（魔棒图标）：单击开关，长按进入设置，可调整亮度、对比度、饱和度、色温和色调。滤镜只影响应用内显示，不会改写原始图片。
-- 配置文字模型与图片识别模型后，可开启上传图片自动估算热量。吃历按日期处理：同一天最多 3 张图片并行识别食物名称与分量，全部成功后只调用一次文字模型，结合当天备注和所有识别结果统一返回每张图片的总能量及逐项食物名称、分量、单位和 kJ；确认是同餐重复角度时可把重复图片记为 0 kJ。内置旧版默认文字提示词会迁移到多图契约，用户自定义提示词不会被覆盖。
-- 吃历顶栏的“估算所有”按钮单击会把当前日期加入任务，长按直接进入热量估算进度页。进度页显示同时识别数、已完成图片数，以及“并行图片模型识别 / 全日文字模型统一计算 / 保存”阶段；点“正在处理”卡片可分别查看多个图片请求和全日文字请求的实时用时、流式思考与回复。离开吃历后任务继续运行；不同日期仍按队列依次处理。任一图片、统一计算或保存失败时当天不部分写入，后续日期继续。
-- 热量结果记录在媒体目录的 `dc-media.json`（兼容读取旧名 `deskcubby-media.json`，不再改写图片 Markdown 标题；旧版写在标题里的 `午餐-800kJ` 仍可读取）。点击日期热量或详情入口可查看完整日期，按“早餐 1 / 午餐 1 / 午餐 2”等列出食物明细；没有结果的照片统一显示“估算失败”。每张照片旁的计算器仍可只重算该图并保留手工总量；整日重算会并行识别当天全部照片、统一计算、更新全部明细并清除手工总量。两者都会保留备注并只把它发送给文字模型。
-- `dc-media.json` v2 对大小、条目、日期、食物数、字符串和能量值设有上限，并以 previous/pending、回读校验和恢复副本保护更新；损坏或超限文件不会被当作空数据覆盖。
-- 日记设置可开启“记录照片拍摄地点”：导入图片时读取 EXIF 位置（相册图片可能需要授予媒体位置权限），经系统地理编码后与热量一起写入 `dc-media.json`。
-- 日记阅读预览会在照片下方显示 `dc-media.json` 中已有的拍摄地点，不只在吃历放大查看器中显示。
+- Meal categories are fixed as Breakfast, Lunch, Afternoon Tea, Dinner, Fruit, and Late-night Snack, with default icons `🥪 🍱 🍹 🍜 🍊 🍤`.
+- Meal Calendar groups food photos by date and controls maximum image height and caption visibility. Tapping opens a fullscreen viewer with pinch zoom and double-tap zoom; calories and capture location appear when available. Loading takes one SAF child-metadata snapshot each for the journal and media directories and reuses a bounded Markdown-image-reference cache. Returning from filters or estimation progress reuses loaded data. Only an app-originated journal/media change automatically invalidates it; manual refresh still forces external edits to be reread.
+- A date range, inclusive at both ends, can be exported as a tall PNG. Export honors the current meal filter, image filter, images-per-row, and caption settings, checks height/pixel limits before generation, and verifies the file by reading it back after writing.
+- Images can wrap as two per row, three per row, or “2+3 Auto.” Auto mixes rows of two and three without leaving a final empty slot: 4=2+2, 5=3+2, and 7=3+2+2.
+- The funnel in the top-right filters meal categories for the current session—for example, selecting only Breakfast displays only breakfast photos.
+- The wand button toggles photo filters on tap and opens settings on long press. Brightness, contrast, saturation, temperature, and tint affect only in-app rendering and never rewrite source images.
+- After text and image-recognition models are configured, automatic calorie estimation can be enabled. Work is grouped by day: up to three photos are recognized in parallel for foods and portions, then one text-model request combines the day's note and all recognition results and returns total energy plus each food name, quantity, unit, and kJ for every photo. Confirmed duplicate angles of the same meal may be assigned 0 kJ. The built-in legacy text prompt migrates to the multi-image contract; custom prompts are not overwritten.
+- Tapping Estimate All queues the current date; long-pressing opens progress directly. The progress page shows concurrent recognitions, completed images, and the Parallel image recognition / Whole-day text calculation / Save stages. Tapping the active card shows per-image and whole-day request duration, streamed reasoning, and streamed response. Work continues after leaving Meal Calendar, while dates still process sequentially. If any image request, combined calculation, or save fails, that day is not partially written and later dates continue.
+- Results live in `dc-media.json` in the media directory. The legacy `deskcubby-media.json` is still read, but Markdown image titles are no longer rewritten; old titles such as `Lunch-800kJ` remain a read-only fallback. Tapping a date total/details opens the full date with entries such as Breakfast 1, Lunch 1, and Lunch 2. Photos without results consistently show “Estimation failed.” The calculator beside a photo reruns only that image while preserving a manual day total. A full-day rerun recognizes every photo in parallel, calculates once, replaces all details, and clears the manual total. Both preserve the note and send it only to the text model.
+- `dc-media.json` v2 limits file size, entries, dates, food items, strings, and energy values. Updates use previous/pending copies, read-back verification, and a recovery copy. A damaged or oversized file is never treated as empty and overwritten.
+- Journal settings can enable capture-location recording. Imported photos have EXIF coordinates read when available—gallery images may require media-location permission—then system geocoding writes the place beside calories in `dc-media.json`.
+- Journal reading preview displays an existing capture location from `dc-media.json` below the photo, not only in the fullscreen Meal Calendar viewer.
 
-### 小巧思、浏览器与其他页面
+### Quick Thoughts, browser, and other pages
 
-- 小巧思支持创建、更新、分类、置顶、拖动排序、复制、分享、软删除和回收站；首次进入“全部”、未分类或任一分类时会自动定位到列表底部的最新内容，而不是停在最老条目。
-- 长按小巧思可标记/取消“重点”，重点条目以可自定义的背景色显示；分类颜色支持预设色板与自定义取色，有机未来的预设色板覆盖多个色相而非单一绿色系。
-- 长按小巧思的“切换分类”弹窗内可直接新增分类，新分类会立即套用到该条小巧思；编辑分类时可一键导出该分类的全部小巧思（系统分享为纯文本）。
-- 输入框只在点击时弹出键盘、只从键盘自身收起，列表滚动不再影响键盘；输入框最大高度可在小巧思设置中调整（超出后内部滚动）。
-- 可选择小巧思单行/完整显示，以及重启后回到全部页面或上次停留的分类；小巧思页右上角、分类按钮左侧可随时即时切换“一行/完整”。
-- 多标签 WebView 浏览器支持地址栏横滑切换、前进/后退、刷新、主页、页内查找、收藏、历史、上传、下载和外部打开。
-- 日期记录、诗词本和每日诗词；首页每日诗词按本地日期记录当天已展示的指纹，应用启动不会在同一天自行换诗。刷新会轮换今日诗词 `v2.jinrishici.com`、Hitokoto 的诗词分类 `v1.hitokoto.cn/?c=i` 与古诗词·一言 `api.gushi.ci/all.json`，全部在线源失败或撞到当日已看内容时继续从 182 篇内置诗库选择，因此不再出现“暂无未看过的新诗词”。主页诗词详情以诗词名称为标题。
-- 诗词本支持“全部 / 未分类 / 自定义分类”筛选、分类颜色、增删改、单篇改分类和右上角排序模式；排序稳定支持调整第一条或把任意诗词移到第一条。删除分类时可明确选择“仅删除分类（诗词归入未分类）”或“分类和诗词一起删除”。排序时四点手柄可拖动或用无障碍上移/下移，卡片收成“题目在开头”的一行预览。七言自动换行只对检测到至少两句七言句式的诗词生效。点击主页诗词模块可查看整首诗并收藏；卡片长按进入编辑、改分类或删除。诗词本设置仍支持本机字体、字号、行距、对齐、出处、引号装饰和七言自动换行。
-- RSS 页面支持 RSS 2.0 与 Atom 订阅的增删改、启停和刷新；点击有效的 HTTPS 文章会进入应用内多标签浏览器阅读全文，仍可从浏览器菜单交给系统浏览器。
-- 收藏夹页面提供密码保护的私密文本收藏：首次使用设置密码，条目用密码派生密钥（PBKDF2 + AES-GCM）加密后保存在 Room。新密码允许 1 个到任意多个 Unicode 码点；密码不可找回。v29 会原样备份 AES-GCM 密文、IV、盐、迭代次数和加密校验值，但绝不写入密码、明文或派生密钥，因此换设备后输入原密码即可解锁。卡片不显示日期；有备注时直接显示备注，无备注时省略该行。普通正文单击复制，安全 HTTP(S) 链接单击用系统浏览器打开，长按进入含复制/编辑/删除的界面，右侧四点手柄可拖动排序；“设置 → 子页面设置 → 收藏夹”可调整卡片最小行高，最低 48dp，与小巧思的紧凑高度一致。
-- 小游戏页面提供相互独立存档的 4×4、5×5、6×6 三种 2048、贪吃蛇、俄罗斯方块、自定义扫雷、横屏蜘蛛纸牌和本地双人围棋。围棋可选择 9/13/19 路棋盘，执行提子、禁自杀与简单劫；双方连续两次停着后结束，页面显示双方提子数，但不自动按地域或面积判定胜负。0.12.0 在每次合法落子或停着后发布新的棋局快照，确保 Compose 立即重绘棋子、手数和轮次；触控按最近交叉点吸附并覆盖整块棋盘，连续落子不再因状态引用或交叉点间死区失效。其他页面及游戏内未单独设色的文字统一使用当前主题前景色，能随亮/暗模式切换黑/白；2048 默认色板也跟随应用明暗模式，用户手动选择白天/黑夜后则保留该覆盖。2048 另支持慢速/标准/快速三档动画速度、分项动画开关、全页四向滑动和无限撤回；五位数及更长方块值会按位数与格宽单行缩放，绝不换行。扫雷可设置 6–30 行、6–30 列和合法范围内的雷数；单花色蜘蛛纸牌支持发牌、移动、自动收走 K→A、撤回和横屏布局。
-- 小游戏会按各自玩法累计特色统计：2048 同时记录“总操作次数”（每次被游戏接受的方向输入，包含没有移动棋盘的输入）和“有效移动”，另有合并、最高方块及获胜；0.10.0 起不再新增或展示 2048 失败次数/胜率，但旧 Room/备份中的失败字段继续兼容往返。围棋记录落子、提子、停着和完成棋局数，其他游戏继续记录各自的食物、消行、扫雷、移动与胜负。统一“统计”页面汇总日记、手机使用时间、健康、阅读和全部游戏，卡片可进入带趋势图或指标图的统计子页。围棋存档、最高提子、特色统计和主页围棋快捷入口当前只保存在 Android 本机，并从 v29 备份投影排除；既有七个游戏/变体继续按原规则进入 v29。
-- 每个小游戏分别累计前台游玩总时长；计时每 30 秒检查点保存，并在离开游戏或应用退到后台时保存到应用私有 `engagement-times-v1.json`。总时长不会进入 Room 游戏存档、v29 JSON 或 Android 系统备份；特色统计存入 Room，既有七个游戏/变体进入 v29 显式备份，围棋统计只留在 Android 本机。
+- Quick Thoughts supports create, update, categorization, pinning, drag ordering, copy, share, soft delete, and trash. The first visit to All, Uncategorized, or any category automatically positions the list at the newest content at the bottom instead of the oldest entry.
+- Long-pressing a thought marks or unmarks it as Important. Important entries use a customizable background. Category colors include presets and a custom picker; Organic Future presets span several hues instead of only green.
+- The Change Category dialog opened from a long press can create a category and immediately apply it to the current thought. Category editing can export every thought in that category as plain text through the system share sheet.
+- The keyboard opens only after tapping the input and closes only from the keyboard itself; scrolling the list no longer affects it. Quick Thoughts settings control the input's maximum height, after which the field scrolls internally.
+- Thoughts can use one-line or full display and can reopen after restart at All or the last category. A top-right control beside Categories switches one-line/full display immediately.
+- The multi-tab WebView browser supports horizontal address-bar tab switching, back/forward, refresh, home, find in page, bookmarks, history, uploads, downloads, and opening externally.
+- Date Records, Poetry Book, and Daily Poem are included. Home stores the displayed poem's fingerprint by local date, so startup does not silently replace it on the same day. Refresh rotates among Jinrishici (`v2.jinrishici.com`), Hitokoto's poetry category (`v1.hitokoto.cn/?c=i`), and Gushi Ci (`api.gushi.ci/all.json`). If all sources fail or repeat today's content, it continues from 182 bundled poems instead of showing “No unseen poem available.” The Home detail view uses the poem's name as its title.
+- Poetry Book filters All / Uncategorized / custom categories and supports category colors, create/edit/delete, per-poem reassignment, and a top-right sorting mode. Ordering correctly handles moving any item to the first position. Category deletion explicitly chooses between deleting only the category and moving poems to Uncategorized, or deleting both. Four-dot handles support drag and accessible move-up/move-down actions, and sorting cards collapse to a one-line preview beginning with the title. Automatic line breaks for seven-character verse apply only when at least two such lines are detected. Tapping the Home poem opens and bookmarks the complete work; long-pressing a card opens edit, recategorize, or delete. Settings still control a local font, font size, line spacing, alignment, source display, quotation decoration, and seven-character wrapping.
+- RSS manages RSS 2.0 and Atom subscriptions with create/edit/delete, enable/disable, and refresh. Valid HTTPS articles open in the built-in multi-tab browser and can still be handed to the system browser.
+- Vault is a password-protected private-text collection. A password-derived key (PBKDF2 + AES-GCM) encrypts entries stored in Room. New passwords may contain one or more Unicode code points and cannot be recovered. v29 backs up AES-GCM ciphertext, IV, salt, iteration count, and encrypted verifier exactly, but never the password, plaintext, or derived key; entering the original password after a device migration unlocks it. Cards do not show dates, show notes only when present, copy ordinary text on tap, and open safe HTTP(S) links in the system browser. Long press opens copy/edit/delete; four-dot handles reorder. “Settings → Subpage settings → Vault” controls minimum row height down to 48 dp.
+- Games keeps independent saves for 4×4/5×5/6×6 2048, Snake, Tetris, custom Minesweeper, landscape single-suit Spider Solitaire, and local two-player Go. Go supports 9×9, 13×13, and 19×19 boards, captures, suicide prevention, and simple ko. Two consecutive passes end the game; capture counts are shown, but territory/area scoring is not automated. Since 0.12.0 every valid move or pass publishes a fresh game snapshot so Compose immediately redraws stones, move count, and turn. Touches snap to the nearest intersection across the full board, eliminating dead zones. Game text without a local override uses the current theme foreground and follows light/dark mode. The default 2048 palette also follows the theme unless the user chooses a day/night override. 2048 offers slow/standard/fast motion, per-animation switches, full-page four-direction swipes, and unlimited undo; values with five or more digits scale to one line. Minesweeper supports 6–30 rows, 6–30 columns, and any valid mine count. Spider supports deal, move, automatic K→A removal, undo, and landscape layout.
+- Game-specific statistics include both 2048 total operations—every accepted directional input, even without board movement—and effective moves, plus merges, highest tile, and wins. Since 0.10.0, new 2048 losses/win rates are neither recorded nor shown; legacy Room/backup loss fields still round-trip. Go tracks stones placed, captures, passes, and completed games. Other games retain their own food, line, mine, move, and win/loss measures. The unified Statistics page covers journals, phone usage, health, reading, and all games, with cards leading to trend or metric charts. Go saves, record captures, detailed statistics, and Home shortcut remain local to Android and are excluded from v29; the existing seven games/variants retain their previous v29 behavior.
+- Each game separately accumulates foreground play time. It checkpoints every 30 seconds and saves to private `engagement-times-v1.json` when leaving or backgrounding. Total time is excluded from Room game saves, v29 JSON, and Android system backup. Detailed statistics live in Room; the existing seven games/variants enter explicit v29 backup, while Go statistics stay only on Android.
 
-### 手机使用时间与健康
+### Phone Usage and Health
 
-- 新增“手机使用时间”主页面，经 Android“使用情况访问权限”读取应用进入/退出前台及熄屏、锁屏事件，在本地午夜切分真实使用区间；每次刷新会补采系统仍可访问且事件边界完整的历史，并日结总时长及每个应用的时长。0.3.7 会重建仍可验证的近期历史，修正部分厂商把同一按日汇总重复返回而造成连续多天数值完全相同的问题。应用筛选优先读取系统应用标签和图标（例如把 `aweme` 显示为抖音），并按当前范围用时降序排列。
-- “健康”只从已授权的 Health Connect 只读聚合每日步数、距离和活动热量，可在页面用三个指标按钮切换总览、图表和明细；不再申请活动识别权限或回退到 `TYPE_STEP_COUNTER`。Health Connect 状态/权限说明模块移到页面全部统计内容的最下方。
-- 两页都提供开始日期、已统计天数、总计、日均以及 7/30/90 天或全部范围。三种统计图以同一行的纯图标切换，点击柱、折线点或方块会在该点上方悬浮显示日期和值，不会弹出页面；柱状图按高低渐变，柱状图和曲线在图内左上/左下叠加最高/最低纵轴标注。
-- 手机使用时间使用 `H`/`M` 紧凑显示时长，不再显示“总览”标题；总览卡新增单日最高和过去 7 天平均。统计图位于范围与图表类型按钮上方，加载权限与历史期间显示加载按钮，不再短暂闪现“统计未开启”；“本机私有统计”说明卡已移除。
-- 每次安装会生成不依赖硬件标识的随机稳定设备 ID，并使用可编辑的设备名称。手机使用时间页可选择“所有设备”或任一设备；本机只采集自己的系统数据，其他设备历史来自 v29 导入或云同步。“所有设备”按日期和应用相加，并显示短设备 ID 以区分同名设备。开启后每天首次打开应用也会尝试采集一次。
-- Android 0.4.0 已删除旧的「导出给 Windows」规范 v4 手动导出界面。云配置中勾选“多设备使用时间”后，每台设备会使用 `usage/v1/{deviceId}.json` 独立对象双向同步，并按同一设备/日期合并；FINAL 日优先于 OPEN 日，同状态取较新的采集结果，避免 A、B 手机覆盖彼此。
-- 两个功能默认关闭，开关分别位于“设置 → 子页面设置 → 手机使用时间”和“设置 → 子页面设置 → 健康”。开启后仍需进入对应系统授权页；启用任一统计时，WorkManager 每 6 小时尝试补采。
-- 当天记录保持可刷新；过去日期只有完整读取成功才会日结，日结后不再重复计算。关闭开关停止后续采集但保留本机历史。
-- Room v12 是手机使用时间、其他设备使用时间缓存、健康每日统计和小游戏特色统计的唯一运行时权威来源。升级时会把 `usage-statistics.json`、旧设备缓存和 `step-statistics.json` 事务化、幂等迁入 Room；损坏文件原样保留且不会遮住其他有效文件。JSON 编解码只保留用于旧数据迁移、DeskCubby 备份/导入导出和云同步，外部格式保持兼容。为避免系统备份把同库中的健康明细带到其他设备，`deskcubby.db` 及其 WAL/SHM/journal 均排除 Android 系统备份；显式 DeskCubby JSON/云同步仍是受支持的迁移路径。
+- Phone Usage reads foreground/background, screen-off, and lock events after Android Usage Access is granted, splits real intervals at local midnight, and finalizes daily totals and per-app durations. Refresh backfills still-accessible history only when event boundaries are complete. Version 0.3.7 rebuilt verifiable recent history to correct devices that repeated one daily aggregate across several days. App filtering prefers system labels and icons—for example, displaying Douyin instead of `aweme`—and orders apps by duration in the selected range.
+- Health only aggregates daily steps, distance, and active calories read-only from authorized Health Connect data. Three metric buttons switch overview, chart, and details. Activity Recognition is no longer requested and `TYPE_STEP_COUNTER` is not used as a fallback. The Health Connect status/permission explanation appears below all statistics.
+- Both pages show start date, days counted, total, daily average, and 7/30/90-day or All ranges. Three icon-only buttons on one row switch chart type. Tapping a bar, line point, or square floats its date and value above the point without opening another page. Bars use a height gradient, and bar/line charts overlay maximum/minimum axis labels inside the upper-left/lower-left.
+- Phone Usage formats duration compactly with `H`/`M` and omits an “Overview” heading. Its cards add Highest Day and Past 7-day Average. The chart sits above range/type controls. Permission and history loading show a loading button instead of briefly flashing “Statistics disabled.” The old “Private local statistics” card has been removed.
+- Every installation creates a stable random device ID unrelated to hardware identifiers and an editable device name. Phone Usage can display All Devices or one device. A device collects only its own system data; other-device history arrives through v29 import or cloud sync. All Devices sums by date and app and displays a short device ID to distinguish duplicate names. After enablement, the first app open each day also attempts collection.
+- Android 0.4.0 removed the old manual “Export for Windows” canonical-v4 UI. Enabling Multi-device phone usage on a cloud configuration gives each device an independent `usage/v1/{deviceId}.json` object for bidirectional merge. FINAL days win over OPEN days; equal states choose the newer collection, preventing phones A and B from overwriting one another.
+- Both features are disabled by default under “Settings → Subpage settings → Phone Usage” and “Settings → Subpage settings → Health.” Enabling still requires the corresponding system authorization. When either is enabled, WorkManager attempts backfill every six hours.
+- The current day remains refreshable. A past day is finalized only after a complete successful read, then is not recomputed. Disabling collection retains local history.
+- Room v12 is the sole runtime authority for phone usage, other-device usage cache, daily health statistics, and game-specific statistics. Upgrade transactionally and idempotently migrates `usage-statistics.json`, legacy device caches, and `step-statistics.json` into Room. Damaged files are preserved and do not hide other valid inputs. JSON codecs remain only for legacy migration, DeskCubby backup/import/export, and cloud sync, with external formats unchanged. To prevent Android system backup from moving health details embedded in the same database, `deskcubby.db` and its WAL/SHM/journal files are excluded from system backup. Explicit DeskCubby JSON/cloud sync remains the supported migration path.
 
-### AI 配置与聊天
+### AI configuration and chat
 
-- AI 配置库支持多套文字/图片模型；每套配置包含名称、类型、API 地址、模型名称、API Key、温度、系统提示词和 HTTP 许可。
-- 配置列表点击进入详情，长按可复制或删除；AI 聊天和日记热量估算可分别选择要使用的配置。
-- 配置详情可预览实际请求 JSON 结构。文字消息、图片提示词和图片数据以占位符显示；API Key 位于 Authorization 请求头，不属于 JSON 预览。
-- AI 聊天使用 OpenAI-compatible `chat/completions` 非流式接口；会话和消息保存在 Room，可查看历史、继续聊天、新建、改名和删除，并根据首条消息在本地自动生成标题。
-- 聊天可通过系统文件选择器附带一张图片。服务商和所选模型需要兼容 `image_url` data URL 形式的多模态消息。
-- 聊天输入框左侧使用一个“+”菜单统一提供图片、日记上下文和小巧思上下文，发送按钮位于输入框内部。日记可逐项选择；小巧思既可逐条选择，也可一键导入或取消整个分类。日期记录和诗词旧上下文快照继续兼容但不再占用新建入口。每次最多 50 项、单项 64 KiB、总计 256 KiB；超限会原子拒绝而不会改变原选择或静默截断。
-- 所选内容在用户点发送前才读取并冻结，快照仅包含来源、标题、日期/署名和正文，不发送 Room ID、`content://` URI、文件哈希或凭据。快照作为不可信参考数据随会话保存在本机，并随该会话后续请求继续发往所选模型服务。
-- 等待回复时会显示“正在思考”；若服务端明确返回 `reasoning_content`、`reasoning`、`analysis` 或 `<think>` 内容，可在折叠面板中查看并随会话保存。应用不会展示模型未返回的内部推理。
+- The AI configuration library stores multiple text/image models. Each configuration contains name, type, API endpoint, model name, API Key, temperature, system prompt, and HTTP permission.
+- Tap a configuration for details; long-press to copy or delete. AI Chat and Meal Calendar estimation independently choose their active configurations.
+- Details preview the real request-JSON structure with placeholders for text, image prompt, and image data. The API Key belongs in the Authorization header and is never part of the JSON preview.
+- AI Chat calls a non-streaming OpenAI-compatible `chat/completions` endpoint. Sessions and messages live in Room with history, continuation, creation, rename, and deletion. A title is generated locally from the first message.
+- The system file picker can attach one image. The provider/model must accept multimodal `image_url` data URLs.
+- A single “+” menu to the left of the chat input offers image, journal context, and Quick Thoughts context; Send is inside the field. Journals are individually selectable. Quick Thoughts can be selected individually or imported/cleared by category. Legacy Date Record and Poetry context snapshots remain compatible but are no longer new-entry choices. Limits are 50 items, 64 KiB per item, and 256 KiB total; exceeding them rejects the change atomically instead of altering the current selection or silently truncating.
+- Selected content is read and frozen only when Send is pressed. A snapshot contains source, title, date/attribution, and body, but no Room ID, `content://` URI, file hash, or credentials. It is stored locally with the conversation as untrusted reference data and is included in later requests for that conversation.
+- While waiting, the UI shows “Thinking.” If the server explicitly returns `reasoning_content`, `reasoning`, `analysis`, or `<think>` content, it appears in a collapsible panel and is stored with the session. DeskCubby never invents model reasoning the service did not return.
 
 > [!WARNING]
-> 按当前产品设计，AI API Key 会以**明文**随 AI 配置写入应用设置，也会进入 DeskCubby v29 JSON/自动备份。v29 还包含自定义主题、Markdown 标题字号、笔记目录引用、既有七个游戏/变体的主页快捷入口、存档与特色统计、桌面小卡片设计及其名称/透明度/图标/对齐/字号选项、多设备使用时间、URI-free 阅读进度，以及 Vault 密文/校验元数据；请勿把备份文件、应用数据目录、同步到云端的应用 JSON 或含 Key 的截图放入公开或共享位置。围棋快捷入口、存档和统计当前不进入 v29。
+> Under the current product design, an AI API Key is stored in **plaintext** with its model configuration and is included in DeskCubby v29 JSON/automatic backups. v29 also contains custom themes, Markdown heading sizes, note-directory references, Home shortcuts/saves/detailed statistics for the existing seven games/variants, widget designs and their name/opacity/icon/alignment/text-size options, multi-device phone usage, URI-free reading progress, and Vault ciphertext/verifier metadata. Never publish or share backups, app-data directories, cloud-synchronized application JSON, or screenshots containing a Key. Go shortcuts, saves, and statistics are currently excluded from v29.
 
-### 关于与更新
+### About and updates
 
-- 设置 → 关于：显示版本号、GitHub 仓库入口，并可从 GitHub Release 手动检查更新。检测到含可信 DeskCubby APK 的新版本后显示“下载并安装”按钮；应用会下载到私有缓存，校验包名、版本和签名，再处理“允许安装未知应用”授权并调起系统安装器。
-- 关于页可把桌面显示名称切换为 “Desk Cubby” 或 “桌洞”（通过启动器别名实现，部分启动器需要片刻刷新）。
-- 关于页可在经典图标、魔法书图标与用户提供的桌洞图标之间即时切换；图标与中英文桌面名称可自由组合。
-- 关于页提供“应用教学”入口，跳转到仓库内的 [TUTORIAL.md](TUTORIAL.md)，逐页面说明每个按钮和手势的用法；“页面教学”还可关闭默认开启的蒙版模式，或清除当前设备的全部页面确认以重新播放。
+- “Settings → About” displays the version and GitHub link and can manually check GitHub Releases. When a newer release contains a trusted DeskCubby APK, Download and Install writes it to private cache, verifies package name, version, and signature, guides the “Install unknown apps” permission when necessary, and invokes the system installer.
+- The launcher display name can switch between “Desk Cubby” and “桌洞” through launcher aliases; some launchers need a moment to refresh.
+- The About page switches immediately among the classic icon, magic-book icon, and a user-provided DeskCubby icon. Either icon style can be combined with either launcher language.
+- App Tutorial opens repository [TUTORIAL.md](TUTORIAL.md), which explains each page, button, and gesture. Page Tutorials can disable the default overlays or clear every confirmation on the current device to replay them.
 
-### 应用数据
+### Application data
 
-- 设置主页使用简短入口“设置 → 应用数据”；页面首次进入即统计应用总占用和私有数据占用，并按安装包/代码、Room 结构化数据库、DataStore/偏好、阅读数据、阅读与游戏时长、旧统计迁移文件、缓存、其他私有文件、外部应用目录及用户选择的日记/媒体目录分组显示。私有目录和 SAF 目录扫描受数量与总时间上限保护，未扫描完会明确标为下限估算；可手动重新计算。
-- 同一页面统一提供本机 JSON 备份，并可从“云端同步”卡片进入 WebDAV/S3 配置。
-- 云端同步状态卡会持久显示“上次同步时间”；尚未完成过同步时明确显示“尚未同步 / Never”。
-- 应用首页的“立即同步”和“强制上传/下载”两个独立模块复用同一状态与串行 WorkManager 队列，显示是否启用、处理进度、上次完成时间和待确认应用 JSON；普通卡只做安全合并，强制卡分别确认本机优先上传或单一云端来源优先下载。
-- 设置中可维护多个 WebDAV 或 S3 兼容服务配置，分别启停，并选择日记、媒体、应用 JSON、多设备使用时间、阅读进度以及“仅上传”或“双向”同步。新建配置默认包含阅读进度；既有配置不会被升级过程静默勾选，需要用户编辑配置后主动开启。
-- 支持手动“立即同步”；其下方有同样高度、左右各半的“强制上传 / 强制下载”二合一按钮，点任一侧会先显示影响范围确认。强制上传让同路径冲突内容以本机为准，但远端写入仍绑定扫描到的远端版本，并可同时上传到多个已启用端点；强制下载只允许一个已启用云端来源，多来源时以稳定的 `SYNC_FORCE_DOWNLOAD_SOURCE_COUNT` 失败关闭，避免后一端点静默覆盖前一端点。单一来源的强制下载让同路径内容以远端为准，但只在本机文件仍匹配扫描快照时采用，并发本机修改会保留为冲突副本。两种强制模式都只补齐对应方向的独有项目、不传播删除，云端应用 JSON 下载仍只暂存待用户确认。开启全局开关后还会注册需要联网的 6 小时周期任务；同步日记和媒体时仍只通过 SAF 访问用户授权目录。
-- Android 系统小组件面板可单独添加“立即同步”组件，或添加左右分区的“强制上传 / 强制下载”组件。点击后进入同一个有联网约束的唯一 WorkManager 队列，避免重复并发运行；组件仅显示“已排队、正在同步/上传/下载、已完成、同步失败、请检查同步设置”等通用状态，不展示端点、路径、正文或凭据。桌面强制按钮是用户显式添加的快捷动作，点击后直接排队，不再弹出应用内确认框；若强制下载时启用了多个来源，任务会在读取任何端点前失败并提示检查同步设置。
-- 同步继续使用 SHA-256、远端 manifest 和冲突副本约束内容。WebDAV 普通 GET/PUT 未返回验证头时，会用最大响应 64 KiB 的 `PROPFIND Depth: 0` 补取目标资源的强 ETag，再通过 `If-Match` 条件确认；仍无单个合法强 ETag 时安全失败，不会以秒级 `Last-Modified` 或无条件写入覆盖数据。当前不会传播删除：某一侧缺失的文件会按同步方向重新上传、下载或跳过。
-- S3 接入点可省略协议：SSL/TLS 默认开启并自动补 `https://`，仅可信内网可关闭后使用 HTTP。S3 支持默认开启的 Path-Style（`/Bucket/目录`）与 Bucket 子域名寻址，可用于 CSTCloud 等兼容端点。0.12.0 整体移除了“故意发送不匹配 `If-Match` 条件 GET、再要求服务拒绝”的执行语义探针，也不再因未加引号、弱、多个、缺失 ETag 或服务忽略条件 GET 而报 `SYNC_REMOTE_VALIDATION`。读取和写入仍会尽力发送 `If-Match` / `If-None-Match`，并把服务返回的 409/412 当作冲突；manifest/payload 的 SHA-256 校验、内容寻址对象和无可信写入 ETag 时的同字节回读校验仍保留。若兼容 S3 服务忽略条件请求，这些内容校验能确认传输字节，却不能替服务提供原子的并发写保护。
-- WebDAV/S3 每个服务配置都支持自定义 User-Agent；保存后会用于该服务的同步请求，留空会恢复默认值。
-- WebDAV 密码仍由 Android Keystore 加密。按产品要求，S3 Access Key ID、Secret Access Key、Session Token 以明文写入应用私有 DataStore，编辑配置时完整回显；旧版 Keystore 中的 S3 值会在首次编辑保存时迁移。S3 凭据仍不进入日志或 DeskCubby JSON 备份。
-- 选择“应用 JSON”会把 v29 备份以 `json/dc.json` 上传到所选服务，其中包含明文 AI API Key、自定义主题、结构化记录和 URI-free 阅读进度。另选“多设备使用时间”会使用每设备独立对象自动合并；另选“阅读进度”会使用 `reading/v1/progress.json` 按书籍 SHA-256 指纹自动合并，无需恢复整份应用 JSON。阅读对象不含书名、URI、封面或正文，但文件指纹仍可能被用于识别已知文件；HTTPS 只保护传输过程，远端对象没有端到端加密，请只使用可信服务。
-- 从云端下载的应用 JSON 只会校验并暂存在应用私有目录；后台任务不会直接覆盖本机设置或 Room，必须由用户在同步设置中确认后才会恢复。
+- The concise “Settings → Application data” page immediately calculates total app usage and private-data usage, grouped by package/code, Room database, DataStore/preferences, reading data, reading/game time, legacy statistics migration files, cache, other private files, external app directories, and selected SAF journal/media directories. Private and SAF scans have item and total-time limits; an incomplete result is explicitly labeled a lower-bound estimate. Recalculate is available.
+- The same page provides local JSON backup and links to WebDAV/S3 from its Cloud Sync card.
+- Cloud status persistently shows Last sync; before the first successful sync it explicitly displays Never.
+- Home's separate Sync Now and Force Upload/Download modules reuse the same state and serialized WorkManager queue. They display enablement, progress, last completion, and pending application JSON. Normal sync performs safe merge; the force card separately confirms local-first upload or one-source remote-first download.
+- Multiple WebDAV and S3-compatible configurations can be managed independently and can select journals, media, application JSON, multi-device phone usage, reading progress, and upload-only or bidirectional mode. New configurations enable reading progress by default. Existing configurations are not silently changed during upgrade; users must edit them to opt in.
+- Manual Sync Now is followed by an equal-height split Force Upload / Force Download button. Either side first shows an impact confirmation. Force Upload makes local content authoritative for same-path conflicts but still binds remote writes to the scanned remote version and may target several enabled endpoints. Force Download accepts one enabled cloud source; multiple sources fail closed with stable code `SYNC_FORCE_DOWNLOAD_SOURCE_COUNT` before any endpoint is read. A valid single-source download makes remote content authoritative only while the local file still matches its scan snapshot; a concurrent local edit is retained as a conflict copy. Neither force mode propagates deletion; one-sided items are filled only in the chosen direction. Downloaded cloud application JSON remains pending for user confirmation. The global switch also registers a network-constrained six-hour periodic job. Journals and media continue to use only SAF-authorized directories.
+- Android's system widget picker can add either a Sync Now widget or a split Force Upload / Force Download widget. Actions enter one unique network-constrained WorkManager queue to prevent duplicate concurrent runs. Widgets show only generic states such as Queued, Syncing/Uploading/Downloading, Complete, Failed, or Check sync settings—never endpoint, path, content, or credentials. Because adding the force widget is itself an explicit user action, tapping it queues directly without another in-app dialog. Force Download with multiple sources fails before reading any endpoint.
+- Synchronization continues to use SHA-256, a remote manifest, and conflict copies. If ordinary WebDAV GET/PUT lacks a validator, a `PROPFIND Depth: 0` response capped at 64 KiB obtains one strong ETag before `If-Match`. Without exactly one valid strong ETag, the operation fails safely instead of using second-resolution `Last-Modified` or overwriting unconditionally. Deletions are not propagated: a file missing on one side is uploaded, downloaded, or skipped according to mode.
+- An S3 endpoint may omit its scheme. SSL/TLS is enabled by default and prepends `https://`; only a trusted LAN may explicitly use HTTP. Path-style (`/Bucket/path`) is enabled by default, with bucket-subdomain addressing also available for services such as CSTCloud. Since 0.12.0, the app no longer sends a deliberately mismatched `If-Match` conditional GET as a semantic probe and no longer blocks on unquoted, weak, multiple, or missing ETags or a service ignoring conditional GET. Reads and writes still best-effort send `If-Match` / `If-None-Match` and treat 409/412 as conflicts. Manifest/payload SHA-256, content-addressed objects, and same-byte read-back when no trustworthy write ETag exists remain. These checks verify bytes but cannot supply atomic concurrent-write semantics when a compatible S3 service ignores conditions.
+- Every WebDAV/S3 service accepts a custom User-Agent; an empty value restores the default.
+- WebDAV passwords remain Android-Keystore encrypted. By product requirement, S3 Access Key ID, Secret Access Key, and Session Token are plaintext in private DataStore and fully visible while editing. Legacy Keystore S3 values migrate on first edit/save. S3 credentials remain excluded from logs and DeskCubby JSON backups.
+- Enabling Application JSON uploads the v29 backup as `json/dc.json`, including plaintext AI API Keys, custom themes, structured records, and URI-free reading progress. Multi-device phone usage uses a separate per-device object; Reading progress uses `reading/v1/progress.json` merged by full-book SHA-256 without restoring the whole application JSON. The reading object contains no title, URI, cover, or text, although a fingerprint may still identify a known file. HTTPS protects transport only; remote objects are not end-to-end encrypted, so use only trusted services.
+- Downloaded cloud application JSON is validated and staged in private storage. A background job never directly overwrites local settings or Room; the user must confirm restoration in Sync settings.
 
-### 备份
+### Backups
 
-- 支持选择自动备份目录、立即保存、手动导入和导出单个 JSON 文件；自动备份使用 `dc.json`，手动导出默认使用 `DC-yyyy-MM-dd.json`，并继续识别旧版 `DeskCubby*.json`。“设置 → 应用数据 → 查看整体 JSON”可查看当前完整备份快照。
-- 当前备份格式为 v29，最大 64 MiB，并继续安全导入 v1–v28。v29 在 v28 的受控 Custom 主题和最多 500 条 URI-free 阅读进度基础上，为每个桌面信息卡增加名称显隐、0%–100% 背景透明度、图标显隐、文字对齐和 75%–150% 字号；导入旧版时使用显示名称/图标、100% 背景、不缩放且左侧对齐的兼容默认。进度仍只含书籍 SHA-256 指纹、TXT/PDF 类型、位置、总页数和更新时间，不含书名、URI、封面或正文。Windows 0.6.0 可导入 Android 0.13.0 导出的 v29。
-- Vault 密码/明文/派生密钥、WebDAV 密码、S3 用户名/Key/Session Token、AI 对话历史及冻结上下文、笔记/日记正文、媒体文件、背景图片文件、阅读书架/封面/偏好、阅读与小游戏总时长、健康历史和系统权限不进入 JSON。v29 导入后 Vault 保持锁定；既有七个游戏/变体同 ID 最高分取较大值，较新存档胜出，特色统计逐项取较大值；围棋存档、最高提子、特色统计和主页围棋快捷入口从 v29 投影排除，只保存在 Android 本机。使用时间按设备和日期合并，本机设备 ID 不会被导入文件覆盖。
-- v29 仍包含两个统计功能的普通开关字段，但导入时会强制关闭手机使用时间和健康统计，云同步也保持关闭；音乐可视化设置会恢复，但录音权限必须由设备本机重新授予。旧备份缺少 Custom 主题、阅读进度或新增桌面卡片外观字段时使用安全默认值并保留本机进度；更早版本的逐项兼容规则继续有效。
-- 导入 v11 及更早备份时，仅为配置 ID 与 API 地址都一致的 AI 配置保留本机已有 Key。
+- Select an automatic-backup directory, save immediately, or manually import/export one JSON file. Automatic backup uses `dc.json`; manual export defaults to `DC-yyyy-MM-dd.json` and still recognizes legacy `DeskCubby*.json`. “Settings → Application data → View complete JSON” displays the current full snapshot.
+- The current format is v29, limited to 64 MiB, with safe import support for v1–v28. On top of v28 controlled Custom themes and up to 500 URI-free reading-progress records, v29 adds five appearance fields to each home-screen widget: name visibility, 0%–100% background opacity, icon visibility, text alignment, and 75%–150% text scale. Older imports default to visible name/icon, 100% background, no scale, and left alignment. Reading progress still contains only the full-book SHA-256 fingerprint, TXT/PDF type, position, total pages, and timestamp—never title, URI, cover, or content. Windows 0.6.0 imports v29 produced by Android 0.13.0.
+- Vault passwords/plaintext/derived keys, WebDAV passwords, S3 user/keys/session token, AI chat history and frozen context, note/journal content, media files, background-image files, bookshelf/covers/preferences, reading/game time, health history, and system permissions are excluded. After a v29 import, Vault remains locked. For the existing seven games/variants, higher scores win, newer saves win, and detailed metrics merge by maximum. Go saves, record captures, detailed statistics, and Home shortcut are excluded from v29 and stay only on Android. Usage merges by device and date; an imported file never replaces the local device ID.
+- v29 still contains ordinary enable fields for both statistics features, but import force-disables Phone Usage and Health collection and leaves cloud sync disabled. Music visualizer settings restore, but recording permission must be granted again locally. Missing Custom themes, reading progress, or new widget appearance fields use safe defaults while preserving local progress; all earlier per-version compatibility rules still apply.
+- Importing v11 or earlier retains an existing local AI Key only when both configuration ID and API endpoint match.
 
-### 本地数据库
+### Local database
 
-- Room 数据库当前版本为 12，保留 1→2 至 11→12 的全部显式迁移，不使用 destructive migration；10→11 新增手机使用时间、外部设备缓存、健康每日统计和旧文件迁移标记表，11→12 新增小游戏特色统计表。
-- v6 新增 AI 会话和消息表；删除会话会级联删除其消息。AI 历史保存在本机，但不属于 JSON 备份。
-- v7 为小巧思增加重点标记列，并新增收藏夹密文表（vault_items）与小游戏存档表（game_states）；v20 开始把后两者的密文/存档纳入显式 JSON 备份，v21 又加入诗词顺序、行高和 User-Agent；数据库结构只在 9→10 增加诗词排序列。
-- v8 为收藏夹条目增加持久排序字段，升级时保留原显示顺序。
+- Room is currently version 12 with every explicit migration from 1→2 through 11→12 and no destructive migration. 10→11 added phone usage, external-device cache, daily health, and legacy-file migration markers; 11→12 added game-specific statistics.
+- v6 introduced AI session/message tables; deleting a session cascades to its messages. AI history is local and excluded from JSON backup.
+- v7 added the Important flag to Quick Thoughts, the `vault_items` ciphertext table, and `game_states`. Explicit JSON backup began including the latter two ciphertext/save structures in v20; v21 added poetry ordering, row height, and User-Agent. The database itself added the poetry-order column only in 9→10.
+- v8 added persistent ordering to Vault items while preserving their existing display order during upgrade.
 
-## Android 构建环境
+## Android build environment
 
 - Android SDK 36
-- JDK 17 或更高版本（可以使用 Android Studio 自带的 JDK）
+- JDK 17 or newer (the JDK bundled with Android Studio is supported)
 
-使用 Android Studio 时请打开仓库内的 `android/` 目录。项目 Wrapper 在未设置 `GRADLE_USER_HOME` 时，会默认把 Gradle 分发和依赖缓存放在 `android/.gradle-user-home`，避免占用 C 盘。
+Open the repository's `android/` directory in Android Studio. Unless `GRADLE_USER_HOME` is already set, the project wrapper stores Gradle distributions and dependency caches in `android/.gradle-user-home` to avoid consuming the system drive.
 
-以下命令均从仓库根目录运行。
+Run the commands below from the repository root.
 
 ### Debug APK
 
@@ -201,43 +203,43 @@ Android 端已增加内部 Kotlin Plugin API 基础层：独立 `:plugin-api:cor
 .\android\gradlew.bat --project-dir .\android :app:assembleDebug
 ```
 
-输出：`android/app/build/outputs/apk/debug/DeskCubby.apk`
+Output: `android/app/build/outputs/apk/debug/DeskCubby.apk`
 
-### Release 签名
+### Release signing
 
-首次打包前运行：
+Before the first release build, run:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\android\scripts\generate-release-keystore.ps1
 ```
 
-脚本会生成：
+The script creates:
 
-- `android/release/DeskCubby-release.jks`：应用的长期 Release 签名密钥。
-- `android/keystore.properties`：本机签名参数和随机强密码。
+- `android/release/DeskCubby-release.jks` — the app's long-lived release signing key.
+- `android/keystore.properties` — local signing parameters and strong random passwords.
 
-这两个文件均已被 `.gitignore` 排除，不会进入 Git。请把它们一起加密备份到可靠位置；Android 后续版本必须继续使用同一把签名密钥，丢失或更换密钥会导致已安装版本无法正常升级。
+Both files are ignored by Git. Back them up together in a reliable encrypted location. Every later Android release must use the same key; losing or replacing it prevents installed versions from upgrading normally.
 
-为避免目录迁移破坏已有发布能力，构建仍兼容迁移前保存在仓库根目录的 `keystore.properties` 与其相对路径；新配置统一放在 `android/` 内即可。如果签名脚本检测到根目录已有旧签名文件，它会拒绝生成替代密钥。不要为了整理目录复制、替换或重新生成已有长期签名密钥。
+For compatibility with repositories moved from older layouts, builds still accept a legacy root-level `keystore.properties` and its relative key path. New configurations belong under `android/`. If the signing script detects an existing legacy key at the root, it refuses to generate a replacement. Do not copy, replace, or regenerate a long-lived key merely to reorganize directories.
 
-然后构建已签名 Release APK：
+Build the signed release APK:
 
 ```powershell
 .\android\gradlew.bat --project-dir .\android :app:assembleRelease
 ```
 
-输出：`android/app/build/outputs/apk/release/DeskCubby.apk`
+Output: `android/app/build/outputs/apk/release/DeskCubby.apk`
 
-如需手动配置，可复制 `android/keystore.properties.example` 为 `android/keystore.properties`。CI 也可以改用以下环境变量，避免把密码写入文件：
+For manual setup, copy `android/keystore.properties.example` to `android/keystore.properties`. CI may instead use these environment variables so passwords are not written to disk:
 
 - `DESKCUBBY_RELEASE_STORE_FILE`
 - `DESKCUBBY_RELEASE_STORE_PASSWORD`
 - `DESKCUBBY_RELEASE_KEY_ALIAS`
 - `DESKCUBBY_RELEASE_KEY_PASSWORD`
 
-Release 任务在签名配置缺失或不完整时会直接失败，不会误生成未签名安装包。
+Release tasks fail immediately when signing configuration is missing or incomplete; they never silently produce an unsigned APK.
 
-### 验证
+### Verification
 
 ```powershell
 .\android\gradlew.bat --project-dir .\android :plugin-api:core:testDebugUnitTest --offline
@@ -247,123 +249,123 @@ Release 任务在签名配置缺失或不完整时会直接失败，不会误生
 .\android\gradlew.bat --project-dir .\android :app:assembleDebug :app:lintDebug --offline
 ```
 
-0.13.0（2026-08-10）把 PDF 增强视图从 AndroidX PDF 改为 PDFium 1.0.35，保留系统 `PdfRenderer` 兼容回退；模板保存后会实时更新所有仍绑定该模板的桌面实例，同时保持每实例独立和模板删除后的最后快照。应用快捷卡以 48dp 居中显示目标 launcher Activity/alias 图标；桌面设计器可选择全部 21 个首页模块，大尺寸按主页模块复刻完整月历、多项记录逐条直达、日常记录实际录入、随机日记、小游戏快捷入口和完整云同步状态/操作，诗词、六餐图片与快速输入也保留直接操作，小尺寸统一退化为跳转。首页云同步拆为“立即同步”和“强制上传/下载”两张卡，并兼容迁移旧单卡配置。应用升级为 versionCode 27，备份仍为 v29，Room 仍为 v12，Windows 保持 0.5.0。本轮按用户要求未启动 Android 模拟器，发布验证使用编译、自动化测试、Lint、签名 APK 与静态包检查。
+0.13.0 (2026-08-10) replaced AndroidX PDF with PDFium 1.0.35 for the enhanced PDF view while retaining the system `PdfRenderer` compatibility fallback. Saving a widget template now updates every still-bound widget instance immediately while preserving per-instance independence and the final snapshot after template deletion. App shortcuts center the target launcher Activity/alias icon at 48 dp. The widget designer can choose all 21 Home modules; large widgets reproduce the full calendar, per-item record links, actual Daily Record input, random journal, game shortcuts, and complete cloud-sync state/actions, while Poetry, six meal-photo actions, and Quick Input retain direct actions. Small widgets consistently degrade to navigation. Home cloud sync is split into Sync Now and Force Upload/Download cards with legacy single-card migration. The app moved to versionCode 27, backup stayed at v29, Room stayed at v12, and Windows stayed at 0.5.0. At the user's request, this release did not start an Android emulator; release verification used compilation, automated tests, Lint, a signed APK, and static package checks.
 
-PDFium Android 封装采用 Apache License 2.0，PDFium 引擎采用 BSD 风格许可；随 APK 分发的版权、许可与免责声明见 [`android/app/src/main/assets/pdfium_NOTICES.txt`](android/app/src/main/assets/pdfium_NOTICES.txt)，应用内也可从“设置 → 关于 → 第三方许可”打开。DeskCubby 自身代码仍使用 MIT License。
+The PDFium Android wrapper uses Apache License 2.0 and the PDFium engine uses a BSD-style license. Copyright, license, and disclaimer notices distributed in the APK are in [`android/app/src/main/assets/pdfium_NOTICES.txt`](android/app/src/main/assets/pdfium_NOTICES.txt) and are also available at “Settings → About → Third-party licenses.” DeskCubby's own code remains MIT-licensed.
 
-0.12.0（2026-08-10）修复 Android 围棋合法落子后复用同一可变状态引用、导致 Compose 不重绘棋子和轮次的问题；每次落子/停着改为发布独立快照，棋盘触控统一按最近交叉点吸附，消除交叉点间死区并支持连续落子。阅读书架两列视图新增“显示封面下方书名”开关；无自定义图片的 TXT 改为把书名直接绘在默认封面上。Reader 私有状态升至 schema v6 并继续读取 v1–v5。
+0.12.0 (2026-08-10) fixed Android Go reusing one mutable state reference after a valid move, which prevented Compose from redrawing stones and turn state. Every move/pass now publishes an independent snapshot, and board input consistently snaps to the nearest intersection to eliminate dead zones. The two-column bookshelf gained a Show title below cover switch; a TXT without a custom image now draws its title on the default cover. Reader private state moved to schema v6 while retaining v1–v5 support.
 
-同版修复增强 PDF 被首屏前非致命 AndroidX `RequestFailureEvent` 误判失败的问题；文档打开、视图绑定和 30 秒首屏超时仍安全回退兼容视图。S3 移除条件 GET 执行语义探针及相应验证阻断，兼容忽略条件请求或返回非标准 ETag 的服务；`If-Match` / `If-None-Match` 继续尽力发送，409/412、manifest/payload SHA-256、内容寻址与无可信写入 ETag 时的同字节回读校验仍保留。
+The same release fixed nonfatal AndroidX `RequestFailureEvent` signals before first-page display being misclassified as enhanced-PDF failure; document-open/view-bind checks and the 30-second first-page timeout still fail safely to the compatibility view. S3 removed the conditional-GET semantic probe and its compatibility block, allowing services that ignore conditions or return nonstandard ETags. Best-effort `If-Match` / `If-None-Match`, 409/412 conflict handling, manifest/payload SHA-256, content addressing, and same-byte read-back without a trustworthy write ETag remain.
 
-云同步现在作为真实应用首页模块提供立即同步、需确认的强制上传/下载、进度、上次完成时间和待处理应用 JSON 状态，不再只依赖系统桌面组件。桌面信息卡按 App Widget ID 保存完整实例快照，多个实例可显示不同设计，并新增名称/图标显隐、0%–100% 背景透明度、左中右对齐和 75%–150% 字号。备份升至 v29 并继续导入 v1–v28；Windows 0.5.0 暂不能导入 v29。应用升级为 0.12.0（versionCode 26），Room 保持 v12，Windows 源码与版本保持 0.5.0。
+Cloud sync became real Home modules with Sync Now, confirmed Force Upload/Download, progress, last completion, and pending application JSON instead of relying only on system widgets. Home-screen widgets store complete per-App-Widget-ID snapshots so multiple instances can show separate designs and gained name/icon visibility, 0%–100% background opacity, left/center/right alignment, and 75%–150% text size. Backup moved to v29 while retaining v1–v28 import. Windows 0.5.0 could not yet import v29. Android moved to 0.12.0 (versionCode 26); Room stayed at v12 and Windows source/version at 0.5.0.
 
-0.6.0（2026-08-11）修复桌面端无法显示 PDF 的问题：WebView2 不内置 PDF 查看器，原 `<iframe>` 连续查看器显示空白，现改为 pdf.js（`pdfjs-dist`）在应用内 canvas 渲染。PDF 数据仍通过受限 `http://reader.localhost/{bookId}.pdf` 只读协议按需获取（Rust 侧支持 HTTP Range 并返回 CORS 头），前端不获得文件系统权限；支持按容器宽度自适应和阅读设置里的 50%–300% 基准缩放、页码导航，书签恢复的页码超过实际页数时自动钳制，加载或渲染失败可重试。CSP 相应放开 `connect-src http://reader.localhost` 与 `worker-src 'self' blob:`。
+Windows 0.6.0 (2026-08-11) fixed blank desktop PDFs caused by WebView2 not including a PDF viewer. The former `<iframe>` viewer was replaced by pdf.js canvas rendering. PDF bytes still arrive on demand through restricted `http://reader.localhost/{bookId}.pdf` access, with Rust HTTP Range and CORS support; the frontend never gains file-system access. Rendering fits container width, honors the saved 50%–300% baseline zoom, supports page navigation, clamps restored bookmarks beyond the true page count, and provides retry after load/render failure. CSP now allows `connect-src http://reader.localhost` and `worker-src 'self' blob:`.
 
-同版把数据兼容追平 Android 0.13.0：备份边界从 Android v1–v28 升级为 v1–v29 并统一导出 v29。旧版导入时在内存中安全升级——按 Android 0.13.0 语义为 `desktopWidgetConfigs` 每项补齐 `showName`/`backgroundOpacityPercent`/`showIcon`/`textAlignment`/`textScalePercent` 默认值，并把旧 `cloud_sync` 主页模块改写为 `cloud_sync_now`；合法 `homeModuleId` 扩展为与 Android 同源的 21 项（新增 `notes`/`game_shortcuts`/`record_overview`/`cloud_sync_now`/`cloud_sync_force`），并校验 v29 五个外观字段的范围与枚举。导入/导出、恢复点、DPAPI 兼容影子、私有字段清洗和 `configs_managed` 所有权门保持不变。Windows 版本升级为 0.6.0，Android 保持 0.13.0，交换格式保持 v29。
+The same release caught Windows data compatibility up to Android 0.13.0: import moved from Android v1–v28 to v1–v29 and export always writes v29. Older input is safely upgraded in memory by filling `showName`, `backgroundOpacityPercent`, `showIcon`, `textAlignment`, and `textScalePercent` defaults on every `desktopWidgetConfigs` item and rewriting legacy `cloud_sync` Home modules to `cloud_sync_now`. Valid `homeModuleId` values now match Android's 21 entries, adding `notes`, `game_shortcuts`, `record_overview`, `cloud_sync_now`, and `cloud_sync_force`, with ranges/enums validated for the five v29 appearance fields. Import/export, restore points, the DPAPI compatibility shadow, private-field cleaning, and the `configs_managed` ownership gate remain unchanged. Windows became 0.6.0, Android stayed 0.13.0, and the exchange format stayed v29.
 
-0.5.0（2026-08-10）追平 Android 0.11.0 的桌面可共用能力：Windows 云同步页加入需要显式确认的“强制上传 / 强制下载”。强制上传可依次处理多个已启用端点；强制下载只接受恰好一个已启用来源。两种模式都不传播删除，远端写入仍绑定扫描版本，本机写入仍绑定扫描快照，并发修改不会被静默覆盖；远端应用 JSON 仍只暂存待预览确认。
+Windows 0.5.0 (2026-08-10) brought across capabilities shared with Android 0.11.0. Windows cloud sync gained explicitly confirmed Force Upload / Force Download. Upload can process several enabled endpoints; download accepts exactly one source. Neither propagates deletion. Remote writes remain tied to scanned versions, local writes to scan snapshots, concurrent changes are never silently overwritten, and remote application JSON remains staged for preview/confirmation.
 
-同版新增 Windows 本地双人围棋，支持 9/13/19 路、提子、禁自杀、简单劫、连续两次停着结束、最高提子与落子/提子/停着/完成棋局统计，不自动判断地域胜负。围棋使用 SQLite v7 的独立私有游戏表，存档、统计与游玩时长只保存在这台电脑，结构上排除 v28、导入前恢复点、自动备份和应用 JSON 云同步；既有七个游戏/变体的 v28 往返规则不变。
+The release also added local two-player Go on Windows with 9×9/13×13/19×19 boards, capture, suicide prevention, simple ko, two-pass ending, record captures, and move/capture/pass/completed-game statistics, without territory adjudication. SQLite v7 private game tables keep Go saves, statistics, and play time on that computer and structurally exclude them from v28, pre-import restore points, automatic backups, and application-JSON cloud sync. Existing v28 behavior for the other seven games/variants stayed unchanged.
 
-修复侧栏分组折叠后页面按钮仍留在布局中的问题，折叠内容现在同时从视觉布局和键盘顺序移除；修复日记 Markdown 预览遇到中文或空格图片名、以及 Rust 返回空解析结果时永久显示“正在读取图片”的问题，受限媒体协议仍只接受媒体根内的安全文件。Windows 版本升级为 0.5.0，Android 版本、v28、Reader 私有 schema 与 Room v12 均不变。
+It fixed collapsed sidebar groups leaving page buttons in the layout; collapsed content is now absent from both visual layout and keyboard order. It also fixed journal Markdown previews that remained on “Reading image” for Chinese/space-containing filenames or empty Rust resolution results, while the restricted media protocol continues to accept only safe files under the media root. Windows became 0.5.0; Android version, v28, Reader private schema, and Room v12 were unchanged.
 
-0.11.0（2026-08-10）改善 Android 首次使用与高风险入口：日记未配置时可在系统 SAF 选择器确认本机 Documents，一次创建并绑定 `Documents/deskcubby/diary` 与 `Documents/deskcubby/media`；系统确认、目录创建和读写校验完成前不会写入设置，手动选择仍保留。
+0.11.0 (2026-08-10) improved Android first-use and high-risk entry points. When journals are unconfigured, one SAF picker confirmation at Documents creates and binds `Documents/deskcubby/diary` and `Documents/deskcubby/media`. Settings are written only after system confirmation, directory creation, and read/write validation; manual selection remains.
 
-阅读书架两列封面改为按卡片实测宽度限制解码、像素与缓存，不再在进入书架时为多个任意 PDF 逐个打开应用进程内渲染；优先采用已验证缓存或文档提供方缩略图，失败显示占位，手动封面仍可用。增强 PDF 改为在 `PdfView` 附着后绑定文档、首屏前延后硬件颜色层并监听请求失败；文档/首屏各 30 秒超时，失败安全回退连续兼容视图并允许重试。增强能力仍由系统版本、安装包服务、系统扩展与文档决定，不承诺所有设备都启用。
+Two-column bookshelf covers now limit decoding, pixels, and cache using measured card width and no longer open every arbitrary PDF for in-process rendering when entering the shelf. Verified cache/provider thumbnails are preferred, a placeholder appears on failure, and manual covers remain. The enhanced PDF view binds only after `PdfView` attaches, delays the hardware color layer before first paint, and listens for request failure. Document/first-page timeouts are 30 seconds, safely switch to a continuous compatibility view, and allow retry. Availability still depends on OS version, installed package service, system extensions, and the document.
 
-同版新增 Android 本地双人围棋（9/13/19 路、提子、禁自杀、简单劫、双方连续停着结束，不自动判断地域胜负）；围棋存档、最高提子、特色统计和主页快捷入口只保存在 Android 本机，不进入 v28。云同步页新增同高二合一“强制上传 / 强制下载”，两者不传播删除，且远端条件写、本机快照与应用 JSON 待确认边界不放宽；“立即同步”和二合一强制同步都可从系统小组件面板添加。三个 provider 补齐通用 Android 发现元数据，S3 条件语义探针改用与实际读取一致的有界条件 GET。应用升级为 0.11.0（versionCode 25），备份保持 v28，Reader 私有 schema 保持 v5，Room 保持 v12；Windows 源码与版本保持 0.4.0。
+The release added local Android two-player Go on 9×9/13×13/19×19 boards with captures, suicide prevention, simple ko, and a two-pass ending but no territory adjudication. Go saves, record captures, detailed statistics, and Home shortcut are Android-local and excluded from v28. Cloud sync added an equal-height split Force Upload / Force Download control without relaxing deletion, conditional remote write, local snapshot, or pending-JSON boundaries. Sync Now and force sync can both be added through the system widget picker. All three providers gained generic Android discovery metadata, and the S3 conditional-semantics probe used the same bounded conditional GET as real reads. Android moved to 0.11.0 (versionCode 25); backup stayed v28, Reader private schema v5, Room v12, and Windows source/version 0.4.0.
 
-0.10.0（2026-08-08）集中升级 Android 阅读体验：增强 PDF 预热隔离服务并以首屏内容/位图双通道确认，15 秒失败后自动回退兼容视图；增加纯净全屏、TXT/PDF 自定义前景与背景、PDF 黑底白字显示映射、列表/两列封面、PDF 首页自动封面、手动封面、进度百分比，以及兼容视图共享横向偏移。阅读私有状态升至 schema v5；v28 备份和可选的 `reading/v1/progress.json` 云对象按同文件 SHA-256 指纹合并跨设备进度，不携带书名、URI、封面或正文。
+0.10.0 (2026-08-08) overhauled Android reading. Enhanced PDF prewarms in an isolated service and verifies the first page through content/bitmap channels, then falls back after 15 seconds. It added distraction-free fullscreen, custom TXT/PDF foreground/background, PDF white-on-black mapping, list/two-column covers, PDF first-page covers, manual covers, progress percentages, and shared horizontal offset in compatibility mode. Reader private state moved to schema v5. v28 backup and optional `reading/v1/progress.json` merge progress across devices by full-file SHA-256 without title, URI, cover, or content.
 
-同版新增受控 Custom Compose 主题（明暗色板、基础渲染、圆角、边框、阴影、不透明度、间距、动效），不执行 CSS 或脚本；2048 五位数保持单行缩放，并新增包含无效方向输入的总操作次数、不再展示失败次数；S3 在经过条件请求与内容校验后兼容非标准 ETag，仍保持并发冲突保护；桌面小卡片补齐首次渲染、WorkManager 保底更新和通用系统小组件面板手动添加提示。应用升级为 0.10.0（versionCode 24），备份升级为 v28，Reader 私有 schema 升至 v5，Room 保持 v12，Markdown 和 `dc-media.json` v2 不变；Windows 源码与版本未修改。
+The same release added controlled Custom Compose themes with light/dark palettes, base rendering, radius, border, shadow, opacity, spacing, and motion but no CSS/scripts. Five-digit 2048 tiles remain on one line, total operations include ineffective directional input, and loss counts are no longer shown. S3 tolerates nonstandard ETags after conditional/content validation while retaining conflict protection. Home-screen widgets gained first-render fixes, WorkManager fallback updates, and generic widget-picker guidance. Android became 0.10.0 (versionCode 24), backup v28, Reader schema v5, Room v12, with Markdown and `dc-media.json` v2 unchanged; Windows source/version did not change.
 
-本版同时加入 Android Kotlin Plugin API 旁路架构。`TestPlugin` 仅属于 core 测试源集；生产 Hilt 插件集合保持为空，UI contribution registry 尚未接入现有导航，现有业务调用链没有迁移。Plugin API 作为未来 Diary/Vault/Media/Sync/AI/UI/Storage 扩展入口，本身不改变用户界面、交互、数据逻辑、Room 或 Markdown。
+This release also introduced the side-channel Android Kotlin Plugin API architecture. `TestPlugin` exists only in the core test source set; the production Hilt plugin set is empty, the UI-contribution registry is not connected to current navigation, and existing business call paths were not migrated. The Plugin API is a future Diary/Vault/Media/Sync/AI/UI/Storage extension point and itself changes no UI, interaction, data logic, Room, or Markdown.
 
-0.9.3（2026-08-06）修复部分 Android 设备打开 PDF 后一直停在加载状态：AndroidX PDF 文档打开和首屏内容分别设置 8 秒上限，失败或超时后自动切换到连续 `PdfRenderer` 兼容视图并显示双语提示；协程取消仍向上传播，不会被误当成加载失败。文本搜索、选择与自动目录改为按 Android 11+ 和系统 S SDK Extension 13 的真实能力启用，并在首屏成功后才开始扫描。应用 versionCode 为 23、备份保持 v27、Room 保持 v12；Windows 源码与版本未修改。
+0.9.3 (2026-08-06) fixed some Android devices remaining forever on PDF loading. AndroidX PDF document-open and first-page-content phases each gained an eight-second limit, then automatically switch to the continuous `PdfRenderer` view with a bilingual notice. Coroutine cancellation still propagates. Text search, selection, and automatic contents are enabled only by real Android 11+ / S SDK Extension 13 capability and begin after first-page success. versionCode became 23; backup v27 and Room v12 stayed, with no Windows source/version change.
 
-0.9.2（2026-08-05）优化吃历首次与重复进入性能：日记和媒体目录改为单次 SAF 元数据快照，媒体索引与四种侧车候选复用一次枚举；从吃历滤镜/热量进度返回时复用已加载结果，应用内日记变更通过 revision 精确失效。热量估算保持按日期排队，但同一天最多 3 张图片并行识别，全部成功后只调用一次文字模型统一计算并一次性保存；失败不部分提交。内置默认提示词迁移到多图 `photoIndex` 契约。应用 versionCode 为 22、备份保持 v27、Room 保持 v12；Windows 源码与版本未修改。
+0.9.2 (2026-08-05) optimized first and repeat Meal Calendar entry. Journal and media directories use one SAF metadata snapshot; media index and four sidecar candidates share a single enumeration. Returning from filter/estimation progress reuses data, while in-app journal revisions invalidate precisely. Dates still queue sequentially, but up to three photos per day recognize in parallel before one combined text-model calculation and one atomic save. Failure produces no partial commit. The built-in prompt migrated to the multi-image `photoIndex` contract. versionCode became 22; backup v27 and Room v12 stayed, with no Windows source/version change.
 
-0.9.1（2026-08-05）把 PDF 阅读改为连续纵向滚动，Android 9+ 增强视图支持双指及 50%–300% 基准缩放；系统 PDF 扩展支持的设备还提供文本选择复制、全文搜索高亮和文本层自动目录，Android 8 保留连续渲染兼容路径。TXT 搜索覆盖整本书，正文可选择复制；章节识别会处理空格、全角/零宽字符，并把首页整合目录条目替换为后文正文位置。贪吃蛇、俄罗斯方块、扫雷与蜘蛛纸牌统一继承主题前景色；主页小游戏模块可配置七个入口。备份升至 v27（继续导入 v1–v26），阅读私有状态升至 schema v4，应用 versionCode 为 21、Room 保持 v12；Windows 源码与版本未修改。
+0.9.1 (2026-08-05) made PDF reading continuously vertical. Android 9+ enhanced mode supports pinch and 50%–300% baseline zoom. Devices with the required system PDF extension also support selection/copy, full-text highlighted search, and text-layer contents; Android 8 retains continuous compatibility rendering. TXT search covers the whole book and body text can be selected/copied. Chapter recognition handles spaces and full-width/zero-width characters and replaces front-matter contents entries with later body locations. Snake, Tetris, Minesweeper, and Spider inherit theme foreground colors; Home game shortcuts select among seven entries. Backup became v27 with v1–v26 imports; Reader state schema v4, versionCode 21, and Room v12, with no Windows source/version change.
 
-0.9.0（2026-08-05）新增 Obsidian 兼容笔记页：SAF 原地浏览正常文件夹顺序，支持文件夹/Markdown 笔记新建、重命名、删除、自动保存与外部冲突处理；每次上传媒体都重新选择笔记库内的目标位置，并兼容标准图片和 `![[Wiki 嵌入]]`。日记与笔记共享更完整的 CommonMark 预览，H1–H6 字号可在日记设置中分别调整。
+0.9.0 (2026-08-05) added Obsidian-compatible Notes with in-place SAF browsing in natural folder order, folder/Markdown create/rename/delete, autosave, and external-conflict handling. Every media upload selects a destination inside the note library and supports both standard images and `![[Wiki embeds]]`. Journals and Notes share a fuller CommonMark preview with independent H1–H6 sizes.
 
-TXT 阅读新增更广的中英文智能章节规则、自定义整行正则、智能/自定义组合模式和标题长度上限。热量估算进度可点开查看实时用时、可折叠思考和流式回复；每日详情支持单图重算，无结果改为“估算失败”。主页加入笔记、小游戏快捷入口和记录概览，小巧思初次显示最新内容；小游戏字体与 2048 默认色板适配主题明暗。备份升至 v26（继续导入 v1–v25），应用 versionCode 为 20、Room 保持 v12；Windows 源码与版本未修改。
+TXT gained broader Chinese/English chapter rules, custom whole-line regex, combined smart/custom mode, and a title-length limit. Calorie progress became inspectable with live duration, collapsible reasoning, and streamed response. Daily details can rerun one image and show “Estimation failed” when empty. Home added Notes, game shortcuts, and Record Overview; Quick Thoughts initially shows the newest content; game typography and default 2048 colors follow theme mode. Backup became v26 with v1–v25 imports, versionCode 20, and Room v12, with no Windows source/version change.
 
-0.8.0（2026-08-04）为 Android 加入默认开启的逐页蒙版教学：主页面、嵌套路由、设置子页、具体小游戏和阅读状态各自只确认一次，可在“设置 → 关于 → 页面教学”关闭或重置；“外观与语言”支持 SAF 全局背景图片、0–100% 可见度和 0–40dp 模糊。逐页确认保持设备本机状态，备份升级为 v25 并保存背景参数与教学总开关。
+0.8.0 (2026-08-04) added default-on per-page Android tutorial overlays for main pages, nested routes, Settings subpages, individual games, and reading states. Each is confirmed once and can be disabled/reset under “Settings → About → Page tutorials.” Appearance and Language gained an SAF global background with 0%–100% visibility and 0–40 dp blur. Confirmations remain device-local; backup v25 includes background parameters and the tutorial master switch.
 
-TXT 阅读新增自动章节识别与目录侧栏，按约 1,800 字符生成稳定逻辑页，支持页码/进度跳转和旧段落进度迁移；阅读背景可选择任意颜色，PDF 也能按页数或进度跳转。日常事件模板和填写框支持换行；蜘蛛纸牌重开前新增不可恢复提示。应用 versionCode 为 19、Room 保持 v12；Windows 源码与版本未修改。
+TXT gained automatic chapter recognition and a contents drawer, stable logical pages around 1,800 characters, page/progress navigation, and migration from old paragraph positions. Reading backgrounds accept any color, and PDF can jump by page or progress. Daily-event templates and input became multiline; restarting Spider now warns that it cannot be undone. versionCode became 19 and Room stayed v12, with no Windows source/version change.
 
-0.7.0（2026-08-04）把吃历批量热量估算改为可观察的按日队列：长按“估算所有”进入进度页，逐张显示图片识别、文字估算与保存阶段；离开吃历后继续处理，其他日期的重算可排队，每天只在全部图片处理完后统一保存一次。底栏移除选中按钮的椭圆底色，频谱可视化增加自适应与 20–20,000 Hz 手动范围。
+0.7.0 (2026-08-04) turned bulk Meal Calendar estimation into an observable per-day queue. Long-press Estimate All opens progress with image recognition, text calculation, and save stages. Work continues after leaving; other dates queue; each date saves once only after every image finishes. Bottom navigation removed its selected pill, and spectrum visualization gained adaptive and manual 20–20,000 Hz ranges.
 
-小游戏新增 Room 持久化的特色统计，并加入统一统计中心；扫雷支持双击数字翻开周围未插旗格，蜘蛛纸牌及其他游戏分别记录契合玩法的移动、胜负、消除等指标。Room 升至 12，备份升至 v24 并安全合并特色统计和音乐频率设置；应用 versionCode 为 18。Windows 源码与版本未修改。
+Games gained Room-persisted detailed statistics and a unified Statistics center. Minesweeper can double-tap a number to open surrounding unflagged cells; Spider and other games track appropriate moves, results, clears, and other metrics. Room moved to 12, backup v24 safely merged statistics and music frequency settings, and versionCode became 18. Windows source/version did not change.
 
-0.6.6（2026-08-04）修复 0.6.0 音乐可视化层参与 `Scaffold` 测量、导致底部导航占满页面高度的问题，并增加固定容器回归测试。阅读状态写入和横竖屏退出恢复、小游戏前台计时与旋转恢复、蜘蛛纸牌撤回存档均加强了崩溃与竞态边界。
+0.6.6 (2026-08-04) fixed the 0.6.0 visualizer participating in `Scaffold` measurement and making bottom navigation fill the page, with a fixed-container regression test. Reading-state writes and orientation/exit recovery, foreground game timing and rotation recovery, and Spider undo saves gained stronger crash/race handling.
 
-吃历新增可点击的每日热量详情、可编辑总量、逐项食物分量/kJ 和仅详情可见备注；重算会把备注发送给文字模型，默认提示词升级，`dc-media.json` v2 继续兼容旧数据并增加有界、回读验证的安全更新。手机使用时间、其他设备缓存和健康每日统计安全迁移到 Room v11，Room 成为运行时唯一权威；手动 JSON 默认名改为 `DC-yyyy-MM-dd.json`。WebDAV 在普通响应缺少验证头时可用安全的 `PROPFIND Depth: 0` 补取强 ETag，无强验证器仍失败关闭。应用 versionCode 为 17，备份仍为 v23；Windows 源码与版本未修改。
+Meal Calendar added tappable daily calorie details, editable totals, per-food portions/kJ, and notes visible only in details. Recalculation sends notes to the text model, the default prompt was upgraded, and `dc-media.json` v2 retained old data while adding bounded, read-back-verified updates. Phone usage, other-device caches, and daily health statistics safely migrated to Room v11 as the sole runtime authority. Manual JSON default names became `DC-yyyy-MM-dd.json`. WebDAV can use bounded `PROPFIND Depth: 0` to obtain a strong ETag when ordinary responses omit validators and still fails closed without one. versionCode became 17, backup stayed v23, with no Windows source/version change.
 
-0.6.0（2026-08-03）新增 TXT/PDF 阅读页，支持 SAF 导入、横竖屏锁定、TXT 背景/字号/行距/段距设置、默认滑动阅读和每本书私有 JSON 阅读计时；底部导航新增取得本机录音权限后的直方图、波形、平滑曲线音乐可视化。小游戏新增可自定义扫雷和横屏单花色蜘蛛纸牌，2048 增加三档动画速度，全部小游戏分别累计私有 JSON 前台游玩时间。
+0.6.0 (2026-08-03) added TXT/PDF Reading with SAF import, portrait/landscape lock, TXT background/font/line/paragraph controls, default scrolling, and private per-book JSON reading time. Bottom navigation gained bar, waveform, and smooth-curve music visualization after local recording permission. Games added configurable Minesweeper and landscape single-suit Spider; 2048 gained three speeds; every game separately accumulates foreground time in private JSON.
 
-应用数据页新增安装包、数据库、偏好、阅读、娱乐计时、统计、缓存、外部目录和 SAF 日记/媒体分组占用；收藏夹最低行高压缩到 48dp。该版曾加入 WebDAV `Last-Modified` 回退，0.6.6 已将其收紧为通过 `PROPFIND` 补取强 ETag，避免秒级时间戳的并发覆盖窗口。应用 versionCode 为 16，备份为 v23，Room 仍为 v10；Windows 源码与版本未修改。
+Application Data added grouped package, database, preferences, reading, engagement, statistics, cache, external-directory, and SAF journal/media size. Vault minimum rows shrank to 48 dp. This version briefly added a WebDAV `Last-Modified` fallback; 0.6.6 tightened it to strong ETags through `PROPFIND` to avoid second-resolution overwrite races. versionCode became 16, backup v23, and Room stayed v10; Windows source/version did not change.
 
-0.5.0（2026-08-03）新增可缩放的 Android 桌面小卡片设计页，支持 1–6 格自定义尺寸、常用尺寸、背景/文字色、SAF 背景图片、16 种主页模块和其他应用启动按钮，并可从应用内请求添加到桌面。小卡片设计进入 v22 备份；实际桌面实例绑定保持设备本机状态。
+0.5.0 (2026-08-03) added a scalable Android home-screen widget designer with custom 1–6 cell sizes, presets, background/text colors, SAF backgrounds, 16 Home modules, other-app buttons, and in-app widget placement. Widget designs entered v22 backup; actual instance bindings remained device-local.
 
-吃历新增按 SAF 文档版本复用的持久解析缓存，手动刷新可强制重建，批量热量计算和主页上传不再为定位同一照片反复全量扫描。每日诗词从单一今日诗词 API 扩展到今日诗词、Hitokoto 诗词分类和古诗词·一言轮换，在线源失败时使用 182 篇内置诗库继续换诗。健康改为只使用 Health Connect，并把状态说明卡移到页面底部；云同步状态持久显示上次同步时间；系统开屏底色改为黑色。应用 versionCode 为 15，备份为 v22，Room 仍为 v10。
+Meal Calendar added a persistent parse cache keyed by SAF document version. Manual refresh can rebuild it, and bulk estimation/Home uploads no longer repeatedly rescan to locate the same photo. Daily Poem expanded from one API to Jinrishici, Hitokoto Poetry, and Gushi Ci rotation with 182 bundled fallbacks. Health moved to Health Connect only and placed status at the bottom. Sync status persistently shows last sync, and the system splash background became black. versionCode became 15, backup v22, Room v10.
 
-0.4.2（2026-08-01）修复 2048 在可滚动页面中只能左右滑动的问题，恢复上、下、左、右四向操作，并把右下角撤回换成回转箭头。修复诗词本调整第一条、移到第一条的排序错误；删除分类现在可选择保留诗词并归入未分类，或连同分类下诗词一起删除。
+0.4.2 (2026-08-01) restored four-direction 2048 swipes inside scrolling pages and replaced the bottom-right undo icon. It fixed sorting the first Poetry Book item or moving an item first. Category deletion can now retain poems under Uncategorized or delete both category and poems.
 
-“步数记录”升级为“健康”，Health Connect 同时读取步数、距离和活动热量，系统计步传感器继续作为仅步数回退。首页每日诗词改为按本地日期去重，同一天启动和手动刷新都不会重复；日记源码及预览为媒体新增确认删除，可同时移除当前日记全部引用和媒体文件。应用 versionCode 为 14；备份仍为 v21，Room 仍为 v10。
+Step Records became Health, with Health Connect steps, distance, and active calories while the system step sensor remained a steps-only fallback at that time. Home Daily Poem deduplicates by local date across startup and manual refresh. Journal source/preview added confirmed media deletion that removes every current-journal reference and the media file. versionCode became 14; backup v21 and Room v10 stayed.
 
-0.4.1（2026-07-31）修复主页每日诗词刷新几次后循环的问题，使用有界刷新与近期诗词指纹避开重复；诗词本右上角新增排序模式，四点手柄支持拖动/无障碍移动，排序时以题目开头的一行预览显示，七言自动换行只对检测到的七言诗生效。WebDAV/S3 配置新增可保存 User-Agent；主页饮食图片改为单击拍照、长按选图并移除提示语；手机使用时间开启后每天首次打开应用也会尝试采集一次。
+0.4.1 (2026-07-31) fixed Home Daily Poem cycling after several refreshes through bounded refresh and recent fingerprints. Poetry Book gained top-right sorting, draggable/accessible four-dot handles, title-first one-line previews, and seven-character wrapping only for detected verse. WebDAV/S3 configurations gained User-Agent. Home food-photo changed to tap-camera/long-press-picker without instructions. Enabled Phone Usage attempts collection on the first open each day.
 
-2048 页面现在只显示当前分数，移除 2048.org 文案；无限撤回改为右下角图表按钮，页面任意位置滑动均可操作，棋盘放大并上下居中，支持白天/黑夜和生成、移动、合并动画开关，数字字号按棋盘格大小适配。收藏夹新增可设置的卡片最小行高。Android 备份升级为 v21（继续导入 v1–v20），Room 升级为 v10 并显式迁移诗词排序；应用 versionCode 为 13。
+2048 now displays only current score, removes 2048.org copy, puts unlimited undo in a bottom-right chart button, accepts swipes anywhere, enlarges/centers the board, offers day/night and spawn/move/merge switches, and adapts number size to cells. Vault gained configurable minimum row height. Android backup became v21 with v1–v20 imports; Room v10 explicitly migrated poetry ordering; versionCode became 13.
 
-0.4.0（2026-07-30）把 Android 应用备份升级为 v20：原样保存 Vault 密文/盐/校验元数据，加入五种小游戏的存档与最高分，并加入按稳定随机设备 ID 分组的手机使用时间。手机使用时间页新增设备切换、设备名编辑和“所有设备”汇总；WebDAV/S3 新增每设备独立的使用时间同步对象并按日期安全合并。旧的手动规范 v4 导出界面已删除；Android 继续导入 v1–v19，但 Windows 0.2.0 暂不兼容 v20。应用 versionCode 为 12；Room 仍为 v9。
+0.4.0 (2026-07-30) moved Android backup to v20, preserving Vault ciphertext/salt/verifier metadata, five game saves and high scores, and phone usage grouped by a stable random device ID. Phone Usage gained device switching, name editing, and All Devices. WebDAV/S3 gained per-device usage objects with safe date merge. The legacy manual canonical-v4 Export for Windows UI was removed. Android retained v1–v19 import, while Windows 0.2.0 did not yet support v20. versionCode became 12 and Room stayed v9.
 
-0.3.8（2026-07-30）按 2048.org 重做三种 2048 的界面和动画并加入无限撤回；修复 Android S3 的协议、SSL/TLS、Path-Style/虚拟主机寻址、CSTCloud 兼容、凭据回显和错误代码；诗词本加入分类及 11 类 182 篇初高中古诗文预设；调换应用数据页的 JSON 与备份说明顺序。应用 versionCode 为 11；备份升级为 v19，Room 升级为 v9。
+0.3.8 (2026-07-30) rebuilt all three 2048 variants after 2048.org with new UI/motion and unlimited undo; fixed Android S3 scheme, SSL/TLS, path-style/virtual-host addressing, CSTCloud compatibility, credential display, and error codes; added Poetry categories and 182 bundled school-level works in 11 groups; and reordered JSON/backup explanations on Application Data. versionCode became 11, backup v19, Room v9.
 
-0.3.7（2026-07-28）改用前后台事件重建手机使用时间并按本地午夜切分，升级后会修正系统仍保留事件范围内的重复日高值；4×4/5×5/6×6 三种 2048 均新增可随存档保留的单步撤回，游戏结束时也可撤回继续。应用 versionCode 为 10；应用备份仍为 v18，Room 仍为 v8。
+0.3.7 (2026-07-28) rebuilt Phone Usage from foreground/background events split at local midnight and corrected repeated daily highs within system-retained event history after upgrade. All three 2048 variants gained a persisted one-step undo, including after game over. versionCode became 10; backup v18 and Room v8 stayed.
 
-0.3.6（2026-07-28）新增七言诗自动换行、步数传感器回退、设置页一键重置和蜂窝色盘；重做手机使用时间总览、加载状态与图内交互提示；2048 拆分为 4×4/5×5/6×6 并增强色阶和动画；设置入口缩短为“应用数据”，AI 聊天更换图标。备份格式升级为 v18，应用 versionCode 为 9。
+0.3.6 (2026-07-28) added seven-character poetry wrapping, step-sensor fallback, one-tap Settings reset, and a honeycomb palette; rebuilt Phone Usage overview/loading/chart hints; split 2048 into 4×4/5×5/6×6 with stronger colors/motion; shortened Settings entry to Application Data; and changed the AI Chat icon. Backup became v18 and versionCode 9.
 
-0.3.5（2026-07-28）新增桌洞启动图标、诗词本排版设置与长按操作；修正使用时间应用名称/图标解析并让三种统计图可点选日期；收藏夹改为备注紧凑显示、长按复制/编辑/删除和拖动排序；未来保存的 JSON 文件名统一缩短为 `dc` 前缀并兼容旧名。备份格式升级为 v17，Room 升级为 v8。
+0.3.5 (2026-07-28) added the DeskCubby launcher icon, Poetry typography and long-press actions; fixed usage app label/icon resolution and made all three charts selectable by date; made Vault notes compact with long-press copy/edit/delete and drag ordering; and standardized future JSON names on the short `dc` prefix while retaining legacy names. Backup became v17 and Room v8.
 
-本次发布产物：
+Current release artifact:
 
-- Release APK：`android/app/build/outputs/apk/release/DeskCubby.apk`
+- Release APK: `android/app/build/outputs/apk/release/DeskCubby.apk`
 
-如需验证已签名的 Release APK：
+To verify a signed release APK:
 
 ```powershell
 apksigner verify --verbose android\app\build\outputs\apk\release\DeskCubby.apk
 ```
 
-## Windows 构建环境
+## Windows build environment
 
-Windows 客户端需要 Windows 10/11 x64、Node.js 20+、pnpm、Rust，以及带“使用 C++ 的桌面开发”工作负载的 Visual Studio 2022 Build Tools 和 WebView2 Runtime。仓库的 `windows/rust-toolchain.toml` 固定使用项目级 `stable-x86_64-pc-windows-msvc`，不会依赖机器默认的 GNU target。
+The Windows client requires Windows 10/11 x64, Node.js 20+, pnpm, Rust, Visual Studio 2022 Build Tools with the “Desktop development with C++” workload, and WebView2 Runtime. `windows/rust-toolchain.toml` pins project-local `stable-x86_64-pc-windows-msvc` and does not rely on the machine's default GNU target.
 
-若本机 Visual Studio 缓存了 Windows SDK 10.0.26100，可在**管理员 PowerShell** 中把桌面 C++/签名组件安装到固定的 `E:\Windows Kits\10`，再执行只读校验：
+If Visual Studio has cached Windows SDK 10.0.26100, run the following from **Administrator PowerShell** to install desktop C++/signing components at the fixed `E:\Windows Kits\10` location and then perform a read-only verification:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\scripts\install-windows-sdk-26100.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\scripts\install-windows-sdk-26100.ps1 -VerifyOnly
 ```
 
-脚本会校验 Visual Studio 缓存中 Microsoft 安装器的 SHA-256/Authenticode，并检查 `rc.exe`、`signtool.exe`、`kernel32.lib` 与注册表 `KitsRoot10`；缓存只有 bootstrapper 时可能联网下载 Microsoft SDK 载荷。只有 `-VerifyOnly` 成功，才可将该 SDK 视为可用于本项目 MSVC 构建。
+The script verifies Microsoft installer SHA-256/Authenticode signatures in the Visual Studio cache and checks `rc.exe`, `signtool.exe`, `kernel32.lib`, and the `KitsRoot10` registry value. A cache containing only a bootstrapper may download Microsoft SDK payloads. Treat the SDK as usable for this project's MSVC build only after `-VerifyOnly` succeeds.
 
-以下命令从仓库根目录运行：
+Run the following from the repository root:
 
 ```powershell
 cd .\windows
 pnpm install --frozen-lockfile
 
-# 浏览器中的 Vite 开发界面
+# Vite interface in a browser
 pnpm dev
 
-# 带 Rust 后端的桌面开发模式
+# Desktop development with the Rust backend
 pnpm tauri dev
 ```
 
-提交 Windows 改动前执行：
+Before committing Windows changes:
 
 ```powershell
 cd .\windows
@@ -375,7 +377,7 @@ cargo clippy --manifest-path .\src-tauri\Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path .\src-tauri\Cargo.toml
 ```
 
-普通本地构建可生成 NSIS，并从同一次 Release 构建复制便携 EXE、生成 SHA-256：
+A normal local package build produces NSIS and copies a portable executable from the same Release build with a SHA-256 file:
 
 ```powershell
 cd .\windows
@@ -383,27 +385,27 @@ pnpm package:windows
 pnpm package:portable
 ```
 
-典型输出位置：
+Typical outputs:
 
-- 原始 Release EXE：`windows/src-tauri/target/release/deskcubby-windows.exe`（显式 target 构建时位于 `target/x86_64-pc-windows-msvc/release/`）
-- NSIS 安装包：`windows/src-tauri/target/release/bundle/nsis/`
-- 便携测试文件与校验值：`windows/artifacts/DeskCubby-0.6.0-windows-x64-portable.exe` 和同名 `.sha256`
+- Raw Release executable: `windows/src-tauri/target/release/deskcubby-windows.exe` (or `target/x86_64-pc-windows-msvc/release/` with an explicit target)
+- NSIS installer: `windows/src-tauri/target/release/bundle/nsis/`
+- Portable test executable and checksum: `windows/artifacts/DeskCubby-0.6.0-windows-x64-portable.exe` and its `.sha256`
 
-也可显式构建一个仅供本地测试、禁止发布的未签名包：
+To create an explicitly unsigned build for local testing only—never for release:
 
 ```powershell
 cd .\windows
 .\scripts\build-release.ps1 -Mode AllowUnsignedTestBuild
 ```
 
-正式发布必须使用受保护环境中的长期 Tauri updater 私钥；Windows Authenticode 身份（PFX 或硬件/云签名命令）为可选增强：
+A production release requires the long-lived Tauri-updater private key from a protected environment. Windows Authenticode identity through a PFX or hardware/cloud signing command is optional:
 
 ```powershell
 cd .\windows
 .\scripts\build-release.ps1 -Mode SignedRelease -ReleaseTag windows-v0.6.0
 ```
 
-成功的 `SignedRelease` 会产生：
+A successful `SignedRelease` produces:
 
 - `windows/artifacts/DeskCubby-0.6.0-windows-x64-setup.exe`
 - `windows/artifacts/DeskCubby-0.6.0-windows-x64-portable.exe`
@@ -411,40 +413,36 @@ cd .\windows
 - `windows/artifacts/SHA256SUMS.txt`
 - `windows/artifacts/latest.json`
 
-Tauri updater 的 minisign 私钥签名是正式发布的强制安全边界，用于应用内下载验证；安装包 `.sig` 缺失、无效或与内嵌公钥不匹配时构建失败。Authenticode 签名和可信时间戳只负责 Windows 发布者身份/SmartScreen：未配置时，脚本会明确验证 EXE 为 `NotSigned` 后继续发布；未来配置 PFX 或自定义签名命令时，仍会自动签名并验证证书链、可信时间戳及可选 signer subject。两种 Authenticode 机制不能同时启用。
+The Tauri updater's minisign private-key signature is a mandatory production boundary for validating in-app downloads; a missing or invalid installer `.sig`, or one that does not match the embedded public key, fails the build. Authenticode signing and a trusted timestamp establish Windows publisher identity/SmartScreen only. Without Authenticode configuration, the script explicitly verifies that the executable is `NotSigned` before continuing. When a PFX or custom signing command is configured, it signs and verifies the certificate chain, trusted timestamp, and optional signer subject. The two Authenticode mechanisms cannot be enabled simultaneously.
 
-`.github/workflows/windows-release.yml` 在精确的 `windows-vX.Y.Z` tag 上执行 `SignedRelease`，校验五个资产后创建 **draft** GitHub Release：portable EXE、setup EXE、setup `.sig`、`SHA256SUMS.txt` 和 `latest.json`。工作流上传前后都会核对精确资产集合、大小和 GitHub SHA-256 digest，不覆盖已发布、不完整或包含未知资产的 Release。人工复核并发布版本 Release 后，才可把已验证的 `latest.json` 提升到独立 `windows-stable` 通道，避免与同仓库 Android Release 争用全局 `latest`。
+`.github/workflows/windows-release.yml` runs `SignedRelease` only on an exact `windows-vX.Y.Z` tag, validates five assets, and creates a **draft** GitHub Release containing the portable EXE, setup EXE, setup `.sig`, `SHA256SUMS.txt`, and `latest.json`. Before and after upload, it verifies the exact asset set, sizes, and GitHub SHA-256 digests. It never overwrites a published, incomplete, or unknown-asset Release. After human review and publication, the verified `latest.json` can be promoted to the separate `windows-stable` channel, avoiding competition with Android for the repository-wide `latest` release.
 
-检入的基础配置故意不含 updater 公钥或端点，因此普通本地 0.6.0 构建仍是更新未配置的测试产物，也可能显示“未知发布者”。`SignedRelease` 与 CI 可以在没有 Windows 代码签名证书 Secrets 的情况下构建正式 Release，但仍必须提供 updater 公钥、HTTPS endpoint、Tauri updater 私钥和非空私钥密码；缺少任一项或安装包 `.sig` 验证失败时都会失败关闭。Windows 0.1.0 没有 updater 插件，已有用户必须先手动安装一个 updater-enabled 正式版本，之后才可使用应用内更新。
+The checked-in base configuration intentionally contains no updater public key or endpoint, so normal local 0.6.0 builds are updater-unconfigured test artifacts and may display “Unknown publisher.” `SignedRelease` and CI can produce a formal release without Windows code-signing certificate secrets, but they still require the updater public key, HTTPS endpoint, Tauri updater private key, and nonempty private-key password. A missing item or failed `.sig` validation fails closed. Windows 0.1.0 did not include the updater plugin; existing users must manually install one updater-enabled formal release before in-app updates can work.
 
-## 使用边界
+## Usage boundaries
 
-- Windows 0.5.0 可导入 Android v1–v28，并统一导出 v28，但不会直接打开或共享 Android Room 数据库。Android 0.13.0 新导出的完整应用备份是 v29，Windows 0.5.0 会把它作为未来版本拒绝；日记、媒体和笔记真实文件仍应通过用户选择的普通目录互操作。
-- Windows 重新导出会合并 DPAPI 兼容影子中的 Android 专属模块与未知字段，但这不代表 Windows 会展示或执行内置浏览器、桌面小卡片或未来未知功能。
-- Windows 手机使用时间和健康页面只显示用户明确导入、链接或通过已启用专用 usage 云对象下载的手机数据，不调用 Windows 活动/健康采集 API。Windows 不上传 usage；两类明细、来源路径和只读缓存都不进入 v28、恢复点、自动备份或应用 JSON 云同步。
-- 编辑器采用“源码编辑 + 阅读预览”，不会把 CommonMark AST 重新序列化，因此能保留未知的 Obsidian 语法；预览只渲染基础 CommonMark。
-- 源码中的媒体拖动只识别独占一行的 Markdown 图片语法。
-- 图片 Markdown 链接只写媒体文件名；建议在 Obsidian 中把 DeskCubby 的媒体目录配置为附件目录。
-- 天气组件目前只显示离线缓存占位；每日诗词会轮换三个受限 HTTPS 在线源，失败时从内置诗库选择。第三方服务的可用性仍由其运营方决定。
-- RSS 面向公网 HTTPS Feed；文章列表当前不跨应用重启保存。
-- AI 服务商需要兼容非流式 OpenAI `chat/completions` 消息格式；聊天图片和图片识别通过 `image_url` data URL 发送，单张图片限制为 8 MiB。思考面板只显示服务端实际返回的 reasoning。
-- 导入 AI 上下文后，只有在用户发送消息时冻结内容才会离开设备并发往当前模型服务；该快照会留在本机会话中并随之后的会话请求继续发送。需要停止复用时请新建对话。
-- AI 热量结果仅为估算值，不应视为医学或营养测量结果。
-- 手机使用时间由 Android UsageEvents 的前后台、熄屏和锁屏事件重建，按当前时区的本地午夜切分，口径仍可能与设备厂商的“屏幕时间”不同；应用会补采系统仍保留且事件流完整覆盖的自然日，但 Android/厂商已经清理的数据或最老的截断日无法恢复。若当天事件不可用，应用只对当天使用单日汇总回退，不再把一个厂商汇总复制到多个历史日期。
-- 健康页只读取 Health Connect 已有数据，不再使用本机 `TYPE_STEP_COUNTER`。Android 13 及以下需要安装/更新 Health Connect 时会优先打开 Google Play，并在商店不可用时回退到 HTTPS 页面；没有 Health Connect 或未授权时不会改用其他数据源，也不会伪造 0。
-- 吃历长图受 Android Bitmap 内存、图像高度和总像素安全上限约束；时间范围过大时需缩短范围并分批导出。
-- WebDAV 远端目录需要预先存在，且仍需在普通响应或 `PROPFIND Depth: 0` 属性中提供单个合法强 ETag。Android 0.12.0 的 S3 通道不再执行条件 GET 探针，也不以服务是否落实 `If-Match` 作为启用门槛；条件头只作最佳努力，SHA-256、内容寻址和必要的写后同字节回读仍校验内容，但不能补足服务端缺失的原子并发语义。Windows 0.5.0 使用自己的受限 S3 实现，不受这次 Android 修改影响。
-- 云端同步默认限制单对象 64 MiB、单次传输 512 MiB、10,000 个对象和 10 分钟总时长，不适合作为不受限制的整盘镜像工具。
-- 云端应用 JSON 的下载只产生待确认的暂存副本；恢复 JSON 不会替换日记正文、媒体文件或 AI 对话历史。
-- Windows 收藏夹只属于当前 Windows 数据库，不进 v28、云同步或恢复点；密码无法找回。导入 Android v28 时也会清除其 Vault `active`/`pending`/`items`，不会覆盖 Windows Vault。手机使用时间只可从用户选择的来源或专用云 usage 对象下载到 DPAPI 私有缓存；Windows 不上传 usage，且本机来源路径、usage/health 明细与缓存不会导出。
-- 自动更新只在生产发布包内嵌可信 HTTPS 更新源和 updater 公钥后生效；自动检查只提示，下载安装始终要求用户确认。本地未配置构建必须显示“更新未配置”。
-- 文件版本历史和更完整的冲突“另存副本”流程尚未加入。
-- 部分云盘文档提供方可能拒绝重命名；这时软删除会失败并保留原文件，不会直接永久删除。
+- Windows 0.6.0 imports Android v1–v29 and always exports v29, but it never opens or shares the Android Room database directly. Real journal, media, and note files interoperate only through ordinary directories selected by the user.
+- A Windows re-export merges Android-only modules and unknown fields from the DPAPI compatibility shadow. That does not mean Windows displays or executes the built-in browser, home-screen widgets, or unknown future features.
+- Windows Phone Usage and Health display only phone data explicitly imported, linked, or downloaded from an enabled dedicated usage cloud object. Windows never calls activity/health collection APIs or uploads usage. Details, source paths, and read-only caches are excluded from v29, restore points, automatic backups, and application-JSON cloud sync.
+- Editors use source editing plus reading preview and do not reserialize the CommonMark AST, preserving unknown Obsidian syntax. Preview renders only basic CommonMark.
+- Media drag ordering recognizes only Markdown images on standalone lines.
+- Markdown image links contain only the media filename. When using Obsidian, configure DeskCubby's media directory as the attachment folder.
+- The Weather widget currently displays an offline cached placeholder. Daily Poem rotates among three restricted HTTPS sources and falls back to bundled poetry. Third-party availability remains under those providers' control.
+- RSS targets public HTTPS feeds. Article lists currently do not persist across app restarts.
+- AI providers must support non-streaming OpenAI `chat/completions` messages. Chat images and image recognition use `image_url` data URLs with an 8 MiB limit per image. The reasoning panel displays only reasoning actually returned by the service.
+- After AI context is selected, frozen content leaves the device only when the user sends a message. That snapshot remains in the local conversation and is included in later requests for the same conversation. Start a new conversation to stop reusing it.
+- AI calorie output is an estimate, not a medical or nutritional measurement.
+- Phone Usage reconstructs foreground time from Android UsageEvents including screen-off/lock and splits at local midnight in the current time zone. Results may differ from a manufacturer's “screen time.” The app backfills natural days only while the system still retains a complete event stream. Android/manufacturer-deleted data and the oldest truncated day cannot be recovered. If event data is unavailable for the current day, only that day may use a one-day aggregate fallback; one manufacturer total is never copied across historical days.
+- Health reads existing Health Connect data only and no longer uses local `TYPE_STEP_COUNTER`. On Android 13 or earlier, installing/updating Health Connect opens Google Play first and falls back to an HTTPS page if the store is unavailable. Without Health Connect or authorization, DeskCubby does not switch to another source or fabricate zeroes.
+- A Meal Calendar tall PNG is constrained by Android bitmap memory, image-height, and total-pixel safety limits. Shorten the date range and export in batches when necessary.
+- A WebDAV remote directory must already exist and provide exactly one valid strong ETag in an ordinary response or `PROPFIND Depth: 0` property. Android 0.12.0's S3 path no longer runs a conditional-GET probe or requires the service to enforce `If-Match` as an enablement gate. Conditional headers are best effort; SHA-256, content addressing, and necessary post-write same-byte read-back still validate content but cannot replace missing atomic concurrency semantics on the server. Windows 0.6.0 uses its own restricted S3 implementation and is unaffected by that Android change.
+- Cloud sync defaults to limits of 64 MiB per object, 512 MiB per run, 10,000 objects, and ten minutes total. It is not an unrestricted whole-drive mirror.
+- Downloading cloud application JSON creates only a pending staged copy. Restoring JSON does not replace journal content, media files, or AI chat history.
+- Windows Vault belongs only to the current Windows database and is excluded from v29, cloud sync, and restore points; its password cannot be recovered. Importing Android v29 also removes Android Vault `active`/`pending`/`items` and never replaces Windows Vault. Phone Usage can only download from a user-selected source or dedicated usage cloud object into a private DPAPI cache. Windows never uploads usage, and local source paths and usage/health details/caches are not exported.
+- Automatic updates work only in production packages containing a trusted HTTPS update source and updater public key. Automatic checks only notify; download and installation always require confirmation. A local unconfigured build must show “Updater not configured.”
+- File version history and a more complete Save a Copy conflict workflow are not yet implemented.
+- Some cloud document providers reject renaming. In that case, soft delete fails and retains the original file instead of permanently deleting it.
 
-## 开源许可
+## License
 
-DeskCubby 代码使用 [MIT License](LICENSE) 开源。Android 内置诗词预设的来源与单独许可见
-[`poetry_presets_NOTICES.txt`](android/app/src/main/assets/poetry_presets_NOTICES.txt)；其中由初中数据
-派生的预设编排按 CC BY-SA 4.0 提供，不属于仓库代码的 MIT 授权范围。Android PDF 增强视图所用
-PdfiumAndroid 封装（Apache-2.0）和 PDFium 引擎（BSD 风格）的版权、许可与免责声明见
-[`pdfium_NOTICES.txt`](android/app/src/main/assets/pdfium_NOTICES.txt)。
+DeskCubby source code is available under the [MIT License](LICENSE). Sources and separate licenses for bundled Android poetry presets are listed in [`poetry_presets_NOTICES.txt`](android/app/src/main/assets/poetry_presets_NOTICES.txt). Preset compilation derived from middle-school data is licensed under CC BY-SA 4.0 and is not covered by the repository code's MIT License. Copyright, license, and disclaimer notices for the PdfiumAndroid wrapper (Apache-2.0) and the PDFium engine (BSD-style) used by the enhanced Android PDF view are in [`pdfium_NOTICES.txt`](android/app/src/main/assets/pdfium_NOTICES.txt).
