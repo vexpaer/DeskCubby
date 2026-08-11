@@ -1020,7 +1020,7 @@ class BackupJsonCodecTest {
                         validReaderProgressRecord(
                             fingerprint = "b".repeat(64),
                             type = ReaderBookType.PDF,
-                        ),
+                        ).copy(pageOffsetPercent = 65),
                         validReaderProgressRecord(
                             fingerprint = "a".repeat(64),
                             type = ReaderBookType.TXT,
@@ -1039,7 +1039,15 @@ class BackupJsonCodecTest {
             assertFalse(record.has("title"))
             assertFalse(record.has("coverUri"))
             assertFalse(record.has("content"))
+            assertFalse(record.has("pageOffsetPercent"))
         }
+        assertEquals(
+            0,
+            BackupJsonCodec.decode(encoded.toString())
+                .readerProgress
+                .first { it.fingerprint == "b".repeat(64) }
+                .pageOffsetPercent,
+        )
     }
 
     @Test

@@ -32,6 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -116,7 +117,7 @@ private val pdfiumOpenMutex = Mutex()
 @Composable
 internal fun PdfiumPdfReader(
     uri: Uri,
-    initialPage: Int,
+    initialPosition: ReaderPagePosition,
     preferences: ReaderPreferences,
     background: Color,
     foreground: Color,
@@ -125,7 +126,7 @@ internal fun PdfiumPdfReader(
     searchQuery: String,
     selectedSearchIndex: Int,
     onRequestedPageConsumed: () -> Unit,
-    onCurrentPageChanged: (Int) -> Unit,
+    onCurrentPositionChanged: (ReaderPagePosition) -> Unit,
     onSearchResultCountChanged: (Int) -> Unit,
     onChaptersChanged: (List<ReaderChapter>) -> Unit,
     onChapterScanRunningChanged: (Boolean) -> Unit,
@@ -188,7 +189,7 @@ internal fun PdfiumPdfReader(
             )
             else -> PdfiumDocumentView(
                 session = session,
-                initialPage = initialPage,
+                initialPosition = initialPosition,
                 preferences = preferences,
                 background = background,
                 foreground = foreground,
@@ -196,7 +197,7 @@ internal fun PdfiumPdfReader(
                 searchQuery = searchQuery,
                 selectedSearchIndex = selectedSearchIndex,
                 onRequestedPageConsumed = onRequestedPageConsumed,
-                onCurrentPageChanged = onCurrentPageChanged,
+                onCurrentPositionChanged = onCurrentPositionChanged,
                 onSearchResultCountChanged = onSearchResultCountChanged,
                 onChaptersChanged = onChaptersChanged,
                 onChapterScanRunningChanged = onChapterScanRunningChanged,
@@ -209,7 +210,7 @@ internal fun PdfiumPdfReader(
 @Composable
 private fun PdfiumDocumentView(
     session: PdfiumDocumentSession,
-    initialPage: Int,
+    initialPosition: ReaderPagePosition,
     preferences: ReaderPreferences,
     background: Color,
     foreground: Color,
@@ -217,21 +218,34 @@ private fun PdfiumDocumentView(
     searchQuery: String,
     selectedSearchIndex: Int,
     onRequestedPageConsumed: () -> Unit,
-    onCurrentPageChanged: (Int) -> Unit,
+    onCurrentPositionChanged: (ReaderPagePosition) -> Unit,
     onSearchResultCountChanged: (Int) -> Unit,
     onChaptersChanged: (List<ReaderChapter>) -> Unit,
     onChapterScanRunningChanged: (Boolean) -> Unit,
     onEnhancedReaderUnavailable: () -> Unit,
 ) {
-    val safeInitialPage = initialPage.coerceIn(0, session.pageCount - 1)
+    val restoredPosition = remember(session) {
+        ReaderPagePosition(
+            pageIndex = initialPosition.pageIndex.coerceIn(0, session.pageCount - 1),
+            pageOffsetPercent = initialPosition.pageOffsetPercent,
+        )
+    }
+    val safeInitialPage = restoredPosition.pageIndex
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = safeInitialPage)
     val horizontalScrollState = rememberScrollState()
     var gestureZoom by remember(session) { mutableFloatStateOf(1f) }
     var firstContentLoaded by remember(session) { mutableStateOf(false) }
     var searchMatches by remember(session) { mutableStateOf<List<Int>>(emptyList()) }
-    val currentOnPageChanged by rememberUpdatedState(onCurrentPageChanged)
+    var initialPositionRestored by rememberSaveable { mutableStateOf(false) }
+    val currentOnPositionChanged by rememberUpdatedState(onCurrentPositionChanged)
     val currentOnEnhancedReaderUnavailable by rememberUpdatedState(onEnhancedReaderUnavailable)
 
+    LaunchedEffect(session, listState) {
+        if (!initialPositionRestored) {
+            listState.restoreReaderPagePosition(restoredPosition, session.pageCount)
+            initialPositionRestored = true
+        }
+    }
     LaunchedEffect(preferences.pdfZoomPercent) { gestureZoom = 1f }
     LaunchedEffect(requestedPage) {
         requestedPage?.let { page ->
@@ -239,10 +253,11 @@ private fun PdfiumDocumentView(
             onRequestedPageConsumed()
         }
     }
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex }
+    LaunchedEffect(listState, initialPositionRestored, session.pageCount) {
+        if (!initialPositionRestored) return@LaunchedEffect
+        snapshotFlow { listState.currentReaderPagePosition(session.pageCount) }
             .distinctUntilChanged()
-            .collect(currentOnPageChanged)
+            .collect(currentOnPositionChanged)
     }
     LaunchedEffect(session, firstContentLoaded) {
         if (firstContentLoaded) return@LaunchedEffect

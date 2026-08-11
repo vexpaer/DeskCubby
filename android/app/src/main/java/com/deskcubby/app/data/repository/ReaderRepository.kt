@@ -91,6 +91,12 @@ data class ReaderBook(
     /** Logical TXT page count or physical PDF page count; zero means not measured yet. */
     val totalPages: Int = 0,
     val progressUpdatedAt: Long = 0L,
+    /**
+     * Local-only per-page offset in 5% increments (0, 5, 10, …, 95).
+     * The field is reset to zero when book content changes. External export deliberately
+     * projects it to zero so encode/decode snapshots remain semantically consistent.
+     */
+    val pageOffsetPercent: Int = 0,
 )
 
 data class ReaderLibraryState(
@@ -108,6 +114,11 @@ data class ReaderProgressRecord(
     val pdfPageIndex: Int = 0,
     val totalPages: Int = 0,
     val updatedAt: Long = 0L,
+    /**
+     * Local-only per-page offset in 5% increments (0, 5, 10, …, 95).
+     * This field is used for internal merging only; external codecs project it to zero.
+     */
+    val pageOffsetPercent: Int = 0,
 )
 
 data class ReaderProgressImportResult(
@@ -218,6 +229,7 @@ class ReaderRepository @Inject constructor(
                 textParagraphIndex = if (contentChanged) 0 else existing.textParagraphIndex,
                 textPageIndex = if (contentChanged) 0 else existing.textPageIndex,
                 pdfPageIndex = if (contentChanged) 0 else existing.pdfPageIndex,
+                pageOffsetPercent = if (contentChanged) 0 else existing.pageOffsetPercent,
                 fingerprint = measuredFingerprint ?: existing.fingerprint,
                 totalPages = totalPages,
                 progressUpdatedAt = if (contentChanged) 0L else existing.progressUpdatedAt,
@@ -311,40 +323,71 @@ class ReaderRepository @Inject constructor(
         book.copy(lastOpenedAt = System.currentTimeMillis())
     }
 
-    suspend fun saveTextProgress(bookId: String, pageIndex: Int, paragraphIndex: Int) =
-        updateBookProgress(bookId) { book ->
-            val normalizedPage = pageIndex.coerceIn(0, MAX_TEXT_PAGES - 1)
-            val normalizedParagraph = paragraphIndex.coerceIn(0, MAX_PARAGRAPHS - 1)
-            if (book.textParagraphIndex == normalizedParagraph) {
-                if (book.textPageIndex == normalizedPage) book else {
-                    // Recomputing the local logical page for the same canonical paragraph is not
-                    // a new reading action and must not win a cross-device progress conflict.
-                    book.copy(textPageIndex = normalizedPage)
+    suspend fun saveTextProgress(
+        bookId: String,
+        pageIndex: Int,
+        paragraphIndex: Int,
+        pageOffsetPercent: Int = 0,
+    ) = updateBookProgress(bookId) { book ->
+        val normalizedPage = pageIndex.coerceIn(0, MAX_TEXT_PAGES - 1)
+        val normalizedParagraph = paragraphIndex.coerceIn(0, MAX_PARAGRAPHS - 1)
+        val normalizedOffset = normalizePageOffsetPercent(pageOffsetPercent)
+        if (book.textParagraphIndex == normalizedParagraph) {
+            if (book.textPageIndex == normalizedPage) {
+                if (book.pageOffsetPercent == normalizedOffset) book else {
+                    book.copy(
+                        pageOffsetPercent = normalizedOffset,
+                        progressUpdatedAt = nextReaderProgressTimestamp(book.progressUpdatedAt),
+                    )
                 }
             } else {
+                // Recomputing the local logical page for the same canonical paragraph is not
+                // a new reading action unless the user also moved within that page.
                 book.copy(
                     textPageIndex = normalizedPage,
-                    textParagraphIndex = normalizedParagraph,
-                    progressUpdatedAt = nextReaderProgressTimestamp(book.progressUpdatedAt),
+                    pageOffsetPercent = normalizedOffset,
+                    progressUpdatedAt = if (book.pageOffsetPercent != normalizedOffset) {
+                        nextReaderProgressTimestamp(book.progressUpdatedAt)
+                    } else {
+                        book.progressUpdatedAt
+                    },
                 )
             }
-        }
-
-    suspend fun savePdfProgress(bookId: String, pageIndex: Int) =
-        updateBookProgress(bookId) { book ->
-            val normalizedPage = pageIndex.coerceIn(
-                0,
-                (book.totalPages - 1).takeIf { it >= 0 } ?: (MAX_PDF_PAGES - 1),
+        } else {
+            book.copy(
+                textPageIndex = normalizedPage,
+                textParagraphIndex = normalizedParagraph,
+                pageOffsetPercent = normalizedOffset,
+                progressUpdatedAt = nextReaderProgressTimestamp(book.progressUpdatedAt),
             )
-            if (book.pdfPageIndex == normalizedPage) {
-                book
-            } else {
+        }
+    }
+
+    suspend fun savePdfProgress(
+        bookId: String,
+        pageIndex: Int,
+        pageOffsetPercent: Int = 0,
+    ) = updateBookProgress(bookId) { book ->
+        val normalizedPage = pageIndex.coerceIn(
+            0,
+            (book.totalPages - 1).takeIf { it >= 0 } ?: (MAX_PDF_PAGES - 1),
+        )
+        val normalizedOffset = normalizePageOffsetPercent(pageOffsetPercent)
+        if (book.pdfPageIndex == normalizedPage) {
+            if (book.pageOffsetPercent == normalizedOffset) book else {
                 book.copy(
-                    pdfPageIndex = normalizedPage,
+                    pageOffsetPercent = normalizedOffset,
                     progressUpdatedAt = nextReaderProgressTimestamp(book.progressUpdatedAt),
                 )
             }
+        } else {
+            book.copy(
+                pdfPageIndex = normalizedPage,
+                pageOffsetPercent = normalizedOffset,
+                progressUpdatedAt = nextReaderProgressTimestamp(book.progressUpdatedAt),
+            )
         }
+    }
 
     suspend fun updatePreferences(value: ReaderPreferences) = mutex.withLock {
         withContext(Dispatchers.IO) {
@@ -502,7 +545,7 @@ class ReaderRepository @Inject constructor(
                         normalized.progressLedger,
                 ).sortedWith(
                     compareBy(ReaderProgressRecord::fingerprint, ReaderProgressRecord::type),
-                )
+                ).map { record -> record.copy(pageOffsetPercent = 0) }
             }
         }
     }
@@ -1047,6 +1090,19 @@ class ReaderRepository @Inject constructor(
     }
 }
 
+/**
+ * Floors an observed scroll percentage to the previous 5% checkpoint so resume never skips
+ * unread content. Valid persisted values are 0, 5, 10, …, 95.
+ */
+internal fun quantizePageOffsetPercent(rawPercent: Int): Int =
+    (rawPercent / 5 * 5).coerceIn(0, 95)
+
+/**
+ * Normalizes a hostile value to a safe 5% checkpoint. Negative values, values above 100, and
+ * values that are not exact multiples of 5 are all floored to the previous valid checkpoint.
+ */
+internal fun normalizePageOffsetPercent(value: Int): Int = quantizePageOffsetPercent(value)
+
 internal fun normalizeReaderPreferences(value: ReaderPreferences): ReaderPreferences = value.copy(
     customBackgroundArgb = value.customBackgroundArgb or 0xFF000000.toInt(),
     customForegroundArgb = value.customForegroundArgb?.or(0xFF000000.toInt()),
@@ -1098,6 +1154,7 @@ internal fun mergeReaderProgress(
                 // the cross-device canonical position; -1 reuses the existing migration/remap path.
                 textPageIndex = -1,
                 textParagraphIndex = record.textParagraphIndex.coerceIn(0, 249_999),
+                pageOffsetPercent = normalizePageOffsetPercent(record.pageOffsetPercent),
                 progressUpdatedAt = maxOf(book.progressUpdatedAt, record.updatedAt),
             )
             ReaderBookType.PDF -> book.copy(
@@ -1107,6 +1164,7 @@ internal fun mergeReaderProgress(
                     destinationTotal = book.totalPages,
                     maximum = 20_000,
                 ),
+                pageOffsetPercent = normalizePageOffsetPercent(record.pageOffsetPercent),
                 progressUpdatedAt = maxOf(book.progressUpdatedAt, record.updatedAt),
             )
         }
@@ -1140,6 +1198,7 @@ internal fun replaceReaderProgress(
                     ReaderRepository.MAX_TEXT_PAGES - 1,
                 ),
                 textParagraphIndex = record.textParagraphIndex.coerceIn(0, 249_999),
+                pageOffsetPercent = normalizePageOffsetPercent(record.pageOffsetPercent),
                 progressUpdatedAt = record.updatedAt,
             )
             ReaderBookType.PDF -> book.copy(
@@ -1147,6 +1206,7 @@ internal fun replaceReaderProgress(
                     0,
                     if (book.totalPages > 0) minOf(book.totalPages, 20_000) - 1 else 19_999,
                 ),
+                pageOffsetPercent = normalizePageOffsetPercent(record.pageOffsetPercent),
                 progressUpdatedAt = record.updatedAt,
             )
         }
@@ -1183,6 +1243,7 @@ private fun ReaderBook.toProgressRecordOrNull(): ReaderProgressRecord? {
         pdfPageIndex = pdfPageIndex.coerceAtLeast(0),
         totalPages = totalPages.coerceAtLeast(0),
         updatedAt = progressUpdatedAt.coerceAtLeast(0L),
+        pageOffsetPercent = normalizePageOffsetPercent(pageOffsetPercent),
     )
 }
 
@@ -1199,22 +1260,26 @@ private fun ReaderProgressRecord.normalizedOrNull(): ReaderProgressRecord? {
             if (type == ReaderBookType.PDF) 20_000 else ReaderRepository.MAX_TEXT_PAGES,
         ),
         updatedAt = updatedAt.coerceAtLeast(0L),
+        pageOffsetPercent = normalizePageOffsetPercent(pageOffsetPercent),
     )
 }
 
 private fun ReaderProgressRecord.progressSortIndex(): Int = when (type) {
-    ReaderBookType.TXT -> textParagraphIndex
-    ReaderBookType.PDF -> pdfPageIndex
+    ReaderBookType.TXT -> textParagraphIndex * 100 + pageOffsetPercent
+    ReaderBookType.PDF -> pdfPageIndex * 100 + pageOffsetPercent
 }
 
 private fun ReaderBook.progressSortIndex(): Int = when (type) {
-    ReaderBookType.TXT -> textParagraphIndex.coerceAtLeast(0)
-    ReaderBookType.PDF -> pdfPageIndex.coerceAtLeast(0)
+    ReaderBookType.TXT -> textParagraphIndex.coerceAtLeast(0) * 100 +
+        normalizePageOffsetPercent(pageOffsetPercent)
+    ReaderBookType.PDF -> pdfPageIndex.coerceAtLeast(0) * 100 +
+        normalizePageOffsetPercent(pageOffsetPercent)
 }
 
 private fun ReaderBook.hasMeaningfulProgress(): Boolean = progressUpdatedAt > 0L || when (type) {
-    ReaderBookType.TXT -> textParagraphIndex > 0 || textPageIndex > 0
-    ReaderBookType.PDF -> pdfPageIndex > 0
+    ReaderBookType.TXT -> textParagraphIndex > 0 || textPageIndex > 0 ||
+        pageOffsetPercent > 0
+    ReaderBookType.PDF -> pdfPageIndex > 0 || pageOffsetPercent > 0
 }
 
 private fun nextReaderProgressTimestamp(previous: Long): Long {
@@ -1668,7 +1733,7 @@ internal fun decodeReaderText(bytes: ByteArray): String {
 }
 
 internal object ReaderStateCodec {
-    private const val SCHEMA_VERSION = 6
+    private const val SCHEMA_VERSION = 7
     private const val MAX_BOOKS = 500
     private val idPattern = Regex("[A-Za-z0-9._:-]{1,256}")
 
@@ -1714,7 +1779,11 @@ internal object ReaderStateCodec {
                             .put("coverUri", book.coverUri ?: JSONObject.NULL)
                             .put("fingerprint", book.fingerprint ?: JSONObject.NULL)
                             .put("totalPages", book.totalPages)
-                            .put("progressUpdatedAt", book.progressUpdatedAt),
+                            .put("progressUpdatedAt", book.progressUpdatedAt)
+                            .put(
+                                "pageOffsetPercent",
+                                normalizePageOffsetPercent(book.pageOffsetPercent),
+                            ),
                     )
                 }
             },
@@ -1867,6 +1936,11 @@ internal object ReaderStateCodec {
                         } else {
                             0L
                         },
+                        pageOffsetPercent = if (schemaVersion >= 7) {
+                            normalizePageOffsetPercent(item.optInt("pageOffsetPercent", 0))
+                        } else {
+                            0
+                        },
                     ),
                 )
             }
@@ -1877,7 +1951,11 @@ internal object ReaderStateCodec {
             mergeReaderProgressLedger(
                 buildList {
                     repeat(array.length()) { index ->
-                        add(array.getJSONObject(index).toProgressRecord())
+                        add(
+                            array.getJSONObject(index).toProgressRecord(
+                                includePageOffset = schemaVersion >= 7,
+                            ),
+                        )
                     }
                 },
             )
@@ -1900,8 +1978,9 @@ internal object ReaderStateCodec {
         .put("pdfPageIndex", pdfPageIndex)
         .put("totalPages", totalPages)
         .put("updatedAt", updatedAt)
+        .put("pageOffsetPercent", normalizePageOffsetPercent(pageOffsetPercent))
 
-    private fun JSONObject.toProgressRecord(): ReaderProgressRecord {
+    private fun JSONObject.toProgressRecord(includePageOffset: Boolean): ReaderProgressRecord {
         val fingerprint = getString("fingerprint").lowercase(Locale.ROOT)
         require(READER_FINGERPRINT_REGEX.matches(fingerprint))
         return ReaderProgressRecord(
@@ -1912,6 +1991,11 @@ internal object ReaderStateCodec {
             pdfPageIndex = optInt("pdfPageIndex", 0),
             totalPages = optInt("totalPages", 0),
             updatedAt = optLong("updatedAt", 0L),
+            pageOffsetPercent = if (includePageOffset) {
+                normalizePageOffsetPercent(optInt("pageOffsetPercent", 0))
+            } else {
+                0
+            },
         ).normalizedOrNull() ?: error("Invalid reader progress record")
     }
 

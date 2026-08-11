@@ -6,9 +6,9 @@
 
 DeskCubby 是一个本地优先的跨平台个人记录应用。Android 端使用 Kotlin/Jetpack Compose，Windows 端使用 Tauri 2 + React/TypeScript + Rust；两个客户端都把 Markdown 日记和媒体保存在用户自己选择的目录中，应用数据库只保存结构化记录、设置与可重建索引。
 
-当前版本：Android **0.13.0**；Windows **0.6.0**。
+当前版本：Android **0.13.1**；Windows **0.6.0**。
 
-仓库按平台拆分：完整 Android 工程位于 `android/`，Windows 工程位于 `windows/`；`README.md`、`README.zh-CN.md`、`TUTORIAL.md`、`overview.md`、许可证等项目级文档继续保留在仓库根目录。
+仓库按平台拆分：完整 Android 工程位于 `android/`，Windows 工程位于 `windows/`；公开的 `README.md`、`README.zh-CN.md`、`TUTORIAL.md` 与许可证等项目级文档继续保留在仓库根目录。
 
 ## Windows 0.6.0
 
@@ -45,7 +45,7 @@ Windows 数据库位于 `%LOCALAPPDATA%\com.deskcubby.windows\deskcubby.db`，�
 
 Windows 不制作 Android 内置浏览器或桌面小卡片，也不读取 Android Room 数据库、`content://` URI 或系统级 Android 权限。Windows 与 Android 都提供围棋，但两端棋局与战绩各自只留在本机并从 v29 投影排除；Android 的主页围棋快捷入口同样只留在 Android 本机，Windows 仍从小游戏页进入围棋。Windows 还以独立私有表把围棋排除在恢复点、自动备份和应用 JSON 云同步之外。手机使用时间和健康只显示用户带到 Windows 的数据，绝不在 Windows 端采集或上传；阅读书架/路径、AI 会话、RSS 文章缓存、Windows Vault 与 usage/health 缓存属于本机数据，不随 v29 迁移。只有 URI-free 阅读位置可通过 v29 或可选阅读进度对象合并。
 
-## Android 0.13.0 当前功能
+## Android 0.13.1 当前功能
 
 Android 端已增加内部 Kotlin Plugin API 基础层：独立 `:plugin-api:core` module 提供插件生命周期、统一 `PluginContext`，以及日记、Markdown 笔记库、媒体、同步、AI、Compose UI contribution 和插件独立存储接口；`:app` 中的 Adapter 继续委托现有 Repository/Service。它是供后续新功能使用的旁路入口，当前没有生产插件，也没有迁移既有 Screen、ViewModel 或 Repository 调用链；Plugin API 本身不改变现有页面、交互、Room v12、Markdown 或 `dc-media.json` v2。架构与扩展步骤见 [android/plugin-api/README.md](android/plugin-api/README.md)。
 
@@ -91,7 +91,7 @@ Android 端已增加内部 Kotlin Plugin API 基础层：独立 `:plugin-api:cor
 - TXT 与 PDF 都可选择 5 种预设背景或任意自定义背景，并可把前景/字体颜色设为自动或任意自定义色。PDF 采用只影响显示的双色映射，因此夜间背景配浅色前景可得到黑底白字，原 PDF 不会被改写；TXT 另可调整 12–38sp 字号、1.0–2.4 倍行距和 0–36dp 段距。兼容 PDF 的所有页面共用同一个横向偏移，左右查看放大页面后不会只移动当前一页。
 - 阅读设置可开启“全屏纯净模式”：正文扩展到安全区域，默认隐藏书名、工具栏、页码和系统栏，点屏幕中央可唤醒或再次隐藏组件。方向仍可选跟随系统、锁定竖屏或锁定横屏。
 - 书架右上角设置可在现有列表与两列封面间切换，并独立决定是否显示封面下方书名和阅读进度百分比。关闭书名后仅隐藏封面下方重复标题；没有手动图片的 TXT 会把书名直接居中写在默认封面上，因此仍可辨认。封面继续按卡片实际宽度限制解码、输出像素与缓存大小；PDF 优先使用已验证缓存或系统文档提供方的安全缩略图，无法取得时显示类型占位。PDF/TXT 都可选择一张 SAF 图片手动覆盖，移除后恢复安全缩略图或默认封面，不改动原书。
-- 每本书的 URI、封面、页/段进度及全局阅读偏好写入应用私有 schema-v6 JSON，并继续兼容 v1–v5；v6 只增加两列封面下方书名开关，旧状态默认继续显示。前台阅读每 30 秒检查点保存，离开或退到后台时再次保存。完整书籍字节和类型生成 SHA-256 指纹，并维护不含 URI/书名/封面/正文的有界进度账本。DeskCubby v29 JSON 会携带这部分进度记录；另一设备恢复后，无论先恢复还是先导入，只要通过 SAF 导入内容完全相同的 TXT/PDF，就会按最新记录跳到相同位置。书架、封面、显示偏好和阅读时长仍不进入应用 JSON 或 Android 系统备份。
+- 每本书的 URI、封面、页/段进度及全局阅读偏好写入应用私有 schema-v7 JSON，并继续兼容 v1–v6。v7 在首个可见 TXT/PDF 页之外，按 5% 一档向下保存页内位置，因此类似第 13.65 页的位置可在页内恢复，并避免越过尚未阅读的内容；滚动稳定约 600 毫秒后保存，离开阅读器时再补一次检查点。页内偏移只留在 Android 私有状态：v29 应用 JSON 与 `reading/v1/progress.json` 仍沿用既有 URI-free 页/段字段，并把对外位置投影到该页开头。完整书籍字节和类型生成 SHA-256 指纹；书名、URI、封面、正文、书架、显示偏好与阅读时长均不随这些进度记录或 Android 系统备份迁移。
 
 ### 饮食记录与 AI 热量估算
 
@@ -176,7 +176,7 @@ Android 端已增加内部 Kotlin Plugin API 基础层：独立 `:plugin-api:cor
 ### 备份
 
 - 支持选择自动备份目录、立即保存、手动导入和导出单个 JSON 文件；自动备份使用 `dc.json`，手动导出默认使用 `DC-yyyy-MM-dd.json`，并继续识别旧版 `DeskCubby*.json`。“设置 → 应用数据 → 查看整体 JSON”可查看当前完整备份快照。
-- 当前备份格式为 v29，最大 64 MiB，并继续安全导入 v1–v28。v29 在 v28 的受控 Custom 主题和最多 500 条 URI-free 阅读进度基础上，为每个桌面信息卡增加名称显隐、0%–100% 背景透明度、图标显隐、文字对齐和 75%–150% 字号；导入旧版时使用显示名称/图标、100% 背景、不缩放且左侧对齐的兼容默认。进度仍只含书籍 SHA-256 指纹、TXT/PDF 类型、位置、总页数和更新时间，不含书名、URI、封面或正文。Windows 0.6.0 可导入 Android 0.13.0 导出的 v29。
+- 当前备份格式为 v29，最大 64 MiB，并继续安全导入 v1–v28。v29 在 v28 的受控 Custom 主题和最多 500 条 URI-free 阅读进度基础上，为每个桌面信息卡增加名称显隐、0%–100% 背景透明度、图标显隐、文字对齐和 75%–150% 字号；导入旧版时使用显示名称/图标、100% 背景、不缩放且左侧对齐的兼容默认。进度仍只含书籍 SHA-256 指纹、TXT/PDF 类型、页/段位置、总页数和更新时间，不含 Android 私有的 5% 页内偏移、书名、URI、封面或正文。Windows 0.6.0 可导入 Android 0.13.1 导出的 v29。
 - Vault 密码/明文/派生密钥、WebDAV 密码、S3 用户名/Key/Session Token、AI 对话历史及冻结上下文、笔记/日记正文、媒体文件、背景图片文件、阅读书架/封面/偏好、阅读与小游戏总时长、健康历史和系统权限不进入 JSON。v29 导入后 Vault 保持锁定；既有七个游戏/变体同 ID 最高分取较大值，较新存档胜出，特色统计逐项取较大值；围棋存档、最高提子、特色统计和主页围棋快捷入口从 v29 投影排除，只保存在 Android 本机。使用时间按设备和日期合并，本机设备 ID 不会被导入文件覆盖。
 - v29 仍包含两个统计功能的普通开关字段，但导入时会强制关闭手机使用时间和健康统计，云同步也保持关闭；音乐可视化设置会恢复，但录音权限必须由设备本机重新授予。旧备份缺少 Custom 主题、阅读进度或新增桌面卡片外观字段时使用安全默认值并保留本机进度；更早版本的逐项兼容规则继续有效。
 - 导入 v11 及更早备份时，仅为配置 ID 与 API 地址都一致的 AI 配置保留本机已有 Key。
@@ -248,6 +248,8 @@ Release 任务在签名配置缺失或不完整时会直接失败，不会误生
 .\android\gradlew.bat --project-dir .\android :app:compileDebugAndroidTestKotlin --offline
 .\android\gradlew.bat --project-dir .\android :app:assembleDebug :app:lintDebug --offline
 ```
+
+0.13.1（2026-08-12）把 Android TXT 与 PDF 的恢复位置细化到每页 5%。应用会保存首个可见页和向下取整的 0/5/…/95 页内检查点；滚动稳定约 600 毫秒后写入，离开时再保存一次，因此恢复不会越过未读内容。Reader 私有状态升至 schema v7 并继续读取 v1–v6；更细的页内偏移只留在 Android，本次不改变 v29 与 `reading/v1/progress.json` 的隐私受限页/段结构。Android 升至 versionCode 28；备份保持 v29、Room 保持 v12、Windows 保持 0.6.0。
 
 0.13.0（2026-08-10）把 PDF 增强视图从 AndroidX PDF 改为 PDFium 1.0.35，保留系统 `PdfRenderer` 兼容回退；模板保存后会实时更新所有仍绑定该模板的桌面实例，同时保持每实例独立和模板删除后的最后快照。应用快捷卡以 48dp 居中显示目标 launcher Activity/alias 图标；桌面设计器可选择全部 21 个首页模块，大尺寸按主页模块复刻完整月历、多项记录逐条直达、日常记录实际录入、随机日记、小游戏快捷入口和完整云同步状态/操作，诗词、六餐图片与快速输入也保留直接操作，小尺寸统一退化为跳转。首页云同步拆为“立即同步”和“强制上传/下载”两张卡，并兼容迁移旧单卡配置。应用升级为 versionCode 27，备份仍为 v29，Room 仍为 v12，Windows 保持 0.5.0。本轮按用户要求未启动 Android 模拟器，发布验证使用编译、自动化测试、Lint、签名 APK 与静态包检查。
 

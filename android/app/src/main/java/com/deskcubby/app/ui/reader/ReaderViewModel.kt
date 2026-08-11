@@ -111,10 +111,22 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
-    fun saveTextProgress(bookId: String, pageIndex: Int, paragraphIndex: Int) =
+    fun saveTextProgress(
+        bookId: String,
+        pageIndex: Int,
+        paragraphIndex: Int,
+        pageOffsetPercent: Int,
+    ) =
         viewModelScope.launch {
-        runCatching { repository.saveTextProgress(bookId, pageIndex, paragraphIndex) }
-    }
+            runCatching {
+                repository.saveTextProgress(
+                    bookId = bookId,
+                    pageIndex = pageIndex,
+                    paragraphIndex = paragraphIndex,
+                    pageOffsetPercent = pageOffsetPercent,
+                )
+            }
+        }
 
     fun setCustomCover(bookId: String, uri: android.net.Uri?) = viewModelScope.launch {
         try {
@@ -129,9 +141,16 @@ class ReaderViewModel @Inject constructor(
     suspend fun loadCover(book: ReaderBook, widthPx: Int): Bitmap? =
         repository.loadCover(book, widthPx)
 
-    fun savePdfProgress(bookId: String, pageIndex: Int) = viewModelScope.launch {
-        runCatching { repository.savePdfProgress(bookId, pageIndex) }
-    }
+    fun savePdfProgress(bookId: String, pageIndex: Int, pageOffsetPercent: Int) =
+        viewModelScope.launch {
+            runCatching {
+                repository.savePdfProgress(
+                    bookId = bookId,
+                    pageIndex = pageIndex,
+                    pageOffsetPercent = pageOffsetPercent,
+                )
+            }
+        }
 
     suspend fun renderPdfPage(book: ReaderBook, pageIndex: Int, widthPx: Int): Bitmap =
         repository.renderPdfPage(book, pageIndex, widthPx)

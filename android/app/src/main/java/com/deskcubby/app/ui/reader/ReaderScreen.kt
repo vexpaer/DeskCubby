@@ -840,8 +840,13 @@ private fun ReaderBookPage(
                         requestedPage = requestedPage,
                         onRequestedPageConsumed = { requestedPage = null },
                         onCurrentPageChanged = { currentPage = it },
-                        onProgress = { pageIndex, paragraphIndex ->
-                            viewModel.saveTextProgress(book.id, pageIndex, paragraphIndex)
+                        onProgress = { pageIndex, paragraphIndex, pageOffsetPercent ->
+                            viewModel.saveTextProgress(
+                                bookId = book.id,
+                                pageIndex = pageIndex,
+                                paragraphIndex = paragraphIndex,
+                                pageOffsetPercent = pageOffsetPercent,
+                            )
                         },
                     )
                     is ReaderContent.PdfBook -> PdfReader(
@@ -1066,7 +1071,9 @@ private fun ReaderShelfSettingsDialog(
 private fun readerBookProgressPercent(book: ReaderBook): Int {
     if (book.totalPages <= 1) return 0
     val page = if (book.type == ReaderBookType.PDF) book.pdfPageIndex else book.textPageIndex
-    return (page.coerceIn(0, book.totalPages - 1).toFloat() /
+    val precisePage = page.coerceIn(0, book.totalPages - 1) +
+        com.deskcubby.app.data.repository.normalizePageOffsetPercent(book.pageOffsetPercent) / 100f
+    return (precisePage.coerceIn(0f, (book.totalPages - 1).toFloat()) /
         (book.totalPages - 1).toFloat() * 100f).roundToInt()
 }
 
@@ -1083,7 +1090,7 @@ private fun TextReader(
     requestedPage: Int?,
     onRequestedPageConsumed: () -> Unit,
     onCurrentPageChanged: (Int) -> Unit,
-    onProgress: (Int, Int) -> Unit,
+    onProgress: (Int, Int, Int) -> Unit,
 ) {
     val initial = if (book.textPageIndex >= 0) {
         book.textPageIndex.coerceIn(0, pages.lastIndex.coerceAtLeast(0))
@@ -1093,31 +1100,60 @@ private fun TextReader(
             book.textParagraphIndex,
         )
     }
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initial)
-    val visiblePage by remember(listState) {
-        derivedStateOf { listState.firstVisibleItemIndex }
+    val initialPosition = remember(book.id) {
+        ReaderPagePosition(
+            pageIndex = initial,
+            pageOffsetPercent = book.pageOffsetPercent,
+        )
+    }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPosition.pageIndex)
+    var initialPositionRestored by rememberSaveable(book.id) { mutableStateOf(false) }
+    val visiblePosition by remember(listState, pages.size) {
+        derivedStateOf { listState.currentReaderPagePosition(pages.size) }
     }
     val currentOnProgress by rememberUpdatedState(onProgress)
     val currentOnPageChanged by rememberUpdatedState(onCurrentPageChanged)
+    val currentPages by rememberUpdatedState(pages)
+    val currentInitialPositionRestored by rememberUpdatedState(initialPositionRestored)
+    LaunchedEffect(book.id, listState, pages.size) {
+        if (!initialPositionRestored) {
+            listState.restoreReaderPagePosition(initialPosition, pages.size)
+            initialPositionRestored = true
+        }
+    }
     LaunchedEffect(requestedPage) {
         requestedPage?.let { page ->
             listState.scrollToItem(page.coerceIn(0, pages.lastIndex.coerceAtLeast(0)))
             onRequestedPageConsumed()
         }
     }
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex }
+    LaunchedEffect(listState, initialPositionRestored, pages) {
+        if (!initialPositionRestored) return@LaunchedEffect
+        snapshotFlow { listState.currentReaderPagePosition(pages.size) }
             .distinctUntilChanged()
-            .collectLatest { index ->
-                currentOnPageChanged(index)
+            .collectLatest { position ->
+                currentOnPageChanged(position.pageIndex)
                 delay(600L)
-                currentOnProgress(index, pages[index].firstParagraphIndex)
+                currentOnProgress(
+                    position.pageIndex,
+                    pages[position.pageIndex].firstParagraphIndex,
+                    position.pageOffsetPercent,
+                )
             }
     }
     DisposableEffect(listState) {
         onDispose {
-            val index = listState.firstVisibleItemIndex.coerceIn(0, pages.lastIndex)
-            currentOnProgress(index, pages[index].firstParagraphIndex)
+            if (currentPages.isEmpty()) return@onDispose
+            val position = if (currentInitialPositionRestored) {
+                listState.currentReaderPagePosition(currentPages.size)
+            } else {
+                initialPosition
+            }
+            currentOnProgress(
+                position.pageIndex,
+                currentPages[position.pageIndex].firstParagraphIndex,
+                position.pageOffsetPercent,
+            )
         }
     }
     Box(Modifier.fillMaxSize().padding(contentPadding).background(background)) {
@@ -1164,7 +1200,7 @@ private fun TextReader(
         }
         if (showPageIndicator) {
             ReaderPageIndicator(
-                currentPage = visiblePage,
+                currentPage = visiblePosition.pageIndex,
                 totalPages = pages.size,
                 background = background,
                 foreground = foreground,
@@ -1367,23 +1403,53 @@ private fun PdfReader(
     onEnhancedReaderUnavailable: () -> Unit,
     viewModel: ReaderViewModel,
 ) {
-    var currentPage by remember(book.id) {
+    var currentPdfPage by rememberSaveable(book.id) {
         mutableIntStateOf(book.pdfPageIndex.coerceIn(0, pageCount - 1))
     }
-    val reportCurrentPage: (Int) -> Unit = { page ->
-        val safePage = page.coerceIn(0, pageCount - 1)
-        currentPage = safePage
-        onCurrentPageChanged(safePage)
-        viewModel.savePdfProgress(book.id, safePage)
+    var currentPdfPageOffsetPercent by rememberSaveable(book.id) {
+        mutableIntStateOf(book.pageOffsetPercent)
     }
+    val currentPosition = ReaderPagePosition(
+        pageIndex = currentPdfPage.coerceIn(0, pageCount - 1),
+        pageOffsetPercent = com.deskcubby.app.data.repository.normalizePageOffsetPercent(
+            currentPdfPageOffsetPercent,
+        ),
+    )
+    val reportCurrentPosition: (ReaderPagePosition) -> Unit = { position ->
+        val safePosition = ReaderPagePosition(
+            pageIndex = position.pageIndex.coerceIn(0, pageCount - 1),
+            pageOffsetPercent =
+                com.deskcubby.app.data.repository.normalizePageOffsetPercent(
+                    position.pageOffsetPercent,
+                ),
+        )
+        currentPdfPage = safePosition.pageIndex
+        currentPdfPageOffsetPercent = safePosition.pageOffsetPercent
+        onCurrentPageChanged(safePosition.pageIndex)
+    }
+    LaunchedEffect(book.id, currentPosition) {
+        delay(600L)
+        viewModel.savePdfProgress(
+            bookId = book.id,
+            pageIndex = currentPosition.pageIndex,
+            pageOffsetPercent = currentPosition.pageOffsetPercent,
+        )
+    }
+    val currentPositionOnDispose by rememberUpdatedState(currentPosition)
     DisposableEffect(book.id) {
-        onDispose { viewModel.savePdfProgress(book.id, currentPage) }
+        onDispose {
+            viewModel.savePdfProgress(
+                bookId = book.id,
+                pageIndex = currentPositionOnDispose.pageIndex,
+                pageOffsetPercent = currentPositionOnDispose.pageOffsetPercent,
+            )
+        }
     }
     Box(Modifier.fillMaxSize().padding(contentPadding).background(background)) {
         if (useEnhancedRenderer) {
             PdfiumPdfReader(
                 uri = android.net.Uri.parse(book.uri),
-                initialPage = currentPage,
+                initialPosition = currentPosition,
                 preferences = preferences,
                 background = background,
                 foreground = foreground,
@@ -1392,7 +1458,7 @@ private fun PdfReader(
                 searchQuery = searchQuery,
                 selectedSearchIndex = selectedSearchIndex,
                 onRequestedPageConsumed = onRequestedPageConsumed,
-                onCurrentPageChanged = reportCurrentPage,
+                onCurrentPositionChanged = reportCurrentPosition,
                 onSearchResultCountChanged = onSearchResultCountChanged,
                 onChaptersChanged = onChaptersChanged,
                 onChapterScanRunningChanged = onChapterScanRunningChanged,
@@ -1406,19 +1472,20 @@ private fun PdfReader(
             }
             LegacyContinuousPdfReader(
                 book = book,
+                initialPosition = currentPosition,
                 pageCount = pageCount,
                 zoomPercent = preferences.pdfZoomPercent,
                 background = background,
                 foreground = foreground,
                 requestedPage = requestedPage,
                 onRequestedPageConsumed = onRequestedPageConsumed,
-                onCurrentPageChanged = reportCurrentPage,
+                onCurrentPositionChanged = reportCurrentPosition,
                 viewModel = viewModel,
             )
         }
         if (showPageIndicator) {
             ReaderPageIndicator(
-                currentPage = currentPage,
+                currentPage = currentPosition.pageIndex,
                 totalPages = pageCount,
                 background = background,
                 foreground = foreground,
@@ -1431,28 +1498,43 @@ private fun PdfReader(
 @Composable
 private fun LegacyContinuousPdfReader(
     book: ReaderBook,
+    initialPosition: ReaderPagePosition,
     pageCount: Int,
     zoomPercent: Int,
     background: Color,
     foreground: Color,
     requestedPage: Int?,
     onRequestedPageConsumed: () -> Unit,
-    onCurrentPageChanged: (Int) -> Unit,
+    onCurrentPositionChanged: (ReaderPagePosition) -> Unit,
     viewModel: ReaderViewModel,
 ) {
+    val restoredPosition = remember(book.id) {
+        ReaderPagePosition(
+            pageIndex = initialPosition.pageIndex.coerceIn(0, pageCount - 1),
+            pageOffsetPercent = initialPosition.pageOffsetPercent,
+        )
+    }
     val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = book.pdfPageIndex.coerceIn(0, pageCount - 1),
+        initialFirstVisibleItemIndex = restoredPosition.pageIndex,
     )
+    var initialPositionRestored by rememberSaveable(book.id) { mutableStateOf(false) }
+    LaunchedEffect(book.id, listState, pageCount) {
+        if (!initialPositionRestored) {
+            listState.restoreReaderPagePosition(restoredPosition, pageCount)
+            initialPositionRestored = true
+        }
+    }
     LaunchedEffect(requestedPage) {
         requestedPage?.let { page ->
             listState.scrollToItem(page.coerceIn(0, pageCount - 1))
             onRequestedPageConsumed()
         }
     }
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex }
+    LaunchedEffect(listState, initialPositionRestored, pageCount) {
+        if (!initialPositionRestored) return@LaunchedEffect
+        snapshotFlow { listState.currentReaderPagePosition(pageCount) }
             .distinctUntilChanged()
-            .collect(onCurrentPageChanged)
+            .collect(onCurrentPositionChanged)
     }
     val sharedHorizontalScroll = rememberScrollState()
     BoxWithConstraints(Modifier.fillMaxSize()) {

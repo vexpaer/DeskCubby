@@ -15,7 +15,13 @@ import org.junit.runner.RunWith
 class ReaderProgressJsonCodecTest {
     @Test
     fun payloadIsDeterministicSortedAndContainsNoLocalBookMetadata() {
-        val txt = record("b", ReaderBookType.TXT, paragraph = 44, updatedAt = 20)
+        val txt = record(
+            "b",
+            ReaderBookType.TXT,
+            paragraph = 44,
+            updatedAt = 20,
+            pageOffsetPercent = 65,
+        )
         val pdf = record("a", ReaderBookType.PDF, pdfPage = 7, updatedAt = 10)
 
         val first = ReaderProgressJsonCodec.encode(listOf(txt, pdf))
@@ -23,10 +29,14 @@ class ReaderProgressJsonCodecTest {
         val raw = first.toString(Charsets.UTF_8)
 
         assertTrue(first.contentEquals(second))
-        assertEquals(listOf(pdf, txt), ReaderProgressJsonCodec.decode(first))
+        assertEquals(
+            listOf(pdf, txt.copy(pageOffsetPercent = 0)),
+            ReaderProgressJsonCodec.decode(first),
+        )
         assertFalse(raw.contains("content://"))
         assertFalse(raw.contains("title", ignoreCase = true))
         assertFalse(raw.contains("cover", ignoreCase = true))
+        assertFalse(raw.contains("pageOffsetPercent"))
         val root = JSONObject(raw)
         assertEquals(ReaderProgressJsonCodec.FORMAT_VERSION, root.getInt("version"))
         assertEquals("a".repeat(64), root.getJSONArray("records").getJSONObject(0).getString("fingerprint"))
@@ -98,6 +108,7 @@ class ReaderProgressJsonCodecTest {
         paragraph: Int = 0,
         pdfPage: Int = 0,
         updatedAt: Long,
+        pageOffsetPercent: Int = 0,
     ) = ReaderProgressRecord(
         fingerprint = fingerprintCharacter.repeat(64),
         type = type,
@@ -105,5 +116,6 @@ class ReaderProgressJsonCodecTest {
         pdfPageIndex = pdfPage,
         totalPages = 100,
         updatedAt = updatedAt,
+        pageOffsetPercent = pageOffsetPercent,
     )
 }

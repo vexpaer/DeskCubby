@@ -53,7 +53,7 @@ class ReaderRepositoryTest {
             )
             assertTrue(stored.isFile)
             assertTrue(stored.length() in 1..ReaderRepository.MAX_STATE_BYTES.toLong())
-            assertEquals(6, JSONObject(stored.readText(Charsets.UTF_8)).getInt("schemaVersion"))
+            assertEquals(7, JSONObject(stored.readText(Charsets.UTF_8)).getInt("schemaVersion"))
 
             val reloaded = ReaderRepository(isolatedContext)
             assertEquals(ReaderPreferences(), reloaded.state.value.preferences)
@@ -76,9 +76,20 @@ class ReaderRepositoryTest {
                     type = ReaderBookType.TXT,
                     addedAt = 1L,
                     lastOpenedAt = 2L,
+                    fingerprint = "a".repeat(64),
+                    progressUpdatedAt = 10L,
+                    pageOffsetPercent = 65,
                 ),
             ),
             preferences = ReaderPreferences(),
+            progressLedger = listOf(
+                ReaderProgressRecord(
+                    fingerprint = "a".repeat(64),
+                    type = ReaderBookType.TXT,
+                    updatedAt = 10L,
+                    pageOffsetPercent = 65,
+                ),
+            ),
         )
         assertEquals(state, ReaderStateCodec.decode(ReaderStateCodec.encode(state)))
 
@@ -89,6 +100,47 @@ class ReaderRepositoryTest {
         }
         val failed = runCatching { ReaderStateCodec.decode(duplicate.toString()) }.isFailure
         assertTrue(failed)
+    }
+
+    @Test
+    fun schemaSixReaderStateDefaultsPageOffsetToPageStart() {
+        val current = ReaderLibraryState(
+            books = listOf(
+                ReaderBook(
+                    id = "legacy-offset",
+                    uri = "content://library/legacy-offset.pdf",
+                    title = "Legacy offset",
+                    type = ReaderBookType.PDF,
+                    addedAt = 1L,
+                    lastOpenedAt = 2L,
+                    pdfPageIndex = 13,
+                    fingerprint = "e".repeat(64),
+                    totalPages = 100,
+                    progressUpdatedAt = 20L,
+                    pageOffsetPercent = 65,
+                ),
+            ),
+            progressLedger = listOf(
+                ReaderProgressRecord(
+                    fingerprint = "e".repeat(64),
+                    type = ReaderBookType.PDF,
+                    pdfPageIndex = 13,
+                    totalPages = 100,
+                    updatedAt = 20L,
+                    pageOffsetPercent = 65,
+                ),
+            ),
+        )
+        val legacy = JSONObject(ReaderStateCodec.encode(current)).apply {
+            put("schemaVersion", 6)
+            getJSONArray("books").getJSONObject(0).remove("pageOffsetPercent")
+            getJSONArray("progressLedger").getJSONObject(0).remove("pageOffsetPercent")
+        }
+
+        val decoded = ReaderStateCodec.decode(legacy.toString())
+
+        assertEquals(0, decoded.books.single().pageOffsetPercent)
+        assertEquals(0, decoded.progressLedger.single().pageOffsetPercent)
     }
 
     @Test
@@ -285,6 +337,77 @@ class ReaderRepositoryTest {
         assertEquals(-1, book.textPageIndex)
         assertEquals(900, book.textParagraphIndex)
         assertEquals(20L, book.progressUpdatedAt)
+    }
+
+    @Test
+    fun equalTimestampProgressUsesLaterFivePercentCheckpoint() {
+        val fingerprint = "f".repeat(64)
+        val earlier = ReaderProgressRecord(
+            fingerprint = fingerprint,
+            type = ReaderBookType.PDF,
+            pdfPageIndex = 13,
+            totalPages = 100,
+            updatedAt = 100L,
+            pageOffsetPercent = 60,
+        )
+        val later = earlier.copy(pageOffsetPercent = 65)
+
+        val merged = mergeReaderProgress(
+            ReaderLibraryState(progressLedger = listOf(earlier)),
+            listOf(later),
+        ).state
+
+        assertEquals(65, merged.progressLedger.single().pageOffsetPercent)
+    }
+
+    @Test
+    fun externalProgressExportOmitsLocalPageOffset() = runBlocking {
+        val application = ApplicationProvider.getApplicationContext<Context>()
+        val isolatedFiles = File(application.cacheDir, "reader-export-${UUID.randomUUID()}")
+        val isolatedContext = object : ContextWrapper(application) {
+            override fun getFilesDir(): File = isolatedFiles
+        }
+        val fingerprint = "1".repeat(64)
+        val progress = ReaderProgressRecord(
+            fingerprint = fingerprint,
+            type = ReaderBookType.PDF,
+            pdfPageIndex = 13,
+            totalPages = 100,
+            updatedAt = 100L,
+            pageOffsetPercent = 65,
+        )
+        val state = ReaderLibraryState(
+            books = listOf(
+                ReaderBook(
+                    id = "private-offset",
+                    uri = "content://library/private-offset.pdf",
+                    title = "Private offset",
+                    type = ReaderBookType.PDF,
+                    addedAt = 1L,
+                    lastOpenedAt = 2L,
+                    pdfPageIndex = 13,
+                    fingerprint = fingerprint,
+                    totalPages = 100,
+                    progressUpdatedAt = 100L,
+                    pageOffsetPercent = 65,
+                ),
+            ),
+            progressLedger = listOf(progress),
+        )
+        val stateDirectory = File(isolatedFiles, ReaderRepository.DIRECTORY_NAME).apply { mkdirs() }
+        File(stateDirectory, ReaderRepository.STATE_FILE_NAME)
+            .writeText(ReaderStateCodec.encode(state), Charsets.UTF_8)
+        try {
+            val repository = ReaderRepository(isolatedContext)
+            repository.initialize()
+
+            val exported = repository.exportProgressRecords().single()
+
+            assertEquals(13, exported.pdfPageIndex)
+            assertEquals(0, exported.pageOffsetPercent)
+        } finally {
+            isolatedFiles.deleteRecursively()
+        }
     }
 
     @Test
