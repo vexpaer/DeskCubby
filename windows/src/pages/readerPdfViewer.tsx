@@ -17,7 +17,7 @@ import { tr } from "../lib/ipc";
 GlobalWorkerOptions.workerPort = new PdfWorker();
 
 export interface ReaderPdfViewerProps {
-  /** Restricted http://reader.localhost/{bookId}.pdf URL; never a filesystem path. */
+  /** Restricted reader protocol URL carrying only a book UUID; never a filesystem path. */
   assetUrl: string;
   /** 0-based page index, aligned with ReaderPage's pageIndex. */
   pageIndex: number;

@@ -31,7 +31,7 @@ describe("StatsPage", () => {
       }
       if (command === "get_usage_page" || command === "get_health_page") return null as never;
       if (command === "get_reader_library") {
-        return { dtoVersion: 1, books: [], preferences: {}, totalReadingMillis: "0" } as never;
+        return { dtoVersion: 2, books: [], preferences: {}, totalReadingMillis: "0" } as never;
       }
       if (command === "get_games_snapshot") {
         return {

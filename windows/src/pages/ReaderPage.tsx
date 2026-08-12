@@ -8,6 +8,10 @@ import {
   FileText,
   LibraryBig,
   List,
+  Maximize2,
+  Minimize2,
+  Minus,
+  Plus,
   RotateCcw,
   Save,
   Search,
@@ -36,23 +40,31 @@ import {
 import { DeskCubbyIpcError, readableError, tr } from "../lib/ipc";
 import {
   readerApi,
-  type ReaderBookV1,
-  type ReaderDocumentV1,
-  type ReaderLibraryV1,
-  type ReaderPreferencesV1,
-  type ReaderTextDocumentV1,
+  type ReaderBookV2,
+  type ReaderDocumentV2,
+  type ReaderLibraryV2,
+  type ReaderPreferencesV2,
+  type ReaderTextDocumentV2,
 } from "../lib/readerApi";
 import { useAppStore } from "../store/appStore";
 import "../styles/reader.css";
 import ReaderPdfViewer from "./readerPdfViewer";
 
-const DEFAULT_READER_PREFERENCES: ReaderPreferencesV1 = {
+const DEFAULT_READER_PREFERENCES: ReaderPreferencesV2 = {
   background: "paper",
   customBackgroundArgb: -724762,
+  customForegroundArgb: null,
   fontSizePx: 19,
+  fontFamily: "serif",
   lineHeightMultiplier: 1.6,
   paragraphSpacingPx: 10,
+  contentWidthPx: 960,
+  textAlignment: "start",
   pdfZoomPercent: 100,
+  immersiveMode: false,
+  showProgressPercentage: false,
+  libraryLayout: "list",
+  showGridBookTitles: true,
   chapterDetectionMode: "smartAndCustom",
   customChapterRegex: "",
   chapterHeadingMaxChars: 160,
@@ -69,7 +81,7 @@ interface ReaderTextMatch {
 }
 
 function findReaderTextMatches(
-  document: ReaderTextDocumentV1,
+  document: ReaderTextDocumentV2,
   rawQuery: string,
 ): ReaderTextMatch[] {
   const query = [...rawQuery.trim()].slice(0, MAX_READER_SEARCH_QUERY_CHARS).join("");
@@ -96,17 +108,22 @@ function findReaderTextMatches(
 }
 
 function safeReaderPdfUrl(assetUrl: string, bookId: string): string | null {
+  if (typeof assetUrl !== "string") return null;
   try {
     const parsed = new URL(assetUrl);
     const expectedPath = `/${bookId}.pdf`;
+    const isProductionProtocol =
+      parsed.protocol === "http:" && parsed.hostname === "reader.localhost";
+    const isNativeProtocol =
+      parsed.protocol === "reader:" && parsed.hostname === "localhost";
     if (
-      parsed.protocol !== "http:" ||
-      parsed.hostname !== "reader.localhost" ||
+      (!isProductionProtocol && !isNativeProtocol) ||
       parsed.port ||
       parsed.username ||
       parsed.password ||
       parsed.pathname !== expectedPath ||
-      parsed.search
+      parsed.search ||
+      parsed.hash
     ) {
       return null;
     }
@@ -126,6 +143,48 @@ function cssToArgb(value: string): number {
   return (0xff00_0000 | (Number.isFinite(rgb) ? rgb : 0xf4f0e6)) | 0;
 }
 
+function automaticReaderForeground(preferences: ReaderPreferencesV2): string {
+  const preset: Record<ReaderPreferencesV2["background"], string> = {
+    white: "#1d1d1f",
+    paper: "#29261f",
+    sepia: "#382d20",
+    green: "#203126",
+    night: "#e6e4de",
+    custom: "#1d1d1f",
+  };
+  if (preferences.background !== "custom") return preset[preferences.background];
+  const color = (preferences.customBackgroundArgb >>> 0) & 0x00ff_ffff;
+  const red = (color >> 16) & 0xff;
+  const green = (color >> 8) & 0xff;
+  const blue = color & 0xff;
+  const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
+  return luminance > 0.52 ? "#171717" : "#f4f4f2";
+}
+
+function readerBackgroundCss(preferences: ReaderPreferencesV2): string {
+  const preset: Record<ReaderPreferencesV2["background"], string> = {
+    white: "#ffffff",
+    paper: "#f4f0e6",
+    sepia: "#ead9b9",
+    green: "#dce8d7",
+    night: "#15171c",
+    custom: argbToCss(preferences.customBackgroundArgb),
+  };
+  return preset[preferences.background];
+}
+
+function readerForegroundCss(preferences: ReaderPreferencesV2): string {
+  return preferences.customForegroundArgb === null
+    ? automaticReaderForeground(preferences)
+    : argbToCss(preferences.customForegroundArgb);
+}
+
+function readerBookProgressPercent(book: ReaderBookV2): number {
+  if (book.totalPages <= 1) return 0;
+  const page = book.bookType === "pdf" ? book.pdfPageIndex : book.textPageIndex;
+  return Math.round((Math.min(Math.max(page, 0), book.totalPages - 1) / (book.totalPages - 1)) * 100);
+}
+
 function decimalMillis(value: string): bigint {
   return /^\d+$/.test(value) ? BigInt(value) : 0n;
 }
@@ -141,9 +200,9 @@ function formatReadingTime(value: string, language: "zh-CN" | "en"): string {
 }
 
 function replaceBook(
-  library: ReaderLibraryV1 | null,
-  book: ReaderBookV1,
-): ReaderLibraryV1 | null {
+  library: ReaderLibraryV2 | null,
+  book: ReaderBookV2,
+): ReaderLibraryV2 | null {
   if (!library) return library;
   const books = library.books.some((candidate) => candidate.id === book.id)
     ? library.books.map((candidate) => (candidate.id === book.id ? book : candidate))
@@ -187,19 +246,26 @@ function readerErrorMessage(
 function ReaderBookCard({
   book,
   language,
+  layout,
+  showGridBookTitles,
+  showProgressPercentage,
   busy,
   onOpen,
   onRemove,
 }: {
-  book: ReaderBookV1;
+  book: ReaderBookV2;
   language: "zh-CN" | "en";
+  layout: ReaderPreferencesV2["libraryLayout"];
+  showGridBookTitles: boolean;
+  showProgressPercentage: boolean;
   busy: boolean;
   onOpen: () => void;
   onRemove: () => void;
 }) {
   const locale = language === "en" ? "en-US" : "zh-CN";
+  const progress = readerBookProgressPercent(book);
   return (
-    <article className="card reader-book-card">
+    <article className={`card reader-book-card layout-${layout}`}>
       <button
         className="reader-book-open"
         type="button"
@@ -209,9 +275,10 @@ function ReaderBookCard({
       >
         <span className="reader-book-icon" aria-hidden="true">
           {book.bookType === "pdf" ? <FileText /> : <BookOpen />}
+          {layout === "grid" ? <em>{book.title}</em> : null}
         </span>
         <span className="reader-book-copy">
-          <strong>{book.title}</strong>
+          {layout !== "grid" || showGridBookTitles ? <strong>{book.title}</strong> : null}
           <span>
             {book.bookType.toUpperCase()} · {formatReadingTime(book.readingMillis, language)}
           </span>
@@ -221,6 +288,12 @@ function ReaderBookCard({
               new Date(book.lastOpenedAt),
             )}
           </small>
+          {showProgressPercentage && book.totalPages > 1 ? (
+            <span className="reader-book-progress">
+              <span aria-hidden="true"><i style={{ width: `${progress}%` }} /></span>
+              <small>{progress}%</small>
+            </span>
+          ) : null}
         </span>
       </button>
       <button
@@ -243,7 +316,7 @@ function HighlightedPage({
   currentMatchIndex,
   paragraphSpacing,
 }: {
-  document: ReaderTextDocumentV1;
+  document: ReaderTextDocumentV2;
   pageIndex: number;
   matches: ReaderTextMatch[];
   currentMatchIndex: number;
@@ -312,10 +385,10 @@ function ReaderSettings({
   onClose,
 }: {
   language: "zh-CN" | "en";
-  draft: ReaderPreferencesV1;
+  draft: ReaderPreferencesV2;
   busy: boolean;
   error: string;
-  onChange: (next: ReaderPreferencesV1) => void;
+  onChange: (next: ReaderPreferencesV2) => void;
   onReset: () => void;
   onSave: () => void;
   onClose: () => void;
@@ -343,73 +416,155 @@ function ReaderSettings({
         </div>
       </div>
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
-      <div className="reader-settings-grid">
-        <label className="field">
-          <span className="field-label">{copy("阅读背景", "Reading background")}</span>
-          <select
-            value={draft.background}
-            onChange={(event) => onChange({ ...draft, background: event.target.value as ReaderPreferencesV1["background"] })}
-          >
-            <option value="white">{copy("白色", "White")}</option>
-            <option value="paper">{copy("纸张", "Paper")}</option>
-            <option value="sepia">{copy("羊皮纸", "Sepia")}</option>
-            <option value="green">{copy("护眼绿", "Reading green")}</option>
-            <option value="night">{copy("夜间", "Night")}</option>
-            <option value="custom">{copy("自定义", "Custom")}</option>
-          </select>
-        </label>
-        {draft.background === "custom" ? (
-          <label className="field">
-            <span className="field-label">{copy("自定义背景色", "Custom background")}</span>
-            <input
-              type="color"
-              value={argbToCss(draft.customBackgroundArgb)}
-              onChange={(event) => onChange({ ...draft, customBackgroundArgb: cssToArgb(event.target.value) })}
-            />
-          </label>
-        ) : null}
-        <label className="field reader-setting-range">
-          <span className="field-label">{copy("TXT 字号", "TXT font size")} · {draft.fontSizePx.toFixed(0)} px</span>
-          <input type="range" min="12" max="38" step="1" value={draft.fontSizePx} onChange={(event) => onChange({ ...draft, fontSizePx: Number(event.target.value) })} />
-        </label>
-        <label className="field reader-setting-range">
-          <span className="field-label">{copy("行距", "Line height")} · {draft.lineHeightMultiplier.toFixed(1)}</span>
-          <input type="range" min="1" max="2.4" step="0.1" value={draft.lineHeightMultiplier} onChange={(event) => onChange({ ...draft, lineHeightMultiplier: Number(event.target.value) })} />
-        </label>
-        <label className="field reader-setting-range">
-          <span className="field-label">{copy("段距", "Paragraph spacing")} · {draft.paragraphSpacingPx.toFixed(0)} px</span>
-          <input type="range" min="0" max="36" step="1" value={draft.paragraphSpacingPx} onChange={(event) => onChange({ ...draft, paragraphSpacingPx: Number(event.target.value) })} />
-        </label>
-        <label className="field reader-setting-range">
-          <span className="field-label">{copy("PDF 基准缩放", "PDF base zoom")} · {draft.pdfZoomPercent}%</span>
-          <input type="range" min="50" max="300" step="10" value={draft.pdfZoomPercent} onChange={(event) => onChange({ ...draft, pdfZoomPercent: Number(event.target.value) })} />
-        </label>
-        <label className="field">
-          <span className="field-label">{copy("章节识别", "Chapter detection")}</span>
-          <select
-            value={draft.chapterDetectionMode}
-            onChange={(event) => onChange({ ...draft, chapterDetectionMode: event.target.value as ReaderPreferencesV1["chapterDetectionMode"] })}
-          >
-            <option value="smartAndCustom">{copy("智能 + 自定义", "Smart + custom")}</option>
-            <option value="smart">{copy("仅智能", "Smart only")}</option>
-            <option value="custom">{copy("仅自定义正则", "Custom regex only")}</option>
-          </select>
-        </label>
-        <label className="field reader-setting-range">
-          <span className="field-label">{copy("标题最大长度", "Maximum heading length")} · {draft.chapterHeadingMaxChars}</span>
-          <input type="range" min="20" max="240" step="5" value={draft.chapterHeadingMaxChars} onChange={(event) => onChange({ ...draft, chapterHeadingMaxChars: Number(event.target.value) })} />
-        </label>
-        <label className="field reader-settings-regex">
-          <span className="field-label">{copy("自定义章节正则", "Custom chapter regex")}</span>
-          <input
-            value={draft.customChapterRegex}
-            maxLength={1024}
-            spellCheck={false}
-            placeholder={copy("例如：Scene\\s+\\d+", "For example: Scene\\s+\\d+")}
-            onChange={(event) => onChange({ ...draft, customChapterRegex: event.target.value })}
-          />
-          <small className="field-hint">{copy("必须匹配整行；Rust 正则不支持回溯引用或环视。", "Must match the full line. Rust regex does not support backreferences or look-around.")}</small>
-        </label>
+      <div className="reader-settings-sections">
+        <fieldset className="reader-settings-section">
+          <legend>{copy("颜色与页面", "Color and page")}</legend>
+          <div className="reader-settings-grid">
+            <label className="field">
+              <span className="field-label">{copy("阅读背景", "Reading background")}</span>
+              <select
+                value={draft.background}
+                onChange={(event) => onChange({ ...draft, background: event.target.value as ReaderPreferencesV2["background"] })}
+              >
+                <option value="white">{copy("白色", "White")}</option>
+                <option value="paper">{copy("纸张", "Paper")}</option>
+                <option value="sepia">{copy("羊皮纸", "Sepia")}</option>
+                <option value="green">{copy("护眼绿", "Reading green")}</option>
+                <option value="night">{copy("夜间", "Night")}</option>
+                <option value="custom">{copy("自定义", "Custom")}</option>
+              </select>
+            </label>
+            {draft.background === "custom" ? (
+              <label className="field reader-color-field">
+                <span className="field-label">{copy("自定义背景色", "Custom background")}</span>
+                <input
+                  type="color"
+                  value={argbToCss(draft.customBackgroundArgb)}
+                  onChange={(event) => onChange({ ...draft, customBackgroundArgb: cssToArgb(event.target.value) })}
+                />
+              </label>
+            ) : null}
+            <label className="field">
+              <span className="field-label">{copy("文字 / PDF 前景色", "Text / PDF foreground")}</span>
+              <select
+                value={draft.customForegroundArgb === null ? "auto" : "custom"}
+                onChange={(event) => onChange({
+                  ...draft,
+                  customForegroundArgb: event.target.value === "auto"
+                    ? null
+                    : cssToArgb(automaticReaderForeground(draft)),
+                })}
+              >
+                <option value="auto">{copy("自动对比色", "Automatic contrast")}</option>
+                <option value="custom">{copy("自定义", "Custom")}</option>
+              </select>
+            </label>
+            {draft.customForegroundArgb !== null ? (
+              <label className="field reader-color-field">
+                <span className="field-label">{copy("自定义前景色", "Custom foreground")}</span>
+                <input
+                  type="color"
+                  value={argbToCss(draft.customForegroundArgb)}
+                  onChange={(event) => onChange({ ...draft, customForegroundArgb: cssToArgb(event.target.value) })}
+                />
+              </label>
+            ) : null}
+          </div>
+          <small className="field-hint">{copy("TXT 使用所选颜色；PDF 可映射为相同的背景/前景双色，原文件不会被修改。", "TXT uses these colors. PDFs can map to the same background/foreground pair without changing the file.")}</small>
+        </fieldset>
+
+        <fieldset className="reader-settings-section">
+          <legend>{copy("TXT 排版", "TXT typography")}</legend>
+          <div className="reader-settings-grid">
+            <label className="field">
+              <span className="field-label">{copy("字体", "Font family")}</span>
+              <select value={draft.fontFamily} onChange={(event) => onChange({ ...draft, fontFamily: event.target.value as ReaderPreferencesV2["fontFamily"] })}>
+                <option value="serif">{copy("衬线（适合长文）", "Serif (long-form)")}</option>
+                <option value="sans">{copy("无衬线", "Sans serif")}</option>
+                <option value="mono">{copy("等宽", "Monospace")}</option>
+              </select>
+            </label>
+            <label className="field">
+              <span className="field-label">{copy("段落对齐", "Paragraph alignment")}</span>
+              <select value={draft.textAlignment} onChange={(event) => onChange({ ...draft, textAlignment: event.target.value as ReaderPreferencesV2["textAlignment"] })}>
+                <option value="start">{copy("自然左对齐", "Natural start")}</option>
+                <option value="justify">{copy("两端对齐", "Justified")}</option>
+              </select>
+            </label>
+            <label className="field reader-setting-range">
+              <span className="field-label">{copy("字号", "Font size")} · {draft.fontSizePx.toFixed(0)} px</span>
+              <input type="range" min="12" max="38" step="1" value={draft.fontSizePx} onChange={(event) => onChange({ ...draft, fontSizePx: Number(event.target.value) })} />
+            </label>
+            <label className="field reader-setting-range">
+              <span className="field-label">{copy("正文宽度", "Text width")} · {draft.contentWidthPx} px</span>
+              <input type="range" min="520" max="1280" step="40" value={draft.contentWidthPx} onChange={(event) => onChange({ ...draft, contentWidthPx: Number(event.target.value) })} />
+            </label>
+            <label className="field reader-setting-range">
+              <span className="field-label">{copy("行距", "Line height")} · {draft.lineHeightMultiplier.toFixed(1)}</span>
+              <input type="range" min="1" max="2.4" step="0.1" value={draft.lineHeightMultiplier} onChange={(event) => onChange({ ...draft, lineHeightMultiplier: Number(event.target.value) })} />
+            </label>
+            <label className="field reader-setting-range">
+              <span className="field-label">{copy("段距", "Paragraph spacing")} · {draft.paragraphSpacingPx.toFixed(0)} px</span>
+              <input type="range" min="0" max="36" step="1" value={draft.paragraphSpacingPx} onChange={(event) => onChange({ ...draft, paragraphSpacingPx: Number(event.target.value) })} />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset className="reader-settings-section">
+          <legend>{copy("阅读与书架", "Reading and shelf")}</legend>
+          <div className="reader-settings-grid">
+            <label className="field reader-setting-range">
+              <span className="field-label">{copy("PDF 基准缩放", "PDF base zoom")} · {draft.pdfZoomPercent}%</span>
+              <input type="range" min="50" max="300" step="10" value={draft.pdfZoomPercent} onChange={(event) => onChange({ ...draft, pdfZoomPercent: Number(event.target.value) })} />
+            </label>
+            <label className="field">
+              <span className="field-label">{copy("书架布局", "Shelf layout")}</span>
+              <select value={draft.libraryLayout} onChange={(event) => onChange({ ...draft, libraryLayout: event.target.value as ReaderPreferencesV2["libraryLayout"] })}>
+                <option value="list">{copy("紧凑列表", "Compact list")}</option>
+                <option value="grid">{copy("封面网格", "Cover grid")}</option>
+              </select>
+            </label>
+            <div className="reader-toggle-setting">
+              <span><strong>{copy("默认进入专注模式", "Start in focus mode")}</strong><small>{copy("控制栏悬浮在正文上，不占阅读高度。", "The controls float over the page instead of taking reading height.")}</small></span>
+              <label className="switch-row"><input aria-label={copy("默认进入专注模式", "Start in focus mode")} type="checkbox" checked={draft.immersiveMode} onChange={(event) => onChange({ ...draft, immersiveMode: event.target.checked })} />{draft.immersiveMode ? copy("已开启", "On") : copy("已关闭", "Off")}</label>
+            </div>
+            <div className="reader-toggle-setting">
+              <span><strong>{copy("显示书架进度", "Show shelf progress")}</strong><small>{copy("按 TXT 逻辑页或 PDF 实际页计算。", "Uses TXT logical pages or physical PDF pages.")}</small></span>
+              <label className="switch-row"><input aria-label={copy("显示书架进度", "Show shelf progress")} type="checkbox" checked={draft.showProgressPercentage} onChange={(event) => onChange({ ...draft, showProgressPercentage: event.target.checked })} />{draft.showProgressPercentage ? copy("已开启", "On") : copy("已关闭", "Off")}</label>
+            </div>
+            {draft.libraryLayout === "grid" ? (
+              <div className="reader-toggle-setting">
+                <span><strong>{copy("封面下显示书名", "Show title below cover")}</strong><small>{copy("封面本身仍保留书名，关闭可减少重复信息。", "The cover still carries the title; turn this off to reduce repetition.")}</small></span>
+                <label className="switch-row"><input aria-label={copy("封面下显示书名", "Show title below cover")} type="checkbox" checked={draft.showGridBookTitles} onChange={(event) => onChange({ ...draft, showGridBookTitles: event.target.checked })} />{draft.showGridBookTitles ? copy("已开启", "On") : copy("已关闭", "Off")}</label>
+              </div>
+            ) : null}
+          </div>
+        </fieldset>
+
+        <fieldset className="reader-settings-section">
+          <legend>{copy("章节识别", "Chapter detection")}</legend>
+          <div className="reader-settings-grid">
+            <label className="field">
+              <span className="field-label">{copy("识别方式", "Detection mode")}</span>
+              <select value={draft.chapterDetectionMode} onChange={(event) => onChange({ ...draft, chapterDetectionMode: event.target.value as ReaderPreferencesV2["chapterDetectionMode"] })}>
+                <option value="smartAndCustom">{copy("智能 + 自定义", "Smart + custom")}</option>
+                <option value="smart">{copy("仅智能", "Smart only")}</option>
+                <option value="custom">{copy("仅自定义正则", "Custom regex only")}</option>
+              </select>
+            </label>
+            <label className="field reader-setting-range">
+              <span className="field-label">{copy("标题最大长度", "Maximum heading length")} · {draft.chapterHeadingMaxChars}</span>
+              <input type="range" min="20" max="240" step="5" value={draft.chapterHeadingMaxChars} onChange={(event) => onChange({ ...draft, chapterHeadingMaxChars: Number(event.target.value) })} />
+            </label>
+            {draft.chapterDetectionMode !== "smart" ? (
+              <label className="field reader-settings-regex">
+                <span className="field-label">{copy("自定义章节正则", "Custom chapter regex")}</span>
+                <input value={draft.customChapterRegex} maxLength={1024} spellCheck={false} placeholder={copy("例如：Scene\\s+\\d+", "For example: Scene\\s+\\d+")} onChange={(event) => onChange({ ...draft, customChapterRegex: event.target.value })} />
+                <small className="field-hint">{copy("必须匹配整行；Rust 正则不支持回溯引用或环视。", "Must match the full line. Rust regex does not support backreferences or look-around.")}</small>
+              </label>
+            ) : null}
+          </div>
+        </fieldset>
       </div>
     </section>
   );
@@ -418,23 +573,24 @@ function ReaderSettings({
 export default function ReaderPage() {
   const language = useAppStore((state) => state.appearance.language);
   const copy = useCallback((zh: string, en: string) => tr(language, zh, en), [language]);
-  const [library, setLibrary] = useState<ReaderLibraryV1 | null>(null);
-  const [activeDocument, setActiveDocument] = useState<ReaderDocumentV1 | null>(null);
+  const [library, setLibrary] = useState<ReaderLibraryV2 | null>(null);
+  const [activeDocument, setActiveDocument] = useState<ReaderDocumentV2 | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [tocOpen, setTocOpen] = useState(true);
+  const [tocOpen, setTocOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMatchIndex, setSearchMatchIndex] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsDraft, setSettingsDraft] = useState<ReaderPreferencesV1>(DEFAULT_READER_PREFERENCES);
+  const [settingsDraft, setSettingsDraft] = useState<ReaderPreferencesV2>(DEFAULT_READER_PREFERENCES);
   const [settingsError, setSettingsError] = useState("");
   const [settingsDiscardConfirm, setSettingsDiscardConfirm] = useState(false);
-  const [removeTarget, setRemoveTarget] = useState<ReaderBookV1 | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ReaderBookV2 | null>(null);
   const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
+  const [focusMode, setFocusMode] = useState(false);
   const progressSequence = useRef(0);
 
   const settingsDirty = useMemo(
@@ -460,7 +616,7 @@ export default function ReaderPage() {
     void loadLibrary();
   }, [loadLibrary]);
 
-  const applyDocument = useCallback((next: ReaderDocumentV1) => {
+  const applyDocument = useCallback((next: ReaderDocumentV2) => {
     setActiveDocument(next);
     setPageIndex(
       next.kind === "txt"
@@ -468,6 +624,8 @@ export default function ReaderPage() {
         : Math.min(next.book.pdfPageIndex, MAX_PDF_PAGE_INDEX),
     );
     setPdfPageCount(null);
+    setFocusMode(next.preferences.immersiveMode);
+    setTocOpen(false);
     setSearchQuery("");
     setSearchMatchIndex(0);
     setNotice("");
@@ -524,6 +682,7 @@ export default function ReaderPage() {
       });
       setLibrary((current) => replaceBook(current, book));
       setActiveDocument(null);
+      setFocusMode(false);
     } catch (reason) {
       setError(readerErrorMessage(reason, language));
     } finally {
@@ -653,6 +812,7 @@ export default function ReaderPage() {
     const preferences = library?.preferences ?? DEFAULT_READER_PREFERENCES;
     setSettingsDraft(preferences);
     setSettingsError("");
+    setFocusMode(false);
     setSettingsOpen(true);
   }
 
@@ -711,10 +871,24 @@ export default function ReaderPage() {
       : null;
   const pdfPageInputMax = pdfPageCount
     ? Math.min(pdfPageCount, MAX_PDF_PAGE_INDEX + 1)
-    : MAX_PDF_PAGE_INDEX + 1;
+    : Math.max(pageIndex + 1, 1);
   const pdfLastPageIndex = pdfPageCount
     ? Math.min(pdfPageCount - 1, MAX_PDF_PAGE_INDEX)
-    : MAX_PDF_PAGE_INDEX;
+    : Math.max(pageIndex, 0);
+  const lastPageIndex = activeDocument?.kind === "txt"
+    ? Math.max(currentTextPageCount - 1, 0)
+    : pdfLastPageIndex;
+
+  function adjustPdfZoom(delta: number) {
+    setActiveDocument((current) => {
+      if (current?.kind !== "pdf") return current;
+      const pdfZoomPercent = Math.min(
+        Math.max(current.preferences.pdfZoomPercent + delta, 50),
+        300,
+      );
+      return { ...current, preferences: { ...current.preferences, pdfZoomPercent } };
+    });
+  }
 
   // The pdf.js viewer reports the total page count only after the document has
   // been loaded through the restricted reader URL. Clamp a bookmark-restored
@@ -729,12 +903,65 @@ export default function ReaderPage() {
     (reason: unknown) => setError(readerErrorMessage(reason, language)),
     [language],
   );
+  const handlePdfRendered = useCallback(() => setError(""), []);
+  useEffect(() => {
+    if (!activeDocument || settingsOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const editing = Boolean(
+        target?.closest("input, textarea, select, button, [contenteditable='true']"),
+      );
+      if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "f") {
+        if (activeDocument.kind === "txt") {
+          event.preventDefault();
+          setFocusMode(false);
+          setSearchOpen(true);
+        }
+        return;
+      }
+      if (editing) return;
+      if (event.key === "Escape") {
+        if (searchOpen) setSearchOpen(false);
+        else if (tocOpen) setTocOpen(false);
+        else if (focusMode) setFocusMode(false);
+        else return;
+        event.preventDefault();
+        return;
+      }
+      if (event.key === "ArrowLeft" || event.key === "PageUp") {
+        event.preventDefault();
+        setPageIndex((page) => Math.max(page - 1, 0));
+      } else if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") {
+        event.preventDefault();
+        setPageIndex((page) => Math.min(page + 1, lastPageIndex));
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        setPageIndex(0);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        setPageIndex(lastPageIndex);
+      }
+    };
+    globalThis.addEventListener("keydown", onKeyDown);
+    return () => globalThis.removeEventListener("keydown", onKeyDown);
+  }, [activeDocument, focusMode, lastPageIndex, searchOpen, settingsOpen, tocOpen]);
+
+  const activePreferences = activeDocument?.preferences ?? DEFAULT_READER_PREFERENCES;
+  const activeBackground = readerBackgroundCss(activePreferences);
+  const activeForeground = readerForegroundCss(activePreferences);
+  const readerFontFamily = {
+    serif: 'ui-serif, Georgia, "Noto Serif SC", "Songti SC", serif',
+    sans: 'var(--font-sans)',
+    mono: 'ui-monospace, "Cascadia Mono", Consolas, monospace',
+  }[activePreferences.fontFamily];
   const readerStyle = {
-    "--reader-font-size": `${activeDocument?.preferences.fontSizePx ?? 19}px`,
-    "--reader-line-height": activeDocument?.preferences.lineHeightMultiplier ?? 1.6,
-    ...(activeDocument?.preferences.background === "custom"
-      ? { "--reader-custom-background": argbToCss(activeDocument.preferences.customBackgroundArgb) }
-      : {}),
+    "--reader-font-size": `${activePreferences.fontSizePx}px`,
+    "--reader-line-height": activePreferences.lineHeightMultiplier,
+    "--reader-content-width": `${activePreferences.contentWidthPx}px`,
+    "--reader-font-family": readerFontFamily,
+    "--reader-text-align": activePreferences.textAlignment,
+    "--reader-background": activeBackground,
+    "--reader-foreground": activeForeground,
   } as CSSProperties;
 
   if (loading && !library) {
@@ -757,35 +984,16 @@ export default function ReaderPage() {
 
   return (
     <PageFrame
-      className={`reader-page${activeDocument ? " reader-is-open" : ""}`}
-      eyebrow={copy("本机私有 · 原文件只读", "Private on this PC · Original files read-only")}
+      className={`reader-page${activeDocument ? " reader-is-open" : ""}${focusMode ? " reader-focus-mode" : ""}`}
+      eyebrow={activeDocument ? undefined : copy("本机私有 · 原文件只读", "Private on this PC · Original files read-only")}
       title={activeDocument?.book.title ?? copy("阅读", "Reader")}
       description={
         activeDocument
-          ? activeDocument.kind === "txt"
-            ? copy(`第 ${pageIndex + 1} / ${currentTextPageCount} 逻辑页 · ${progressPercent}%`, `Logical page ${pageIndex + 1} of ${currentTextPageCount} · ${progressPercent}%`)
-            : copy(`已保存到第 ${pageIndex + 1} 页`, `Saved at page ${pageIndex + 1}`)
+          ? undefined
           : copy("显式打开本机 TXT/PDF；书架路径、阅读设置和时长保持本机私有，无路径、无书名的进度可进入 v29 备份及可选云同步。", "Explicitly open local TXT/PDF files. Library paths, settings, and reading time remain private; path-free, title-free progress can enter v29 backups and optional cloud sync.")
       }
       actions={
-        activeDocument ? (
-          <>
-            <button className="button-secondary" type="button" disabled={!!busy || settingsOpen} onClick={() => void closeBook()}>
-              <ArrowLeft aria-hidden="true" size={17} />
-              {copy("返回书库", "Back to library")}
-            </button>
-            {activeDocument.kind === "txt" ? (
-              <button className="button-secondary" type="button" disabled={!!busy || settingsOpen} aria-pressed={searchOpen} onClick={() => setSearchOpen((open) => !open)}>
-                <Search aria-hidden="true" size={17} />
-                {copy("全文搜索", "Full-text search")}
-              </button>
-            ) : null}
-            <button className="button-secondary" type="button" disabled={!!busy || settingsOpen} onClick={openSettings}>
-              <Settings2 aria-hidden="true" size={17} />
-              {copy("阅读设置", "Reader settings")}
-            </button>
-          </>
-        ) : (
+        activeDocument ? undefined : (
           <>
             <button className="button-secondary" type="button" disabled={!!busy || settingsOpen} onClick={openSettings}>
               <Settings2 aria-hidden="true" size={17} />
@@ -825,23 +1033,26 @@ export default function ReaderPage() {
         />
       ) : null}
 
-      {!activeDocument ? (
+      {settingsOpen ? null : !activeDocument ? (
         <>
           <aside className="panel reader-boundary-note">
             <LibraryBig aria-hidden="true" size={23} />
             <div>
-              <h2>{copy("文件与数据边界", "File and data boundary")}</h2>
-              <p>{copy("DeskCubby 只读你明确选择的原文件；从书库移除不会删除文件，绝对路径和正文不会出现在错误消息中。", "DeskCubby reads only files you explicitly choose. Removing a book never deletes it, and absolute paths or content never appear in errors.")}</p>
+              <h2>{copy("本机书架", "Local shelf")}</h2>
+              <p>{copy("只读已选择的原文件；移除书架记录不会删除原文件。", "Original files are read-only; removing a shelf entry never deletes the file.")}</p>
             </div>
             <strong>{formatReadingTime(library?.totalReadingMillis ?? "0", language)}</strong>
           </aside>
           {library?.books.length ? (
-            <section className="reader-library-grid" aria-label={copy("本机书库", "Local library")}>
+            <section className={`reader-library-grid layout-${library.preferences.libraryLayout}`} aria-label={copy("本机书库", "Local library")}>
               {library.books.map((book) => (
                 <ReaderBookCard
                   key={book.id}
                   book={book}
                   language={language}
+                  layout={library.preferences.libraryLayout}
+                  showGridBookTitles={library.preferences.showGridBookTitles}
+                  showProgressPercentage={library.preferences.showProgressPercentage}
                   busy={!!busy || settingsOpen}
                   onOpen={() => void openBook(book.id)}
                   onRemove={() => setRemoveTarget(book)}
@@ -852,7 +1063,7 @@ export default function ReaderPage() {
             <div className="panel">
               <EmptyState
                 title={copy("书库还是空的", "Your library is empty")}
-                description={copy("选择一个 UTF-8 / UTF-16 / GB18030 TXT，或交给 Windows PDF 查看器连续阅读。", "Choose a UTF-8 / UTF-16 / GB18030 TXT, or read a PDF continuously in the Windows PDF viewer.")}
+                description={copy("选择 UTF-8 / UTF-16 / GB18030 TXT 或 PDF；PDF 会直接在应用内渲染。", "Choose a UTF-8 / UTF-16 / GB18030 TXT or PDF; PDFs render directly in the app.")}
                 icon={BookOpen}
                 action={<button className="button-primary" type="button" disabled={!!busy} onClick={() => void chooseBook()}><FilePlus2 aria-hidden="true" size={17} />{copy("打开文件", "Open file")}</button>}
               />
@@ -902,54 +1113,74 @@ export default function ReaderPage() {
 
             <div className="reader-content-column">
               <div className="panel reader-toolbar" aria-label={copy("阅读控制", "Reader controls")}>
-                {activeDocument.kind === "txt" && !tocOpen ? (
-                  <button className="icon-button" type="button" onClick={() => setTocOpen(true)} aria-label={copy("显示目录", "Show contents")}><List aria-hidden="true" size={18} /></button>
-                ) : null}
-                <button className="icon-button" type="button" disabled={pageIndex <= 0} onClick={() => setPageIndex((page) => Math.max(page - 1, 0))} aria-label={copy("上一页", "Previous page")}><ChevronLeft aria-hidden="true" size={19} /></button>
-                {activeDocument.kind === "txt" ? (
-                  <>
-                    <label className="reader-progress-range">
-                      <span className="sr-only">{copy("阅读进度", "Reading progress")}</span>
-                      <input type="range" min="1" max={Math.max(currentTextPageCount, 1)} value={pageIndex + 1} onChange={(event) => setPageIndex(Number(event.target.value) - 1)} />
+                <div className="reader-toolbar-leading">
+                  <button className="icon-button" type="button" disabled={!!busy || settingsOpen} onClick={() => void closeBook()} aria-label={copy("返回书架", "Back to shelf")} title={copy("返回书架", "Back to shelf")}><ArrowLeft aria-hidden="true" size={18} /></button>
+                  <h1 title={activeDocument.book.title}>{activeDocument.book.title}</h1>
+                  {activeDocument.kind === "txt" ? (
+                    <>
+                      <button className={`icon-button${tocOpen ? " is-active" : ""}`} type="button" aria-pressed={tocOpen} onClick={() => { setFocusMode(false); setTocOpen((open) => !open); }} aria-label={tocOpen ? copy("收起目录", "Hide contents") : copy("显示目录", "Show contents")} title={copy("目录", "Contents")}><List aria-hidden="true" size={18} /></button>
+                      <button className={`icon-button${searchOpen ? " is-active" : ""}`} type="button" aria-pressed={searchOpen} onClick={() => { setFocusMode(false); setSearchOpen((open) => !open); }} aria-label={copy("全文搜索", "Full-text search")} title={`${copy("全文搜索", "Full-text search")} · Ctrl+F`}><Search aria-hidden="true" size={18} /></button>
+                    </>
+                  ) : null}
+                </div>
+
+                <div className="reader-toolbar-pager">
+                  <button className="icon-button" type="button" disabled={pageIndex <= 0} onClick={() => setPageIndex((page) => Math.max(page - 1, 0))} aria-label={copy("上一页", "Previous page")} title={`${copy("上一页", "Previous page")} · ← / PageUp`}><ChevronLeft aria-hidden="true" size={19} /></button>
+                  {activeDocument.kind === "txt" ? (
+                    <>
+                      <label className="reader-progress-range">
+                        <span className="sr-only">{copy("阅读进度", "Reading progress")}</span>
+                        <input type="range" min="1" max={Math.max(currentTextPageCount, 1)} value={pageIndex + 1} onChange={(event) => setPageIndex(Number(event.target.value) - 1)} />
+                      </label>
+                      <label className="reader-page-input">
+                        <input aria-label={copy("页码", "Page number")} type="number" min="1" max={Math.max(currentTextPageCount, 1)} value={pageIndex + 1} onChange={(event) => setPageIndex(Math.min(Math.max(Number(event.target.value || 1) - 1, 0), Math.max(currentTextPageCount - 1, 0)))} />
+                        <span>/ {currentTextPageCount} · {progressPercent}%</span>
+                      </label>
+                    </>
+                  ) : (
+                    <label className="reader-page-input reader-pdf-page-input">
+                      <input aria-label={copy("保存页码", "Saved page")} type="number" min="1" max={pdfPageInputMax} value={pageIndex + 1} onChange={(event) => setPageIndex(Math.min(Math.max(Number(event.target.value || 1) - 1, 0), pdfLastPageIndex))} />
+                      <span>/ {pdfPageCount ?? "…"}</span>
                     </label>
-                    <label className="reader-page-input">
-                      <span>{copy("页", "Page")}</span>
-                      <input type="number" min="1" max={Math.max(currentTextPageCount, 1)} value={pageIndex + 1} onChange={(event) => setPageIndex(Math.min(Math.max(Number(event.target.value || 1) - 1, 0), Math.max(currentTextPageCount - 1, 0)))} />
-                      <span>/ {currentTextPageCount}</span>
-                    </label>
-                  </>
-                ) : (
-                  <label className="reader-page-input reader-pdf-page-input">
-                    <span>{copy("保存页码", "Saved page")}</span>
-                    <input type="number" min="1" max={pdfPageInputMax} value={pageIndex + 1} onChange={(event) => setPageIndex(Math.min(Math.max(Number(event.target.value || 1) - 1, 0), pdfLastPageIndex))} />
-                  </label>
-                )}
-                <button className="icon-button" type="button" disabled={activeDocument.kind === "txt" ? pageIndex >= currentTextPageCount - 1 : pageIndex >= pdfLastPageIndex} onClick={() => setPageIndex((page) => Math.min(page + 1, activeDocument.kind === "txt" ? currentTextPageCount - 1 : pdfLastPageIndex))} aria-label={copy("下一页", "Next page")}><ChevronRight aria-hidden="true" size={19} /></button>
-                {activeDocument.kind === "txt" ? (
-                  <button className="button-ghost button-small" type="button" onClick={() => void copyCurrentPage()}><Clipboard aria-hidden="true" size={16} />{copy("复制当前页", "Copy page")}</button>
-                ) : <output className="reader-pdf-zoom">{activeDocument.preferences.pdfZoomPercent}%</output>}
+                  )}
+                  <button className="icon-button" type="button" disabled={pageIndex >= lastPageIndex} onClick={() => setPageIndex((page) => Math.min(page + 1, lastPageIndex))} aria-label={copy("下一页", "Next page")} title={`${copy("下一页", "Next page")} · → / PageDown`}><ChevronRight aria-hidden="true" size={19} /></button>
+                </div>
+
+                <div className="reader-toolbar-trailing">
+                  {activeDocument.kind === "txt" ? (
+                    <button className="icon-button" type="button" onClick={() => void copyCurrentPage()} aria-label={copy("复制当前页", "Copy page")} title={copy("复制当前页", "Copy page")}><Clipboard aria-hidden="true" size={17} /></button>
+                  ) : (
+                    <div className="reader-pdf-zoom-controls" aria-label={copy("PDF 临时缩放", "Temporary PDF zoom")}>
+                      <button className="icon-button" type="button" disabled={activeDocument.preferences.pdfZoomPercent <= 50} onClick={() => adjustPdfZoom(-10)} aria-label={copy("缩小 PDF", "Zoom PDF out")}><Minus aria-hidden="true" size={17} /></button>
+                      <output>{activeDocument.preferences.pdfZoomPercent}%</output>
+                      <button className="icon-button" type="button" disabled={activeDocument.preferences.pdfZoomPercent >= 300} onClick={() => adjustPdfZoom(10)} aria-label={copy("放大 PDF", "Zoom PDF in")}><Plus aria-hidden="true" size={17} /></button>
+                    </div>
+                  )}
+                  <button className="icon-button" type="button" disabled={!!busy || settingsOpen} onClick={openSettings} aria-label={copy("阅读设置", "Reader settings")} title={copy("阅读设置", "Reader settings")}><Settings2 aria-hidden="true" size={18} /></button>
+                  <button className={`icon-button${focusMode ? " is-active" : ""}`} type="button" aria-pressed={focusMode} onClick={() => setFocusMode((enabled) => !enabled)} aria-label={focusMode ? copy("退出专注模式", "Exit focus mode") : copy("进入专注模式", "Enter focus mode")} title={focusMode ? copy("退出专注模式", "Exit focus mode") : copy("进入专注模式", "Enter focus mode")}>{focusMode ? <Minimize2 aria-hidden="true" size={18} /> : <Maximize2 aria-hidden="true" size={18} />}</button>
+                </div>
               </div>
 
               {activeDocument.kind === "txt" ? (
-                <div className={`reader-text-surface background-${activeDocument.preferences.background}`} style={activeDocument.preferences.background === "custom" ? { background: argbToCss(activeDocument.preferences.customBackgroundArgb) } : undefined}>
+                <div className={`reader-text-surface background-${activeDocument.preferences.background}`}>
                   <HighlightedPage document={activeDocument} pageIndex={pageIndex} matches={textMatches} currentMatchIndex={searchMatchIndex} paragraphSpacing={activeDocument.preferences.paragraphSpacingPx} />
                 </div>
               ) : pdfBaseUrl ? (
                 <div className="reader-pdf-surface">
-                  <div className="reader-pdf-note" role="note">
-                    {copy("PDF 在应用内渲染；可通过阅读设置调整基准缩放，应用只保存上方页码。", "PDF renders in-app; adjust the base zoom in reader settings. The app saves only the page number above.")}
-                  </div>
                   <ReaderPdfViewer
                     assetUrl={pdfBaseUrl}
                     pageIndex={pageIndex}
                     zoomPercent={activeDocument.preferences.pdfZoomPercent}
                     language={language}
+                    background={activeBackground}
+                    foreground={activeForeground}
                     onPageCountChanged={handlePdfPageCount}
+                    onPageRendered={handlePdfRendered}
                     onRenderFailed={handlePdfRenderFailed}
                   />
                 </div>
               ) : (
-                <div className="panel"><ErrorState title={copy("无法显示 PDF", "PDF cannot be displayed")} description={copy("后端返回了无效的阅读地址；绝对路径未被使用。", "The backend returned an invalid reader URL; no absolute path was used.")} /></div>
+                <div className="panel"><ErrorState title={copy("无法显示 PDF", "PDF cannot be displayed")} description={copy("阅读数据版本不兼容，请返回书架后重新打开；应用不会把绝对路径交给前端。", "The reader data version is incompatible. Return to the shelf and reopen it; the app never gives the frontend an absolute path.")} /></div>
               )}
             </div>
           </div>

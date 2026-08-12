@@ -6,9 +6,9 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
-  ReaderDocumentV1,
-  ReaderLibraryV1,
-  ReaderPreferencesV1,
+  ReaderDocumentV2,
+  ReaderLibraryV2,
+  ReaderPreferencesV2,
 } from "../lib/readerApi";
 import { useAppStore } from "../store/appStore";
 import ReaderPage from "./ReaderPage";
@@ -24,20 +24,28 @@ vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?worker", () => ({
   default: class PdfWorkerStub {},
 }));
 
-const PREFERENCES: ReaderPreferencesV1 = {
+const PREFERENCES: ReaderPreferencesV2 = {
   background: "paper",
   customBackgroundArgb: -724762,
+  customForegroundArgb: null,
   fontSizePx: 19,
+  fontFamily: "serif",
   lineHeightMultiplier: 1.6,
   paragraphSpacingPx: 10,
+  contentWidthPx: 960,
+  textAlignment: "start",
   pdfZoomPercent: 100,
+  immersiveMode: false,
+  showProgressPercentage: false,
+  libraryLayout: "list",
+  showGridBookTitles: true,
   chapterDetectionMode: "smartAndCustom",
   customChapterRegex: "",
   chapterHeadingMaxChars: 160,
 };
 
 const PDF_BOOK = {
-  dtoVersion: 1,
+  dtoVersion: 2,
   id: "22222222-2222-4222-8222-222222222222",
   title: "研究报告",
   bookType: "pdf",
@@ -46,11 +54,12 @@ const PDF_BOOK = {
   textParagraphIndex: 0,
   textPageIndex: 0,
   pdfPageIndex: 4,
+  totalPages: 12,
   readingMillis: "0",
 } as const;
 
-const EMPTY_LIBRARY: ReaderLibraryV1 = {
-  dtoVersion: 1,
+const EMPTY_LIBRARY: ReaderLibraryV2 = {
+  dtoVersion: 2,
   books: [],
   preferences: PREFERENCES,
   totalReadingMillis: "0",
@@ -83,12 +92,12 @@ describe("ReaderPage PDF viewer integration", () => {
 
   it("loads the PDF through the restricted reader URL and clamps a restored page index", async () => {
     const user = userEvent.setup();
-    const library: ReaderLibraryV1 = {
+    const library: ReaderLibraryV2 = {
       ...EMPTY_LIBRARY,
       books: [PDF_BOOK],
     };
-    const document: ReaderDocumentV1 = {
-      dtoVersion: 1,
+    const document: ReaderDocumentV2 = {
+      dtoVersion: 2,
       book: PDF_BOOK,
       preferences: PREFERENCES,
       kind: "pdf",
@@ -124,6 +133,5 @@ describe("ReaderPage PDF viewer integration", () => {
         url: `http://reader.localhost/${PDF_BOOK.id}.pdf`,
       }),
     );
-    expect(screen.getByText(/已保存到第 3 页/)).toBeInTheDocument();
   });
 });

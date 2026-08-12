@@ -114,7 +114,7 @@ foreach ($rawDirective in ($csp -split ";")) {
 $requiredCspSources = @{
     "default-src" = @("'self'")
     "object-src" = @("'none'")
-    "frame-src" = @("reader:", "http://reader.localhost")
+    "frame-src" = @("'none'")
     "img-src" = @(
         "'self'",
         "data:",
@@ -124,7 +124,7 @@ $requiredCspSources = @{
         "media:",
         "http://media.localhost"
     )
-    "connect-src" = @("ipc:", "http://ipc.localhost")
+    "connect-src" = @("ipc:", "http://ipc.localhost", "reader:", "http://reader.localhost")
 }
 foreach ($directive in $requiredCspSources.GetEnumerator()) {
     if (-not $cspDirectives.ContainsKey($directive.Key)) {

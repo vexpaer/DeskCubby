@@ -5,9 +5,9 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
-  ReaderDocumentV1,
-  ReaderLibraryV1,
-  ReaderPreferencesV1,
+  ReaderDocumentV2,
+  ReaderLibraryV2,
+  ReaderPreferencesV2,
 } from "../lib/readerApi";
 import { useAppStore } from "../store/appStore";
 import ReaderPage from "./ReaderPage";
@@ -21,34 +21,48 @@ vi.mock("./readerPdfViewer", () => ({
     assetUrl,
     pageIndex,
     zoomPercent,
+    background,
+    foreground,
   }: {
     assetUrl: string;
     pageIndex: number;
     zoomPercent: number;
+    background?: string;
+    foreground?: string;
   }) => (
     <div
       data-testid="reader-pdf-viewer"
       data-url={assetUrl}
       data-page-index={pageIndex}
       data-zoom={zoomPercent}
+      data-background={background}
+      data-foreground={foreground}
     />
   ),
 }));
 
-const PREFERENCES: ReaderPreferencesV1 = {
+const PREFERENCES: ReaderPreferencesV2 = {
   background: "paper",
   customBackgroundArgb: -724762,
+  customForegroundArgb: null,
   fontSizePx: 19,
+  fontFamily: "serif",
   lineHeightMultiplier: 1.6,
   paragraphSpacingPx: 10,
+  contentWidthPx: 960,
+  textAlignment: "start",
   pdfZoomPercent: 100,
+  immersiveMode: false,
+  showProgressPercentage: false,
+  libraryLayout: "list",
+  showGridBookTitles: true,
   chapterDetectionMode: "smartAndCustom",
   customChapterRegex: "",
   chapterHeadingMaxChars: 160,
 };
 
 const TEXT_BOOK = {
-  dtoVersion: 1,
+  dtoVersion: 2,
   id: "11111111-1111-4111-8111-111111111111",
   title: "示例小说",
   bookType: "txt",
@@ -57,11 +71,12 @@ const TEXT_BOOK = {
   textParagraphIndex: 0,
   textPageIndex: 0,
   pdfPageIndex: 0,
+  totalPages: 2,
   readingMillis: "60000",
 } as const;
 
 const PDF_BOOK = {
-  dtoVersion: 1,
+  dtoVersion: 2,
   id: "22222222-2222-4222-8222-222222222222",
   title: "研究报告",
   bookType: "pdf",
@@ -70,25 +85,26 @@ const PDF_BOOK = {
   textParagraphIndex: 0,
   textPageIndex: 0,
   pdfPageIndex: 4,
+  totalPages: 12,
   readingMillis: "0",
 } as const;
 
-const EMPTY_LIBRARY: ReaderLibraryV1 = {
-  dtoVersion: 1,
+const EMPTY_LIBRARY: ReaderLibraryV2 = {
+  dtoVersion: 2,
   books: [],
   preferences: PREFERENCES,
   totalReadingMillis: "0",
 };
 
-const TEXT_LIBRARY: ReaderLibraryV1 = {
-  dtoVersion: 1,
+const TEXT_LIBRARY: ReaderLibraryV2 = {
+  dtoVersion: 2,
   books: [TEXT_BOOK],
   preferences: PREFERENCES,
   totalReadingMillis: "60000",
 };
 
-const TEXT_DOCUMENT: ReaderDocumentV1 = {
-  dtoVersion: 1,
+const TEXT_DOCUMENT: ReaderDocumentV2 = {
+  dtoVersion: 2,
   book: TEXT_BOOK,
   preferences: PREFERENCES,
   kind: "txt",
@@ -173,7 +189,7 @@ describe("ReaderPage", () => {
 
     await user.click(screen.getByRole("button", { name: "下一个结果" }));
     await user.click(screen.getByRole("button", { name: "下一个结果" }));
-    expect(await screen.findByText(/第 2 \/ 2 逻辑页/)).toBeInTheDocument();
+    expect(await screen.findByRole("spinbutton", { name: "页码" })).toHaveValue(2);
 
     await user.click(screen.getByRole("button", { name: "复制当前页" }));
     expect(clipboardWrite).toHaveBeenCalledWith("第二章\n\nlater alpha");
@@ -182,7 +198,7 @@ describe("ReaderPage", () => {
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("save_reader_progress", {
         request: {
-          dtoVersion: 1,
+          dtoVersion: 2,
           bookId: TEXT_BOOK.id,
           pageIndex: 1,
           paragraphIndex: 2,
@@ -193,12 +209,12 @@ describe("ReaderPage", () => {
 
   it("renders PDFs through the in-app viewer using only an opaque reader URL", async () => {
     const user = userEvent.setup();
-    const library: ReaderLibraryV1 = {
+    const library: ReaderLibraryV2 = {
       ...EMPTY_LIBRARY,
       books: [PDF_BOOK],
     };
-    const document: ReaderDocumentV1 = {
-      dtoVersion: 1,
+    const document: ReaderDocumentV2 = {
+      dtoVersion: 2,
       book: PDF_BOOK,
       preferences: { ...PREFERENCES, pdfZoomPercent: 150 },
       kind: "pdf",
@@ -222,14 +238,16 @@ describe("ReaderPage", () => {
     );
     expect(viewer).toHaveAttribute("data-page-index", "4");
     expect(viewer).toHaveAttribute("data-zoom", "150");
-    expect(screen.getByText(/PDF 在应用内渲染/)).toBeInTheDocument();
+    expect(viewer).toHaveAttribute("data-background", "#f4f0e6");
+    expect(viewer).toHaveAttribute("data-foreground", "#29261f");
+    expect(screen.getByText("150%")).toBeInTheDocument();
     expect(viewer.getAttribute("data-url")).not.toContain("C:");
     expect(viewer.getAttribute("data-url")).not.toContain("#page");
   });
 
   it("restores a settings draft and saves it only after the top-right action", async () => {
     const user = userEvent.setup();
-    const customized: ReaderLibraryV1 = {
+    const customized: ReaderLibraryV2 = {
       ...EMPTY_LIBRARY,
       preferences: { ...PREFERENCES, fontSizePx: 28 },
     };
@@ -238,7 +256,7 @@ describe("ReaderPage", () => {
       if (command === "save_reader_preferences") {
         return {
           ...EMPTY_LIBRARY,
-          preferences: (args as { request: { preferences: ReaderPreferencesV1 } }).request.preferences,
+          preferences: (args as { request: { preferences: ReaderPreferencesV2 } }).request.preferences,
         } as never;
       }
       throw new Error(`Unexpected command: ${command}`);
@@ -252,11 +270,53 @@ describe("ReaderPage", () => {
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("save_reader_preferences", {
         request: {
-          dtoVersion: 1,
+          dtoVersion: 2,
           preferences: PREFERENCES,
         },
       });
     });
+  });
+
+  it("persists the expanded desktop reading controls and starts in focus mode", async () => {
+    const user = userEvent.setup();
+    let savedPreferences = PREFERENCES;
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "get_reader_library") {
+        return { ...TEXT_LIBRARY, preferences: savedPreferences } as never;
+      }
+      if (command === "save_reader_preferences") {
+        savedPreferences = (args as { request: { preferences: ReaderPreferencesV2 } }).request.preferences;
+        return { ...TEXT_LIBRARY, preferences: savedPreferences } as never;
+      }
+      if (command === "open_reader_book") {
+        return { ...TEXT_DOCUMENT, preferences: savedPreferences } as never;
+      }
+      if (command === "save_reader_progress") return TEXT_BOOK as never;
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    renderReader();
+    await user.click(await screen.findByRole("button", { name: "阅读设置" }));
+    await user.selectOptions(screen.getByLabelText("字体"), "sans");
+    await user.selectOptions(screen.getByLabelText("段落对齐"), "justify");
+    await user.selectOptions(screen.getByLabelText("书架布局"), "grid");
+    await user.click(screen.getByRole("checkbox", { name: "默认进入专注模式" }));
+    await user.click(screen.getByRole("checkbox", { name: "显示书架进度" }));
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(savedPreferences).toEqual(expect.objectContaining({
+        fontFamily: "sans",
+        textAlignment: "justify",
+        libraryLayout: "grid",
+        immersiveMode: true,
+        showProgressPercentage: true,
+      }));
+    });
+    await user.click(screen.getByRole("button", { name: "打开《示例小说》" }));
+    expect(await screen.findByRole("button", { name: "退出专注模式" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "退出专注模式" }));
+    expect(screen.getByRole("button", { name: "进入专注模式" })).toBeInTheDocument();
   });
 
   it("delegates custom-regex validation to the Rust-compatible backend", async () => {
@@ -266,7 +326,7 @@ describe("ReaderPage", () => {
       if (command === "save_reader_preferences") {
         return {
           ...EMPTY_LIBRARY,
-          preferences: (args as { request: { preferences: ReaderPreferencesV1 } }).request.preferences,
+          preferences: (args as { request: { preferences: ReaderPreferencesV2 } }).request.preferences,
         } as never;
       }
       throw new Error(`Unexpected command: ${command}`);
@@ -281,7 +341,7 @@ describe("ReaderPage", () => {
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("save_reader_preferences", {
         request: {
-          dtoVersion: 1,
+          dtoVersion: 2,
           preferences: {
             ...PREFERENCES,
             customChapterRegex: "(?i)^chapter\\s+\\d+$",

@@ -1,10 +1,10 @@
 //! Local-first TXT/PDF reader for the Windows client.
 //!
 //! Files enter this boundary only through an explicit native file-picker action. The
-//! WebView receives TXT logical pages or an opaque `reader://` URL; an absolute path never
+//! WebView receives TXT logical pages or an opaque reader-protocol URL; an absolute path never
 //! crosses IPC. Library metadata, progress, preferences and engagement time live in a private
 //! crash-safe JSON file. Paths, titles, settings and reading time stay private; only the bounded,
-//! URI-free fingerprint progress ledger participates in Android v28 backup and optional cloud
+//! URI-free fingerprint progress ledger participates in Android v29 backup and optional cloud
 //! synchronization.
 
 use crate::AppState;
@@ -26,8 +26,8 @@ use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
-pub(crate) const READER_DTO_VERSION: u32 = 1;
-const READER_STATE_SCHEMA_VERSION: u32 = 2;
+pub(crate) const READER_DTO_VERSION: u32 = 2;
+const READER_STATE_SCHEMA_VERSION: u32 = 3;
 const READER_DIRECTORY_NAME: &str = "reader";
 const READER_STATE_FILE_NAME: &str = "reader-state-v1.json";
 const READER_STATE_PENDING_FILE_NAME: &str = "reader-state-v1.json.pending";
@@ -52,6 +52,8 @@ const MIN_TOC_HEADINGS_ON_PAGE: usize = 3;
 const MAX_TOC_PARAGRAPH_SPAN: usize = 2;
 const MIN_PDF_ZOOM_PERCENT: u16 = 50;
 const MAX_PDF_ZOOM_PERCENT: u16 = 300;
+const MIN_READER_CONTENT_WIDTH_PX: u16 = 520;
+const MAX_READER_CONTENT_WIDTH_PX: u16 = 1_280;
 const MAX_RECORDED_READER_DELTA_MILLIS: u64 = 5 * 60 * 1_000;
 const MAX_JAVASCRIPT_DATE_MILLIS: i64 = 8_640_000_000_000_000;
 const READER_PROGRESS_FORMAT_VERSION: u32 = 1;
@@ -85,15 +87,73 @@ pub(crate) enum ReaderChapterDetectionMode {
     SmartAndCustom,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ReaderFontFamily {
+    Serif,
+    Sans,
+    Mono,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ReaderTextAlignment {
+    Start,
+    Justify,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ReaderLibraryLayout {
+    List,
+    Grid,
+}
+
+fn default_reader_font_family() -> ReaderFontFamily {
+    ReaderFontFamily::Serif
+}
+
+fn default_reader_text_alignment() -> ReaderTextAlignment {
+    ReaderTextAlignment::Start
+}
+
+fn default_reader_library_layout() -> ReaderLibraryLayout {
+    ReaderLibraryLayout::List
+}
+
+fn default_reader_content_width_px() -> u16 {
+    960
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ReaderPreferences {
     pub(crate) background: ReaderBackground,
     pub(crate) custom_background_argb: i32,
+    #[serde(default)]
+    pub(crate) custom_foreground_argb: Option<i32>,
     pub(crate) font_size_px: f64,
+    #[serde(default = "default_reader_font_family")]
+    pub(crate) font_family: ReaderFontFamily,
     pub(crate) line_height_multiplier: f64,
     pub(crate) paragraph_spacing_px: f64,
+    #[serde(default = "default_reader_content_width_px")]
+    pub(crate) content_width_px: u16,
+    #[serde(default = "default_reader_text_alignment")]
+    pub(crate) text_alignment: ReaderTextAlignment,
     pub(crate) pdf_zoom_percent: u16,
+    #[serde(default)]
+    pub(crate) immersive_mode: bool,
+    #[serde(default)]
+    pub(crate) show_progress_percentage: bool,
+    #[serde(default = "default_reader_library_layout")]
+    pub(crate) library_layout: ReaderLibraryLayout,
+    #[serde(default = "default_true")]
+    pub(crate) show_grid_book_titles: bool,
     pub(crate) chapter_detection_mode: ReaderChapterDetectionMode,
     pub(crate) custom_chapter_regex: String,
     pub(crate) chapter_heading_max_chars: u16,
@@ -104,10 +164,18 @@ impl Default for ReaderPreferences {
         Self {
             background: ReaderBackground::Paper,
             custom_background_argb: 0xFFF4F0E6_u32 as i32,
+            custom_foreground_argb: None,
             font_size_px: 19.0,
+            font_family: ReaderFontFamily::Serif,
             line_height_multiplier: 1.6,
             paragraph_spacing_px: 10.0,
+            content_width_px: default_reader_content_width_px(),
+            text_alignment: ReaderTextAlignment::Start,
             pdf_zoom_percent: 100,
+            immersive_mode: false,
+            show_progress_percentage: false,
+            library_layout: ReaderLibraryLayout::List,
+            show_grid_book_titles: true,
             chapter_detection_mode: ReaderChapterDetectionMode::SmartAndCustom,
             custom_chapter_regex: String::new(),
             chapter_heading_max_chars: 160,
@@ -258,6 +326,7 @@ pub(crate) struct ReaderBookDto {
     text_paragraph_index: usize,
     text_page_index: usize,
     pdf_page_index: usize,
+    total_pages: usize,
     reading_millis: String,
 }
 
@@ -299,6 +368,7 @@ enum ReaderDocumentContentDto {
         chapters: Vec<ReaderChapterDto>,
     },
     Pdf {
+        #[serde(rename = "assetUrl")]
         asset_url: String,
     },
 }
@@ -709,6 +779,7 @@ fn book_dto(book: &StoredReaderBook) -> ReaderBookDto {
         text_paragraph_index: book.text_paragraph_index,
         text_page_index: book.text_page_index,
         pdf_page_index: book.pdf_page_index,
+        total_pages: book.total_pages,
         reading_millis: book.reading_millis.to_string(),
     }
 }
@@ -757,10 +828,16 @@ fn normalize_reader_preferences(
     value.font_size_px = value.font_size_px.clamp(12.0, 38.0);
     value.line_height_multiplier = value.line_height_multiplier.clamp(1.0, 2.4);
     value.paragraph_spacing_px = value.paragraph_spacing_px.clamp(0.0, 36.0);
+    value.content_width_px = value
+        .content_width_px
+        .clamp(MIN_READER_CONTENT_WIDTH_PX, MAX_READER_CONTENT_WIDTH_PX);
     value.pdf_zoom_percent = value
         .pdf_zoom_percent
         .clamp(MIN_PDF_ZOOM_PERCENT, MAX_PDF_ZOOM_PERCENT);
     value.custom_background_argb = (value.custom_background_argb as u32 | 0xFF00_0000) as i32;
+    value.custom_foreground_argb = value
+        .custom_foreground_argb
+        .map(|color| (color as u32 | 0xFF00_0000) as i32);
     value.custom_chapter_regex = truncate_chars(
         value.custom_chapter_regex.trim(),
         MAX_READER_CUSTOM_REGEX_CHARS,
@@ -2044,8 +2121,8 @@ fn decode_protocol_book_id(path: &str) -> Option<String> {
     Some(leaf.to_owned())
 }
 
-/// Read-only protocol endpoint used by the WebView2 built-in PDF viewer. The URL carries only a
-/// UUID. Each request resolves that UUID through private reader state and revalidates the exact
+/// Read-only protocol endpoint used by the in-app pdf.js viewer. The URL carries only a UUID.
+/// Each request resolves that UUID through private reader state and revalidates the exact
 /// explicitly selected regular file before serving bounded bytes.
 pub(crate) fn handle_protocol<R: Runtime>(
     context: tauri::UriSchemeContext<'_, R>,
@@ -2326,6 +2403,15 @@ mod tests {
         let id = Uuid::new_v4().to_string();
         let url = reader_url_for_book(&id).unwrap();
         assert_eq!(url, format!("http://reader.localhost/{id}.pdf"));
+        let wire = serde_json::to_value(ReaderDocumentContentDto::Pdf {
+            asset_url: url.clone(),
+        })
+        .unwrap();
+        assert_eq!(
+            wire.get("assetUrl").and_then(|value| value.as_str()),
+            Some(url.as_str())
+        );
+        assert!(wire.get("asset_url").is_none());
         assert_eq!(decode_protocol_book_id(&format!("/{id}.pdf")), Some(id));
         assert!(decode_protocol_book_id("/../private.pdf").is_none());
         assert_eq!(parse_byte_range("bytes=0-99", 1_000), Some((0, 99)));
@@ -2343,12 +2429,19 @@ mod tests {
         value.paragraph_spacing_px = 100.0;
         value.pdf_zoom_percent = 900;
         value.custom_background_argb = 0x0012_3456;
+        value.custom_foreground_argb = Some(0x0065_4321);
+        value.content_width_px = u16::MAX;
         let normalized = normalize_reader_preferences(value).unwrap();
         assert_eq!(normalized.font_size_px, 38.0);
         assert_eq!(normalized.line_height_multiplier, 1.0);
         assert_eq!(normalized.paragraph_spacing_px, 36.0);
         assert_eq!(normalized.pdf_zoom_percent, 300);
+        assert_eq!(normalized.content_width_px, MAX_READER_CONTENT_WIDTH_PX);
         assert_eq!(normalized.custom_background_argb as u32, 0xFF12_3456);
+        assert_eq!(
+            normalized.custom_foreground_argb.map(|color| color as u32),
+            Some(0xFF65_4321)
+        );
 
         let mut invalid = preferences();
         invalid.custom_chapter_regex = "[unfinished".to_owned();
@@ -2454,11 +2547,54 @@ mod tests {
         fs::write(&target, serde_json::to_vec(&legacy).unwrap()).unwrap();
 
         let migrated = load_reader_state(root.path()).unwrap();
-        assert_eq!(migrated.schema_version, 2);
+        assert_eq!(migrated.schema_version, 3);
         assert_eq!(migrated.books[0].text_paragraph_index, 7);
         assert_eq!(migrated.books[0].text_page_index, 3);
         assert_eq!(migrated.books[0].fingerprint, None);
         assert!(migrated.progress_ledger.is_empty());
+    }
+
+    #[test]
+    fn schema_two_preferences_gain_desktop_reader_defaults_without_losing_state() {
+        let root = tempdir().unwrap();
+        let (target, _, _, directory) = state_paths(root.path());
+        fs::create_dir_all(directory).unwrap();
+        let legacy = serde_json::json!({
+            "schemaVersion": 2,
+            "preferences": {
+                "background": "paper",
+                "customBackgroundArgb": -724762,
+                "fontSizePx": 23.0,
+                "lineHeightMultiplier": 1.8,
+                "paragraphSpacingPx": 12.0,
+                "pdfZoomPercent": 140,
+                "chapterDetectionMode": "smartAndCustom",
+                "customChapterRegex": "",
+                "chapterHeadingMaxChars": 160
+            },
+            "books": [],
+            "progressLedger": []
+        });
+        fs::write(&target, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+        let migrated = load_reader_state(root.path()).unwrap();
+        assert_eq!(migrated.schema_version, 3);
+        assert_eq!(migrated.preferences.font_size_px, 23.0);
+        assert_eq!(migrated.preferences.pdf_zoom_percent, 140);
+        assert_eq!(migrated.preferences.custom_foreground_argb, None);
+        assert_eq!(migrated.preferences.font_family, ReaderFontFamily::Serif);
+        assert_eq!(migrated.preferences.content_width_px, 960);
+        assert_eq!(
+            migrated.preferences.text_alignment,
+            ReaderTextAlignment::Start
+        );
+        assert_eq!(
+            migrated.preferences.library_layout,
+            ReaderLibraryLayout::List
+        );
+        assert!(migrated.preferences.show_grid_book_titles);
+        assert!(!migrated.preferences.show_progress_percentage);
+        assert!(!migrated.preferences.immersive_mode);
     }
 
     #[test]
