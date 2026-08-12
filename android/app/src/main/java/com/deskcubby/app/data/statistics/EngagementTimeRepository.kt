@@ -27,6 +27,8 @@ enum class EngagementKind { GAME, READING }
 data class EngagementTimeSnapshot(
     val gameTotalsMillis: Map<String, Long> = emptyMap(),
     val readingTotalsMillis: Map<String, Long> = emptyMap(),
+    /** Last known local title for every book with persisted reading time. */
+    val readingTitles: Map<String, String> = emptyMap(),
 ) {
     fun total(kind: EngagementKind, id: String): Long = when (kind) {
         EngagementKind.GAME -> gameTotalsMillis[id]
@@ -35,10 +37,12 @@ data class EngagementTimeSnapshot(
 }
 
 /** A synchronously detached session interval waiting to be committed to the JSON store. */
+@ConsistentCopyVisibility
 data class PendingEngagementDuration internal constructor(
     internal val kind: EngagementKind,
     internal val id: String,
     internal val elapsedMillis: Long,
+    internal val readingTitle: String?,
 )
 
 /**
@@ -52,20 +56,35 @@ class EngagementTimeRepository @Inject constructor(
     @ApplicationContext context: Context,
 ) {
     private data class SessionKey(val kind: EngagementKind, val id: String)
+    private data class ActiveSession(
+        val startedAtElapsedMillis: Long,
+        val readingTitle: String?,
+    )
 
     private val directory = File(context.filesDir, DIRECTORY_NAME)
     private val file = File(directory, FILE_NAME)
     private val mutex = Mutex()
     private val persistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessionsLock = Any()
-    private val sessions = mutableMapOf<SessionKey, Long>()
+    private val sessions = mutableMapOf<SessionKey, ActiveSession>()
     private val _snapshot = MutableStateFlow(readSnapshotOrEmpty())
     val snapshot: StateFlow<EngagementTimeSnapshot> = _snapshot.asStateFlow()
 
-    fun begin(kind: EngagementKind, id: String) {
+    fun begin(kind: EngagementKind, id: String, readingTitle: String? = null) {
         val validId = requireValidId(id)
+        val validTitle = if (kind == EngagementKind.READING) {
+            normalizeReadingTitle(readingTitle)
+        } else {
+            null
+        }
         synchronized(sessionsLock) {
-            sessions.putIfAbsent(SessionKey(kind, validId), SystemClock.elapsedRealtime())
+            val key = SessionKey(kind, validId)
+            val existing = sessions[key]
+            if (existing == null) {
+                sessions[key] = ActiveSession(SystemClock.elapsedRealtime(), validTitle)
+            } else if (validTitle != null && existing.readingTitle != validTitle) {
+                sessions[key] = existing.copy(readingTitle = validTitle)
+            }
         }
     }
 
@@ -73,12 +92,18 @@ class EngagementTimeRepository @Inject constructor(
         val validId = requireValidId(id)
         val key = SessionKey(kind, validId)
         val now = SystemClock.elapsedRealtime()
-        val elapsed = synchronized(sessionsLock) {
-            val started = sessions[key] ?: return
-            sessions[key] = now
-            (now - started).coerceIn(0L, MAX_SINGLE_CHECKPOINT_MILLIS)
+        val interval = synchronized(sessionsLock) {
+            val active = sessions[key] ?: return
+            sessions[key] = active.copy(startedAtElapsedMillis = now)
+            PendingEngagementDuration(
+                kind = kind,
+                id = validId,
+                elapsedMillis = (now - active.startedAtElapsedMillis)
+                    .coerceIn(0L, MAX_SINGLE_CHECKPOINT_MILLIS),
+                readingTitle = active.readingTitle,
+            )
         }
-        if (elapsed > 0L) addDuration(key, elapsed)
+        if (interval.elapsedMillis > 0L) addDuration(interval)
     }
 
     /**
@@ -90,20 +115,46 @@ class EngagementTimeRepository @Inject constructor(
         val validId = requireValidId(id)
         val key = SessionKey(kind, validId)
         val now = SystemClock.elapsedRealtime()
-        val elapsed = synchronized(sessionsLock) {
-            val started = sessions.remove(key) ?: return null
-            (now - started).coerceIn(0L, MAX_SINGLE_CHECKPOINT_MILLIS)
+        val interval = synchronized(sessionsLock) {
+            val active = sessions.remove(key) ?: return null
+            PendingEngagementDuration(
+                kind = kind,
+                id = validId,
+                elapsedMillis = (now - active.startedAtElapsedMillis)
+                    .coerceIn(0L, MAX_SINGLE_CHECKPOINT_MILLIS),
+                readingTitle = active.readingTitle,
+            )
         }
-        return elapsed.takeIf { it > 0L }?.let {
-            PendingEngagementDuration(kind, validId, it)
-        }
+        return interval.takeIf { it.elapsedMillis > 0L }
     }
 
     suspend fun commit(pending: PendingEngagementDuration) {
-        addDuration(
-            SessionKey(pending.kind, pending.id),
-            pending.elapsedMillis,
-        )
+        addDuration(pending)
+    }
+
+    /**
+     * Persists titles for already-timed books before a shelf entry can be removed. This also
+     * upgrades v1 files while the old shelf still has enough information to recover the title.
+     */
+    suspend fun rememberReadingTitles(titlesById: Map<String, String>) = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            require(titlesById.size <= MAX_ITEMS_PER_KIND)
+            val normalized = titlesById.entries.mapNotNull { (id, title) ->
+                val validId = requireValidId(id)
+                normalizeReadingTitle(title)?.let { validId to it }
+            }.toMap()
+            val current = readSnapshotOrEmpty()
+            val updatedTitles = current.readingTitles.toMutableMap()
+            current.readingTotalsMillis.forEach { (id, totalMillis) ->
+                if (totalMillis > 0L) {
+                    normalized[id]?.let { updatedTitles[id] = it }
+                }
+            }
+            val updated = current.copy(readingTitles = updatedTitles.toSortedMap())
+            if (updated == current) return@withContext
+            writeVerified(updated)
+            _snapshot.value = updated
+        }
     }
 
     /** Commits outside feature ViewModel scopes so an Activity finish cannot cancel final time. */
@@ -118,15 +169,25 @@ class EngagementTimeRepository @Inject constructor(
         endNow(kind, id)?.let { commit(it) }
     }
 
-    private suspend fun addDuration(key: SessionKey, elapsed: Long) = mutex.withLock {
+    private suspend fun addDuration(pending: PendingEngagementDuration) = mutex.withLock {
         withContext(Dispatchers.IO) {
             val current = readSnapshotOrEmpty()
-            val updated = when (key.kind) {
+            val updated = when (pending.kind) {
                 EngagementKind.GAME -> current.copy(
-                    gameTotalsMillis = current.gameTotalsMillis.withAddedDuration(key.id, elapsed),
+                    gameTotalsMillis = current.gameTotalsMillis.withAddedDuration(
+                        pending.id,
+                        pending.elapsedMillis,
+                    ),
                 )
                 EngagementKind.READING -> current.copy(
-                    readingTotalsMillis = current.readingTotalsMillis.withAddedDuration(key.id, elapsed),
+                    readingTotalsMillis = current.readingTotalsMillis.withAddedDuration(
+                        pending.id,
+                        pending.elapsedMillis,
+                    ),
+                    readingTitles = current.readingTitles.withReadingTitle(
+                        pending.id,
+                        pending.readingTitle,
+                    ),
                 )
             }
             writeVerified(updated)
@@ -138,6 +199,14 @@ class EngagementTimeRepository @Inject constructor(
         toMutableMap().apply {
             this[id] = ((this[id] ?: 0L) + elapsed).coerceAtMost(MAX_TOTAL_MILLIS)
         }.toSortedMap()
+
+    private fun Map<String, String>.withReadingTitle(
+        id: String,
+        title: String?,
+    ): Map<String, String> {
+        val validTitle = normalizeReadingTitle(title) ?: return this
+        return toMutableMap().apply { this[id] = validTitle }.toSortedMap()
+    }
 
     private fun readSnapshotOrEmpty(): EngagementTimeSnapshot {
         val candidates = listOf(
@@ -207,14 +276,25 @@ class EngagementTimeRepository @Inject constructor(
         .put("schemaVersion", SCHEMA_VERSION)
         .put("gameTotalsMillis", value.gameTotalsMillis.toJsonObject())
         .put("readingTotalsMillis", value.readingTotalsMillis.toJsonObject())
+        .put("readingTitles", value.readingTitles.toReadingTitlesJsonObject())
         .toString()
 
     private fun decode(raw: String): EngagementTimeSnapshot {
         val root = JSONObject(raw)
-        require(root.getInt("schemaVersion") == SCHEMA_VERSION)
+        val schemaVersion = root.getInt("schemaVersion")
+        require(schemaVersion in 1..SCHEMA_VERSION)
+        val readingTotals = root.getJSONObject("readingTotalsMillis").decodeTotals()
+        val readingTitles = if (schemaVersion >= 2) {
+            root.getJSONObject("readingTitles").decodeReadingTitles().also { titles ->
+                require(titles.keys.all(readingTotals::containsKey))
+            }
+        } else {
+            emptyMap()
+        }
         return EngagementTimeSnapshot(
             gameTotalsMillis = root.getJSONObject("gameTotalsMillis").decodeTotals(),
-            readingTotalsMillis = root.getJSONObject("readingTotalsMillis").decodeTotals(),
+            readingTotalsMillis = readingTotals,
+            readingTitles = readingTitles,
         )
     }
 
@@ -232,6 +312,27 @@ class EngagementTimeRepository @Inject constructor(
         }.toSortedMap()
     }
 
+    private fun Map<String, String>.toReadingTitlesJsonObject(): JSONObject = JSONObject().apply {
+        entries.sortedBy(Map.Entry<String, String>::key).forEach { (id, title) ->
+            put(id, requireNotNull(normalizeReadingTitle(title)))
+        }
+    }
+
+    private fun JSONObject.decodeReadingTitles(): Map<String, String> {
+        require(length() <= MAX_ITEMS_PER_KIND)
+        return keys().asSequence().associateWith { id ->
+            requireValidId(id)
+            getString(id).also { title ->
+                require(title.isNotBlank() && title.length <= MAX_READING_TITLE_CHARS)
+            }
+        }.toSortedMap()
+    }
+
+    private fun normalizeReadingTitle(title: String?): String? = title
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?.take(MAX_READING_TITLE_CHARS)
+
     private fun requireValidId(id: String): String = id.also {
         require(ID_PATTERN.matches(it)) { "Invalid engagement identifier" }
     }
@@ -239,9 +340,10 @@ class EngagementTimeRepository @Inject constructor(
     companion object {
         const val DIRECTORY_NAME = "engagement"
         const val FILE_NAME = "engagement-times-v1.json"
-        private const val SCHEMA_VERSION = 1
-        private const val MAX_JSON_BYTES = 512 * 1024
+        private const val SCHEMA_VERSION = 2
+        private const val MAX_JSON_BYTES = 2 * 1024 * 1024
         private const val MAX_ITEMS_PER_KIND = 2_000
+        private const val MAX_READING_TITLE_CHARS = 240
         private const val MAX_SINGLE_CHECKPOINT_MILLIS = 6L * 60 * 60 * 1_000
         private const val MAX_TOTAL_MILLIS = 100L * 365 * 24 * 60 * 60 * 1_000
         private val ID_PATTERN = Regex("[A-Za-z0-9._:-]{1,256}")

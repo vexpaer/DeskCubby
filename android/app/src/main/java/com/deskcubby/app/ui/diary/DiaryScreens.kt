@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -115,6 +116,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -1718,7 +1720,7 @@ private val markdownMediaPattern = Regex(
 private val markdownMediaLinePattern = Regex("""^\s*${markdownMediaPattern.pattern}\s*$""")
 
 @Composable
-private fun MarkdownSourceEditor(
+internal fun MarkdownSourceEditor(
     value: TextFieldValue,
     onValueChange: (TextFieldValue) -> Unit,
     onMoveMediaLine: (fromIndex: Int, toIndex: Int) -> Unit,
@@ -1783,7 +1785,11 @@ private fun MarkdownSourceEditor(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = viewportHeight)
-                            .padding(start = 16.dp, top = topPadding, end = 88.dp, bottom = 40.dp),
+                            // Normal prose uses the full writing width. Media-only rows receive an
+                            // opaque trailing control overlay below, so their delete/drag actions
+                            // no longer force an editor-wide right gutter.
+                            .padding(start = 16.dp, top = topPadding, end = 16.dp, bottom = 40.dp)
+                            .testTag(MARKDOWN_SOURCE_TEXT_FIELD_TEST_TAG),
                         textStyle = MaterialTheme.typography.bodyLarge.copy(
                             color = MaterialTheme.colorScheme.onSurface,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
@@ -1795,7 +1801,7 @@ private fun MarkdownSourceEditor(
                     if (value.text.isEmpty()) {
                         Text(
                             text = tr("开始记录…", "Start writing…"),
-                            modifier = Modifier.padding(start = 16.dp, top = topPadding, end = 88.dp),
+                            modifier = Modifier.padding(start = 16.dp, top = topPadding, end = 16.dp),
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
@@ -1876,49 +1882,58 @@ private fun MarkdownSourceEditor(
                                 } else {
                                     Spacer(Modifier.weight(1f))
                                 }
-                                IconButton(
-                                    modifier = Modifier.size(handleSize),
-                                    enabled = !isDragging,
-                                    onClick = { onDeleteMedia(mediaLine.target) },
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .background(MaterialTheme.colorScheme.surface),
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Icon(
-                                        Icons.Outlined.Delete,
-                                        contentDescription = tr("删除媒体", "Delete media"),
-                                        modifier = Modifier.size(20.dp),
+                                    IconButton(
+                                        modifier = Modifier.size(handleSize),
+                                        enabled = !isDragging,
+                                        onClick = { onDeleteMedia(mediaLine.target) },
+                                    ) {
+                                        Icon(
+                                            Icons.Outlined.Delete,
+                                            contentDescription = tr("删除媒体", "Delete media"),
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    }
+                                    FourDotDragHandle(
+                                        modifier = Modifier.size(handleSize),
+                                        translateSelf = false,
+                                        onDragStarted = {
+                                            draggingMediaLineIndex = mediaLine.index
+                                            mediaDragDistancePx = 0f
+                                            mediaDragTargetVisualLine = startVisualLine
+                                            mediaDragTargetSourceLine = mediaLine.index
+                                        },
+                                        onDragChanged = { verticalDistance ->
+                                            mediaDragDistancePx = verticalDistance
+                                            val (targetVisualLine, targetSourceLine) =
+                                                dragTarget(verticalDistance)
+                                            mediaDragTargetVisualLine = targetVisualLine
+                                            mediaDragTargetSourceLine = targetSourceLine
+                                        },
+                                        onDragCancelled = {
+                                            draggingMediaLineIndex = null
+                                            mediaDragDistancePx = 0f
+                                            mediaDragTargetVisualLine = null
+                                            mediaDragTargetSourceLine = null
+                                        },
+                                        onDragFinished = { verticalDistance ->
+                                            val (_, calculatedTargetSourceLine) =
+                                                dragTarget(verticalDistance)
+                                            val targetSourceLine = mediaDragTargetSourceLine
+                                                ?: calculatedTargetSourceLine
+                                            draggingMediaLineIndex = null
+                                            mediaDragDistancePx = 0f
+                                            mediaDragTargetVisualLine = null
+                                            mediaDragTargetSourceLine = null
+                                            onMoveMediaLine(mediaLine.index, targetSourceLine)
+                                        },
                                     )
                                 }
-                                FourDotDragHandle(
-                                    modifier = Modifier.size(handleSize),
-                                    translateSelf = false,
-                                    onDragStarted = {
-                                        draggingMediaLineIndex = mediaLine.index
-                                        mediaDragDistancePx = 0f
-                                        mediaDragTargetVisualLine = startVisualLine
-                                        mediaDragTargetSourceLine = mediaLine.index
-                                    },
-                                    onDragChanged = { verticalDistance ->
-                                        mediaDragDistancePx = verticalDistance
-                                        val (targetVisualLine, targetSourceLine) = dragTarget(verticalDistance)
-                                        mediaDragTargetVisualLine = targetVisualLine
-                                        mediaDragTargetSourceLine = targetSourceLine
-                                    },
-                                    onDragCancelled = {
-                                        draggingMediaLineIndex = null
-                                        mediaDragDistancePx = 0f
-                                        mediaDragTargetVisualLine = null
-                                        mediaDragTargetSourceLine = null
-                                    },
-                                    onDragFinished = { verticalDistance ->
-                                        val (_, calculatedTargetSourceLine) = dragTarget(verticalDistance)
-                                        val targetSourceLine = mediaDragTargetSourceLine
-                                            ?: calculatedTargetSourceLine
-                                        draggingMediaLineIndex = null
-                                        mediaDragDistancePx = 0f
-                                        mediaDragTargetVisualLine = null
-                                        mediaDragTargetSourceLine = null
-                                        onMoveMediaLine(mediaLine.index, targetSourceLine)
-                                    },
-                                )
                             }
                         }
 
@@ -1968,6 +1983,8 @@ private fun findMediaSourceLines(source: String): List<MediaSourceLine> = buildL
         startOffset += line.length + 1
     }
 }
+
+internal const val MARKDOWN_SOURCE_TEXT_FIELD_TEST_TAG = "markdown_source_text_field"
 
 @Composable
 private fun TextInputDialog(

@@ -491,12 +491,18 @@ private fun ReadingStatisticsPage(
             item {
                 SectionHeading(
                     tr("书籍对比", "Book comparison"),
-                    tr("按累计前台阅读时长排序。已从书架移除的书仍保留合并后的历史时长。", "Ranked by foreground reading time. Removed books retain their combined history."),
+                    tr(
+                        "按累计前台阅读时长排序。书籍移出书架后，已记录的书名和历史时长仍会保留。",
+                        "Ranked by foreground reading time. Recorded titles and history remain after books leave the shelf.",
+                    ),
                 )
             }
             items(state.reading, key = EngagementStatisticsItem::id) { item ->
                 RankedBarRow(
-                    label = item.title ?: tr("已移除的书籍", "Removed book"),
+                    label = item.title ?: tr(
+                        "旧版未记录书名",
+                        "Title not recorded by earlier version",
+                    ),
                     value = localizedDuration(item.totalMillis),
                     fraction = item.totalMillis.toDouble() /
                         state.reading.first().totalMillis.coerceAtLeast(1L).toDouble(),

@@ -28,7 +28,11 @@ class EngagementTimeRepositoryTest {
             repository.begin(EngagementKind.GAME, "minesweeper")
             delay(20)
             repository.end(EngagementKind.GAME, "minesweeper")
-            repository.begin(EngagementKind.READING, "book-id")
+            repository.begin(
+                EngagementKind.READING,
+                "book-id",
+                readingTitle = "Persistent Book",
+            )
             delay(20)
             repository.end(EngagementKind.READING, "book-id")
 
@@ -42,13 +46,18 @@ class EngagementTimeRepositoryTest {
                 EngagementTimeRepository.FILE_NAME,
             )
             val root = JSONObject(stored.readText(Charsets.UTF_8))
-            assertEquals(1, root.getInt("schemaVersion"))
+            assertEquals(2, root.getInt("schemaVersion"))
             assertEquals(gameMillis, root.getJSONObject("gameTotalsMillis").getLong("minesweeper"))
             assertEquals(readingMillis, root.getJSONObject("readingTotalsMillis").getLong("book-id"))
+            assertEquals(
+                "Persistent Book",
+                root.getJSONObject("readingTitles").getString("book-id"),
+            )
 
             val reloaded = EngagementTimeRepository(isolatedContext)
             assertEquals(gameMillis, reloaded.snapshot.value.total(EngagementKind.GAME, "minesweeper"))
             assertEquals(readingMillis, reloaded.snapshot.value.total(EngagementKind.READING, "book-id"))
+            assertEquals("Persistent Book", reloaded.snapshot.value.readingTitles["book-id"])
         } finally {
             isolatedFiles.deleteRecursively()
         }
@@ -78,6 +87,47 @@ class EngagementTimeRepositoryTest {
 
             val total = repository.snapshot.value.total(EngagementKind.GAME, "spider")
             assertTrue(total > afterFirstCommit)
+        } finally {
+            isolatedFiles.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun schemaOneDurationsUpgradeWithoutLossAndRecoverCurrentShelfTitle() = runBlocking {
+        val application = ApplicationProvider.getApplicationContext<Context>()
+        val isolatedFiles = File(application.cacheDir, "engagement-v1-${UUID.randomUUID()}")
+        val isolatedContext = object : ContextWrapper(application) {
+            override fun getFilesDir(): File = isolatedFiles
+        }
+        try {
+            val directory = File(isolatedFiles, EngagementTimeRepository.DIRECTORY_NAME)
+            directory.mkdirs()
+            val stored = File(directory, EngagementTimeRepository.FILE_NAME)
+            stored.writeText(
+                JSONObject()
+                    .put("schemaVersion", 1)
+                    .put("gameTotalsMillis", JSONObject().put("spider", 42_000L))
+                    .put("readingTotalsMillis", JSONObject().put("legacy-book", 84_000L))
+                    .toString(),
+                Charsets.UTF_8,
+            )
+
+            val repository = EngagementTimeRepository(isolatedContext)
+            assertEquals(84_000L, repository.snapshot.value.readingTotalsMillis["legacy-book"])
+            assertTrue(repository.snapshot.value.readingTitles.isEmpty())
+
+            repository.rememberReadingTitles(mapOf("legacy-book" to "Recovered Title"))
+
+            val upgraded = JSONObject(stored.readText(Charsets.UTF_8))
+            assertEquals(2, upgraded.getInt("schemaVersion"))
+            assertEquals(
+                84_000L,
+                upgraded.getJSONObject("readingTotalsMillis").getLong("legacy-book"),
+            )
+            assertEquals(
+                "Recovered Title",
+                upgraded.getJSONObject("readingTitles").getString("legacy-book"),
+            )
         } finally {
             isolatedFiles.deleteRecursively()
         }

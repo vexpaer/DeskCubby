@@ -106,7 +106,7 @@ internal fun deriveStatisticsHubState(
             .map { (bookId, totalMillis) ->
                 EngagementStatisticsItem(
                     id = bookId,
-                    title = titlesByBookId[bookId],
+                    title = titlesByBookId[bookId] ?: engagement.readingTitles[bookId],
                     totalMillis = totalMillis.coerceAtLeast(0L),
                 )
             }

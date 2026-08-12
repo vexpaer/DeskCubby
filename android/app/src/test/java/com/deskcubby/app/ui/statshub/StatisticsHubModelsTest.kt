@@ -122,6 +122,7 @@ class StatisticsHubModelsTest {
         val engagement = EngagementTimeSnapshot(
             gameTotalsMillis = mapOf("minesweeper" to 120_000L),
             readingTotalsMillis = mapOf("book-1" to 60_000L, "removed" to 30_000L),
+            readingTitles = mapOf("removed" to "Archived Book"),
         )
 
         val result = deriveStatisticsHubState(
@@ -141,7 +142,7 @@ class StatisticsHubModelsTest {
 
         assertEquals(90_000L, result.totalReadingMillis)
         assertEquals("A Book", result.reading.first { it.id == "book-1" }.title)
-        assertNull(result.reading.first { it.id == "removed" }.title)
+        assertEquals("Archived Book", result.reading.first { it.id == "removed" }.title)
         val mines = result.games.first { it.gameId == "minesweeper" }
         assertEquals(120_000L, mines.totalPlayMillis)
         assertEquals(42L, mines.highScore)

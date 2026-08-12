@@ -47,7 +47,14 @@ class ReaderViewModel @Inject constructor(
     init {
         // ReaderRepository deliberately avoids constructor-time disk I/O. Loading here keeps the
         // first frame responsive while every later mutation is serialized behind the same mutex.
-        viewModelScope.launch { repository.initialize() }
+        viewModelScope.launch {
+            repository.initialize()
+            runCatching {
+                engagementTimeRepository.rememberReadingTitles(
+                    repository.state.value.books.associate { it.id to it.title },
+                )
+            }
+        }
     }
 
     fun import(uri: Uri) = viewModelScope.launch {
@@ -85,8 +92,12 @@ class ReaderViewModel @Inject constructor(
     }
 
     fun remove(bookId: String) = viewModelScope.launch {
+        val book = repository.state.value.books.firstOrNull { it.id == bookId }
         if (activeBookId() == bookId) close()
         try {
+            book?.let {
+                engagementTimeRepository.rememberReadingTitles(mapOf(it.id to it.title))
+            }
             repository.remove(bookId)
         } catch (error: CancellationException) {
             throw error
@@ -155,8 +166,12 @@ class ReaderViewModel @Inject constructor(
     suspend fun renderPdfPage(book: ReaderBook, pageIndex: Int, widthPx: Int): Bitmap =
         repository.renderPdfPage(book, pageIndex, widthPx)
 
-    fun beginReading(bookId: String) {
-        engagementTimeRepository.begin(EngagementKind.READING, bookId)
+    fun beginReading(bookId: String, title: String) {
+        engagementTimeRepository.begin(
+            kind = EngagementKind.READING,
+            id = bookId,
+            readingTitle = title,
+        )
     }
 
     fun checkpointReading(bookId: String) = viewModelScope.launch {

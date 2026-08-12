@@ -120,6 +120,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
@@ -647,7 +648,7 @@ private fun ReaderBookPage(
     }
     ReaderOrientationEffect(activity, preferences.orientation)
     ReaderSystemBarsEffect(activity, hideSystemBars = preferences.immersiveMode && !controlsVisible)
-    ReaderTimingEffect(book.id, viewModel)
+    ReaderTimingEffect(book.id, book.title, viewModel)
 
     LaunchedEffect(preferences.immersiveMode) {
         controlsVisible = !preferences.immersiveMode
@@ -711,18 +712,14 @@ private fun ReaderBookPage(
             )
         },
     ) {
-        Scaffold(
-            containerColor = background,
-            contentColor = foreground,
-            contentWindowInsets = if (showReaderControls) {
-                WindowInsets.safeDrawing
-            } else {
-                WindowInsets(0, 0, 0, 0)
-            },
-            snackbarHost = { SnackbarHost(bookSnackbar) },
+        ReaderOverlayScaffold(
+            background = background,
+            foreground = foreground,
+            showReaderControls = showReaderControls,
+            controlsOverlayContent = preferences.immersiveMode,
+            snackbarHostState = bookSnackbar,
             topBar = {
-                if (showReaderControls) {
-                    Column(Modifier.background(background)) {
+                Column(Modifier.background(background)) {
                         TopAppBar(
                             title = {
                                 Text(book.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -785,10 +782,9 @@ private fun ReaderBookPage(
                                 },
                             )
                         }
-                    }
                 }
             },
-        ) { inner ->
+        ) {
             Box(
                 Modifier
                     .fillMaxSize()
@@ -835,7 +831,6 @@ private fun ReaderBookPage(
                         background = background,
                         foreground = foreground,
                         searchQuery = searchQuery,
-                        contentPadding = inner,
                         showPageIndicator = showReaderControls,
                         requestedPage = requestedPage,
                         onRequestedPageConsumed = { requestedPage = null },
@@ -856,7 +851,6 @@ private fun ReaderBookPage(
                         useEnhancedRenderer = pdfRendererMode == ReaderPdfRendererMode.ENHANCED,
                         background = background,
                         foreground = foreground,
-                        contentPadding = inner,
                         showPageIndicator = showReaderControls,
                         requestedPage = requestedPage,
                         onRequestedPageConsumed = { requestedPage = null },
@@ -919,6 +913,45 @@ private fun ReaderBookPage(
         )
     }
 }
+
+/**
+ * Keeps the reader's content plane fixed while transient chrome is composed above it.
+ * Scaffold reports top-bar padding to its body, but the reader intentionally ignores that value:
+ * the toolbar/search row occludes the top of the page instead of moving its center.
+ */
+@Composable
+internal fun ReaderOverlayScaffold(
+    background: Color,
+    foreground: Color,
+    showReaderControls: Boolean,
+    controlsOverlayContent: Boolean,
+    snackbarHostState: SnackbarHostState,
+    topBar: @Composable () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Scaffold(
+        containerColor = background,
+        contentColor = foreground,
+        contentWindowInsets = WindowInsets.safeDrawing,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        topBar = {
+            if (showReaderControls) topBar()
+        },
+    ) { inner ->
+        Box(
+            Modifier
+                .fillMaxSize()
+                .then(
+                    if (controlsOverlayContent) Modifier else Modifier.padding(inner),
+                )
+                .testTag(READER_CONTENT_PLANE_TEST_TAG),
+        ) {
+            content()
+        }
+    }
+}
+
+internal const val READER_CONTENT_PLANE_TEST_TAG = "reader_content_plane"
 
 @Composable
 private fun ReaderCover(
@@ -1085,7 +1118,6 @@ private fun TextReader(
     background: Color,
     foreground: Color,
     searchQuery: String,
-    contentPadding: PaddingValues,
     showPageIndicator: Boolean,
     requestedPage: Int?,
     onRequestedPageConsumed: () -> Unit,
@@ -1156,7 +1188,7 @@ private fun TextReader(
             )
         }
     }
-    Box(Modifier.fillMaxSize().padding(contentPadding).background(background)) {
+    Box(Modifier.fillMaxSize().background(background)) {
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
@@ -1390,7 +1422,6 @@ private fun PdfReader(
     useEnhancedRenderer: Boolean,
     background: Color,
     foreground: Color,
-    contentPadding: PaddingValues,
     showPageIndicator: Boolean,
     requestedPage: Int?,
     onRequestedPageConsumed: () -> Unit,
@@ -1445,7 +1476,7 @@ private fun PdfReader(
             )
         }
     }
-    Box(Modifier.fillMaxSize().padding(contentPadding).background(background)) {
+    Box(Modifier.fillMaxSize().background(background)) {
         if (useEnhancedRenderer) {
             PdfiumPdfReader(
                 uri = android.net.Uri.parse(book.uri),
@@ -2039,19 +2070,19 @@ private fun SettingSlider(
 }
 
 @Composable
-private fun ReaderTimingEffect(bookId: String, viewModel: ReaderViewModel) {
+private fun ReaderTimingEffect(bookId: String, title: String, viewModel: ReaderViewModel) {
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, bookId) {
+    DisposableEffect(lifecycleOwner, bookId, title) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> viewModel.beginReading(bookId)
+                Lifecycle.Event.ON_RESUME -> viewModel.beginReading(bookId, title)
                 Lifecycle.Event.ON_PAUSE -> viewModel.endReading(bookId)
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-            viewModel.beginReading(bookId)
+            viewModel.beginReading(bookId, title)
         }
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
