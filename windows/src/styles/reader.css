@@ -219,6 +219,24 @@
   overflow: auto;
 }
 
+.reader-settings-overlay {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-2);
+  background: rgb(12 12 16 / 38%);
+  backdrop-filter: blur(5px);
+}
+
+.reader-settings-overlay > .reader-settings {
+  width: min(52rem, 100%);
+  height: 100%;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 70px rgb(0 0 0 / 34%);
+}
+
 .reader-settings-header {
   position: sticky;
   z-index: 2;
@@ -291,6 +309,34 @@
   width: 100%;
   min-height: 2.45rem;
   padding: 0.2rem;
+}
+
+.reader-color-preview {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 0.35rem;
+  margin-top: var(--space-3);
+  border: 1px solid rgb(0 0 0 / 12%);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  font-family: ui-serif, Georgia, "Noto Serif SC", serif;
+  line-height: 1.65;
+}
+
+.reader-color-preview p,
+.reader-color-preview small {
+  margin: 0;
+  color: inherit;
+}
+
+.reader-color-preview small {
+  opacity: 0.72;
+}
+
+.reader-contrast-warning {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--warning, var(--secondary));
 }
 
 .reader-toggle-setting {
@@ -537,7 +583,7 @@
   overflow: auto;
   border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
   border-radius: var(--radius-lg);
-  padding: clamp(1rem, 2.5vw, 2.25rem);
+  padding: var(--reader-page-padding, 36px);
   background: var(--reader-background, #f4f0e6);
   color: var(--reader-foreground, #29261f);
   box-shadow: inset 0 1px 5px rgb(0 0 0 / 7%);
@@ -549,6 +595,7 @@
   font-family: var(--reader-font-family, ui-serif, Georgia, serif);
   font-size: var(--reader-font-size, 19px);
   line-height: var(--reader-line-height, 1.6);
+  letter-spacing: var(--reader-letter-spacing, 0);
   overflow-wrap: anywhere;
   text-align: var(--reader-text-align, start);
   text-justify: inter-ideograph;
@@ -557,6 +604,8 @@
 
 .reader-text-page p {
   margin-block-start: 0;
+  color: inherit;
+  text-indent: var(--reader-first-line-indent, 0);
   white-space: pre-wrap;
 }
 
@@ -590,23 +639,178 @@
   min-height: 0;
 }
 
-.reader-pdf-canvas-wrap {
+.reader-pdf-viewer > .react-pdf__Document,
+.reader-pdf-layout {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.reader-pdf-layout {
   position: relative;
-  display: flex;
-  justify-content: center;
+}
+
+.reader-pdf-scroll {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: var(--space-2);
+  overscroll-behavior: contain;
+  padding: var(--reader-pdf-page-padding, 36px);
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
   background: var(--reader-background, var(--surface-muted));
 }
 
-.reader-pdf-canvas-wrap canvas {
+.reader-pdf-scroll.mode-singlePage {
+  display: grid;
+  place-items: center;
+}
+
+.reader-pdf-virtual-stack {
+  width: max-content;
+  min-width: 100%;
+}
+
+.reader-pdf-page-slot {
+  position: relative;
+  display: grid;
+  min-width: 100%;
+  place-items: start center;
+  margin-block-end: var(--reader-pdf-page-gap, 18px);
+}
+
+.reader-pdf-page-slot .react-pdf__Page {
+  position: relative;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 20%);
+}
+
+.reader-pdf-page-slot canvas {
   display: block;
-  flex: 0 0 auto;
-  margin: auto;
-  background: var(--reader-background, #fff);
-  box-shadow: var(--panel-shadow);
+}
+
+.reader-pdf-page-slot .react-pdf__Page__textContent {
+  cursor: text;
+}
+
+.reader-pdf-page-slot .react-pdf__Page__textContent mark {
+  border-radius: 0.1em;
+  background: rgb(255 214 74 / 50%);
+  color: transparent;
+}
+
+.reader-pdf-page-slot .react-pdf__Page__annotations a:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.reader-pdf-page-badge {
+  position: absolute;
+  right: max(calc((100% - min(100%, 64rem)) / 2), var(--space-2));
+  bottom: var(--space-2);
+  border-radius: var(--radius-round);
+  padding: 0.15rem 0.45rem;
+  background: rgb(20 20 24 / 66%);
+  color: #fff;
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.reader-pdf-page-placeholder {
+  display: grid;
+  width: min(30rem, 75vw);
+  min-height: 18rem;
+  place-items: center;
+  background: #fff;
+  color: #34343a;
+}
+
+.reader-pdf-outline {
+  position: absolute;
+  z-index: 8;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  left: var(--space-2);
+  width: min(21rem, calc(100% - var(--space-4)));
+  overflow: auto;
+  padding: var(--space-3);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 24%);
+}
+
+.reader-pdf-outline-header {
+  position: sticky;
+  z-index: 2;
+  top: calc(-1 * var(--space-3));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-3)) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-3);
+  background: var(--surface);
+}
+
+.reader-pdf-outline-header small {
+  color: var(--text-muted);
+}
+
+.reader-pdf-outline ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 0 var(--space-3);
+  list-style: none;
+}
+
+.reader-pdf-outline > .react-pdf__Outline > ul {
+  padding-left: 0;
+}
+
+.reader-pdf-outline a {
+  display: block;
+  border-radius: var(--radius-xs);
+  padding: 0.42rem 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-decoration: none;
+}
+
+.reader-pdf-outline a:hover,
+.reader-pdf-outline a:focus-visible {
+  background: var(--surface-selected);
+  color: var(--text);
+}
+
+.reader-pdf-password-backdrop {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: rgb(10 10 14 / 56%);
+  backdrop-filter: blur(8px);
+}
+
+.reader-pdf-password {
+  display: grid;
+  width: min(26rem, 100%);
+  gap: var(--space-3);
+}
+
+.reader-pdf-password h2,
+.reader-pdf-password p {
+  margin: 0;
+}
+
+.reader-pdf-password .row {
+  justify-content: flex-end;
 }
 
 .reader-pdf-state {
@@ -622,22 +826,13 @@
 }
 
 .reader-pdf-state .spinner,
-.reader-pdf-page-loading .spinner {
+.reader-pdf-page-placeholder .spinner {
   width: 1.6rem;
   height: 1.6rem;
   border: 2px solid var(--border);
   border-top-color: var(--primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
-}
-
-.reader-pdf-page-loading {
-  position: absolute;
-  z-index: 2;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: color-mix(in srgb, var(--reader-background, var(--surface-muted)) 55%, transparent);
 }
 
 .reader-focus-mode .reader-content-column {

@@ -13,6 +13,7 @@ import {
   Minus,
   Plus,
   RotateCcw,
+  RotateCw,
   Save,
   Search,
   Settings2,
@@ -39,18 +40,24 @@ import {
 } from "../components";
 import { DeskCubbyIpcError, readableError, tr } from "../lib/ipc";
 import {
+  argbToCss,
+  automaticReaderForeground,
+  cssToArgb,
+  readerPalette,
+} from "../lib/readerAppearance";
+import {
   readerApi,
-  type ReaderBookV2,
-  type ReaderDocumentV2,
-  type ReaderLibraryV2,
-  type ReaderPreferencesV2,
-  type ReaderTextDocumentV2,
+  type ReaderBookV3,
+  type ReaderDocumentV3,
+  type ReaderLibraryV3,
+  type ReaderPreferencesV3,
+  type ReaderTextDocumentV3,
 } from "../lib/readerApi";
 import { useAppStore } from "../store/appStore";
 import "../styles/reader.css";
-import ReaderPdfViewer from "./readerPdfViewer";
+import ReaderPdfViewer, { type ReaderPdfSearchMatch } from "./readerPdfViewer";
 
-const DEFAULT_READER_PREFERENCES: ReaderPreferencesV2 = {
+const DEFAULT_READER_PREFERENCES: ReaderPreferencesV3 = {
   background: "paper",
   customBackgroundArgb: -724762,
   customForegroundArgb: null,
@@ -60,7 +67,13 @@ const DEFAULT_READER_PREFERENCES: ReaderPreferencesV2 = {
   paragraphSpacingPx: 10,
   contentWidthPx: 960,
   textAlignment: "start",
+  firstLineIndentEm: 0,
+  letterSpacingPx: 0,
+  pagePaddingPx: 36,
   pdfZoomPercent: 100,
+  pdfColorMode: "original",
+  pdfScrollMode: "continuous",
+  pdfPageGapPx: 18,
   immersiveMode: false,
   showProgressPercentage: false,
   libraryLayout: "list",
@@ -81,7 +94,7 @@ interface ReaderTextMatch {
 }
 
 function findReaderTextMatches(
-  document: ReaderTextDocumentV2,
+  document: ReaderTextDocumentV3,
   rawQuery: string,
 ): ReaderTextMatch[] {
   const query = [...rawQuery.trim()].slice(0, MAX_READER_SEARCH_QUERY_CHARS).join("");
@@ -133,53 +146,7 @@ function safeReaderPdfUrl(assetUrl: string, bookId: string): string | null {
   }
 }
 
-function argbToCss(argb: number): string {
-  const rgb = (argb >>> 0) & 0x00ff_ffff;
-  return `#${rgb.toString(16).padStart(6, "0")}`;
-}
-
-function cssToArgb(value: string): number {
-  const rgb = Number.parseInt(value.replace(/^#/, ""), 16);
-  return (0xff00_0000 | (Number.isFinite(rgb) ? rgb : 0xf4f0e6)) | 0;
-}
-
-function automaticReaderForeground(preferences: ReaderPreferencesV2): string {
-  const preset: Record<ReaderPreferencesV2["background"], string> = {
-    white: "#1d1d1f",
-    paper: "#29261f",
-    sepia: "#382d20",
-    green: "#203126",
-    night: "#e6e4de",
-    custom: "#1d1d1f",
-  };
-  if (preferences.background !== "custom") return preset[preferences.background];
-  const color = (preferences.customBackgroundArgb >>> 0) & 0x00ff_ffff;
-  const red = (color >> 16) & 0xff;
-  const green = (color >> 8) & 0xff;
-  const blue = color & 0xff;
-  const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
-  return luminance > 0.52 ? "#171717" : "#f4f4f2";
-}
-
-function readerBackgroundCss(preferences: ReaderPreferencesV2): string {
-  const preset: Record<ReaderPreferencesV2["background"], string> = {
-    white: "#ffffff",
-    paper: "#f4f0e6",
-    sepia: "#ead9b9",
-    green: "#dce8d7",
-    night: "#15171c",
-    custom: argbToCss(preferences.customBackgroundArgb),
-  };
-  return preset[preferences.background];
-}
-
-function readerForegroundCss(preferences: ReaderPreferencesV2): string {
-  return preferences.customForegroundArgb === null
-    ? automaticReaderForeground(preferences)
-    : argbToCss(preferences.customForegroundArgb);
-}
-
-function readerBookProgressPercent(book: ReaderBookV2): number {
+function readerBookProgressPercent(book: ReaderBookV3): number {
   if (book.totalPages <= 1) return 0;
   const page = book.bookType === "pdf" ? book.pdfPageIndex : book.textPageIndex;
   return Math.round((Math.min(Math.max(page, 0), book.totalPages - 1) / (book.totalPages - 1)) * 100);
@@ -200,9 +167,9 @@ function formatReadingTime(value: string, language: "zh-CN" | "en"): string {
 }
 
 function replaceBook(
-  library: ReaderLibraryV2 | null,
-  book: ReaderBookV2,
-): ReaderLibraryV2 | null {
+  library: ReaderLibraryV3 | null,
+  book: ReaderBookV3,
+): ReaderLibraryV3 | null {
   if (!library) return library;
   const books = library.books.some((candidate) => candidate.id === book.id)
     ? library.books.map((candidate) => (candidate.id === book.id ? book : candidate))
@@ -253,9 +220,9 @@ function ReaderBookCard({
   onOpen,
   onRemove,
 }: {
-  book: ReaderBookV2;
+  book: ReaderBookV3;
   language: "zh-CN" | "en";
-  layout: ReaderPreferencesV2["libraryLayout"];
+  layout: ReaderPreferencesV3["libraryLayout"];
   showGridBookTitles: boolean;
   showProgressPercentage: boolean;
   busy: boolean;
@@ -316,7 +283,7 @@ function HighlightedPage({
   currentMatchIndex,
   paragraphSpacing,
 }: {
-  document: ReaderTextDocumentV2;
+  document: ReaderTextDocumentV3;
   pageIndex: number;
   matches: ReaderTextMatch[];
   currentMatchIndex: number;
@@ -385,15 +352,21 @@ function ReaderSettings({
   onClose,
 }: {
   language: "zh-CN" | "en";
-  draft: ReaderPreferencesV2;
+  draft: ReaderPreferencesV3;
   busy: boolean;
   error: string;
-  onChange: (next: ReaderPreferencesV2) => void;
+  onChange: (next: ReaderPreferencesV3) => void;
   onReset: () => void;
   onSave: () => void;
   onClose: () => void;
 }) {
   const copy = (zh: string, en: string) => tr(language, zh, en);
+  const palette = readerPalette(draft);
+  const previewFontFamily = {
+    serif: 'ui-serif, Georgia, "Noto Serif SC", serif',
+    sans: "var(--font-sans)",
+    mono: 'ui-monospace, "Cascadia Mono", Consolas, monospace',
+  }[draft.fontFamily];
   return (
     <section className="panel reader-settings" aria-labelledby="reader-settings-title">
       <div className="panel-header reader-settings-header">
@@ -410,7 +383,7 @@ function ReaderSettings({
             <Save aria-hidden="true" size={16} />
             {busy ? copy("保存中…", "Saving…") : copy("保存", "Save")}
           </button>
-          <button className="icon-button" type="button" disabled={busy} onClick={onClose} aria-label={copy("关闭设置", "Close settings")}>
+          <button autoFocus className="icon-button" type="button" disabled={busy} onClick={onClose} aria-label={copy("关闭设置", "Close settings")}>
             <X aria-hidden="true" size={18} />
           </button>
         </div>
@@ -424,7 +397,7 @@ function ReaderSettings({
               <span className="field-label">{copy("阅读背景", "Reading background")}</span>
               <select
                 value={draft.background}
-                onChange={(event) => onChange({ ...draft, background: event.target.value as ReaderPreferencesV2["background"] })}
+                onChange={(event) => onChange({ ...draft, background: event.target.value as ReaderPreferencesV3["background"] })}
               >
                 <option value="white">{copy("白色", "White")}</option>
                 <option value="paper">{copy("纸张", "Paper")}</option>
@@ -445,7 +418,7 @@ function ReaderSettings({
               </label>
             ) : null}
             <label className="field">
-              <span className="field-label">{copy("文字 / PDF 前景色", "Text / PDF foreground")}</span>
+              <span className="field-label">{copy("文字颜色", "Text color")}</span>
               <select
                 value={draft.customForegroundArgb === null ? "auto" : "custom"}
                 onChange={(event) => onChange({
@@ -470,7 +443,52 @@ function ReaderSettings({
               </label>
             ) : null}
           </div>
-          <small className="field-hint">{copy("TXT 使用所选颜色；PDF 可映射为相同的背景/前景双色，原文件不会被修改。", "TXT uses these colors. PDFs can map to the same background/foreground pair without changing the file.")}</small>
+          <div className="reader-color-preview" style={{
+            background: palette.background,
+            color: palette.foreground,
+            fontFamily: previewFontFamily,
+            fontSize: `${Math.min(draft.fontSizePx, 26)}px`,
+            lineHeight: draft.lineHeightMultiplier,
+            letterSpacing: `${draft.letterSpacingPx}px`,
+            padding: `${Math.min(draft.pagePaddingPx, 48)}px`,
+            textAlign: draft.textAlignment,
+          }}>
+            <strong>{copy("阅读效果预览", "Reading preview")}</strong>
+            <p style={{ textIndent: `${draft.firstLineIndentEm}em`, marginBlockEnd: `${draft.paragraphSpacingPx}px` }}>{copy("清晰的文字应该始终与背景保持足够对比。拖动下方排版设置会立即更新此预览。", "Readable text should always maintain enough contrast with its background. Typography controls below update this preview immediately.")}</p>
+            <small>{copy(`对比度 ${palette.contrast.toFixed(1)}:1`, `Contrast ${palette.contrast.toFixed(1)}:1`)}</small>
+          </div>
+          {palette.adjustedForContrast ? (
+            <small className="field-hint reader-contrast-warning" role="status">{copy("自定义文字色对比度过低，阅读区已自动使用安全对比色；颜色值仍会保留。", "The custom text color has insufficient contrast, so the reader uses a safe automatic color while preserving your choice.")}</small>
+          ) : null}
+        </fieldset>
+
+        <fieldset className="reader-settings-section">
+          <legend>{copy("PDF 显示", "PDF display")}</legend>
+          <div className="reader-settings-grid">
+            <label className="field">
+              <span className="field-label">{copy("页面颜色", "Page colors")}</span>
+              <select value={draft.pdfColorMode} onChange={(event) => onChange({ ...draft, pdfColorMode: event.target.value as ReaderPreferencesV3["pdfColorMode"] })}>
+                <option value="original">{copy("保留原稿（推荐）", "Original document (recommended)")}</option>
+                <option value="readingColors">{copy("阅读配色（黑白映射）", "Reader colors (monochrome mapping)")}</option>
+              </select>
+              <small className="field-hint">{copy("原稿模式保留图片和彩色图表；阅读配色只改变画面副本，不修改文件。", "Original mode preserves images and charts. Reader colors affect only the rendered copy, never the file.")}</small>
+            </label>
+            <label className="field">
+              <span className="field-label">{copy("翻页方式", "Page flow")}</span>
+              <select value={draft.pdfScrollMode} onChange={(event) => onChange({ ...draft, pdfScrollMode: event.target.value as ReaderPreferencesV3["pdfScrollMode"] })}>
+                <option value="continuous">{copy("连续纵向滚动", "Continuous vertical")}</option>
+                <option value="singlePage">{copy("单页翻页", "Single page")}</option>
+              </select>
+            </label>
+            <label className="field reader-setting-range">
+              <span className="field-label">{copy("PDF 基准缩放", "PDF base zoom")} · {draft.pdfZoomPercent}%</span>
+              <input type="range" min="50" max="300" step="10" value={draft.pdfZoomPercent} onChange={(event) => onChange({ ...draft, pdfZoomPercent: Number(event.target.value) })} />
+            </label>
+            <label className="field reader-setting-range">
+              <span className="field-label">{copy("页间距", "Page gap")} · {draft.pdfPageGapPx} px</span>
+              <input type="range" min="0" max="48" step="2" value={draft.pdfPageGapPx} onChange={(event) => onChange({ ...draft, pdfPageGapPx: Number(event.target.value) })} />
+            </label>
+          </div>
         </fieldset>
 
         <fieldset className="reader-settings-section">
@@ -478,7 +496,7 @@ function ReaderSettings({
           <div className="reader-settings-grid">
             <label className="field">
               <span className="field-label">{copy("字体", "Font family")}</span>
-              <select value={draft.fontFamily} onChange={(event) => onChange({ ...draft, fontFamily: event.target.value as ReaderPreferencesV2["fontFamily"] })}>
+              <select value={draft.fontFamily} onChange={(event) => onChange({ ...draft, fontFamily: event.target.value as ReaderPreferencesV3["fontFamily"] })}>
                 <option value="serif">{copy("衬线（适合长文）", "Serif (long-form)")}</option>
                 <option value="sans">{copy("无衬线", "Sans serif")}</option>
                 <option value="mono">{copy("等宽", "Monospace")}</option>
@@ -486,7 +504,7 @@ function ReaderSettings({
             </label>
             <label className="field">
               <span className="field-label">{copy("段落对齐", "Paragraph alignment")}</span>
-              <select value={draft.textAlignment} onChange={(event) => onChange({ ...draft, textAlignment: event.target.value as ReaderPreferencesV2["textAlignment"] })}>
+              <select value={draft.textAlignment} onChange={(event) => onChange({ ...draft, textAlignment: event.target.value as ReaderPreferencesV3["textAlignment"] })}>
                 <option value="start">{copy("自然左对齐", "Natural start")}</option>
                 <option value="justify">{copy("两端对齐", "Justified")}</option>
               </select>
@@ -507,19 +525,27 @@ function ReaderSettings({
               <span className="field-label">{copy("段距", "Paragraph spacing")} · {draft.paragraphSpacingPx.toFixed(0)} px</span>
               <input type="range" min="0" max="36" step="1" value={draft.paragraphSpacingPx} onChange={(event) => onChange({ ...draft, paragraphSpacingPx: Number(event.target.value) })} />
             </label>
+            <label className="field reader-setting-range">
+              <span className="field-label">{copy("首行缩进", "First-line indent")} · {draft.firstLineIndentEm.toFixed(1)} em</span>
+              <input type="range" min="0" max="3" step="0.25" value={draft.firstLineIndentEm} onChange={(event) => onChange({ ...draft, firstLineIndentEm: Number(event.target.value) })} />
+            </label>
+            <label className="field reader-setting-range">
+              <span className="field-label">{copy("字间距", "Letter spacing")} · {draft.letterSpacingPx.toFixed(1)} px</span>
+              <input type="range" min="-0.5" max="2" step="0.1" value={draft.letterSpacingPx} onChange={(event) => onChange({ ...draft, letterSpacingPx: Number(event.target.value) })} />
+            </label>
+            <label className="field reader-setting-range">
+              <span className="field-label">{copy("页面留白", "Page padding")} · {draft.pagePaddingPx} px</span>
+              <input type="range" min="12" max="96" step="4" value={draft.pagePaddingPx} onChange={(event) => onChange({ ...draft, pagePaddingPx: Number(event.target.value) })} />
+            </label>
           </div>
         </fieldset>
 
         <fieldset className="reader-settings-section">
           <legend>{copy("阅读与书架", "Reading and shelf")}</legend>
           <div className="reader-settings-grid">
-            <label className="field reader-setting-range">
-              <span className="field-label">{copy("PDF 基准缩放", "PDF base zoom")} · {draft.pdfZoomPercent}%</span>
-              <input type="range" min="50" max="300" step="10" value={draft.pdfZoomPercent} onChange={(event) => onChange({ ...draft, pdfZoomPercent: Number(event.target.value) })} />
-            </label>
             <label className="field">
               <span className="field-label">{copy("书架布局", "Shelf layout")}</span>
-              <select value={draft.libraryLayout} onChange={(event) => onChange({ ...draft, libraryLayout: event.target.value as ReaderPreferencesV2["libraryLayout"] })}>
+              <select value={draft.libraryLayout} onChange={(event) => onChange({ ...draft, libraryLayout: event.target.value as ReaderPreferencesV3["libraryLayout"] })}>
                 <option value="list">{copy("紧凑列表", "Compact list")}</option>
                 <option value="grid">{copy("封面网格", "Cover grid")}</option>
               </select>
@@ -546,7 +572,7 @@ function ReaderSettings({
           <div className="reader-settings-grid">
             <label className="field">
               <span className="field-label">{copy("识别方式", "Detection mode")}</span>
-              <select value={draft.chapterDetectionMode} onChange={(event) => onChange({ ...draft, chapterDetectionMode: event.target.value as ReaderPreferencesV2["chapterDetectionMode"] })}>
+              <select value={draft.chapterDetectionMode} onChange={(event) => onChange({ ...draft, chapterDetectionMode: event.target.value as ReaderPreferencesV3["chapterDetectionMode"] })}>
                 <option value="smartAndCustom">{copy("智能 + 自定义", "Smart + custom")}</option>
                 <option value="smart">{copy("仅智能", "Smart only")}</option>
                 <option value="custom">{copy("仅自定义正则", "Custom regex only")}</option>
@@ -573,8 +599,8 @@ function ReaderSettings({
 export default function ReaderPage() {
   const language = useAppStore((state) => state.appearance.language);
   const copy = useCallback((zh: string, en: string) => tr(language, zh, en), [language]);
-  const [library, setLibrary] = useState<ReaderLibraryV2 | null>(null);
-  const [activeDocument, setActiveDocument] = useState<ReaderDocumentV2 | null>(null);
+  const [library, setLibrary] = useState<ReaderLibraryV3 | null>(null);
+  const [activeDocument, setActiveDocument] = useState<ReaderDocumentV3 | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
@@ -585,11 +611,14 @@ export default function ReaderPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMatchIndex, setSearchMatchIndex] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsDraft, setSettingsDraft] = useState<ReaderPreferencesV2>(DEFAULT_READER_PREFERENCES);
+  const [settingsDraft, setSettingsDraft] = useState<ReaderPreferencesV3>(DEFAULT_READER_PREFERENCES);
   const [settingsError, setSettingsError] = useState("");
   const [settingsDiscardConfirm, setSettingsDiscardConfirm] = useState(false);
-  const [removeTarget, setRemoveTarget] = useState<ReaderBookV2 | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ReaderBookV3 | null>(null);
   const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
+  const [pdfSearchMatches, setPdfSearchMatches] = useState<ReaderPdfSearchMatch[]>([]);
+  const [pdfSearching, setPdfSearching] = useState(false);
+  const [pdfRotation, setPdfRotation] = useState(0);
   const [focusMode, setFocusMode] = useState(false);
   const progressSequence = useRef(0);
 
@@ -616,7 +645,7 @@ export default function ReaderPage() {
     void loadLibrary();
   }, [loadLibrary]);
 
-  const applyDocument = useCallback((next: ReaderDocumentV2) => {
+  const applyDocument = useCallback((next: ReaderDocumentV3) => {
     setActiveDocument(next);
     setPageIndex(
       next.kind === "txt"
@@ -624,6 +653,9 @@ export default function ReaderPage() {
         : Math.min(next.book.pdfPageIndex, MAX_PDF_PAGE_INDEX),
     );
     setPdfPageCount(null);
+    setPdfSearchMatches([]);
+    setPdfSearching(false);
+    setPdfRotation(0);
     setFocusMode(next.preferences.immersiveMode);
     setTocOpen(false);
     setSearchQuery("");
@@ -792,10 +824,11 @@ export default function ReaderPage() {
   }, [activeDocument?.book.id, searchQuery]);
 
   function moveSearchResult(direction: -1 | 1) {
-    if (!textMatches.length) return;
-    const next = (searchMatchIndex + direction + textMatches.length) % textMatches.length;
+    const matches = activeDocument?.kind === "pdf" ? pdfSearchMatches : textMatches;
+    if (!matches.length) return;
+    const next = (searchMatchIndex + direction + matches.length) % matches.length;
     setSearchMatchIndex(next);
-    setPageIndex(textMatches[next].pageIndex);
+    setPageIndex(matches[next].pageIndex);
   }
 
   async function copyCurrentPage() {
@@ -878,6 +911,8 @@ export default function ReaderPage() {
   const lastPageIndex = activeDocument?.kind === "txt"
     ? Math.max(currentTextPageCount - 1, 0)
     : pdfLastPageIndex;
+  const activeSearchMatches = activeDocument?.kind === "pdf" ? pdfSearchMatches : textMatches;
+  const activeSearchBusy = activeDocument?.kind === "pdf" && pdfSearching;
 
   function adjustPdfZoom(delta: number) {
     setActiveDocument((current) => {
@@ -904,6 +939,14 @@ export default function ReaderPage() {
     [language],
   );
   const handlePdfRendered = useCallback(() => setError(""), []);
+  const handlePdfSearchChanged = useCallback((matches: ReaderPdfSearchMatch[], searching: boolean) => {
+    setPdfSearchMatches(matches);
+    setPdfSearching(searching);
+    setSearchMatchIndex((index) => Math.min(index, Math.max(matches.length - 1, 0)));
+  }, []);
+  const handlePdfVisiblePage = useCallback((nextPageIndex: number) => {
+    setPageIndex(nextPageIndex);
+  }, []);
   useEffect(() => {
     if (!activeDocument || settingsOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -912,11 +955,9 @@ export default function ReaderPage() {
         target?.closest("input, textarea, select, button, [contenteditable='true']"),
       );
       if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "f") {
-        if (activeDocument.kind === "txt") {
-          event.preventDefault();
-          setFocusMode(false);
-          setSearchOpen(true);
-        }
+        event.preventDefault();
+        setFocusMode(false);
+        setSearchOpen(true);
         return;
       }
       if (editing) return;
@@ -947,8 +988,9 @@ export default function ReaderPage() {
   }, [activeDocument, focusMode, lastPageIndex, searchOpen, settingsOpen, tocOpen]);
 
   const activePreferences = activeDocument?.preferences ?? DEFAULT_READER_PREFERENCES;
-  const activeBackground = readerBackgroundCss(activePreferences);
-  const activeForeground = readerForegroundCss(activePreferences);
+  const activePalette = readerPalette(activePreferences);
+  const activeBackground = activePalette.background;
+  const activeForeground = activePalette.foreground;
   const readerFontFamily = {
     serif: 'ui-serif, Georgia, "Noto Serif SC", "Songti SC", serif',
     sans: 'var(--font-sans)',
@@ -960,9 +1002,24 @@ export default function ReaderPage() {
     "--reader-content-width": `${activePreferences.contentWidthPx}px`,
     "--reader-font-family": readerFontFamily,
     "--reader-text-align": activePreferences.textAlignment,
+    "--reader-first-line-indent": `${activePreferences.firstLineIndentEm}em`,
+    "--reader-letter-spacing": `${activePreferences.letterSpacingPx}px`,
+    "--reader-page-padding": `${activePreferences.pagePaddingPx}px`,
     "--reader-background": activeBackground,
     "--reader-foreground": activeForeground,
   } as CSSProperties;
+  const settingsPanel = (
+    <ReaderSettings
+      language={language}
+      draft={settingsDraft}
+      busy={busy === "settings"}
+      error={settingsError}
+      onChange={setSettingsDraft}
+      onReset={() => setSettingsDraft(DEFAULT_READER_PREFERENCES)}
+      onSave={() => void saveSettings()}
+      onClose={requestSettingsClose}
+    />
+  );
 
   if (loading && !library) {
     return (
@@ -1020,21 +1077,10 @@ export default function ReaderPage() {
       {error ? <div className="inline-error" role="alert">{error}</div> : null}
       {notice ? <div className="status-banner success" role="status">{notice}</div> : null}
 
-      {settingsOpen ? (
-        <ReaderSettings
-          language={language}
-          draft={settingsDraft}
-          busy={busy === "settings"}
-          error={settingsError}
-          onChange={setSettingsDraft}
-          onReset={() => setSettingsDraft(DEFAULT_READER_PREFERENCES)}
-          onSave={() => void saveSettings()}
-          onClose={requestSettingsClose}
-        />
-      ) : null}
+      {settingsOpen && !activeDocument ? settingsPanel : null}
 
-      {settingsOpen ? null : !activeDocument ? (
-        <>
+      {!activeDocument ? (
+        settingsOpen ? null : <>
           <aside className="panel reader-boundary-note">
             <LibraryBig aria-hidden="true" size={23} />
             <div>
@@ -1071,21 +1117,23 @@ export default function ReaderPage() {
           )}
         </>
       ) : (
-        <section className="reader-document-shell" style={readerStyle}>
-          {searchOpen && activeDocument.kind === "txt" ? (
+        <section className="reader-document-shell" style={readerStyle} inert={settingsOpen ? true : undefined} aria-hidden={settingsOpen || undefined}>
+          {searchOpen ? (
             <div className="panel reader-search-bar" role="search">
               <Search aria-hidden="true" size={18} />
               <label>
-                <span className="sr-only">{copy("搜索整本 TXT", "Search the whole TXT")}</span>
-                <input autoFocus value={searchQuery} maxLength={MAX_READER_SEARCH_QUERY_CHARS} placeholder={copy("搜索整本 TXT", "Search the whole TXT")} onChange={(event) => setSearchQuery(event.target.value)} />
+                <span className="sr-only">{copy("搜索整本书", "Search the whole book")}</span>
+                <input autoFocus value={searchQuery} maxLength={MAX_READER_SEARCH_QUERY_CHARS} placeholder={activeDocument.kind === "pdf" ? copy("搜索 PDF 文字层", "Search PDF text") : copy("搜索整本 TXT", "Search the whole TXT")} onChange={(event) => setSearchQuery(event.target.value)} />
               </label>
               <output aria-live="polite">
-                {searchQuery.trim()
-                  ? copy(`${textMatches.length ? searchMatchIndex + 1 : 0} / ${textMatches.length}`, `${textMatches.length ? searchMatchIndex + 1 : 0} / ${textMatches.length}`)
+                {activeSearchBusy
+                  ? copy("搜索中…", "Searching…")
+                  : searchQuery.trim()
+                  ? copy(`${activeSearchMatches.length ? searchMatchIndex + 1 : 0} / ${activeSearchMatches.length}`, `${activeSearchMatches.length ? searchMatchIndex + 1 : 0} / ${activeSearchMatches.length}`)
                   : copy("输入关键词", "Enter a query")}
               </output>
-              <button className="icon-button" type="button" disabled={!textMatches.length} onClick={() => moveSearchResult(-1)} aria-label={copy("上一个结果", "Previous result")}><ChevronLeft aria-hidden="true" size={18} /></button>
-              <button className="icon-button" type="button" disabled={!textMatches.length} onClick={() => moveSearchResult(1)} aria-label={copy("下一个结果", "Next result")}><ChevronRight aria-hidden="true" size={18} /></button>
+              <button className="icon-button" type="button" disabled={!activeSearchMatches.length} onClick={() => moveSearchResult(-1)} aria-label={copy("上一个结果", "Previous result")}><ChevronLeft aria-hidden="true" size={18} /></button>
+              <button className="icon-button" type="button" disabled={!activeSearchMatches.length} onClick={() => moveSearchResult(1)} aria-label={copy("下一个结果", "Next result")}><ChevronRight aria-hidden="true" size={18} /></button>
               <button className="icon-button" type="button" onClick={() => setSearchOpen(false)} aria-label={copy("关闭搜索", "Close search")}><X aria-hidden="true" size={18} /></button>
             </div>
           ) : null}
@@ -1116,12 +1164,8 @@ export default function ReaderPage() {
                 <div className="reader-toolbar-leading">
                   <button className="icon-button" type="button" disabled={!!busy || settingsOpen} onClick={() => void closeBook()} aria-label={copy("返回书架", "Back to shelf")} title={copy("返回书架", "Back to shelf")}><ArrowLeft aria-hidden="true" size={18} /></button>
                   <h1 title={activeDocument.book.title}>{activeDocument.book.title}</h1>
-                  {activeDocument.kind === "txt" ? (
-                    <>
-                      <button className={`icon-button${tocOpen ? " is-active" : ""}`} type="button" aria-pressed={tocOpen} onClick={() => { setFocusMode(false); setTocOpen((open) => !open); }} aria-label={tocOpen ? copy("收起目录", "Hide contents") : copy("显示目录", "Show contents")} title={copy("目录", "Contents")}><List aria-hidden="true" size={18} /></button>
-                      <button className={`icon-button${searchOpen ? " is-active" : ""}`} type="button" aria-pressed={searchOpen} onClick={() => { setFocusMode(false); setSearchOpen((open) => !open); }} aria-label={copy("全文搜索", "Full-text search")} title={`${copy("全文搜索", "Full-text search")} · Ctrl+F`}><Search aria-hidden="true" size={18} /></button>
-                    </>
-                  ) : null}
+                  <button className={`icon-button${tocOpen ? " is-active" : ""}`} type="button" aria-pressed={tocOpen} onClick={() => { setFocusMode(false); setTocOpen((open) => !open); }} aria-label={tocOpen ? copy("收起目录", "Hide contents") : copy("显示目录", "Show contents")} title={copy("目录", "Contents")}><List aria-hidden="true" size={18} /></button>
+                  <button className={`icon-button${searchOpen ? " is-active" : ""}`} type="button" aria-pressed={searchOpen} onClick={() => { setFocusMode(false); setSearchOpen((open) => !open); }} aria-label={copy("全文搜索", "Full-text search")} title={`${copy("全文搜索", "Full-text search")} · Ctrl+F`}><Search aria-hidden="true" size={18} /></button>
                 </div>
 
                 <div className="reader-toolbar-pager">
@@ -1150,11 +1194,14 @@ export default function ReaderPage() {
                   {activeDocument.kind === "txt" ? (
                     <button className="icon-button" type="button" onClick={() => void copyCurrentPage()} aria-label={copy("复制当前页", "Copy page")} title={copy("复制当前页", "Copy page")}><Clipboard aria-hidden="true" size={17} /></button>
                   ) : (
-                    <div className="reader-pdf-zoom-controls" aria-label={copy("PDF 临时缩放", "Temporary PDF zoom")}>
-                      <button className="icon-button" type="button" disabled={activeDocument.preferences.pdfZoomPercent <= 50} onClick={() => adjustPdfZoom(-10)} aria-label={copy("缩小 PDF", "Zoom PDF out")}><Minus aria-hidden="true" size={17} /></button>
-                      <output>{activeDocument.preferences.pdfZoomPercent}%</output>
-                      <button className="icon-button" type="button" disabled={activeDocument.preferences.pdfZoomPercent >= 300} onClick={() => adjustPdfZoom(10)} aria-label={copy("放大 PDF", "Zoom PDF in")}><Plus aria-hidden="true" size={17} /></button>
-                    </div>
+                    <>
+                      <div className="reader-pdf-zoom-controls" aria-label={copy("PDF 临时缩放", "Temporary PDF zoom")}>
+                        <button className="icon-button" type="button" disabled={activeDocument.preferences.pdfZoomPercent <= 50} onClick={() => adjustPdfZoom(-10)} aria-label={copy("缩小 PDF", "Zoom PDF out")}><Minus aria-hidden="true" size={17} /></button>
+                        <output>{activeDocument.preferences.pdfZoomPercent}%</output>
+                        <button className="icon-button" type="button" disabled={activeDocument.preferences.pdfZoomPercent >= 300} onClick={() => adjustPdfZoom(10)} aria-label={copy("放大 PDF", "Zoom PDF in")}><Plus aria-hidden="true" size={17} /></button>
+                      </div>
+                      <button className="icon-button" type="button" onClick={() => setPdfRotation((value) => (value + 90) % 360)} aria-label={copy("顺时针旋转 PDF", "Rotate PDF clockwise")} title={copy(`旋转 ${pdfRotation}°`, `Rotation ${pdfRotation}°`)}><RotateCw aria-hidden="true" size={17} /></button>
+                    </>
                   )}
                   <button className="icon-button" type="button" disabled={!!busy || settingsOpen} onClick={openSettings} aria-label={copy("阅读设置", "Reader settings")} title={copy("阅读设置", "Reader settings")}><Settings2 aria-hidden="true" size={18} /></button>
                   <button className={`icon-button${focusMode ? " is-active" : ""}`} type="button" aria-pressed={focusMode} onClick={() => setFocusMode((enabled) => !enabled)} aria-label={focusMode ? copy("退出专注模式", "Exit focus mode") : copy("进入专注模式", "Enter focus mode")} title={focusMode ? copy("退出专注模式", "Exit focus mode") : copy("进入专注模式", "Enter focus mode")}>{focusMode ? <Minimize2 aria-hidden="true" size={18} /> : <Maximize2 aria-hidden="true" size={18} />}</button>
@@ -1168,13 +1215,24 @@ export default function ReaderPage() {
               ) : pdfBaseUrl ? (
                 <div className="reader-pdf-surface">
                   <ReaderPdfViewer
+                    key={activeDocument.book.id}
                     assetUrl={pdfBaseUrl}
                     pageIndex={pageIndex}
                     zoomPercent={activeDocument.preferences.pdfZoomPercent}
                     language={language}
                     background={activeBackground}
                     foreground={activeForeground}
+                    colorMode={activeDocument.preferences.pdfColorMode}
+                    scrollMode={activeDocument.preferences.pdfScrollMode}
+                    pageGapPx={activeDocument.preferences.pdfPageGapPx}
+                    pagePaddingPx={activeDocument.preferences.pagePaddingPx}
+                    rotation={pdfRotation}
+                    searchQuery={searchOpen ? searchQuery : ""}
+                    showOutline={tocOpen}
+                    onOutlineClose={() => setTocOpen(false)}
                     onPageCountChanged={handlePdfPageCount}
+                    onVisiblePageChanged={handlePdfVisiblePage}
+                    onSearchChanged={handlePdfSearchChanged}
                     onPageRendered={handlePdfRendered}
                     onRenderFailed={handlePdfRenderFailed}
                   />
@@ -1186,6 +1244,12 @@ export default function ReaderPage() {
           </div>
         </section>
       )}
+
+      {settingsOpen && activeDocument ? (
+        <div className="reader-settings-overlay" role="dialog" aria-modal="true" aria-labelledby="reader-settings-title">
+          {settingsPanel}
+        </div>
+      ) : null}
 
       <ConfirmDialog
         open={Boolean(removeTarget)}

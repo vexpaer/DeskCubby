@@ -1,30 +1,65 @@
 import { invoke } from "@tauri-apps/api/core";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { getDocument } from "pdfjs-dist";
+import type { ReactNode } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
-  ReaderDocumentV2,
-  ReaderLibraryV2,
-  ReaderPreferencesV2,
+  ReaderDocumentV3,
+  ReaderLibraryV3,
+  ReaderPreferencesV3,
 } from "../lib/readerApi";
 import { useAppStore } from "../store/appStore";
 import ReaderPage from "./ReaderPage";
 
-// jsdom has no canvas 2D context and no real worker, so pdf.js is mocked. This
-// exercises the real readerPdfViewer wiring: document load through the
-// restricted URL and ReaderPage's page-index clamp on the reported page count.
-vi.mock("pdfjs-dist", () => ({
-  GlobalWorkerOptions: {},
-  getDocument: vi.fn(),
-}));
-vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?worker", () => ({
-  default: class PdfWorkerStub {},
+const pdfMocks = vi.hoisted(() => ({
+  documentProps: vi.fn(),
+  pageProps: vi.fn(),
+  proxy: {
+    numPages: 3,
+    getPage: vi.fn(async () => ({
+      getViewport: () => ({ width: 612, height: 792 }),
+      getTextContent: vi.fn(async () => ({ items: [], styles: {} })),
+    })),
+  },
 }));
 
-const PREFERENCES: ReaderPreferencesV2 = {
+vi.mock("react-pdf", async () => {
+  const React = await import("react");
+  return {
+    pdfjs: { GlobalWorkerOptions: {} },
+    PasswordResponses: { NEED_PASSWORD: 1, INCORRECT_PASSWORD: 2 },
+    Document: ({
+      children,
+      file,
+      onLoadSuccess,
+    }: {
+      children?: ReactNode;
+      file?: unknown;
+      onLoadSuccess?: (proxy: typeof pdfMocks.proxy) => void;
+    }) => {
+      pdfMocks.documentProps({ file });
+      React.useEffect(() => onLoadSuccess?.(pdfMocks.proxy), [onLoadSuccess]);
+      return React.createElement("div", { "data-testid": "react-pdf-document" }, children);
+    },
+    Page: (props: Record<string, unknown>) => {
+      pdfMocks.pageProps(props);
+      return React.createElement(
+        "div",
+        { "data-testid": "react-pdf-page" },
+        React.createElement(
+          "a",
+          { href: "https://example.com/pdf-annotation" },
+          "PDF annotation link",
+        ),
+      );
+    },
+    Outline: () => null,
+  };
+});
+
+const PREFERENCES: ReaderPreferencesV3 = {
   background: "paper",
   customBackgroundArgb: -724762,
   customForegroundArgb: null,
@@ -34,7 +69,13 @@ const PREFERENCES: ReaderPreferencesV2 = {
   paragraphSpacingPx: 10,
   contentWidthPx: 960,
   textAlignment: "start",
+  firstLineIndentEm: 0,
+  letterSpacingPx: 0,
+  pagePaddingPx: 36,
   pdfZoomPercent: 100,
+  pdfColorMode: "original",
+  pdfScrollMode: "continuous",
+  pdfPageGapPx: 18,
   immersiveMode: false,
   showProgressPercentage: false,
   libraryLayout: "list",
@@ -45,7 +86,7 @@ const PREFERENCES: ReaderPreferencesV2 = {
 };
 
 const PDF_BOOK = {
-  dtoVersion: 2,
+  dtoVersion: 3,
   id: "22222222-2222-4222-8222-222222222222",
   title: "研究报告",
   bookType: "pdf",
@@ -58,8 +99,8 @@ const PDF_BOOK = {
   readingMillis: "0",
 } as const;
 
-const EMPTY_LIBRARY: ReaderLibraryV2 = {
-  dtoVersion: 2,
+const EMPTY_LIBRARY: ReaderLibraryV3 = {
+  dtoVersion: 3,
   books: [],
   preferences: PREFERENCES,
   totalReadingMillis: "0",
@@ -76,9 +117,8 @@ function renderReader() {
   return render(<RouterProvider router={router} />);
 }
 
-describe("ReaderPage PDF viewer integration", () => {
+describe("ReaderPage React-PDF integration", () => {
   const invokeMock = vi.mocked(invoke);
-  const getDocumentMock = vi.mocked(getDocument);
 
   beforeEach(() => {
     useAppStore.setState((state) => ({
@@ -87,17 +127,15 @@ describe("ReaderPage PDF viewer integration", () => {
       dirtyScopes: [],
     }));
     invokeMock.mockReset();
-    getDocumentMock.mockReset();
+    pdfMocks.documentProps.mockClear();
+    pdfMocks.pageProps.mockClear();
   });
 
-  it("loads the PDF through the restricted reader URL and clamps a restored page index", async () => {
+  it("loads through the restricted URL, clamps progress, and never enables PDF.js pageColors", async () => {
     const user = userEvent.setup();
-    const library: ReaderLibraryV2 = {
-      ...EMPTY_LIBRARY,
-      books: [PDF_BOOK],
-    };
-    const document: ReaderDocumentV2 = {
-      dtoVersion: 2,
+    const library: ReaderLibraryV3 = { ...EMPTY_LIBRARY, books: [PDF_BOOK] };
+    const document: ReaderDocumentV3 = {
+      dtoVersion: 3,
       book: PDF_BOOK,
       preferences: PREFERENCES,
       kind: "pdf",
@@ -107,31 +145,33 @@ describe("ReaderPage PDF viewer integration", () => {
       if (command === "get_reader_library") return library as never;
       if (command === "open_reader_book") return document as never;
       if (command === "save_reader_progress") return PDF_BOOK as never;
+      if (command === "open_external_link") return undefined as never;
       throw new Error(`Unexpected command: ${command}`);
     });
-
-    // The restored bookmark points at page 5 (pdfPageIndex 4), but the real
-    // document has only 3 pages, so the viewer reports numPages and ReaderPage
-    // must clamp the saved-page input down to 3.
-    const proxy = {
-      numPages: 3,
-      getPage: vi.fn(),
-      destroy: vi.fn(async () => undefined),
-    };
-    getDocumentMock.mockReturnValue({
-      promise: Promise.resolve(proxy),
-      destroy: vi.fn(),
-    } as never);
 
     renderReader();
     await user.click(await screen.findByRole("button", { name: "打开《研究报告》" }));
 
     const input = await screen.findByRole("spinbutton", { name: "保存页码" });
     await waitFor(() => expect(input).toHaveValue(3));
-    expect(getDocumentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: `http://reader.localhost/${PDF_BOOK.id}.pdf`,
-      }),
-    );
+    expect(pdfMocks.documentProps).toHaveBeenCalledWith({
+      file: { url: `http://reader.localhost/${PDF_BOOK.id}.pdf` },
+    });
+    await waitFor(() => expect(pdfMocks.pageProps).toHaveBeenCalled());
+    const pageProps = pdfMocks.pageProps.mock.calls.at(-1)?.[0];
+    expect(pageProps).not.toHaveProperty("pageColors");
+    expect(pageProps).toEqual(expect.objectContaining({
+      renderTextLayer: true,
+      renderAnnotationLayer: true,
+      renderForms: true,
+    }));
+
+    await user.click(screen.getAllByRole("link", { name: "PDF annotation link" })[0]);
+    expect(invokeMock).toHaveBeenCalledWith("open_external_link", {
+      request: {
+        schemaVersion: 1,
+        url: "https://example.com/pdf-annotation",
+      },
+    });
   });
 });

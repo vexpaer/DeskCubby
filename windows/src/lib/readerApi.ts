@@ -1,6 +1,6 @@
 import { invokeCommand } from "./ipc";
 
-export const READER_DTO_VERSION = 2 as const;
+export const READER_DTO_VERSION = 3 as const;
 
 export type ReaderBookType = "txt" | "pdf";
 export type ReaderBackground =
@@ -17,8 +17,10 @@ export type ReaderChapterDetectionMode =
 export type ReaderFontFamily = "serif" | "sans" | "mono";
 export type ReaderTextAlignment = "start" | "justify";
 export type ReaderLibraryLayout = "list" | "grid";
+export type ReaderPdfColorMode = "original" | "readingColors";
+export type ReaderPdfScrollMode = "continuous" | "singlePage";
 
-export interface ReaderPreferencesV2 {
+export interface ReaderPreferencesV3 {
   background: ReaderBackground;
   customBackgroundArgb: number;
   customForegroundArgb: number | null;
@@ -28,7 +30,13 @@ export interface ReaderPreferencesV2 {
   paragraphSpacingPx: number;
   contentWidthPx: number;
   textAlignment: ReaderTextAlignment;
+  firstLineIndentEm: number;
+  letterSpacingPx: number;
+  pagePaddingPx: number;
   pdfZoomPercent: number;
+  pdfColorMode: ReaderPdfColorMode;
+  pdfScrollMode: ReaderPdfScrollMode;
+  pdfPageGapPx: number;
   immersiveMode: boolean;
   showProgressPercentage: boolean;
   libraryLayout: ReaderLibraryLayout;
@@ -38,7 +46,7 @@ export interface ReaderPreferencesV2 {
   chapterHeadingMaxChars: number;
 }
 
-export interface ReaderBookV2 {
+export interface ReaderBookV3 {
   dtoVersion: typeof READER_DTO_VERSION;
   id: string;
   title: string;
@@ -52,10 +60,10 @@ export interface ReaderBookV2 {
   readingMillis: string;
 }
 
-export interface ReaderLibraryV2 {
+export interface ReaderLibraryV3 {
   dtoVersion: typeof READER_DTO_VERSION;
-  books: ReaderBookV2[];
-  preferences: ReaderPreferencesV2;
+  books: ReaderBookV3[];
+  preferences: ReaderPreferencesV3;
   totalReadingMillis: string;
 }
 
@@ -70,26 +78,26 @@ export interface ReaderChapterV1 {
   paragraphIndex: number;
 }
 
-interface ReaderDocumentBaseV2 {
+interface ReaderDocumentBaseV3 {
   dtoVersion: typeof READER_DTO_VERSION;
-  book: ReaderBookV2;
-  preferences: ReaderPreferencesV2;
+  book: ReaderBookV3;
+  preferences: ReaderPreferencesV3;
 }
 
-export interface ReaderTextDocumentV2 extends ReaderDocumentBaseV2 {
+export interface ReaderTextDocumentV3 extends ReaderDocumentBaseV3 {
   kind: "txt";
   pages: ReaderTextPageV1[];
   chapters: ReaderChapterV1[];
 }
 
-export interface ReaderPdfDocumentV2 extends ReaderDocumentBaseV2 {
+export interface ReaderPdfDocumentV3 extends ReaderDocumentBaseV3 {
   kind: "pdf";
   assetUrl: string;
 }
 
-export type ReaderDocumentV2 = ReaderTextDocumentV2 | ReaderPdfDocumentV2;
+export type ReaderDocumentV3 = ReaderTextDocumentV3 | ReaderPdfDocumentV3;
 
-export interface ReaderProgressRequestV2 {
+export interface ReaderProgressRequestV3 {
   dtoVersion: typeof READER_DTO_VERSION;
   bookId: string;
   pageIndex: number;
@@ -97,39 +105,39 @@ export interface ReaderProgressRequestV2 {
 }
 
 export const readerApi = {
-  library(): Promise<ReaderLibraryV2> {
+  library(): Promise<ReaderLibraryV3> {
     return invokeCommand("get_reader_library");
   },
 
-  chooseBook(): Promise<ReaderDocumentV2 | null> {
+  chooseBook(): Promise<ReaderDocumentV3 | null> {
     return invokeCommand("choose_reader_book");
   },
 
-  openBook(bookId: string): Promise<ReaderDocumentV2> {
+  openBook(bookId: string): Promise<ReaderDocumentV3> {
     return invokeCommand("open_reader_book", {
       request: { dtoVersion: READER_DTO_VERSION, bookId },
     });
   },
 
-  saveProgress(request: Omit<ReaderProgressRequestV2, "dtoVersion">): Promise<ReaderBookV2> {
+  saveProgress(request: Omit<ReaderProgressRequestV3, "dtoVersion">): Promise<ReaderBookV3> {
     return invokeCommand("save_reader_progress", {
       request: { ...request, dtoVersion: READER_DTO_VERSION },
     });
   },
 
-  savePreferences(preferences: ReaderPreferencesV2): Promise<ReaderLibraryV2> {
+  savePreferences(preferences: ReaderPreferencesV3): Promise<ReaderLibraryV3> {
     return invokeCommand("save_reader_preferences", {
       request: { dtoVersion: READER_DTO_VERSION, preferences },
     });
   },
 
-  removeBook(bookId: string): Promise<ReaderLibraryV2> {
+  removeBook(bookId: string): Promise<ReaderLibraryV3> {
     return invokeCommand("remove_reader_book", {
       request: { dtoVersion: READER_DTO_VERSION, bookId },
     });
   },
 
-  recordTime(bookId: string, deltaMillis: number): Promise<ReaderBookV2> {
+  recordTime(bookId: string, deltaMillis: number): Promise<ReaderBookV3> {
     return invokeCommand("record_reader_time", {
       request: { dtoVersion: READER_DTO_VERSION, bookId, deltaMillis },
     });

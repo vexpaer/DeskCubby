@@ -22,7 +22,7 @@ import { PageFrame } from "../components/PageFrame";
 import { GAME_IDS, gameApi, type GameId, type GamesSnapshotV1 } from "../lib/gameApi";
 import { HEALTH_DTO_VERSION, healthApi, type HealthSnapshotV1 } from "../lib/healthApi";
 import { diaryApi, readableError, tr, type DiaryEntry } from "../lib/ipc";
-import { readerApi, type ReaderLibraryV2 } from "../lib/readerApi";
+import { readerApi, type ReaderLibraryV3 } from "../lib/readerApi";
 import {
   PHONE_USAGE_DTO_VERSION,
   usageApi,
@@ -39,7 +39,7 @@ interface StatsData {
   diaries: DiaryEntry[] | null;
   usage: PhoneUsageSnapshotV2 | null;
   health: HealthSnapshotV1 | null;
-  reader: ReaderLibraryV2 | null;
+  reader: ReaderLibraryV3 | null;
   games: GamesSnapshotV1 | null;
 }
 

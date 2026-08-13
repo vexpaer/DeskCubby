@@ -26,8 +26,8 @@ use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
-pub(crate) const READER_DTO_VERSION: u32 = 2;
-const READER_STATE_SCHEMA_VERSION: u32 = 3;
+pub(crate) const READER_DTO_VERSION: u32 = 3;
+const READER_STATE_SCHEMA_VERSION: u32 = 4;
 const READER_DIRECTORY_NAME: &str = "reader";
 const READER_STATE_FILE_NAME: &str = "reader-state-v1.json";
 const READER_STATE_PENDING_FILE_NAME: &str = "reader-state-v1.json.pending";
@@ -54,6 +54,9 @@ const MIN_PDF_ZOOM_PERCENT: u16 = 50;
 const MAX_PDF_ZOOM_PERCENT: u16 = 300;
 const MIN_READER_CONTENT_WIDTH_PX: u16 = 520;
 const MAX_READER_CONTENT_WIDTH_PX: u16 = 1_280;
+const MIN_READER_PAGE_PADDING_PX: u16 = 12;
+const MAX_READER_PAGE_PADDING_PX: u16 = 96;
+const MAX_PDF_PAGE_GAP_PX: u16 = 48;
 const MAX_RECORDED_READER_DELTA_MILLIS: u64 = 5 * 60 * 1_000;
 const MAX_JAVASCRIPT_DATE_MILLIS: i64 = 8_640_000_000_000_000;
 const READER_PROGRESS_FORMAT_VERSION: u32 = 1;
@@ -109,6 +112,20 @@ pub(crate) enum ReaderLibraryLayout {
     Grid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ReaderPdfColorMode {
+    Original,
+    ReadingColors,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ReaderPdfScrollMode {
+    Continuous,
+    SinglePage,
+}
+
 fn default_reader_font_family() -> ReaderFontFamily {
     ReaderFontFamily::Serif
 }
@@ -123,6 +140,22 @@ fn default_reader_library_layout() -> ReaderLibraryLayout {
 
 fn default_reader_content_width_px() -> u16 {
     960
+}
+
+fn default_reader_page_padding_px() -> u16 {
+    36
+}
+
+fn default_pdf_color_mode() -> ReaderPdfColorMode {
+    ReaderPdfColorMode::Original
+}
+
+fn default_pdf_scroll_mode() -> ReaderPdfScrollMode {
+    ReaderPdfScrollMode::Continuous
+}
+
+fn default_pdf_page_gap_px() -> u16 {
+    18
 }
 
 fn default_true() -> bool {
@@ -145,7 +178,19 @@ pub(crate) struct ReaderPreferences {
     pub(crate) content_width_px: u16,
     #[serde(default = "default_reader_text_alignment")]
     pub(crate) text_alignment: ReaderTextAlignment,
+    #[serde(default)]
+    pub(crate) first_line_indent_em: f64,
+    #[serde(default)]
+    pub(crate) letter_spacing_px: f64,
+    #[serde(default = "default_reader_page_padding_px")]
+    pub(crate) page_padding_px: u16,
     pub(crate) pdf_zoom_percent: u16,
+    #[serde(default = "default_pdf_color_mode")]
+    pub(crate) pdf_color_mode: ReaderPdfColorMode,
+    #[serde(default = "default_pdf_scroll_mode")]
+    pub(crate) pdf_scroll_mode: ReaderPdfScrollMode,
+    #[serde(default = "default_pdf_page_gap_px")]
+    pub(crate) pdf_page_gap_px: u16,
     #[serde(default)]
     pub(crate) immersive_mode: bool,
     #[serde(default)]
@@ -171,7 +216,13 @@ impl Default for ReaderPreferences {
             paragraph_spacing_px: 10.0,
             content_width_px: default_reader_content_width_px(),
             text_alignment: ReaderTextAlignment::Start,
+            first_line_indent_em: 0.0,
+            letter_spacing_px: 0.0,
+            page_padding_px: default_reader_page_padding_px(),
             pdf_zoom_percent: 100,
+            pdf_color_mode: ReaderPdfColorMode::Original,
+            pdf_scroll_mode: ReaderPdfScrollMode::Continuous,
+            pdf_page_gap_px: default_pdf_page_gap_px(),
             immersive_mode: false,
             show_progress_percentage: false,
             library_layout: ReaderLibraryLayout::List,
@@ -822,18 +873,26 @@ fn normalize_reader_preferences(
     if !value.font_size_px.is_finite()
         || !value.line_height_multiplier.is_finite()
         || !value.paragraph_spacing_px.is_finite()
+        || !value.first_line_indent_em.is_finite()
+        || !value.letter_spacing_px.is_finite()
     {
         return Err(ReaderError::InvalidInput);
     }
     value.font_size_px = value.font_size_px.clamp(12.0, 38.0);
     value.line_height_multiplier = value.line_height_multiplier.clamp(1.0, 2.4);
     value.paragraph_spacing_px = value.paragraph_spacing_px.clamp(0.0, 36.0);
+    value.first_line_indent_em = value.first_line_indent_em.clamp(0.0, 3.0);
+    value.letter_spacing_px = value.letter_spacing_px.clamp(-0.5, 2.0);
     value.content_width_px = value
         .content_width_px
         .clamp(MIN_READER_CONTENT_WIDTH_PX, MAX_READER_CONTENT_WIDTH_PX);
+    value.page_padding_px = value
+        .page_padding_px
+        .clamp(MIN_READER_PAGE_PADDING_PX, MAX_READER_PAGE_PADDING_PX);
     value.pdf_zoom_percent = value
         .pdf_zoom_percent
         .clamp(MIN_PDF_ZOOM_PERCENT, MAX_PDF_ZOOM_PERCENT);
+    value.pdf_page_gap_px = value.pdf_page_gap_px.clamp(0, MAX_PDF_PAGE_GAP_PX);
     value.custom_background_argb = (value.custom_background_argb as u32 | 0xFF00_0000) as i32;
     value.custom_foreground_argb = value
         .custom_foreground_argb
@@ -2427,7 +2486,11 @@ mod tests {
         value.font_size_px = 500.0;
         value.line_height_multiplier = -2.0;
         value.paragraph_spacing_px = 100.0;
+        value.first_line_indent_em = 9.0;
+        value.letter_spacing_px = -9.0;
+        value.page_padding_px = u16::MAX;
         value.pdf_zoom_percent = 900;
+        value.pdf_page_gap_px = u16::MAX;
         value.custom_background_argb = 0x0012_3456;
         value.custom_foreground_argb = Some(0x0065_4321);
         value.content_width_px = u16::MAX;
@@ -2435,7 +2498,11 @@ mod tests {
         assert_eq!(normalized.font_size_px, 38.0);
         assert_eq!(normalized.line_height_multiplier, 1.0);
         assert_eq!(normalized.paragraph_spacing_px, 36.0);
+        assert_eq!(normalized.first_line_indent_em, 3.0);
+        assert_eq!(normalized.letter_spacing_px, -0.5);
+        assert_eq!(normalized.page_padding_px, MAX_READER_PAGE_PADDING_PX);
         assert_eq!(normalized.pdf_zoom_percent, 300);
+        assert_eq!(normalized.pdf_page_gap_px, MAX_PDF_PAGE_GAP_PX);
         assert_eq!(normalized.content_width_px, MAX_READER_CONTENT_WIDTH_PX);
         assert_eq!(normalized.custom_background_argb as u32, 0xFF12_3456);
         assert_eq!(
@@ -2547,7 +2614,7 @@ mod tests {
         fs::write(&target, serde_json::to_vec(&legacy).unwrap()).unwrap();
 
         let migrated = load_reader_state(root.path()).unwrap();
-        assert_eq!(migrated.schema_version, 3);
+        assert_eq!(migrated.schema_version, 4);
         assert_eq!(migrated.books[0].text_paragraph_index, 7);
         assert_eq!(migrated.books[0].text_page_index, 3);
         assert_eq!(migrated.books[0].fingerprint, None);
@@ -2578,7 +2645,7 @@ mod tests {
         fs::write(&target, serde_json::to_vec(&legacy).unwrap()).unwrap();
 
         let migrated = load_reader_state(root.path()).unwrap();
-        assert_eq!(migrated.schema_version, 3);
+        assert_eq!(migrated.schema_version, 4);
         assert_eq!(migrated.preferences.font_size_px, 23.0);
         assert_eq!(migrated.preferences.pdf_zoom_percent, 140);
         assert_eq!(migrated.preferences.custom_foreground_argb, None);
@@ -2595,6 +2662,53 @@ mod tests {
         assert!(migrated.preferences.show_grid_book_titles);
         assert!(!migrated.preferences.show_progress_percentage);
         assert!(!migrated.preferences.immersive_mode);
+        assert_eq!(migrated.preferences.first_line_indent_em, 0.0);
+        assert_eq!(migrated.preferences.letter_spacing_px, 0.0);
+        assert_eq!(migrated.preferences.page_padding_px, 36);
+        assert_eq!(
+            migrated.preferences.pdf_color_mode,
+            ReaderPdfColorMode::Original
+        );
+        assert_eq!(
+            migrated.preferences.pdf_scroll_mode,
+            ReaderPdfScrollMode::Continuous
+        );
+        assert_eq!(migrated.preferences.pdf_page_gap_px, 18);
+    }
+
+    #[test]
+    fn schema_three_preferences_gain_pdf_reader_defaults_without_losing_state() {
+        let root = tempdir().unwrap();
+        let (target, _, _, directory) = state_paths(root.path());
+        fs::create_dir_all(directory).unwrap();
+        let mut legacy_preferences = serde_json::to_value(ReaderPreferences::default()).unwrap();
+        let preferences = legacy_preferences.as_object_mut().unwrap();
+        preferences.remove("firstLineIndentEm");
+        preferences.remove("letterSpacingPx");
+        preferences.remove("pagePaddingPx");
+        preferences.remove("pdfColorMode");
+        preferences.remove("pdfScrollMode");
+        preferences.remove("pdfPageGapPx");
+        let legacy = serde_json::json!({
+            "schemaVersion": 3,
+            "preferences": legacy_preferences,
+            "books": [],
+            "progressLedger": []
+        });
+        fs::write(&target, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+        let migrated = load_reader_state(root.path()).unwrap();
+        assert_eq!(migrated.schema_version, 4);
+        assert_eq!(migrated.preferences.page_padding_px, 36);
+        assert_eq!(migrated.preferences.pdf_page_gap_px, 18);
+        assert_eq!(
+            migrated.preferences.pdf_color_mode,
+            ReaderPdfColorMode::Original
+        );
+        assert_eq!(
+            migrated.preferences.pdf_scroll_mode,
+            ReaderPdfScrollMode::Continuous
+        );
     }
 
     #[test]
