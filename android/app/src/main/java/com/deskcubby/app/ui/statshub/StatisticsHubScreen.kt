@@ -41,6 +41,7 @@ import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.SportsEsports
+import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -123,6 +124,7 @@ internal fun StatisticsHubScreen(
                             StatisticsHubPage.DIARY -> tr("日记统计", "Diary statistics")
                             StatisticsHubPage.READING -> tr("阅读统计", "Reading statistics")
                             StatisticsHubPage.GAMES -> tr("小游戏战绩", "Game statistics")
+                            StatisticsHubPage.AGENT -> tr("Agent 用量", "Agent usage")
                         },
                     )
                 },
@@ -148,10 +150,12 @@ internal fun StatisticsHubScreen(
                 onOpenHealth = onOpenHealth,
                 onOpenReading = { pageName = StatisticsHubPage.READING.name },
                 onOpenGames = { pageName = StatisticsHubPage.GAMES.name },
+                onOpenAgent = { pageName = StatisticsHubPage.AGENT.name },
             )
             StatisticsHubPage.DIARY -> DiaryStatisticsPage(state.diary, innerPadding)
             StatisticsHubPage.READING -> ReadingStatisticsPage(state, innerPadding)
             StatisticsHubPage.GAMES -> GameStatisticsPage(state, innerPadding)
+            StatisticsHubPage.AGENT -> AgentStatisticsPage(state, innerPadding)
         }
     }
 }
@@ -165,6 +169,7 @@ private fun StatisticsOverviewPage(
     onOpenHealth: () -> Unit,
     onOpenReading: () -> Unit,
     onOpenGames: () -> Unit,
+    onOpenAgent: () -> Unit,
 ) {
     LazyVerticalGrid(
         columns = GridCells.Adaptive(280.dp),
@@ -199,6 +204,35 @@ private fun StatisticsOverviewPage(
                 }
             }
         } else {
+            item {
+                val reported = state.agent.reportedCallCount > 0
+                StatisticsHubCard(
+                    icon = Icons.Outlined.SmartToy,
+                    title = tr("Agent Token", "Agent tokens"),
+                    primaryValue = state.agent.totalTokens?.takeIf { reported }
+                        ?.let(::formatInteger) ?: "—",
+                    secondaryValue = if (!reported) {
+                        tr(
+                            "${state.agent.modelCallCount} 次模型调用 · Provider 尚未报告用量",
+                            "${state.agent.modelCallCount} model calls · usage not reported by provider",
+                        )
+                    } else {
+                        val rate = state.agent.cacheRate?.let { String.format(Locale.getDefault(), "%.1f%%", it * 100) } ?: "—"
+                        tr(
+                            "${state.agent.runCount} 次运行 · 缓存率 $rate",
+                            "${state.agent.runCount} runs · cache rate $rate",
+                        )
+                    },
+                    chartValues = listOf(
+                        state.agent.inputTokens?.toDouble(),
+                        state.agent.outputTokens?.toDouble(),
+                        state.agent.cachedInputTokens?.toDouble(),
+                        state.agent.reasoningTokens?.toDouble(),
+                    ),
+                    chartDescription = tr("输入、输出、缓存与推理 Token", "Input, output, cached, and reasoning tokens"),
+                    onClick = onOpenAgent,
+                )
+            }
             item {
                 StatisticsHubCard(
                     icon = Icons.Outlined.Article,
@@ -282,6 +316,44 @@ private fun StatisticsOverviewPage(
                     onClick = onOpenGames,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun AgentStatisticsPage(state: StatisticsHubUiState, innerPadding: PaddingValues) {
+    val agent = state.agent
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(innerPadding),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            SectionHeading(
+                title = tr("Provider 报告的真实用量", "Provider-reported usage"),
+                description = tr(
+                    "只统计模型响应中的 usage 字段；未报告的调用单独列出，不按文本长度估算。",
+                    "Only provider usage fields are counted. Unreported calls stay separate and are never estimated from text length.",
+                ),
+            )
+        }
+        item {
+            SummaryMetricPanel(
+                listOf(
+                    tr("Agent 运行", "Agent runs") to formatInteger(agent.runCount),
+                    tr("模型调用", "Model calls") to formatInteger(agent.modelCallCount),
+                    tr("已报告调用", "Reported calls") to formatInteger(agent.reportedCallCount),
+                    tr("未报告调用", "Unreported calls") to formatInteger(agent.unreportedCallCount),
+                    tr("总 Token", "Total tokens") to (agent.totalTokens?.let(::formatInteger) ?: "—"),
+                    tr("输入 Token", "Input tokens") to (agent.inputTokens?.let(::formatInteger) ?: "—"),
+                    tr("输出 Token", "Output tokens") to (agent.outputTokens?.let(::formatInteger) ?: "—"),
+                    tr("缓存输入", "Cached input") to (agent.cachedInputTokens?.let(::formatInteger) ?: "—"),
+                    tr("推理 Token", "Reasoning tokens") to (agent.reasoningTokens?.let(::formatInteger) ?: "—"),
+                    tr("缓存率", "Cache rate") to (
+                        agent.cacheRate?.let { String.format(Locale.getDefault(), "%.1f%%", it * 100) } ?: "—"
+                        ),
+                ),
+            )
         }
     }
 }
@@ -827,7 +899,7 @@ private fun recentStepsChartDescription(points: List<StatisticsPoint>): String {
         parts.joinToString(tr("；", "; "))
 }
 
-private enum class StatisticsHubPage { OVERVIEW, DIARY, READING, GAMES }
+private enum class StatisticsHubPage { OVERVIEW, DIARY, READING, GAMES, AGENT }
 
 private val MONTH_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM")
 private val DAY_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd")

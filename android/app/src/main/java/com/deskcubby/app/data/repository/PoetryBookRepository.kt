@@ -50,6 +50,8 @@ class PoetryBookRepository private constructor(
         return poem
     }
 
+    suspend fun get(id: Long): SavedPoemEntity? = if (id > 0) dao.getById(id) else null
+
     suspend fun create(content: String, source: String = "", categoryId: Long? = null): Long {
         val now = System.currentTimeMillis()
         val id = dao.insertAtEnd(
@@ -85,6 +87,11 @@ class PoetryBookRepository private constructor(
     suspend fun delete(id: Long) {
         require(id > 0) { "Saved poem id must be positive" }
         check(dao.delete(id) == 1) { "Saved poem no longer exists" }
+    }
+
+    suspend fun restoreExact(item: SavedPoemEntity) {
+        require(item.id > 0) { "Saved poem id must be positive" }
+        dao.upsertForUndo(item)
     }
 
     suspend fun setCategory(id: Long, categoryId: Long?) {

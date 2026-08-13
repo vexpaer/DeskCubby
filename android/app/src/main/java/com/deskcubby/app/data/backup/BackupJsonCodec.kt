@@ -11,6 +11,8 @@ import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.local.VaultItemEntity
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AgentDataSource
+import com.deskcubby.app.data.model.AgentPermissionMode
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.CloudSyncConfig
@@ -104,7 +106,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 29,
+    val formatVersion: Int = 30,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -141,7 +143,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 29
+    const val FORMAT_VERSION: Int = 30
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -463,8 +465,18 @@ object BackupJsonCodec {
             .put("id", item.id).put("name", item.name).put("type", item.type.name)
             .put("endpointUrl", item.endpointUrl).put("model", item.model).put("enabled", item.enabled)
             .put("allowInsecureHttp", item.allowInsecureHttp).put("temperature", item.temperature)
-            .put("systemPrompt", item.systemPrompt).put("apiKey", item.apiKey)) } })
+            .put("systemPrompt", item.systemPrompt).put("apiKey", item.apiKey)
+            .put("supportsToolCalling", item.supportsToolCalling)) } })
         .putNullable("aiChatConfigId", settings.aiChatConfigId)
+        .put(
+            "agentEnabledSources",
+            JSONArray().apply {
+                settings.agentEnabledSources
+                    .sortedBy(AgentDataSource::ordinal)
+                    .forEach { put(it.wireValue) }
+            },
+        )
+        .put("agentPermissionMode", settings.agentPermissionMode.name)
         .put("calorieEstimationEnabled", settings.calorieEstimationEnabled)
         .putNullable("calorieTextConfigId", settings.calorieTextConfigId)
         .putNullable("calorieImageConfigId", settings.calorieImageConfigId)
@@ -908,7 +920,10 @@ object BackupJsonCodec {
             },
             fontScale = if (version >= 8) {
                 json.requiredFiniteNumber("fontScale").also { value ->
-                    require(value in MIN_APP_FONT_SCALE.toDouble()..MAX_APP_FONT_SCALE.toDouble()) {
+                    // JSON renders a Float boundary such as 1.3f as the decimal 1.3. Comparing
+                    // that Double against 1.3f.toDouble() (1.29999995...) incorrectly rejects a
+                    // value produced by our own encoder on Android.
+                    require(value.toFloat() in MIN_APP_FONT_SCALE..MAX_APP_FONT_SCALE) {
                         "fontScale must be between $MIN_APP_FONT_SCALE and $MAX_APP_FONT_SCALE"
                     }
                 }.toFloat()
@@ -1199,11 +1214,25 @@ object BackupJsonCodec {
             aiAllowInsecureHttp = if (version >= 9) json.requiredBoolean("aiAllowInsecureHttp")
             else defaults.aiAllowInsecureHttp,
             aiConfigs = if (version >= 10) {
-                decodeAiConfigs(json.requiredArray("aiConfigs"), includeApiKeys = version >= 12)
+                decodeAiConfigs(
+                    json.requiredArray("aiConfigs"),
+                    includeApiKeys = version >= 12,
+                    includeToolCalling = version >= 30,
+                )
             } else {
                 emptyList()
             },
             aiChatConfigId = if (version >= 11) json.requiredNullableString("aiChatConfigId")?.requireMaxLength("aiChatConfigId", 80) else null,
+            agentEnabledSources = if (version >= 30) {
+                decodeAgentDataSources(json.requiredArray("agentEnabledSources"))
+            } else {
+                defaults.agentEnabledSources
+            },
+            agentPermissionMode = if (version >= 30) {
+                json.requiredEnum<AgentPermissionMode>("agentPermissionMode")
+            } else {
+                defaults.agentPermissionMode
+            },
             calorieEstimationEnabled = if (version >= 10) json.requiredBoolean("calorieEstimationEnabled") else false,
             calorieTextConfigId = if (version >= 11) json.requiredNullableString("calorieTextConfigId")?.requireMaxLength("calorieTextConfigId", 80) else null,
             calorieImageConfigId = if (version >= 11) json.requiredNullableString("calorieImageConfigId")?.requireMaxLength("calorieImageConfigId", 80) else null,
@@ -1407,7 +1436,11 @@ object BackupJsonCodec {
 
     private fun defaultsMealTeaIcon() = AppSettings().mealButtonIcons[2]
 
-    private fun decodeAiConfigs(json: JSONArray, includeApiKeys: Boolean): List<AiModelConfig> = buildList {
+    private fun decodeAiConfigs(
+        json: JSONArray,
+        includeApiKeys: Boolean,
+        includeToolCalling: Boolean,
+    ): List<AiModelConfig> = buildList {
         require(json.length() <= 20) { "Too many AI configurations" }
         for (index in 0 until json.length()) json.getJSONObject(index).let { item ->
             add(AiModelConfig(
@@ -1425,8 +1458,26 @@ object BackupJsonCodec {
                 } else {
                     ""
                 },
+                supportsToolCalling = if (includeToolCalling) {
+                    item.requiredBoolean("supportsToolCalling")
+                } else {
+                    false
+                },
             ))
         }
+    }
+
+    private fun decodeAgentDataSources(json: JSONArray): Set<AgentDataSource> {
+        require(json.length() <= AgentDataSource.entries.size) {
+            "Too many Agent data sources"
+        }
+        val sources = linkedSetOf<AgentDataSource>()
+        json.requiredStringList("agentEnabledSources").forEach { value ->
+            val source = AgentDataSource.entries.firstOrNull { it.wireValue == value }
+                ?: throw IllegalArgumentException("Unknown Agent data source: $value")
+            require(sources.add(source)) { "Duplicate Agent data source: $value" }
+        }
+        return sources
     }
 
     private fun decodeDailyEventTemplates(json: JSONArray): List<DailyEventTemplate> {

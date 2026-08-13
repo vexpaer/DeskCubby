@@ -6,8 +6,10 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Base64
 import com.deskcubby.app.data.local.AiChatDao
+import com.deskcubby.app.data.local.AiAttachmentEntity
 import com.deskcubby.app.data.local.AiConversationEntity
 import com.deskcubby.app.data.local.AiMessageEntity
+import com.deskcubby.app.data.local.AiMessageWithAttachments
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
@@ -20,6 +22,7 @@ import java.net.HttpURLConnection
 import java.net.MalformedURLException
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -37,6 +40,10 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
+import com.deskcubby.plugin.api.core.api.AIToolCall
+import com.deskcubby.plugin.api.core.api.AIToolCompletion
+import com.deskcubby.plugin.api.core.api.AIToolCompletionRequest
+import com.deskcubby.plugin.api.core.api.AITokenUsage
 
 enum class AiChatRole(val apiValue: String) {
     USER("user"),
@@ -54,6 +61,7 @@ data class AiChatMessage(
     val content: String,
     val reasoning: String = "",
     val image: AiChatImage? = null,
+    val attachments: List<AiChatAttachment> = emptyList(),
     val createdAt: Long = 0L,
 )
 
@@ -95,6 +103,7 @@ class AiChatException(
 class AiChatRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val aiChatDao: AiChatDao,
+    private val attachmentService: AiAttachmentService,
 ) {
     private val imagePermissionMutex = Mutex()
 
@@ -102,14 +111,16 @@ class AiChatRepository @Inject constructor(
         aiChatDao.observeConversations().map { items -> items.map(AiConversationEntity::toDomain) }
 
     fun observeMessages(conversationId: Long): Flow<List<AiChatMessage>> =
-        aiChatDao.observeMessages(conversationId).map { items -> items.mapNotNull(AiMessageEntity::toDomain) }
+        aiChatDao.observeMessagesWithAttachments(conversationId)
+            .map { items -> items.mapNotNull(AiMessageWithAttachments::toDomain) }
 
     suspend fun getConversation(id: Long): AiConversation? = withContext(Dispatchers.IO) {
         aiChatDao.getConversation(id)?.toDomain()
     }
 
     suspend fun getMessages(conversationId: Long): List<AiChatMessage> = withContext(Dispatchers.IO) {
-        aiChatDao.getMessages(conversationId).mapNotNull(AiMessageEntity::toDomain)
+        aiChatDao.getMessagesWithAttachments(conversationId)
+            .mapNotNull(AiMessageWithAttachments::toDomain)
     }
 
     suspend fun createConversation(
@@ -124,6 +135,7 @@ class AiChatRepository @Inject constructor(
                 modelConfigId = modelConfigId,
                 createdAt = now,
                 updatedAt = now,
+                syncId = UUID.randomUUID().toString(),
             ),
         )
     }
@@ -147,55 +159,9 @@ class AiChatRepository @Inject constructor(
                     imageMimeType = image?.mimeType,
                     imagePermissionOwned = imagePermission?.ownedByChat ?: false,
                     createdAt = now,
+                    syncId = UUID.randomUUID().toString(),
                 ),
             )
-        }
-    }
-
-    /**
-     * Persists the optional frozen context and its user message as one logical turn.
-     *
-     * Persistable image permission is acquired before entering Room's transaction. If the
-     * transaction fails, a permission newly acquired for this turn is released and neither
-     * message remains in the conversation.
-     */
-    suspend fun appendUserTurn(
-        conversationId: Long,
-        frozenContext: String?,
-        content: String,
-        image: AiChatImage? = null,
-        now: Long = System.currentTimeMillis(),
-    ): Long = withContext(Dispatchers.IO) {
-        withPersistedImagePermission(image) { imagePermission ->
-            val messages = buildList {
-                frozenContext?.takeIf(String::isNotBlank)?.let { encoded ->
-                    add(
-                        AiMessageEntity(
-                            conversationId = conversationId,
-                            role = AiChatRole.CONTEXT.apiValue,
-                            content = encoded,
-                            reasoning = "",
-                            imageUri = null,
-                            imageMimeType = null,
-                            imagePermissionOwned = false,
-                            createdAt = now,
-                        ),
-                    )
-                }
-                add(
-                    AiMessageEntity(
-                        conversationId = conversationId,
-                        role = AiChatRole.USER.apiValue,
-                        content = content,
-                        reasoning = "",
-                        imageUri = image?.uri,
-                        imageMimeType = image?.mimeType,
-                        imagePermissionOwned = imagePermission?.ownedByChat ?: false,
-                        createdAt = now,
-                    ),
-                )
-            }
-            aiChatDao.insertUserTurnAndTouch(messages).last()
         }
     }
 
@@ -215,7 +181,11 @@ class AiChatRepository @Inject constructor(
             val ownedImageUris = aiChatDao.deleteConversationAndGetOwnedImageUris(id)
                 ?: return@withLock false
             ownedImageUris.forEach { uri ->
-                if (aiChatDao.countImageReferences(uri) == 0) releaseImagePermission(uri)
+                if (aiChatDao.countImageReferences(uri) == 0 &&
+                    aiChatDao.countAttachmentReferences(uri) == 0
+                ) {
+                    releaseImagePermission(uri)
+                }
             }
             true
         }
@@ -234,6 +204,46 @@ class AiChatRepository @Inject constructor(
             ?: throw AiChatException(AiChatFailure.CONFIGURATION, "所选文件不是受支持的图片。")
         readImageBytes(uri)
         AiChatImage(uri = uri.toString(), mimeType = mimeType)
+    }
+
+    suspend fun prepareAttachment(uriValue: String): AiChatAttachment =
+        attachmentService.prepare(uriValue)
+
+    suspend fun appendAgentUserMessage(
+        conversationId: Long,
+        content: String,
+        attachments: List<AiChatAttachment>,
+        now: Long = System.currentTimeMillis(),
+    ): Long = withContext(Dispatchers.IO) {
+        require(attachments.size <= MAX_AGENT_ATTACHMENTS) { "Too many Agent attachments" }
+        withPersistedAttachmentPermissions(attachments) { permissions ->
+            aiChatDao.insertMessageWithAttachmentsAndTouch(
+                message = AiMessageEntity(
+                    conversationId = conversationId,
+                    role = AiChatRole.USER.apiValue,
+                    content = content,
+                    reasoning = "",
+                    imageUri = null,
+                    imageMimeType = null,
+                    imagePermissionOwned = false,
+                    createdAt = now,
+                    syncId = UUID.randomUUID().toString(),
+                ),
+                attachments = attachments.mapIndexed { index, attachment ->
+                    AiAttachmentEntity(
+                        messageId = 0,
+                        uri = attachment.uri,
+                        mimeType = attachment.mimeType,
+                        displayName = attachment.displayName,
+                        sizeBytes = attachment.sizeBytes,
+                        kind = attachment.kind.name,
+                        extractedText = attachment.extractedText,
+                        permissionOwned = permissions[index].ownedByChat,
+                        syncId = UUID.randomUUID().toString(),
+                    )
+                },
+            )
+        }
     }
 
     private suspend fun persistImagePermission(image: AiChatImage): PersistedImagePermission {
@@ -269,6 +279,41 @@ class AiChatRepository @Inject constructor(
         }
     }
 
+    private suspend fun persistAttachmentPermission(
+        attachment: AiChatAttachment,
+    ): PersistedImagePermission {
+        val resolver = context.contentResolver
+        val uri = Uri.parse(attachment.uri)
+        val alreadyPersisted = resolver.persistedUriPermissions.any {
+            it.uri == uri && it.isReadPermission
+        }
+        var newlyAcquired = false
+        if (!alreadyPersisted) {
+            try {
+                resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                newlyAcquired = true
+            } catch (error: SecurityException) {
+                throw AiChatException(
+                    AiChatFailure.CONFIGURATION,
+                    "无法保留所选附件的读取权限，请重新选择。",
+                    error,
+                )
+            }
+        }
+        return try {
+            val alreadyOwnedByChat = alreadyPersisted &&
+                (aiChatDao.isAttachmentPermissionOwned(attachment.uri) ||
+                    aiChatDao.isImagePermissionOwned(attachment.uri))
+            PersistedImagePermission(
+                ownedByChat = newlyAcquired || alreadyOwnedByChat,
+                newlyAcquired = newlyAcquired,
+            )
+        } catch (error: Throwable) {
+            if (newlyAcquired) releaseImagePermission(attachment.uri)
+            throw error
+        }
+    }
+
     /**
      * URI grant ownership and Room references form one process-level critical section. Room is
      * still the durable reference count; on any insert failure or cancellation we check it in a
@@ -287,6 +332,31 @@ class AiChatRepository @Inject constructor(
                 withContext(NonCancellable + Dispatchers.IO) {
                     if (aiChatDao.countImageReferences(image.uri) == 0) {
                         releaseImagePermission(image.uri)
+                    }
+                }
+            }
+            throw error
+        }
+    }
+
+    private suspend fun <T> withPersistedAttachmentPermissions(
+        attachments: List<AiChatAttachment>,
+        block: suspend (List<PersistedImagePermission>) -> T,
+    ): T = imagePermissionMutex.withLock {
+        val permissions = mutableListOf<PersistedImagePermission>()
+        try {
+            attachments.forEach { attachment ->
+                permissions += persistAttachmentPermission(attachment)
+            }
+            block(permissions)
+        } catch (error: Throwable) {
+            withContext(NonCancellable + Dispatchers.IO) {
+                attachments.zip(permissions).forEach { (attachment, permission) ->
+                    if (permission.newlyAcquired &&
+                        aiChatDao.countImageReferences(attachment.uri) == 0 &&
+                        aiChatDao.countAttachmentReferences(attachment.uri) == 0
+                    ) {
+                        releaseImagePermission(attachment.uri)
                     }
                 }
             }
@@ -403,6 +473,192 @@ class AiChatRepository @Inject constructor(
                 error,
             )
         }
+    }
+
+    suspend fun completeWithTools(
+        config: AiModelConfig,
+        request: AIToolCompletionRequest,
+    ): AIToolCompletion = withContext(Dispatchers.IO) {
+        require(config.type == AiModelType.TEXT) { "Agent requires a text model" }
+        if (!config.supportsToolCalling) {
+            throw AiChatException(
+                AiChatFailure.CONFIGURATION,
+                "当前模型配置未启用原生工具调用，无法运行 Agent。",
+            )
+        }
+        if (request.tools.isEmpty() || request.tools.size > MAX_AGENT_TOOLS) {
+            throw AiChatException(AiChatFailure.CONFIGURATION, "Agent 工具列表无效。")
+        }
+        if (request.systemPrompt.isBlank() || request.systemPrompt.length > MAX_AGENT_SYSTEM_CHARS) {
+            throw AiChatException(AiChatFailure.CONFIGURATION, "Agent 系统提示词无效。")
+        }
+        request.tools.forEach { tool ->
+            if (!AGENT_TOOL_NAME.matches(tool.name) ||
+                tool.description.length > MAX_AGENT_TOOL_DESCRIPTION_CHARS ||
+                tool.parametersJson.length > MAX_AGENT_TOOL_SCHEMA_CHARS
+            ) {
+                throw AiChatException(AiChatFailure.CONFIGURATION, "Agent 工具定义无效。")
+            }
+            try {
+                JSONObject(tool.parametersJson)
+            } catch (error: JSONException) {
+                throw AiChatException(AiChatFailure.CONFIGURATION, "Agent 工具参数结构无效。", error)
+            }
+        }
+        val endpoint = parseAndValidateEndpoint(config.endpointUrl, config.allowInsecureHttp)
+        val imageDataUrls = buildMap {
+            var totalBytes = 0
+            request.messages.forEachIndexed { messageIndex, message ->
+                message.images.forEachIndexed { imageIndex, image ->
+                    val mimeType = image.mimeType.substringBefore(';').trim().lowercase()
+                    if (!mimeType.startsWith("image/")) {
+                        throw AiChatException(
+                            AiChatFailure.CONFIGURATION,
+                            "Agent 附件包含不受支持的图片类型。",
+                        )
+                    }
+                    val bytes = readImageBytes(Uri.parse(image.contentUri))
+                    totalBytes += bytes.size
+                    if (totalBytes > MAX_IMAGE_BYTES) {
+                        throw AiChatException(
+                            AiChatFailure.CONFIGURATION,
+                            "当前 Agent 会话中的图片合计超过 8 MiB。",
+                        )
+                    }
+                    put(
+                        messageIndex to imageIndex,
+                        "data:$mimeType;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP),
+                    )
+                }
+            }
+        }
+        val requestBody = buildAgentRequestJson(
+            model = config.model.trim(),
+            temperature = config.temperature,
+            request = request,
+            imageDataUrls = imageDataUrls,
+        ).toString().toByteArray(StandardCharsets.UTF_8)
+        val limit = if (imageDataUrls.isEmpty()) MAX_BODY_BYTES else MAX_IMAGE_REQUEST_BODY_BYTES
+        if (requestBody.size > limit) {
+            throw AiChatException(AiChatFailure.CONFIGURATION, "Agent 请求内容过长。")
+        }
+        try {
+            parseToolCompletion(
+                responseBody = executeRequest(
+                    initialUrl = endpoint,
+                    body = requestBody,
+                    apiKey = config.apiKey.trim(),
+                    allowInsecureHttp = config.allowInsecureHttp,
+                ),
+                apiKey = config.apiKey.trim(),
+            )
+        } catch (error: AiChatException) {
+            throw error
+        } catch (error: IOException) {
+            throw AiChatException(
+                AiChatFailure.NETWORK,
+                "无法连接 AI 服务，请检查网络和接口地址。",
+                error,
+            )
+        } catch (error: JSONException) {
+            throw AiChatException(
+                AiChatFailure.INVALID_RESPONSE,
+                "模型返回了非法工具调用。",
+                error,
+            )
+        }
+    }
+
+    private fun parseToolCompletion(responseBody: String, apiKey: String): AIToolCompletion {
+        val root = try {
+            JSONObject(responseBody)
+        } catch (error: JSONException) {
+            throw AiChatException(AiChatFailure.INVALID_RESPONSE, "AI 服务返回了无法识别的数据。", error)
+        }
+        root.optJSONObject("error")?.let { errorObject ->
+            val message = sanitizeAiRemoteError(errorObject.optString("message"), apiKey)
+            throw AiChatException(
+                AiChatFailure.REMOTE,
+                message.takeIf(String::isNotEmpty) ?: "AI 服务返回了错误。",
+            )
+        }
+        val choice = root.optJSONArray("choices")?.optJSONObject(0)
+            ?: throw AiChatException(AiChatFailure.INVALID_RESPONSE, "AI 响应中没有可用的回答。")
+        val message = choice.optJSONObject("message")
+            ?: throw AiChatException(AiChatFailure.INVALID_RESPONSE, "AI 响应中没有消息对象。")
+        val rawContent = extractAiContent(message.opt("content")).orEmpty()
+        val tagged = splitAiThinkingContent(rawContent)
+        val explicitReasoning = listOf("reasoning_content", "reasoning", "analysis")
+            .mapNotNull { key -> extractAiContent(message.opt(key))?.takeIf(String::isNotBlank) }
+            .firstOrNull()
+            ?.trim()
+            .orEmpty()
+        val reasoning = listOf(explicitReasoning, tagged.reasoning)
+            .filter(String::isNotBlank)
+            .distinct()
+            .joinToString("\n\n")
+        val callsArray = message.optJSONArray("tool_calls")
+        if (callsArray != null && callsArray.length() > MAX_AGENT_TOOL_CALLS_PER_RESPONSE) {
+            throw AiChatException(AiChatFailure.INVALID_RESPONSE, "模型一次返回了过多工具调用。")
+        }
+        val ids = hashSetOf<String>()
+        val calls = buildList {
+            if (callsArray != null) {
+                for (index in 0 until callsArray.length()) {
+                    val rawCall = callsArray.optJSONObject(index)
+                        ?: throw AiChatException(AiChatFailure.INVALID_RESPONSE, "模型返回了非法工具调用。")
+                    val id = rawCall.optString("id").trim()
+                    val function = rawCall.optJSONObject("function")
+                        ?: throw AiChatException(AiChatFailure.INVALID_RESPONSE, "模型返回了非法工具调用。")
+                    val name = function.optString("name").trim()
+                    val argumentsRaw = function.optString("arguments")
+                    if (id.isBlank() || id.length > MAX_AGENT_TOOL_CALL_ID_CHARS ||
+                        !ids.add(id) || !AGENT_TOOL_NAME.matches(name) ||
+                        argumentsRaw.toByteArray(StandardCharsets.UTF_8).size > MAX_AGENT_ARGUMENT_BYTES
+                    ) {
+                        throw AiChatException(AiChatFailure.INVALID_RESPONSE, "模型返回了非法工具调用。")
+                    }
+                    val arguments = try {
+                        JSONObject(argumentsRaw).toStrictMap()
+                    } catch (error: JSONException) {
+                        throw AiChatException(AiChatFailure.INVALID_RESPONSE, "模型返回了非法工具参数。", error)
+                    }
+                    add(AIToolCall(id = id, name = name, arguments = arguments))
+                }
+            }
+        }
+        if (calls.isEmpty() && tagged.content.isBlank() && reasoning.isBlank()) {
+            throw AiChatException(AiChatFailure.INVALID_RESPONSE, "AI 返回了空回答。")
+        }
+        return AIToolCompletion(
+            content = tagged.content.trim(),
+            reasoning = reasoning,
+            toolCalls = calls,
+            usage = parseTokenUsage(root),
+        )
+    }
+
+    private fun parseTokenUsage(root: JSONObject): AITokenUsage {
+        val usage = root.optJSONObject("usage") ?: return AITokenUsage()
+        fun boundedLong(container: JSONObject, key: String): Long? {
+            if (!container.has(key) || container.isNull(key)) return null
+            return container.optLong(key, -1L).takeIf { it in 0..MAX_REPORTED_TOKENS }
+        }
+        val input = boundedLong(usage, "prompt_tokens") ?: boundedLong(usage, "input_tokens")
+        val output = boundedLong(usage, "completion_tokens") ?: boundedLong(usage, "output_tokens")
+        val promptDetails = usage.optJSONObject("prompt_tokens_details")
+            ?: usage.optJSONObject("input_tokens_details")
+        val completionDetails = usage.optJSONObject("completion_tokens_details")
+            ?: usage.optJSONObject("output_tokens_details")
+        val cached = promptDetails?.let { boundedLong(it, "cached_tokens") }
+            ?: boundedLong(usage, "cache_read_input_tokens")
+        return AITokenUsage(
+            inputTokens = input,
+            outputTokens = output,
+            totalTokens = boundedLong(usage, "total_tokens"),
+            cachedInputTokens = cached?.coerceAtMost(input ?: cached),
+            reasoningTokens = completionDetails?.let { boundedLong(it, "reasoning_tokens") },
+        )
     }
 
     suspend fun analyzeImage(
@@ -984,6 +1240,16 @@ class AiChatRepository @Inject constructor(
         const val WRITE_BUFFER_BYTES = 8 * 1024
         const val MAX_REDIRECTS = 3
         const val MAX_TITLE_CHARS = 80
+        const val MAX_AGENT_ATTACHMENTS = 5
+        const val MAX_AGENT_TOOLS = 32
+        const val MAX_AGENT_TOOL_CALLS_PER_RESPONSE = 16
+        const val MAX_AGENT_TOOL_CALL_ID_CHARS = 200
+        const val MAX_AGENT_ARGUMENT_BYTES = 64 * 1024
+        const val MAX_REPORTED_TOKENS = 1_000_000_000_000L
+        const val MAX_AGENT_SYSTEM_CHARS = 64 * 1024
+        const val MAX_AGENT_TOOL_DESCRIPTION_CHARS = 4_096
+        const val MAX_AGENT_TOOL_SCHEMA_CHARS = 32 * 1024
+        val AGENT_TOOL_NAME = Regex("[A-Za-z0-9_-]{1,64}")
         val REDIRECT_STATUS_CODES = setOf(301, 302, 303, 307, 308)
     }
 }
@@ -1123,7 +1389,42 @@ private fun AiConversationEntity.toDomain() = AiConversation(
     updatedAt = updatedAt,
 )
 
-private fun AiMessageEntity.toDomain(): AiChatMessage? {
+private fun AiMessageWithAttachments.toDomain(): AiChatMessage? {
+    val entity = message
+    val attachmentItems = attachments.mapNotNull { attachment ->
+        val kind = AiAttachmentKind.entries.firstOrNull { it.name == attachment.kind }
+            ?: return@mapNotNull null
+        AiChatAttachment(
+            uri = attachment.uri,
+            mimeType = attachment.mimeType,
+            displayName = attachment.displayName,
+            sizeBytes = attachment.sizeBytes,
+            kind = kind,
+            extractedText = attachment.extractedText,
+            permissionOwnedByChat = attachment.permissionOwned,
+        )
+    }.toMutableList().also { items ->
+        // v5-v12 chat rows stored one image directly on the message. A remote sync cannot carry
+        // its device-local URI, but retaining a placeholder keeps that historical attachment
+        // visible and prevents a later Agent run from pretending it can inspect the image.
+        if (entity.imageUri.isNullOrBlank() && !entity.imageMimeType.isNullOrBlank() &&
+            items.none { it.kind == AiAttachmentKind.IMAGE }
+        ) {
+            items += AiChatAttachment(
+                uri = "",
+                mimeType = entity.imageMimeType,
+                displayName = "image",
+                sizeBytes = 0,
+                kind = AiAttachmentKind.IMAGE,
+            )
+        }
+    }
+    return entity.toDomain(attachmentItems)
+}
+
+private fun AiMessageEntity.toDomain(
+    attachmentItems: List<AiChatAttachment>,
+): AiChatMessage? {
     val messageRole = AiChatRole.entries.firstOrNull { it.apiValue == role } ?: return null
     val messageImage = if (!imageUri.isNullOrBlank() && !imageMimeType.isNullOrBlank()) {
         AiChatImage(
@@ -1139,7 +1440,9 @@ private fun AiMessageEntity.toDomain(): AiChatMessage? {
         role = messageRole,
         content = content,
         reasoning = reasoning,
-        image = messageImage,
+        image = messageImage ?: attachmentItems.firstOrNull { it.kind == AiAttachmentKind.IMAGE }
+            ?.let { AiChatImage(it.uri, it.mimeType, it.permissionOwnedByChat) },
+        attachments = attachmentItems,
         createdAt = createdAt,
     )
 }

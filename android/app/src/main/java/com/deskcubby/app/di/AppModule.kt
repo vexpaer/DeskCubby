@@ -3,6 +3,7 @@ package com.deskcubby.app.di
 import android.content.Context
 import androidx.room.Room
 import com.deskcubby.app.data.local.AiChatDao
+import com.deskcubby.app.data.local.AgentDao
 import com.deskcubby.app.data.local.AppDatabase
 import com.deskcubby.app.data.local.BrowserRecordDao
 import com.deskcubby.app.data.local.DiaryIndexDao
@@ -43,6 +44,7 @@ object AppModule {
                 AppDatabase.MIGRATION_9_10,
                     AppDatabase.MIGRATION_10_11,
                     AppDatabase.MIGRATION_11_12,
+                    AppDatabase.MIGRATION_12_13,
             )
             .build()
 
@@ -54,6 +56,7 @@ object AppModule {
     @Provides fun providePoetryCategoryDao(db: AppDatabase): PoetryCategoryDao = db.poetryCategoryDao()
     @Provides fun provideSavedPoemDao(db: AppDatabase): SavedPoemDao = db.savedPoemDao()
     @Provides fun provideAiChatDao(db: AppDatabase): AiChatDao = db.aiChatDao()
+    @Provides fun provideAgentDao(db: AppDatabase): AgentDao = db.agentDao()
     @Provides fun provideVaultItemDao(db: AppDatabase): VaultItemDao = db.vaultItemDao()
     @Provides fun provideGameStateDao(db: AppDatabase): GameStateDao = db.gameStateDao()
     @Provides

@@ -59,6 +59,7 @@ class AppCloudSyncService @Inject constructor(
     private val secretStore: CloudSyncSecretStore,
     usageDeviceRepository: UsageDeviceRepository,
     readerRepository: ReaderRepository,
+    agentChatSyncRepository: AgentChatSyncRepository,
 ) {
     private val incomingDirectory = File(context.filesDir, INCOMING_DIRECTORY)
     private val runtimePreferences = context.getSharedPreferences(
@@ -75,6 +76,7 @@ class AppCloudSyncService @Inject constructor(
         ),
         usageBridge = AppCloudSyncUsageBridge(usageDeviceRepository),
         readerProgressBridge = AppCloudSyncReaderProgressBridge(readerRepository),
+        agentChatBridge = AppCloudSyncAgentChatBridge(agentChatSyncRepository),
     )
     private val mutableStatus = MutableStateFlow(
         AppCloudSyncStatus(
@@ -269,6 +271,26 @@ class AppCloudSyncService @Inject constructor(
         const val RUNTIME_PREFERENCES = "cloud_sync_runtime"
         const val KEY_LAST_FINISHED_AT = "last_finished_at"
     }
+}
+
+private class AppCloudSyncAgentChatBridge(
+    private val repository: AgentChatSyncRepository,
+) : CloudSyncAgentChatBridge {
+    override suspend fun snapshot(maxBytes: Long): CloudSyncAgentChatSnapshot =
+        repository.snapshot(maxBytes).toCloudSnapshot()
+
+    override suspend fun mergeIncoming(
+        bytes: ByteArray,
+        sha256: String,
+        maxBytes: Long,
+    ): CloudSyncAgentChatSnapshot =
+        repository.mergeIncoming(bytes, sha256, maxBytes).toCloudSnapshot()
+
+    private fun AgentChatSyncSnapshot.toCloudSnapshot() = CloudSyncAgentChatSnapshot(
+        bytes = bytes,
+        lastModifiedMillis = lastModifiedMillis,
+        localId = localId,
+    )
 }
 
 internal fun requireSafeForceDownloadSourceCount(

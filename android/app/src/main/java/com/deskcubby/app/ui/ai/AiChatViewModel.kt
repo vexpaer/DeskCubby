@@ -2,25 +2,33 @@ package com.deskcubby.app.ui.ai
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.deskcubby.app.data.model.AppLanguage
+import com.deskcubby.app.agent.AgentApprovalRequest
+import com.deskcubby.app.agent.AgentConversationMessage
+import com.deskcubby.app.agent.AgentConversationRole
+import com.deskcubby.app.agent.AgentExecutionStatus
+import com.deskcubby.app.agent.AgentExecutionUpdate
+import com.deskcubby.app.agent.AgentPermissionManager
+import com.deskcubby.app.agent.AgentRunRequest
+import com.deskcubby.app.agent.AgentRunUsage
+import com.deskcubby.app.agent.AgentRuntime
+import com.deskcubby.app.agent.AgentRuntimeException
+import com.deskcubby.app.data.model.AgentDataSource
+import com.deskcubby.app.data.model.AgentPermissionMode
 import com.deskcubby.app.data.model.AiModelType
+import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.preferences.SettingsRepository
+import com.deskcubby.app.data.repository.AiAttachmentKind
+import com.deskcubby.app.data.repository.AiChatAttachment
 import com.deskcubby.app.data.repository.AiChatException
-import com.deskcubby.app.data.repository.AiChatImage
 import com.deskcubby.app.data.repository.AiChatMessage
 import com.deskcubby.app.data.repository.AiChatRepository
 import com.deskcubby.app.data.repository.AiChatRole
 import com.deskcubby.app.data.repository.AiConversation
-import com.deskcubby.app.data.repository.AiContextCandidate
-import com.deskcubby.app.data.repository.AiContextCodec
-import com.deskcubby.app.data.repository.AiContextException
-import com.deskcubby.app.data.repository.AiContextFailure
-import com.deskcubby.app.data.repository.AiContextItemPreview
-import com.deskcubby.app.data.repository.AiContextRepository
-import com.deskcubby.app.data.repository.AiContextSource
 import com.deskcubby.app.data.repository.generateConversationTitle
+import com.deskcubby.plugin.api.core.api.AIImage
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -41,19 +49,15 @@ data class AiChatUiState(
     val activeConversationTitle: String = "",
     val messages: List<AiChatMessage> = emptyList(),
     val draft: String = "",
-    val pendingImage: AiChatImage? = null,
-    val pendingContextKeys: Set<String> = emptySet(),
-    val contextCandidates: List<AiContextCandidate> = emptyList(),
-    val contextCandidatesLoaded: Boolean = false,
-    val isContextPickerVisible: Boolean = false,
-    val contextPickerSource: AiContextSource? = null,
-    val contextPickerErrorMessage: String? = null,
-    val isLoadingContextCandidates: Boolean = false,
-    val contextPreview: AiContextItemPreview? = null,
-    val isLoadingContextPreview: Boolean = false,
-    val isPreparingImage: Boolean = false,
+    val pendingAttachments: List<AiChatAttachment> = emptyList(),
+    val isPreparingAttachments: Boolean = false,
     val isSending: Boolean = false,
+    val executionUpdates: List<AgentExecutionUpdate> = emptyList(),
+    val lastRunUsage: AgentRunUsage? = null,
+    val isContextManagerVisible: Boolean = false,
+    val isPermissionModeVisible: Boolean = false,
     val errorMessage: String? = null,
+    val transientMessage: String? = null,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -61,7 +65,8 @@ data class AiChatUiState(
 class AiChatViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val chatRepository: AiChatRepository,
-    private val contextRepository: AiContextRepository,
+    private val agentRuntime: AgentRuntime,
+    private val permissionManager: AgentPermissionManager,
 ) : ViewModel() {
     val settings: StateFlow<AppSettings> = settingsRepository.settings.stateIn(
         scope = viewModelScope,
@@ -76,6 +81,8 @@ class AiChatViewModel @Inject constructor(
             initialValue = emptyList(),
         )
 
+    val pendingApproval: StateFlow<AgentApprovalRequest?> = permissionManager.pending
+
     private val mutableUiState = MutableStateFlow(AiChatUiState())
     val uiState: StateFlow<AiChatUiState> = mutableUiState.asStateFlow()
 
@@ -88,8 +95,7 @@ class AiChatViewModel @Inject constructor(
         viewModelScope.launch {
             activeConversationId
                 .flatMapLatest { id ->
-                    if (id == null) flowOf(emptyList())
-                    else chatRepository.observeMessages(id)
+                    if (id == null) flowOf(emptyList()) else chatRepository.observeMessages(id)
                 }
                 .collect { messages ->
                     mutableUiState.update { state -> state.copy(messages = messages) }
@@ -108,301 +114,206 @@ class AiChatViewModel @Inject constructor(
         mutableUiState.update { it.copy(draft = value.take(MAX_DRAFT_CHARS)) }
     }
 
-    fun attachImage(uri: String) {
+    fun attachFiles(uris: List<String>) {
         val current = mutableUiState.value
-        if (current.isSending || current.isPreparingImage) return
-        mutableUiState.update { it.copy(isPreparingImage = true, errorMessage = null) }
+        if (current.isSending || current.isPreparingAttachments || uris.isEmpty()) return
+        val remaining = MAX_ATTACHMENTS - current.pendingAttachments.size
+        if (remaining <= 0) {
+            mutableUiState.update { it.copy(errorMessage = localized("一次最多添加 5 个附件。", "You can add at most five attachments.")) }
+            return
+        }
+        mutableUiState.update { it.copy(isPreparingAttachments = true, errorMessage = null) }
         viewModelScope.launch {
+            val prepared = mutableListOf<AiChatAttachment>()
             try {
-                val image = chatRepository.prepareImage(uri)
-                mutableUiState.update { it.copy(pendingImage = image) }
+                uris.distinct().take(remaining).forEach { uri ->
+                    prepared += chatRepository.prepareAttachment(uri)
+                }
+                mutableUiState.update { state ->
+                    state.copy(
+                        pendingAttachments = (state.pendingAttachments + prepared)
+                            .distinctBy(AiChatAttachment::uri)
+                            .take(MAX_ATTACHMENTS),
+                    )
+                }
+                if (uris.distinct().size > remaining) {
+                    mutableUiState.update {
+                        it.copy(transientMessage = localized("已添加前 $remaining 个附件。", "Added the first $remaining attachments."))
+                    }
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: AiChatException) {
-                mutableUiState.update {
-                    it.copy(errorMessage = error.message ?: "无法添加图片。")
-                }
+                mutableUiState.update { it.copy(errorMessage = error.message ?: localized("无法添加附件。", "Could not add the attachment.")) }
             } catch (_: Exception) {
-                mutableUiState.update { it.copy(errorMessage = "无法添加图片，请重新选择。") }
+                mutableUiState.update { it.copy(errorMessage = localized("无法读取所选附件。", "Could not read the selected attachment.")) }
             } finally {
-                mutableUiState.update { it.copy(isPreparingImage = false) }
+                mutableUiState.update { it.copy(isPreparingAttachments = false) }
             }
         }
     }
 
-    fun removePendingImage() {
+    fun removePendingAttachment(uri: String) {
         if (mutableUiState.value.isSending) return
-        mutableUiState.update { it.copy(pendingImage = null) }
-    }
-
-    fun openDiaryContextPicker() = openContextPicker(AiContextSource.DIARY)
-
-    fun openThoughtContextPicker() = openContextPicker(AiContextSource.THOUGHT)
-
-    private fun openContextPicker(source: AiContextSource) {
-        val current = mutableUiState.value
-        if (current.isSending || current.isPreparingImage) return
-        mutableUiState.update {
-            it.copy(
-                isContextPickerVisible = true,
-                contextPickerSource = source,
-                contextPickerErrorMessage = null,
-                errorMessage = null,
-            )
-        }
-        if (!current.contextCandidatesLoaded && !current.isLoadingContextCandidates) {
-            loadContextCandidates()
+        mutableUiState.update { state ->
+            state.copy(pendingAttachments = state.pendingAttachments.filterNot { it.uri == uri })
         }
     }
 
-    fun closeContextPicker() {
-        if (mutableUiState.value.isLoadingContextPreview) return
-        mutableUiState.update {
-            it.copy(
-                isContextPickerVisible = false,
-                contextPickerSource = null,
-                contextPickerErrorMessage = null,
-                contextPreview = null,
-            )
+    fun showContextManager() {
+        if (!mutableUiState.value.isSending) {
+            mutableUiState.update { it.copy(isContextManagerVisible = true) }
         }
     }
 
-    fun refreshContextCandidates() {
-        val current = mutableUiState.value
-        if (current.isSending || current.isLoadingContextCandidates) return
-        mutableUiState.update { it.copy(contextPickerErrorMessage = null) }
-        loadContextCandidates()
+    fun hideContextManager() {
+        mutableUiState.update { it.copy(isContextManagerVisible = false) }
     }
 
-    fun toggleContextCandidate(selectionKey: String) {
-        val current = mutableUiState.value
-        if (current.isSending || current.isLoadingContextCandidates) return
-        if (current.contextCandidates.none { it.selectionKey == selectionKey }) return
-        val updated = current.pendingContextKeys.toMutableSet()
-        if (!updated.add(selectionKey)) {
-            updated.remove(selectionKey)
-        } else if (updated.size > AiContextCodec.MAX_ITEMS) {
-            mutableUiState.update {
-                it.copy(
-                    contextPickerErrorMessage = aiContextFailureMessage(
-                        AiContextException(
-                            failure = AiContextFailure.TOO_MANY_ITEMS,
-                            itemCount = updated.size,
-                        ),
-                        settings.value.appLanguage,
-                    ),
-                )
-            }
-            return
-        }
-        mutableUiState.update {
-            it.copy(
-                pendingContextKeys = updated,
-                contextPickerErrorMessage = null,
-            )
-        }
-    }
-
-    fun toggleContextGroup(selectionKeys: Collection<String>) {
-        val current = mutableUiState.value
-        if (current.isSending ||
-            current.isLoadingContextCandidates ||
-            current.contextPickerSource != AiContextSource.THOUGHT
-        ) {
-            return
-        }
-        val availableKeys = current.contextCandidates
-            .asSequence()
-            .filter { it.source == AiContextSource.THOUGHT }
-            .map(AiContextCandidate::selectionKey)
-            .toHashSet()
-        val groupKeys = selectionKeys.filter { it in availableKeys }
-        val result = toggleAiContextGroup(
-            currentSelection = current.pendingContextKeys,
-            groupKeys = groupKeys,
-            maxItems = AiContextCodec.MAX_ITEMS,
-        )
-        if (result.limitExceeded) {
-            mutableUiState.update {
-                it.copy(
-                    contextPickerErrorMessage = aiContextFailureMessage(
-                        AiContextException(
-                            failure = AiContextFailure.TOO_MANY_ITEMS,
-                            itemCount = result.resultingItemCount,
-                        ),
-                        settings.value.appLanguage,
-                    ),
-                )
-            }
-            return
-        }
-        mutableUiState.update {
-            it.copy(
-                pendingContextKeys = result.selection,
-                contextPickerErrorMessage = null,
-            )
-        }
-    }
-
-    fun clearPendingContexts() {
+    fun setSourceEnabled(source: AgentDataSource, enabled: Boolean) {
         if (mutableUiState.value.isSending) return
-        mutableUiState.update {
-            it.copy(
-                pendingContextKeys = emptySet(),
-                contextPickerErrorMessage = null,
-            )
-        }
-    }
-
-    fun previewContextCandidate(selectionKey: String) {
-        val current = mutableUiState.value
-        if (current.isSending || current.isLoadingContextPreview) return
-        if (current.contextCandidates.none { it.selectionKey == selectionKey }) return
-        mutableUiState.update {
-            it.copy(
-                isLoadingContextPreview = true,
-                contextPreview = null,
-                contextPickerErrorMessage = null,
-                errorMessage = null,
-            )
-        }
         viewModelScope.launch {
-            try {
-                val preview = contextRepository.preview(selectionKey)
-                mutableUiState.update { it.copy(contextPreview = preview) }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: AiContextException) {
-                mutableUiState.update {
-                    it.copy(
-                        contextPickerErrorMessage = aiContextFailureMessage(
-                            error,
-                            settings.value.appLanguage,
-                        ),
-                    )
-                }
-            } catch (_: Exception) {
-                mutableUiState.update {
-                    it.copy(
-                        contextPickerErrorMessage = aiContextFailureMessage(
-                            AiContextException(AiContextFailure.SOURCE_UNAVAILABLE),
-                            settings.value.appLanguage,
-                        ),
-                    )
-                }
-            } finally {
-                mutableUiState.update { it.copy(isLoadingContextPreview = false) }
-            }
+            val current = settingsRepository.settings.first().agentEnabledSources
+            settingsRepository.setAgentEnabledSources(if (enabled) current + source else current - source)
         }
     }
 
-    fun dismissContextPreview() {
-        mutableUiState.update { it.copy(contextPreview = null) }
+    fun showPermissionMode() {
+        if (!mutableUiState.value.isSending) {
+            mutableUiState.update { it.copy(isPermissionModeVisible = true) }
+        }
     }
+
+    fun hidePermissionMode() {
+        mutableUiState.update { it.copy(isPermissionModeVisible = false) }
+    }
+
+    fun setPermissionMode(mode: AgentPermissionMode) {
+        if (mutableUiState.value.isSending) return
+        viewModelScope.launch {
+            settingsRepository.setAgentPermissionMode(mode)
+            mutableUiState.update { it.copy(isPermissionModeVisible = false) }
+        }
+    }
+
+    fun approveMutation(requestId: String) = permissionManager.approve(requestId)
+
+    fun rejectMutation(requestId: String) = permissionManager.reject(requestId)
 
     fun sendMessage() {
         val current = mutableUiState.value
-        if (current.isSending || current.isPreparingImage) return
+        if (current.isSending || current.isPreparingAttachments) return
         val content = current.draft.trim()
-        val image = current.pendingImage
-        val contextKeys = current.pendingContextKeys.toList()
-        if (content.isEmpty() && image == null) return
+        val attachments = current.pendingAttachments
+        if (content.isEmpty() && attachments.isEmpty()) return
 
         val draftSnapshot = current.draft
+        val attachmentSnapshot = attachments
         val requestId = ++requestSerial
         mutableUiState.update {
             it.copy(
                 isSending = true,
+                executionUpdates = emptyList(),
+                lastRunUsage = null,
                 errorMessage = null,
             )
         }
-
         sendJob = viewModelScope.launch {
             try {
                 val currentSettings = settingsRepository.settings.first()
-                val textConfig = currentSettings.aiConfigs.firstOrNull {
-                    it.id == currentSettings.aiChatConfigId && it.type == AiModelType.TEXT
+                val textConfig = currentSettings.aiConfigs.firstOrNull { config ->
+                    config.id == currentSettings.aiChatConfigId &&
+                        config.type == AiModelType.TEXT && config.enabled
+                } ?: throw AgentRuntimeException(
+                    "AI_MODEL_UNAVAILABLE",
+                    localized("请先选择可用的文字模型配置。", "Select an available text-model configuration first."),
+                )
+                if (!textConfig.supportsToolCalling) {
+                    throw AgentRuntimeException(
+                        "AI_TOOLS_UNSUPPORTED",
+                        localized(
+                            "当前 Provider 未启用原生工具调用，无法运行 Agent。请在 AI 设置中确认能力。",
+                            "Native tool calling is disabled for this provider. Enable the capability in AI settings.",
+                        ),
+                    )
                 }
-                if (textConfig == null && currentSettings.aiModel.isBlank()) {
-                    mutableUiState.update {
-                        it.copy(errorMessage = "请先在 AI 设置中填写模型名称。")
-                    }
-                    return@launch
+                val effectiveRequest = content.ifBlank {
+                    localized("请分析我附加的内容。", "Please analyze the attached content.")
                 }
-                if ((textConfig?.endpointUrl ?: currentSettings.aiEndpointUrl).isBlank()) {
-                    mutableUiState.update {
-                        it.copy(errorMessage = "请先在 AI 设置中填写接口地址。")
-                    }
-                    return@launch
-                }
-                val frozenContext = contextKeys.takeIf { it.isNotEmpty() }
-                    ?.let { selected ->
-                        AiContextCodec.encode(contextRepository.freeze(selected))
-                    }
-                if (requestId != requestSerial) return@launch
                 val conversationId = current.activeConversationId ?: chatRepository.createConversation(
-                    firstMessage = content,
-                    hasImage = image != null,
-                    modelConfigId = textConfig?.id.orEmpty(),
+                    firstMessage = effectiveRequest,
+                    hasImage = attachments.any { it.kind == AiAttachmentKind.IMAGE },
+                    modelConfigId = textConfig.id,
                 ).also { newId ->
                     activeConversationId.value = newId
                     mutableUiState.update {
                         it.copy(
                             activeConversationId = newId,
-                            activeConversationTitle = generateConversationTitle(content, image != null),
+                            activeConversationTitle = generateConversationTitle(
+                                effectiveRequest,
+                                attachments.any { attachment -> attachment.kind == AiAttachmentKind.IMAGE },
+                            ),
                         )
                     }
                 }
-                chatRepository.appendUserTurn(
+                chatRepository.appendAgentUserMessage(
                     conversationId = conversationId,
-                    frozenContext = frozenContext,
-                    content = content,
-                    image = image,
+                    content = effectiveRequest,
+                    attachments = attachments,
                 )
                 mutableUiState.update { state ->
                     state.copy(
                         draft = if (state.draft == draftSnapshot) "" else state.draft,
-                        pendingImage = if (state.pendingImage == image) null else state.pendingImage,
-                        pendingContextKeys = if (state.pendingContextKeys == contextKeys.toSet()) {
-                            emptySet()
+                        pendingAttachments = if (state.pendingAttachments == attachmentSnapshot) {
+                            emptyList()
                         } else {
-                            state.pendingContextKeys
+                            state.pendingAttachments
                         },
-                        isContextPickerVisible = false,
-                        contextPickerSource = null,
-                        contextPickerErrorMessage = null,
-                        contextPreview = null,
                     )
                 }
-                val requestMessages = chatRepository.getMessages(conversationId)
-                val answer = chatRepository.completeWithReasoning(currentSettings, requestMessages)
+                val messages = chatRepository.getMessages(conversationId)
+                val runRequest = AgentRunRequest(
+                    runId = UUID.randomUUID().toString(),
+                    conversationId = conversationId,
+                    conversationTitle = mutableUiState.value.activeConversationTitle,
+                    userRequest = effectiveRequest,
+                    modelConfigId = textConfig.id,
+                    customModelInstructions = textConfig.systemPrompt,
+                    allowedSources = currentSettings.agentEnabledSources.mapTo(linkedSetOf()) {
+                        it.wireValue
+                    },
+                    permissionMode = currentSettings.agentPermissionMode,
+                    english = currentSettings.appLanguage == AppLanguage.ENGLISH,
+                    messages = buildAgentConversation(messages),
+                )
+                val answer = agentRuntime.run(runRequest, ::recordExecutionUpdate)
                 if (requestId != requestSerial) return@launch
                 chatRepository.appendMessage(
                     conversationId = conversationId,
                     role = AiChatRole.ASSISTANT,
                     content = answer.content,
-                    reasoning = answer.reasoning,
+                    // Agent never surfaces provider reasoning or chain-of-thought.
+                    reasoning = "",
                 )
+                mutableUiState.update { it.copy(lastRunUsage = answer.usage) }
             } catch (error: CancellationException) {
-                throw error
-            } catch (error: AiChatException) {
-                if (requestId == requestSerial) {
-                    mutableUiState.update { it.copy(errorMessage = error.message ?: "AI 请求失败。") }
-                }
-            } catch (error: AiContextException) {
                 if (requestId == requestSerial) {
                     mutableUiState.update {
-                        it.copy(
-                            errorMessage = aiContextFailureMessage(
-                                error,
-                                settings.value.appLanguage,
-                            ),
-                        )
+                        it.copy(transientMessage = localized("Agent 已中止。", "Agent stopped."))
                     }
+                }
+                throw error
+            } catch (error: AgentRuntimeException) {
+                if (requestId == requestSerial) {
+                    mutableUiState.update { it.copy(errorMessage = error.message ?: localized("Agent 运行失败。", "Agent run failed.")) }
+                }
+            } catch (error: AiChatException) {
+                if (requestId == requestSerial) {
+                    mutableUiState.update { it.copy(errorMessage = error.message ?: localized("AI 请求失败。", "AI request failed.")) }
                 }
             } catch (_: Exception) {
                 if (requestId == requestSerial) {
-                    mutableUiState.update { it.copy(errorMessage = "AI 请求失败，请稍后重试。") }
+                    mutableUiState.update { it.copy(errorMessage = localized("Agent 运行失败，请稍后重试。", "Agent run failed. Try again later.")) }
                 }
             } finally {
                 if (requestId == requestSerial) {
@@ -413,41 +324,37 @@ class AiChatViewModel @Inject constructor(
         }
     }
 
-    fun startNewConversation() {
-        if (mutableUiState.value.isSending || mutableUiState.value.isPreparingImage) return
-        initialConversationResolved = true
-        activeConversationId.value = null
+    fun stopAgent() {
+        if (!mutableUiState.value.isSending) return
+        requestSerial += 1
+        pendingApproval.value?.let { permissionManager.reject(it.requestId) }
+        sendJob?.cancel()
+        sendJob = null
         mutableUiState.update {
             it.copy(
-                activeConversationId = null,
-                activeConversationTitle = "",
-                messages = emptyList(),
-                draft = "",
-                pendingImage = null,
-                pendingContextKeys = emptySet(),
-                isContextPickerVisible = false,
-                contextPickerSource = null,
-                contextPickerErrorMessage = null,
-                contextPreview = null,
-                errorMessage = null,
+                isSending = false,
+                transientMessage = localized("Agent 已中止。", "Agent stopped."),
             )
         }
     }
 
-    /** Kept for callers compiled against the earlier in-memory chat API. */
+    fun startNewConversation() {
+        if (mutableUiState.value.isSending || mutableUiState.value.isPreparingAttachments) return
+        initialConversationResolved = true
+        activeConversationId.value = null
+        mutableUiState.value = AiChatUiState()
+    }
+
     fun clearConversation() = startNewConversation()
 
     fun openConversation(id: Long) {
         if (mutableUiState.value.isSending ||
-            mutableUiState.value.isPreparingImage ||
+            mutableUiState.value.isPreparingAttachments ||
             id == activeConversationId.value
-        ) {
-            return
-        }
+        ) return
         initialConversationResolved = true
         viewModelScope.launch {
-            val conversation = chatRepository.getConversation(id) ?: return@launch
-            openConversationInternal(conversation)
+            chatRepository.getConversation(id)?.let { openConversationInternal(it) }
         }
     }
 
@@ -455,7 +362,7 @@ class AiChatViewModel @Inject constructor(
         if (title.isBlank()) return
         viewModelScope.launch {
             if (!chatRepository.renameConversation(id, title)) {
-                mutableUiState.update { it.copy(errorMessage = "无法重命名这段对话。") }
+                mutableUiState.update { it.copy(errorMessage = localized("无法重命名这段对话。", "Could not rename this conversation.")) }
             } else if (activeConversationId.value == id) {
                 mutableUiState.update {
                     it.copy(activeConversationTitle = title.replace(Regex("\\s+"), " ").trim().take(80))
@@ -467,8 +374,9 @@ class AiChatViewModel @Inject constructor(
     fun deleteConversation(id: Long) {
         if (mutableUiState.value.isSending && activeConversationId.value == id) return
         viewModelScope.launch {
-            if (!chatRepository.deleteConversation(id)) return@launch
-            if (activeConversationId.value == id) startNewConversation()
+            if (chatRepository.deleteConversation(id) && activeConversationId.value == id) {
+                startNewConversation()
+            }
         }
     }
 
@@ -476,9 +384,7 @@ class AiChatViewModel @Inject constructor(
         if (mutableUiState.value.isSending) return
         viewModelScope.launch {
             settingsRepository.setAiChatConfigId(id)
-            activeConversationId.value?.let { conversationId ->
-                chatRepository.setConversationModel(conversationId, id)
-            }
+            activeConversationId.value?.let { chatRepository.setConversationModel(it, id) }
         }
     }
 
@@ -486,144 +392,110 @@ class AiChatViewModel @Inject constructor(
         mutableUiState.update { it.copy(errorMessage = null) }
     }
 
-    private suspend fun openConversationInternal(conversation: AiConversation) {
-        val persistedSettings = settingsRepository.settings.first()
-        val originalConfigAvailable = persistedSettings.aiConfigs.any {
-            it.id == conversation.modelConfigId && it.type == AiModelType.TEXT
-        }
-        if (originalConfigAvailable) {
-            settingsRepository.setAiChatConfigId(conversation.modelConfigId)
-        }
-        activeConversationId.value = conversation.id
-        mutableUiState.update {
-            it.copy(
-                activeConversationId = conversation.id,
-                activeConversationTitle = conversation.title,
-                messages = emptyList(),
-                draft = "",
-                pendingImage = null,
-                pendingContextKeys = emptySet(),
-                isContextPickerVisible = false,
-                contextPickerSource = null,
-                contextPickerErrorMessage = null,
-                contextPreview = null,
-                errorMessage = if (conversation.modelConfigId.isNotBlank() && !originalConfigAvailable) {
-                    "原对话使用的模型配置已不存在；历史仍可查看，继续聊天时将使用当前配置。"
+    fun consumeTransientMessage() {
+        mutableUiState.update { it.copy(transientMessage = null) }
+    }
+
+    private fun recordExecutionUpdate(update: AgentExecutionUpdate) {
+        mutableUiState.update { state ->
+            val index = state.executionUpdates.indexOfFirst { it.toolCallId == update.toolCallId }
+            state.copy(
+                executionUpdates = if (index < 0) {
+                    (state.executionUpdates + update).takeLast(MAX_EXECUTION_UPDATES)
                 } else {
-                    null
+                    state.executionUpdates.toMutableList().apply { this[index] = update }
                 },
             )
         }
     }
 
-    private fun loadContextCandidates() {
+    private suspend fun openConversationInternal(conversation: AiConversation) {
+        val persisted = settingsRepository.settings.first()
+        val originalAvailable = persisted.aiConfigs.any {
+            it.id == conversation.modelConfigId && it.type == AiModelType.TEXT && it.enabled
+        }
+        if (originalAvailable) settingsRepository.setAiChatConfigId(conversation.modelConfigId)
+        activeConversationId.value = conversation.id
         mutableUiState.update {
-            it.copy(
-                isLoadingContextCandidates = true,
-                contextPickerErrorMessage = null,
-                errorMessage = null,
+            AiChatUiState(
+                activeConversationId = conversation.id,
+                activeConversationTitle = conversation.title,
+                errorMessage = if (conversation.modelConfigId.isNotBlank() && !originalAvailable) {
+                    localized(
+                        "原对话使用的模型配置已不存在；历史仍可查看，继续时将使用当前配置。",
+                        "The original model configuration no longer exists. History remains available; continuing uses the current configuration.",
+                    )
+                } else null,
             )
         }
-        viewModelScope.launch {
-            try {
-                val candidates = contextRepository.listCandidates()
-                val availableKeys = candidates.mapTo(hashSetOf(), AiContextCandidate::selectionKey)
-                mutableUiState.update { state ->
-                    state.copy(
-                        contextCandidates = candidates,
-                        contextCandidatesLoaded = true,
-                        pendingContextKeys = state.pendingContextKeys.filterTo(linkedSetOf()) {
-                            it in availableKeys
-                        },
-                    )
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                mutableUiState.update {
-                    val message = contextCandidateLoadFailureMessage(settings.value.appLanguage)
-                    if (it.isContextPickerVisible) {
-                        it.copy(contextPickerErrorMessage = message)
-                    } else {
-                        it.copy(errorMessage = message)
-                    }
-                }
-            } finally {
-                mutableUiState.update { it.copy(isLoadingContextCandidates = false) }
-            }
-        }
     }
+
+    private fun buildAgentConversation(messages: List<AiChatMessage>): List<AgentConversationMessage> {
+        var remaining = MAX_HISTORY_CONTENT_CHARS
+        val reversed = mutableListOf<AgentConversationMessage>()
+        messages.asReversed().take(MAX_HISTORY_MESSAGES).forEach { message ->
+            if (remaining <= 0) return@forEach
+            val documentContext = message.attachments
+                .asSequence()
+                .filter { it.kind == AiAttachmentKind.DOCUMENT && !it.extractedText.isNullOrBlank() }
+                .joinToString("\n\n") { attachment ->
+                    "<untrusted_attachment name=\"${attachment.displayName.xmlEscape()}\" " +
+                        "mime=\"${attachment.mimeType.xmlEscape()}\">\n" +
+                        attachment.extractedText.orEmpty() + "\n</untrusted_attachment>"
+                }
+            val syncedImageNotice = message.attachments.any {
+                it.kind == AiAttachmentKind.IMAGE && it.uri.isBlank()
+            }
+            val combined = buildString {
+                append(message.content)
+                if (documentContext.isNotBlank()) append("\n\n").append(documentContext)
+                if (syncedImageNotice) {
+                    append("\n\n[An image attachment exists in synced history but its device-local URI is unavailable.]")
+                }
+            }.takeLast(remaining)
+            remaining -= combined.length
+            val images = buildList {
+                message.image?.takeIf { it.uri.isNotBlank() }?.let { add(AIImage(it.uri, it.mimeType)) }
+                message.attachments.asSequence()
+                    .filter { it.kind == AiAttachmentKind.IMAGE && it.uri.isNotBlank() }
+                    .map { AIImage(it.uri, it.mimeType) }
+                    .filterNot { candidate -> any { it.contentUri == candidate.contentUri } }
+                    .forEach(::add)
+            }
+            reversed += AgentConversationMessage(
+                role = when (message.role) {
+                    AiChatRole.USER -> AgentConversationRole.USER
+                    AiChatRole.ASSISTANT -> AgentConversationRole.ASSISTANT
+                    AiChatRole.CONTEXT -> AgentConversationRole.UNTRUSTED_CONTEXT
+                },
+                content = combined,
+                images = images,
+            )
+        }
+        return reversed.asReversed()
+    }
+
+    private fun localized(chinese: String, english: String): String =
+        if (settings.value.appLanguage == AppLanguage.ENGLISH) english else chinese
+
+    private fun String.xmlEscape(): String = replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .take(500)
 
     private companion object {
         const val MAX_DRAFT_CHARS = 100_000
+        const val MAX_ATTACHMENTS = 5
+        const val MAX_HISTORY_MESSAGES = 80
+        const val MAX_HISTORY_CONTENT_CHARS = 1024 * 1024
+        const val MAX_EXECUTION_UPDATES = 200
     }
 }
 
-internal fun aiContextFailureMessage(
-    error: AiContextException,
-    language: AppLanguage,
-): String {
-    val english = language == AppLanguage.ENGLISH
-    val title = error.itemTitle?.trim()?.takeIf(String::isNotEmpty)
-    val measuredSize = error.measuredBytes?.let(::formatContextKiB)
-    return when (error.failure) {
-        AiContextFailure.TOO_MANY_ITEMS -> if (english) {
-            val selected = error.itemCount?.let { " ($it selected)" }.orEmpty()
-            "You can select at most ${AiContextCodec.MAX_ITEMS} context items$selected."
-        } else {
-            val selected = error.itemCount?.let { "（当前选择 $it 项）" }.orEmpty()
-            "一次最多选择 ${AiContextCodec.MAX_ITEMS} 条上下文$selected。"
-        }
-
-        AiContextFailure.ITEM_TOO_LARGE -> if (english) {
-            val subject = title?.let { "“$it”" } ?: "One selected item"
-            val size = measuredSize?.let { " is $it after encoding and" }.orEmpty()
-            "$subject$size exceeds the 64 KiB per-item limit. It will not be truncated or sent."
-        } else {
-            val subject = title?.let { "“$it”" } ?: "有一条所选内容"
-            val size = measuredSize?.let { "编码后为 $it，" }.orEmpty()
-            "$subject${size}超过单条 64 KiB 上限；不会截断或发送。"
-        }
-
-        AiContextFailure.TOTAL_TOO_LARGE -> if (english) {
-            val size = measuredSize?.let { " ($it after encoding)" }.orEmpty()
-            "The selected context$size exceeds the 256 KiB total limit. Remove some items and try again."
-        } else {
-            val size = measuredSize?.let { "（编码后为 $it）" }.orEmpty()
-            "所选上下文${size}超过 256 KiB 总上限；请减少条目后重试。"
-        }
-
-        AiContextFailure.SOURCE_UNAVAILABLE -> if (english) {
-            "The selected context could not be read. It may have been deleted, its directory permission may have expired, or it may currently be unavailable."
-        } else {
-            "无法读取所选上下文；它可能已被删除、目录授权已失效，或当前不可访问。"
-        }
-
-        AiContextFailure.INVALID_TEXT_ENCODING -> if (english) {
-            val subject = title?.let { "“$it”" } ?: "The selected diary"
-            "$subject is not valid UTF-8 text and cannot be imported."
-        } else {
-            val subject = title?.let { "“$it”" } ?: "所选日记"
-            "$subject 不是有效的 UTF-8 文本，无法导入。"
-        }
-
-        AiContextFailure.INVALID_SNAPSHOT -> if (english) {
-            "The saved context snapshot is invalid or uses an unsupported version."
-        } else {
-            "已保存的上下文快照无效或版本不受支持。"
-        }
-    }
-}
-
-internal fun contextCandidateLoadFailureMessage(language: AppLanguage): String =
-    if (language == AppLanguage.ENGLISH) {
-        "Could not load importable context. Please try again."
-    } else {
-        "无法读取可导入的上下文，请稍后重试。"
-    }
-
-private fun formatContextKiB(bytes: Int): String {
-    val whole = bytes / 1024
-    val decimal = bytes % 1024 * 10 / 1024
-    return "$whole.$decimal KiB"
-}
+internal fun executionStatusIsTerminal(status: AgentExecutionStatus): Boolean = status in setOf(
+    AgentExecutionStatus.REJECTED,
+    AgentExecutionStatus.SUCCEEDED,
+    AgentExecutionStatus.FAILED,
+    AgentExecutionStatus.CANCELED,
+)

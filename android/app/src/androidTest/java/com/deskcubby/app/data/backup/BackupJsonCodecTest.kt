@@ -11,6 +11,8 @@ import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.local.VaultItemEntity
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AgentDataSource
+import com.deskcubby.app.data.model.AgentPermissionMode
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.CloudSyncConfig
@@ -58,6 +60,73 @@ import org.json.JSONObject
 
 @RunWith(AndroidJUnit4::class)
 class BackupJsonCodecTest {
+    @Test
+    fun versionThirtyRoundTripPreservesAgentSourcesPermissionAndModelCapability() {
+        val source = AppBackup(
+            exportedAt = 30,
+            settings = AppSettings(
+                aiConfigs = listOf(
+                    AiModelConfig(
+                        id = "agent-model",
+                        name = "Agent model",
+                        type = AiModelType.TEXT,
+                        endpointUrl = "https://example.com/v1/chat/completions",
+                        model = "example-model",
+                        supportsToolCalling = false,
+                    ),
+                ),
+                agentEnabledSources = setOf(AgentDataSource.DIARY, AgentDataSource.NOTES),
+                agentPermissionMode = AgentPermissionMode.FULL_AUTO,
+            ),
+            thoughts = emptyList(),
+            favorites = emptyList(),
+        )
+
+        val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
+
+        assertEquals(setOf(AgentDataSource.DIARY, AgentDataSource.NOTES), decoded.settings.agentEnabledSources)
+        assertEquals(AgentPermissionMode.FULL_AUTO, decoded.settings.agentPermissionMode)
+        assertFalse(decoded.settings.aiConfigs.single().supportsToolCalling)
+    }
+
+    @Test
+    fun versionTwentyNineUsesSafeAgentDefaultsAndKeepsOldAiConfig() {
+        val json = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 29,
+                    settings = AppSettings(
+                        aiConfigs = listOf(
+                            AiModelConfig(
+                                id = "legacy",
+                                name = "Legacy",
+                                type = AiModelType.TEXT,
+                                endpointUrl = "https://example.com/v1/chat/completions",
+                                model = "legacy-model",
+                            ),
+                        ),
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        ).apply {
+            put("version", 29)
+            getJSONObject("settings").apply {
+                remove("agentEnabledSources")
+                remove("agentPermissionMode")
+                getJSONArray("aiConfigs").getJSONObject(0).remove("supportsToolCalling")
+            }
+        }
+
+        val decoded = BackupJsonCodec.decode(json.toString())
+
+        assertEquals(AppSettings().agentEnabledSources, decoded.settings.agentEnabledSources)
+        assertEquals(AppSettings().agentPermissionMode, decoded.settings.agentPermissionMode)
+        assertEquals("legacy-model", decoded.settings.aiConfigs.single().model)
+        assertEquals(false, decoded.settings.aiConfigs.single().supportsToolCalling)
+    }
+
     @Test
     fun versionTwentyEightRoundTripPreservesEncryptedVaultGamesUsageWidgetsAndNewSettings() {
         val iv = Base64.getEncoder().encodeToString(ByteArray(12) { 2 })
@@ -205,9 +274,9 @@ class BackupJsonCodecTest {
 
         val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
 
-        assertEquals(29, decoded.formatVersion)
+        assertEquals(BackupJsonCodec.FORMAT_VERSION, decoded.formatVersion)
         assertEquals(vault, decoded.vault)
-        assertEquals(gameStates, decoded.gameStates)
+        assertEquals(gameStates.sortedBy(GameStateEntity::gameId), decoded.gameStates)
         assertEquals(gameStatistics, decoded.gameStatistics)
         assertEquals(usageDevices, decoded.usageDevices)
         assertEquals(readerProgress, decoded.readerProgress)
@@ -382,11 +451,25 @@ class BackupJsonCodecTest {
         assertNull(decoded.settings.notesTreeUri)
         assertEquals(DEFAULT_MARKDOWN_HEADING_SIZES_SP, decoded.settings.markdownHeadingSizesSp)
         assertEquals(
-            listOf("today", "notes", "game_shortcuts", "record_overview"),
+            listOf(
+                "today",
+                "notes",
+                "game_shortcuts",
+                "record_overview",
+                "cloud_sync_now",
+                "cloud_sync_force",
+            ),
             decoded.settings.homeWidgets,
         )
         assertEquals(
-            listOf("today", "notes", "game_shortcuts", "record_overview"),
+            listOf(
+                "today",
+                "notes",
+                "game_shortcuts",
+                "record_overview",
+                "cloud_sync_now",
+                "cloud_sync_force",
+            ),
             decoded.settings.homeWidgetTitles,
         )
     }
@@ -645,6 +728,7 @@ class BackupJsonCodecTest {
                 ),
             ),
         )
+        root.put("version", 29)
         root.getJSONObject("settings")
             .getJSONArray("desktopWidgetConfigs")
             .getJSONObject(0)
@@ -993,7 +1077,7 @@ class BackupJsonCodecTest {
 
         val decoded = BackupJsonCodec.decode(encoded)
 
-        assertEquals(29, decoded.formatVersion)
+        assertEquals(BackupJsonCodec.FORMAT_VERSION, decoded.formatVersion)
         assertEquals(VisualStyle.CUSTOM, decoded.settings.visualStyle)
         assertEquals(customTheme, decoded.settings.customTheme)
     }
@@ -1329,7 +1413,7 @@ class BackupJsonCodecTest {
         )
         assertEquals(filter, decoded.settings.mealPhotoFilter)
         assertEquals(navItems, decoded.settings.navItems)
-        assertEquals(88, decoded.settings.vaultRowHeightDp)
+        assertEquals(AppSettings().vaultRowHeightDp, decoded.settings.vaultRowHeightDp)
     }
 
     @Test
@@ -1738,10 +1822,34 @@ class BackupJsonCodecTest {
         assertEquals(false, decoded.settings.mealButtonsUseIcons)
         assertVersionFiveSettingsUseDefaults(decoded.settings)
         assertEquals(
-            listOf("today", "quick_input", "meal_photos", "website"),
+            listOf(
+                "today",
+                "quick_input",
+                "daily_records",
+                "meal_photos",
+                "website",
+                "notes",
+                "game_shortcuts",
+                "record_overview",
+                "cloud_sync_now",
+                "cloud_sync_force",
+            ),
             decoded.settings.homeWidgets,
         )
-        assertEquals(listOf("today", "quick_input", "meal_photos"), decoded.settings.homeWidgetTitles)
+        assertEquals(
+            listOf(
+                "today",
+                "quick_input",
+                "daily_records",
+                "meal_photos",
+                "notes",
+                "game_shortcuts",
+                "record_overview",
+                "cloud_sync_now",
+                "cloud_sync_force",
+            ),
+            decoded.settings.homeWidgetTitles,
+        )
     }
 
     @Test

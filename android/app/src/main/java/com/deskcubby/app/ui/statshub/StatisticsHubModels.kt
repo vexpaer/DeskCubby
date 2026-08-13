@@ -4,6 +4,7 @@ import com.deskcubby.app.data.local.DiaryIndexEntity
 import com.deskcubby.app.data.local.GameStateEntity
 import com.deskcubby.app.data.repository.ReaderBook
 import com.deskcubby.app.data.statistics.EngagementTimeSnapshot
+import com.deskcubby.app.data.statistics.AgentTokenStatistics
 import com.deskcubby.app.data.statistics.StatisticsPoint
 import com.deskcubby.app.data.statistics.StepStatisticsHistory
 import com.deskcubby.app.data.statistics.UsageDeviceRecord
@@ -55,6 +56,7 @@ data class StatisticsHubUiState(
     val health: RecentStatisticsSummary = RecentStatisticsSummary(),
     val reading: List<EngagementStatisticsItem> = emptyList(),
     val games: List<GameStatisticsHubItem> = defaultGameStatisticsHubItems(),
+    val agent: AgentTokenStatistics = AgentTokenStatistics(),
 ) {
     val totalReadingMillis: Long
         get() = reading.saturatedDurationSum()

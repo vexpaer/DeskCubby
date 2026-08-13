@@ -26,6 +26,7 @@ enum class SyncContent {
     JSON_BACKUP,
     USAGE_STATISTICS,
     READING_PROGRESS,
+    AGENT_CHATS,
 }
 
 data class SyncConfiguration(

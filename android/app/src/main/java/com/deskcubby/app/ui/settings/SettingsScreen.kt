@@ -1776,8 +1776,8 @@ private fun CloudSyncSettingsPage(
             text = {
                 Text(
                     tr(
-                        "这会按所选备份的版本导入应用设置和结构化数据；当前格式为 v29，并兼容导入 v1–v28。导入会恢复自定义主题、Markdown 标题字号、主页小游戏快捷入口、背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Vault 随后保持锁定。日记、笔记、媒体与背景图片文件不会被替换。",
-                        "This imports app settings and structured data according to the selected backup version; the current format is v29 and v1–v28 remain accepted. It restores the custom theme, Markdown heading sizes, Home mini-game shortcuts, background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. The Vault remains locked, and diary, note, media, and background-image files are not replaced.",
+                        "这会按所选备份的版本导入应用设置和结构化数据；当前格式为 v30，并兼容导入 v1–v29。导入会恢复 Agent 来源授权/权限模式/模型工具能力、自定义主题、Markdown 标题字号、主页小游戏快捷入口、背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Agent 会话/Review、日记、笔记、媒体与背景图片文件不会被替换。",
+                        "This imports app settings and structured data according to the selected backup version; the current format is v30 and v1–v29 remain accepted. It restores Agent source grants, permission mode, model tool capability, the custom theme, Markdown heading sizes, Home mini-game shortcuts, background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. Agent chats/Review, diary, note, media, and background-image files are not replaced.",
                     ),
                 )
             },
@@ -2123,8 +2123,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.JSON_BACKUP in selectedContents) {
                     Text(
                         tr(
-                            "v29 应用 JSON 包含自定义主题、Markdown 显示设置、主页小游戏快捷入口、全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "The v29 app JSON contains the custom theme, Markdown display settings, Home mini-game shortcuts, global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                            "v30 应用 JSON 包含 Agent 来源/权限/模型能力、自定义主题、Markdown 显示设置、主页小游戏快捷入口、全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "The v30 app JSON contains Agent source/permission/model-capability settings, the custom theme, Markdown display settings, Home mini-game shortcuts, global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2145,6 +2145,16 @@ private fun CloudSyncConfigDetailPage(
                         tr(
                             "阅读进度会按书籍文件的 SHA-256 指纹自动合并。云端不包含书名、文件地址、封面或正文，但文件指纹仍可能用于识别你持有的特定文件；请只使用可信云端。",
                             "Reading progress is merged using each book file's SHA-256 fingerprint. The cloud object contains no title, file URI, cover, or book text, but a fingerprint can still identify a specific file you possess; use only a trusted cloud service.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (CloudSyncContent.AGENT_CHATS in selectedContents) {
+                    Text(
+                        tr(
+                            "Agent 会话会同步文字、冻结的文档文字、图片占位和 Provider 用量；不会上传本机 URI、图片字节、Review/Undo 载荷或秘密。远端没有端到端加密，请只使用可信云端。",
+                            "Agent chats synchronize text, frozen document text, image placeholders, and provider usage. Local URIs, image bytes, Review/Undo payloads, and secrets are excluded. The remote object is not end-to-end encrypted; use only a trusted cloud service.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2308,6 +2318,7 @@ private fun syncContentLabel(content: CloudSyncContent): String = when (content)
     CloudSyncContent.JSON_BACKUP -> tr("应用 JSON", "App JSON")
     CloudSyncContent.USAGE_STATISTICS -> tr("多设备使用时间", "Multi-device screen time")
     CloudSyncContent.READING_PROGRESS -> tr("阅读进度", "Reading progress")
+    CloudSyncContent.AGENT_CHATS -> tr("Agent 会话", "Agent chats")
 }
 
 @Composable
@@ -2322,6 +2333,7 @@ private fun syncContentsLabel(contents: Set<CloudSyncContent>): String =
                     CloudSyncContent.JSON_BACKUP -> "App JSON"
                     CloudSyncContent.USAGE_STATISTICS -> "Screen time"
                     CloudSyncContent.READING_PROGRESS -> "Reading progress"
+                    CloudSyncContent.AGENT_CHATS -> "Agent chats"
                 }
             }
     } else {
@@ -2334,6 +2346,7 @@ private fun syncContentsLabel(contents: Set<CloudSyncContent>): String =
                     CloudSyncContent.JSON_BACKUP -> "应用 JSON"
                     CloudSyncContent.USAGE_STATISTICS -> "使用时间"
                     CloudSyncContent.READING_PROGRESS -> "阅读进度"
+                    CloudSyncContent.AGENT_CHATS -> "Agent 会话"
                 }
             }
     }
@@ -2482,8 +2495,8 @@ private fun BackupSettingsPage(
             text = {
                 Text(
                     tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。当前 v29（并兼容 v1–v28）还会恢复自定义主题、Markdown 标题字号、主页小游戏快捷入口、全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。日记、笔记、媒体和背景图片文件不会被修改。确定继续吗？",
-                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. Current v29 backups (with v1–v28 still accepted) also restore the custom theme, Markdown heading sizes, Home mini-game shortcuts, global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merge games and per-device screen time while leaving the Vault locked. Diary, note, media, and background-image files are unchanged. Continue?",
+                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。当前 v30（并兼容 v1–v29）还会恢复 Agent 来源授权/权限模式/模型工具能力、自定义主题、Markdown 标题字号、主页小游戏快捷入口、全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。Agent 会话/Review、日记、笔记、媒体和背景图片文件不会被修改。确定继续吗？",
+                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. Current v30 backups (with v1–v29 still accepted) also restore Agent source grants, permission mode, model tool capability, the custom theme, Markdown heading sizes, Home mini-game shortcuts, global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merge games and per-device screen time while leaving the Vault locked. Agent chats/Review, diary, note, media, and background-image files are unchanged. Continue?",
                     ),
                 )
             },
@@ -2658,15 +2671,15 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "v29 包含应用设置（含自定义主题、Markdown 标题字号与笔记目录引用、主页小游戏快捷入口、全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。笔记/日记正文、媒体文件、逐页教学确认和背景图片文件不包含在内。",
-                        "v29 includes app settings (including the custom theme, Markdown heading sizes and the notes-folder reference, Home mini-game shortcuts, global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time. Note/diary contents, media files, per-page confirmations, and background-image files are excluded.",
+                        "v30 包含应用设置（含 Agent 来源授权/权限模式/模型工具能力、自定义主题、Markdown 标题字号与笔记目录引用、主页小游戏快捷入口、全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。",
+                        "v30 includes app settings (including Agent source grants, permission mode, model tool capability, the custom theme, Markdown heading sizes and the notes-folder reference, Home mini-game shortcuts, global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
                     tr(
-                        "不包含日记正文、媒体文件、阅读书架/进度、阅读与小游戏累计时长 JSON、AI 对话历史、全局/卡片背景图片文件、逐页教学确认、Vault 密码/派生密钥、云端凭据、健康历史、系统权限或本机随机设备 ID。跨设备导入后需重新选择目录、图片，导入书籍，填写云端凭据并重新授权。",
-                        "Diary/media files, reader library/progress, reading and game-time JSON, AI chats, global/widget background-image files, per-page tutorial confirmations, Vault passwords/derived keys, cloud credentials, health history, system permissions, and this device's random ID are excluded. After cross-device import, reselect folders and images, re-import books, re-enter cloud credentials, and grant permissions again.",
+                        "不包含日记/笔记正文、媒体文件、阅读书架/书名/URI/封面/私有页内偏移、阅读与小游戏累计时长 JSON、Agent 会话/附件/运行/Review/Undo、全局/卡片背景图片文件、逐页教学确认、Vault 密码/派生密钥、云端凭据、健康历史、系统权限或本机随机设备 ID。跨设备导入后需重新选择目录、图片，导入书籍，填写云端凭据并重新授权。",
+                        "Diary/note content, media files, reader library/title/URI/cover/private in-page offset, reading and game-time JSON, Agent chats/attachments/runs/Review/Undo, global/widget background-image files, per-page tutorial confirmations, Vault passwords/derived keys, cloud credentials, health history, system permissions, and this device's random ID are excluded. After cross-device import, reselect folders and images, re-import books, re-enter cloud credentials, and grant permissions again.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -5331,8 +5344,15 @@ private fun AiConfigurationsSettingsPage(
                     Spacer(Modifier.width(12.dp))
                     Text(config.name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.titleMedium)
-                    Text(if (config.type == AiModelType.TEXT) tr("文字", "Text") else tr("图片", "Image"),
-                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        when {
+                            config.type == AiModelType.IMAGE -> tr("图片", "Image")
+                            config.supportsToolCalling -> tr("Agent", "Agent")
+                            else -> tr("文字", "Text")
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -5373,10 +5393,11 @@ private fun AiConfigurationDetailPage(
     var temperature by rememberSaveable(initial.id) { mutableStateOf(initial.temperature) }
     var systemPrompt by rememberSaveable(initial.id) { mutableStateOf(initial.systemPrompt) }
     var apiKey by rememberSaveable(initial.id) { mutableStateOf(initial.apiKey) }
+    var supportsTools by rememberSaveable(initial.id) { mutableStateOf(initial.supportsToolCalling) }
     var requestPreview by remember(initial.id) { mutableStateOf<String?>(null) }
     val changed = initial.copy(name = name, type = type, endpointUrl = endpoint, model = model,
         allowInsecureHttp = allowHttp, temperature = temperature, systemPrompt = systemPrompt,
-        apiKey = apiKey, enabled = true)
+        apiKey = apiKey, supportsToolCalling = supportsTools, enabled = true)
     val endpointUri = remember(endpoint) { runCatching { Uri.parse(endpoint.trim()) }.getOrNull() }
     val endpointValid = endpointUri?.host?.isNotBlank() == true && when (endpointUri.scheme?.lowercase()) {
         "https" -> true; "http" -> allowHttp; else -> false
@@ -5403,6 +5424,7 @@ private fun AiConfigurationDetailPage(
             temperature = defaults.temperature
             systemPrompt = defaults.systemPrompt
             apiKey = defaults.apiKey
+            supportsTools = defaults.supportsToolCalling
             requestPreview = null
         },
     ) {
@@ -5435,8 +5457,32 @@ private fun AiConfigurationDetailPage(
                 )) })
             if (type == AiModelType.TEXT) OutlinedTextField(
                 systemPrompt, { systemPrompt = it.take(20_000) }, Modifier.fillMaxWidth(),
-                label = { Text(tr("系统提示词", "System prompt")) }, minLines = 4,
+                label = { Text(tr("附加模型指令", "Additional model instructions")) }, minLines = 4,
+                supportingText = {
+                    Text(
+                        tr(
+                            "DeskCubby 的严格 Agent system prompt 始终优先；这里仅补充风格和任务偏好。",
+                            "DeskCubby's strict Agent system prompt always takes precedence; use this only for style and task preferences.",
+                        ),
+                    )
+                },
             )
+            if (type == AiModelType.TEXT) Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(tr("原生工具调用", "Native tool calling"))
+                    Text(
+                        tr(
+                            "仅当 Provider 支持 OpenAI-compatible tools/tool_calls 时开启；关闭后该配置不能运行 Agent。",
+                            "Enable only if the provider supports OpenAI-compatible tools/tool_calls. Disabled configurations cannot run Agent.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Checkbox(supportsTools, { supportsTools = it })
+            }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(tr("允许 HTTP", "Allow HTTP"))

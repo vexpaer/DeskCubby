@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface FlashThoughtDao {
+    @Query("SELECT * FROM flash_thoughts WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): FlashThoughtEntity?
+
     @Query("SELECT * FROM flash_thoughts ORDER BY id ASC")
     fun observeAllForBackup(): Flow<List<FlashThoughtEntity>>
 
@@ -49,6 +52,9 @@ interface FlashThoughtDao {
 
     @Insert
     suspend fun insert(item: FlashThoughtEntity): Long
+
+    @Upsert
+    suspend fun upsertForUndo(item: FlashThoughtEntity)
 
     @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM flash_thoughts WHERE deletedAt IS NULL")
     suspend fun nextActiveSortOrder(): Long
@@ -288,6 +294,9 @@ interface DiaryIndexDao {
 
 @Dao
 interface DateRecordDao {
+    @Query("SELECT * FROM date_records WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): DateRecordEntity?
+
     @Query("SELECT * FROM date_records ORDER BY dateIso ASC, createdAt ASC, id ASC")
     fun observeAll(): Flow<List<DateRecordEntity>>
 
@@ -311,6 +320,9 @@ interface DateRecordDao {
 
     @Insert
     suspend fun insert(item: DateRecordEntity): Long
+
+    @Upsert
+    suspend fun upsertForUndo(item: DateRecordEntity)
 
     @Query(
         "UPDATE date_records SET name = :name, icon = :icon, dateIso = :dateIso, " +
@@ -356,6 +368,9 @@ interface SavedPoemDao {
 
     @Insert
     suspend fun insert(item: SavedPoemEntity): Long
+
+    @Upsert
+    suspend fun upsertForUndo(item: SavedPoemEntity)
 
     @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM saved_poems")
     suspend fun nextSortOrder(): Long
@@ -527,11 +542,29 @@ interface PoetryCategoryDao {
 
 @Dao
 interface AiChatDao {
-    @Query("SELECT * FROM ai_conversations ORDER BY updatedAt DESC, id DESC")
+    @Query("SELECT * FROM ai_conversations WHERE deletedAt IS NULL ORDER BY updatedAt DESC, id DESC")
     fun observeConversations(): Flow<List<AiConversationEntity>>
 
-    @Query("SELECT * FROM ai_conversations WHERE id = :id LIMIT 1")
+    @Query("SELECT * FROM ai_conversations WHERE id = :id AND deletedAt IS NULL LIMIT 1")
     suspend fun getConversation(id: Long): AiConversationEntity?
+
+    @Query("SELECT * FROM ai_conversations ORDER BY id ASC")
+    suspend fun getAllConversationsForSync(): List<AiConversationEntity>
+
+    @Query("SELECT * FROM ai_messages ORDER BY id ASC")
+    suspend fun getAllMessagesForSync(): List<AiMessageEntity>
+
+    @Query("SELECT * FROM ai_attachments ORDER BY id ASC")
+    suspend fun getAllAttachmentsForSync(): List<AiAttachmentEntity>
+
+    @Query("SELECT * FROM ai_conversations WHERE syncId = :syncId LIMIT 1")
+    suspend fun getConversationBySyncId(syncId: String): AiConversationEntity?
+
+    @Query("SELECT * FROM ai_messages WHERE syncId = :syncId LIMIT 1")
+    suspend fun getMessageBySyncId(syncId: String): AiMessageEntity?
+
+    @Query("SELECT * FROM ai_attachments WHERE syncId = :syncId LIMIT 1")
+    suspend fun getAttachmentBySyncId(syncId: String): AiAttachmentEntity?
 
     @Query(
         "SELECT * FROM ai_messages WHERE conversationId = :conversationId " +
@@ -545,11 +578,55 @@ interface AiChatDao {
     )
     suspend fun getMessages(conversationId: Long): List<AiMessageEntity>
 
+    @Transaction
+    @Query(
+        "SELECT * FROM ai_messages WHERE conversationId = :conversationId " +
+            "ORDER BY createdAt ASC, id ASC",
+    )
+    fun observeMessagesWithAttachments(
+        conversationId: Long,
+    ): Flow<List<AiMessageWithAttachments>>
+
+    @Transaction
+    @Query(
+        "SELECT * FROM ai_messages WHERE conversationId = :conversationId " +
+            "ORDER BY createdAt ASC, id ASC",
+    )
+    suspend fun getMessagesWithAttachments(
+        conversationId: Long,
+    ): List<AiMessageWithAttachments>
+
     @Insert
     suspend fun insertConversation(conversation: AiConversationEntity): Long
 
     @Insert
     suspend fun insertMessage(message: AiMessageEntity): Long
+
+    @Insert
+    suspend fun insertAttachments(attachments: List<AiAttachmentEntity>)
+
+    @Query("UPDATE ai_conversations SET syncId = :syncId WHERE id = :id AND syncId IS NULL")
+    suspend fun assignConversationSyncId(id: Long, syncId: String): Int
+
+    @Query("UPDATE ai_messages SET syncId = :syncId WHERE id = :id AND syncId IS NULL")
+    suspend fun assignMessageSyncId(id: Long, syncId: String): Int
+
+    @Query("UPDATE ai_attachments SET syncId = :syncId WHERE id = :id AND syncId IS NULL")
+    suspend fun assignAttachmentSyncId(id: Long, syncId: String): Int
+
+    @Query(
+        "UPDATE ai_conversations SET title = :title, modelConfigId = :modelConfigId, " +
+            "createdAt = :createdAt, updatedAt = :updatedAt, deletedAt = :deletedAt " +
+            "WHERE id = :id",
+    )
+    suspend fun updateConversationFromSync(
+        id: Long,
+        title: String,
+        modelConfigId: String,
+        createdAt: Long,
+        updatedAt: Long,
+        deletedAt: Long?,
+    ): Int
 
     @Query(
         "UPDATE ai_conversations SET updatedAt = :updatedAt WHERE id = :conversationId",
@@ -559,6 +636,19 @@ interface AiChatDao {
     @Transaction
     suspend fun insertMessageAndTouch(message: AiMessageEntity): Long {
         val id = insertMessage(message)
+        touchConversation(message.conversationId, message.createdAt)
+        return id
+    }
+
+    @Transaction
+    suspend fun insertMessageWithAttachmentsAndTouch(
+        message: AiMessageEntity,
+        attachments: List<AiAttachmentEntity>,
+    ): Long {
+        val id = insertMessage(message)
+        if (attachments.isNotEmpty()) {
+            insertAttachments(attachments.map { it.copy(messageId = id) })
+        }
         touchConversation(message.conversationId, message.createdAt)
         return id
     }
@@ -602,17 +692,188 @@ interface AiChatDao {
     )
     suspend fun getOwnedImageUris(conversationId: Long): List<String>
 
+    @Query(
+        "SELECT DISTINCT ai_attachments.uri FROM ai_attachments " +
+            "INNER JOIN ai_messages ON ai_messages.id = ai_attachments.messageId " +
+            "WHERE ai_messages.conversationId = :conversationId " +
+            "AND ai_attachments.permissionOwned = 1",
+    )
+    suspend fun getOwnedAttachmentUris(conversationId: Long): List<String>
+
+    @Query(
+        "SELECT COALESCE(MAX(permissionOwned), 0) FROM ai_attachments WHERE uri = :uri",
+    )
+    suspend fun isAttachmentPermissionOwned(uri: String): Boolean
+
     @Query("SELECT COUNT(*) FROM ai_messages WHERE imageUri = :imageUri")
     suspend fun countImageReferences(imageUri: String): Int
 
-    @Query("DELETE FROM ai_conversations WHERE id = :id")
-    suspend fun deleteConversation(id: Long): Int
+    @Query("SELECT COUNT(*) FROM ai_attachments WHERE uri = :uri")
+    suspend fun countAttachmentReferences(uri: String): Int
+
+    @Query(
+        "UPDATE ai_conversations SET deletedAt = :deletedAt, updatedAt = :deletedAt " +
+            "WHERE id = :id AND deletedAt IS NULL",
+    )
+    suspend fun deleteConversation(id: Long, deletedAt: Long): Int
+
+    @Query(
+        "UPDATE ai_messages SET imageUri = NULL, imagePermissionOwned = 0 " +
+            "WHERE conversationId = :conversationId",
+    )
+    suspend fun clearDeletedConversationImageUris(conversationId: Long): Int
+
+    @Query(
+        "UPDATE ai_attachments SET uri = '', permissionOwned = 0 WHERE messageId IN " +
+            "(SELECT id FROM ai_messages WHERE conversationId = :conversationId)",
+    )
+    suspend fun clearDeletedConversationAttachmentUris(conversationId: Long): Int
 
     @Transaction
     suspend fun deleteConversationAndGetOwnedImageUris(id: Long): List<String>? {
-        val imageUris = getOwnedImageUris(id)
-        return if (deleteConversation(id) > 0) imageUris else null
+        val imageUris = (getOwnedImageUris(id) + getOwnedAttachmentUris(id)).distinct()
+        if (deleteConversation(id, System.currentTimeMillis()) <= 0) return null
+        clearDeletedConversationImageUris(id)
+        clearDeletedConversationAttachmentUris(id)
+        return imageUris
     }
+}
+
+@Dao
+interface AgentDao {
+    @Query("SELECT * FROM agent_runs ORDER BY startedAt DESC")
+    fun observeRuns(): Flow<List<AgentRunEntity>>
+
+    @Query(
+        "SELECT COUNT(*) AS runCount, COALESCE(SUM(modelCallCount), 0) AS modelCallCount, " +
+            "COALESCE(SUM(usageReportedCallCount), 0) AS usageReportedCallCount, " +
+            "SUM(inputTokens) AS inputTokens, SUM(outputTokens) AS outputTokens, " +
+            "SUM(totalTokens) AS totalTokens, SUM(cachedInputTokens) AS cachedInputTokens, " +
+            "SUM(cacheRateInputTokens) AS cacheRateInputTokens, " +
+            "SUM(reasoningTokens) AS reasoningTokens FROM agent_runs",
+    )
+    fun observeUsageAggregate(): Flow<AgentUsageAggregate>
+
+    @Query("SELECT * FROM agent_runs WHERE runId = :runId LIMIT 1")
+    suspend fun getRun(runId: String): AgentRunEntity?
+
+    @Query("SELECT * FROM agent_runs ORDER BY startedAt ASC, runId ASC")
+    suspend fun getRunsForSync(): List<AgentRunEntity>
+
+    @Query("SELECT * FROM agent_tool_events WHERE runId = :runId ORDER BY sequence ASC")
+    fun observeToolEvents(runId: String): Flow<List<AgentToolEventEntity>>
+
+    @Query("SELECT * FROM agent_tool_events WHERE runId = :runId ORDER BY sequence ASC")
+    suspend fun getToolEvents(runId: String): List<AgentToolEventEntity>
+
+    @Query("SELECT * FROM agent_mutations WHERE runId = :runId ORDER BY createdAt ASC, id ASC")
+    fun observeMutations(runId: String): Flow<List<AgentMutationEntity>>
+
+    @Query("SELECT * FROM agent_mutations WHERE runId = :runId ORDER BY createdAt ASC, id ASC")
+    suspend fun getMutations(runId: String): List<AgentMutationEntity>
+
+    @Query("SELECT * FROM agent_mutations WHERE id = :id LIMIT 1")
+    suspend fun getMutation(id: Long): AgentMutationEntity?
+
+    @Insert
+    suspend fun insertRun(run: AgentRunEntity)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertRunFromSync(run: AgentRunEntity): Long
+
+    @Query(
+        "UPDATE agent_runs SET conversationId = :conversationId, conversationTitle = :conversationTitle, " +
+            "userRequestSummary = :userRequestSummary, status = :status, " +
+            "modelCallCount = :modelCallCount, usageReportedCallCount = :usageReportedCallCount, " +
+            "inputTokens = :inputTokens, outputTokens = :outputTokens, totalTokens = :totalTokens, " +
+            "cachedInputTokens = :cachedInputTokens, cacheRateInputTokens = :cacheRateInputTokens, " +
+            "reasoningTokens = :reasoningTokens, " +
+            "completedAt = :completedAt WHERE runId = :runId AND " +
+            "COALESCE(completedAt, 0) < COALESCE(:completedAt, 0)",
+    )
+    suspend fun updateRunFromSync(
+        runId: String,
+        conversationId: Long?,
+        conversationTitle: String,
+        userRequestSummary: String,
+        status: String,
+        modelCallCount: Int,
+        usageReportedCallCount: Int,
+        inputTokens: Long?,
+        outputTokens: Long?,
+        totalTokens: Long?,
+        cachedInputTokens: Long?,
+        cacheRateInputTokens: Long?,
+        reasoningTokens: Long?,
+        completedAt: Long?,
+    ): Int
+
+    @Insert
+    suspend fun insertToolEvent(event: AgentToolEventEntity): Long
+
+    @Insert
+    suspend fun insertMutation(mutation: AgentMutationEntity): Long
+
+    @Query(
+        "UPDATE agent_runs SET status = :status, modelCallCount = :modelCallCount, " +
+            "usageReportedCallCount = :usageReportedCallCount, inputTokens = :inputTokens, " +
+            "outputTokens = :outputTokens, totalTokens = :totalTokens, " +
+            "cachedInputTokens = :cachedInputTokens, cacheRateInputTokens = :cacheRateInputTokens, " +
+            "reasoningTokens = :reasoningTokens, " +
+            "completedAt = :completedAt WHERE runId = :runId",
+    )
+    suspend fun finishRun(
+        runId: String,
+        status: String,
+        modelCallCount: Int,
+        usageReportedCallCount: Int,
+        inputTokens: Long?,
+        outputTokens: Long?,
+        totalTokens: Long?,
+        cachedInputTokens: Long?,
+        cacheRateInputTokens: Long?,
+        reasoningTokens: Long?,
+        completedAt: Long,
+    ): Int
+
+    @Query(
+        "UPDATE agent_tool_events SET status = :status, target = :target, summary = :summary, " +
+            "resultSummary = :resultSummary, errorCode = :errorCode, completedAt = :completedAt " +
+            "WHERE id = :id",
+    )
+    suspend fun finishToolEvent(
+        id: Long,
+        status: String,
+        target: String,
+        summary: String,
+        resultSummary: String,
+        errorCode: String?,
+        completedAt: Long,
+    ): Int
+
+    @Query(
+        "UPDATE agent_mutations SET beforeContent = :beforeContent, " +
+            "afterContent = :afterContent, undoPayload = :undoPayload, status = :status " +
+            "WHERE id = :id",
+    )
+    suspend fun completeMutation(
+        id: Long,
+        beforeContent: String,
+        afterContent: String,
+        undoPayload: String,
+        status: String,
+    ): Int
+
+    @Query(
+        "UPDATE agent_mutations SET status = :status WHERE id = :id AND status = 'PENDING'",
+    )
+    suspend fun failPendingMutation(id: Long, status: String): Int
+
+    @Query(
+        "UPDATE agent_mutations SET status = :status, undoneAt = :undoneAt " +
+            "WHERE id = :id AND status = 'APPLIED'",
+    )
+    suspend fun markMutationUndone(id: Long, status: String, undoneAt: Long): Int
 }
 
 @Dao

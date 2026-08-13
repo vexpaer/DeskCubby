@@ -26,7 +26,7 @@ class AiRequestJsonTest {
         )
 
         assertEquals("text-model", body.getString("model"))
-        assertEquals(0.7, body.getDouble("temperature"), 0.0)
+        assertEquals(0.7, body.getDouble("temperature"), 0.000_001)
         assertFalse(body.getBoolean("stream"))
         val messages = body.getJSONArray("messages")
         assertEquals(2, messages.length())

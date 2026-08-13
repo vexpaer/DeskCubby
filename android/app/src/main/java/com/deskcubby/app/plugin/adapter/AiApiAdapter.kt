@@ -15,6 +15,8 @@ import com.deskcubby.plugin.api.core.api.AICompletionRequest
 import com.deskcubby.plugin.api.core.api.AIMessageRole
 import com.deskcubby.plugin.api.core.api.AIModel
 import com.deskcubby.plugin.api.core.api.AIModelType
+import com.deskcubby.plugin.api.core.api.AIToolCompletion
+import com.deskcubby.plugin.api.core.api.AIToolCompletionRequest
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.first
@@ -73,6 +75,34 @@ class AiApiAdapter @Inject constructor(
             )
         }
     }
+
+    override suspend fun completeWithTools(
+        request: AIToolCompletionRequest,
+    ): AIToolCompletion {
+        val current = settingsRepository.settings.first()
+        val selectedId = request.modelConfigurationId ?: current.aiChatConfigId
+        val config = current.aiConfigs.firstOrNull {
+            it.id == selectedId && it.type == AppAIModelType.TEXT && it.enabled
+        } ?: throw PluginApiException(
+            code = "AI_MODEL_UNAVAILABLE",
+            message = "The requested AI text model is not available.",
+        )
+        if (!config.supportsToolCalling) {
+            throw PluginApiException(
+                code = "AI_TOOLS_UNSUPPORTED",
+                message = "The selected provider configuration does not support native tool calling.",
+            )
+        }
+        return try {
+            repository.completeWithTools(config, request)
+        } catch (error: AiChatException) {
+            throw PluginApiException(
+                code = "AI_${error.failure.name}",
+                message = error.message ?: "The AI request failed.",
+                cause = error,
+            )
+        }
+    }
 }
 
 private fun AiModelConfig.toPluginModel(): AIModel = AIModel(
@@ -84,4 +114,5 @@ private fun AiModelConfig.toPluginModel(): AIModel = AIModel(
     },
     model = model,
     enabled = enabled,
+    supportsToolCalling = supportsToolCalling,
 )

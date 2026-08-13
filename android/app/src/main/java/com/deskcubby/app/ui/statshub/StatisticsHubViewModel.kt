@@ -11,6 +11,8 @@ import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.ReaderLibraryState
 import com.deskcubby.app.data.repository.ReaderRepository
 import com.deskcubby.app.data.statistics.EngagementTimeRepository
+import com.deskcubby.app.data.statistics.AgentTokenStatistics
+import com.deskcubby.app.data.statistics.AgentTokenStatisticsRepository
 import com.deskcubby.app.data.statistics.EngagementTimeSnapshot
 import com.deskcubby.app.data.statistics.GameStatisticsRepository
 import com.deskcubby.app.data.statistics.GameStatisticsSnapshot
@@ -40,12 +42,14 @@ class StatisticsHubViewModel @Inject constructor(
     private val readerRepository: ReaderRepository,
     diaryIndexDao: DiaryIndexDao,
     gameStateDao: GameStateDao,
+    agentTokenStatisticsRepository: AgentTokenStatisticsRepository,
 ) : ViewModel() {
     private val gameSources = combine(
         engagementTimeRepository.snapshot,
         gameStatisticsRepository.statistics,
-    ) { engagement, gameStatistics ->
-        GameStatisticsSources(engagement, gameStatistics)
+        agentTokenStatisticsRepository.statistics,
+    ) { engagement, gameStatistics, agentStatistics ->
+        GameStatisticsSources(engagement, gameStatistics, agentStatistics)
     }
 
     private val liveSources = combine(
@@ -61,6 +65,7 @@ class StatisticsHubViewModel @Inject constructor(
             healthHistory = healthHistory,
             engagement = games.engagement,
             gameStatistics = games.gameStatistics,
+            agentStatistics = games.agentStatistics,
             library = library,
         )
     }
@@ -92,7 +97,7 @@ class StatisticsHubViewModel @Inject constructor(
                         values.asMap()
                     },
                     today = LocalDate.now(),
-                )
+                ).copy(agent = live.agentStatistics)
             }
         }
         .stateIn(
@@ -115,11 +120,13 @@ private data class LiveStatisticsSources(
     val engagement: EngagementTimeSnapshot,
     val gameStatistics: GameStatisticsSnapshot,
     val library: ReaderLibraryState,
+    val agentStatistics: AgentTokenStatistics,
 )
 
 private data class GameStatisticsSources(
     val engagement: EngagementTimeSnapshot,
     val gameStatistics: GameStatisticsSnapshot,
+    val agentStatistics: AgentTokenStatistics,
 )
 
 private data class IndexedStatisticsSources(

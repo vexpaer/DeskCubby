@@ -76,8 +76,8 @@ android {
         applicationId = "com.deskcubby.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 29
-        versionName = "0.13.2"
+        versionCode = 30
+        versionName = "0.14.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -178,6 +178,9 @@ dependencies {
 
     implementation("androidx.room:room-runtime:2.8.4")
     implementation("androidx.room:room-ktx:2.8.4")
+    // Room 2.8.4's schema bundle serializers are generated against 1.8.1. DataStore's older
+    // transitive constraint otherwise mixes 1.7.3 runtime classes into migration tests.
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
     kapt("androidx.room:room-compiler:2.8.4")
     androidTestImplementation("androidx.room:room-testing:2.8.4")
     implementation("androidx.datastore:datastore-preferences:1.2.1")

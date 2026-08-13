@@ -15,6 +15,8 @@ class DateRecordRepository @Inject constructor(
 
     fun observeAll(): Flow<List<DateRecordEntity>> = records
 
+    suspend fun get(id: Long): DateRecordEntity? = dao.getById(id)
+
     suspend fun create(name: String, icon: String, dateIso: String): Long {
         val now = System.currentTimeMillis()
         return dao.insert(
@@ -42,6 +44,11 @@ class DateRecordRepository @Inject constructor(
     suspend fun delete(id: Long) {
         require(id > 0) { "Date record id must be positive" }
         dao.delete(id)
+    }
+
+    suspend fun restoreExact(item: DateRecordEntity) {
+        require(item.id > 0) { "Date record id must be positive" }
+        dao.upsertForUndo(item)
     }
 
     private fun requireName(value: String): String = value.trim().also {

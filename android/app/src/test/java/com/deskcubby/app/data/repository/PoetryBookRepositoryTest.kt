@@ -91,6 +91,11 @@ class PoetryBookRepositoryTest {
             return id
         }
 
+        override suspend fun upsertForUndo(item: SavedPoemEntity) {
+            items.value = items.value + (item.id to item)
+            nextId = maxOf(nextId, item.id + 1)
+        }
+
         override suspend fun nextSortOrder(): Long =
             (items.value.values.maxOfOrNull(SavedPoemEntity::sortOrder) ?: -1L) + 1L
 

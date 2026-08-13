@@ -60,7 +60,7 @@ class ReaderProgressCloudSyncIntegrationTest {
     }
 
     @Test
-    fun localStoreRejectsAnyOtherObjectInsideTheReadingPrefix() = runBlocking {
+    fun localStoreRejectsAnyOtherObjectInsideTheReadingPrefix() {
         val bytes = payload()
         val store = localStore(FakeReaderProgressBridge(bytes))
 

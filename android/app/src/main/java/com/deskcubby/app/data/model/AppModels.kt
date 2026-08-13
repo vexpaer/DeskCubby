@@ -311,6 +311,22 @@ fun mealPhotoRowSizes(count: Int, mode: MealPhotosPerRow): List<Int> {
 
 enum class AiModelType { TEXT, IMAGE }
 
+enum class AgentPermissionMode {
+    REQUIRE_APPROVAL,
+    FULL_AUTO,
+}
+
+enum class AgentDataSource(val wireValue: String) {
+    DIARY("diary"),
+    THOUGHTS("thoughts"),
+    DATE_RECORDS("date_records"),
+    DAILY_EVENTS("daily_events"),
+    NOTES("notes"),
+    POEMS("poems"),
+    USAGE("usage"),
+    STATISTICS("statistics"),
+}
+
 data class AiModelConfig(
     val id: String,
     val name: String,
@@ -323,6 +339,8 @@ data class AiModelConfig(
     val systemPrompt: String = "",
     /** Plain-text API key persisted together with the rest of this configuration. */
     val apiKey: String = "",
+    /** Agent execution requires provider-native OpenAI-compatible tool calling. */
+    val supportsToolCalling: Boolean = false,
 )
 
 enum class MealCategory(
@@ -701,6 +719,8 @@ data class AppSettings(
     val aiAllowInsecureHttp: Boolean = false,
     val aiConfigs: List<AiModelConfig> = emptyList(),
     val aiChatConfigId: String? = null,
+    val agentEnabledSources: Set<AgentDataSource> = emptySet(),
+    val agentPermissionMode: AgentPermissionMode = AgentPermissionMode.REQUIRE_APPROVAL,
     val calorieEstimationEnabled: Boolean = false,
     val calorieTextConfigId: String? = null,
     val calorieImageConfigId: String? = null,

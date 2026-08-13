@@ -32,6 +32,7 @@ data class CloudSyncConfig(
         CloudSyncContent.JSON_BACKUP,
         CloudSyncContent.USAGE_STATISTICS,
         CloudSyncContent.READING_PROGRESS,
+        CloudSyncContent.AGENT_CHATS,
     ),
     val direction: CloudSyncDirection = CloudSyncDirection.TWO_WAY,
 ) {
@@ -84,6 +85,7 @@ enum class CloudSyncContent(
     JSON_BACKUP("json"),
     USAGE_STATISTICS("usage/v1"),
     READING_PROGRESS("reading/v1"),
+    AGENT_CHATS("agent/v1"),
 }
 
 enum class CloudSyncDirection {

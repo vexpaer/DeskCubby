@@ -1,8 +1,11 @@
 package com.deskcubby.plugin.api.core
 
 import com.deskcubby.plugin.api.core.api.AIAPI
+import com.deskcubby.plugin.api.core.api.AppAPI
+import com.deskcubby.plugin.api.core.api.DeskCubbyDataAPI
 import com.deskcubby.plugin.api.core.api.DiaryAPI
 import com.deskcubby.plugin.api.core.api.MediaAPI
+import com.deskcubby.plugin.api.core.api.FileAPI
 import com.deskcubby.plugin.api.core.api.StorageAPI
 import com.deskcubby.plugin.api.core.api.SyncAPI
 import com.deskcubby.plugin.api.core.api.UIAPI
@@ -91,6 +94,9 @@ private class RecordingContextFactory : PluginContextFactory {
         media = unsupportedApi(),
         sync = unsupportedApi(),
         ai = unsupportedApi(),
+        data = unsupportedApi(),
+        files = unsupportedApi(),
+        app = unsupportedApi(),
         ui = unsupportedApi(),
         storage = unsupportedApi(),
     )

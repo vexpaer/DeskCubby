@@ -1,10 +1,12 @@
 package com.deskcubby.app.data.local
 
 import androidx.room.ColumnInfo
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import androidx.room.Relation
 
 @Entity(
     tableName = "flash_thoughts",
@@ -114,7 +116,7 @@ data class SavedPoemEntity(
 
 @Entity(
     tableName = "ai_conversations",
-    indices = [Index("updatedAt")],
+    indices = [Index("updatedAt"), Index(value = ["syncId"], unique = true)],
 )
 data class AiConversationEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -122,6 +124,8 @@ data class AiConversationEntity(
     val modelConfigId: String,
     val createdAt: Long,
     val updatedAt: Long,
+    @ColumnInfo(defaultValue = "NULL") val syncId: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val deletedAt: Long? = null,
 )
 
 @Entity(
@@ -134,7 +138,7 @@ data class AiConversationEntity(
             onDelete = ForeignKey.CASCADE,
         ),
     ],
-    indices = [Index("conversationId")],
+    indices = [Index("conversationId"), Index(value = ["syncId"], unique = true)],
 )
 data class AiMessageEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -146,6 +150,142 @@ data class AiMessageEntity(
     val imageMimeType: String?,
     val imagePermissionOwned: Boolean,
     val createdAt: Long,
+    @ColumnInfo(defaultValue = "NULL") val syncId: String? = null,
+)
+
+@Entity(
+    tableName = "ai_attachments",
+    foreignKeys = [
+        ForeignKey(
+            entity = AiMessageEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["messageId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [
+        Index("messageId"),
+        Index("uri"),
+        Index(value = ["syncId"], unique = true),
+    ],
+)
+data class AiAttachmentEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val messageId: Long,
+    val uri: String,
+    val mimeType: String,
+    val displayName: String,
+    val sizeBytes: Long,
+    val kind: String,
+    val extractedText: String?,
+    val permissionOwned: Boolean,
+    @ColumnInfo(defaultValue = "NULL") val syncId: String? = null,
+)
+
+data class AiMessageWithAttachments(
+    @Embedded val message: AiMessageEntity,
+    @Relation(parentColumn = "id", entityColumn = "messageId")
+    val attachments: List<AiAttachmentEntity>,
+)
+
+@Entity(
+    tableName = "agent_runs",
+    indices = [Index("conversationId"), Index("startedAt")],
+)
+data class AgentRunEntity(
+    @PrimaryKey val runId: String,
+    val conversationId: Long?,
+    val conversationTitle: String,
+    val userRequestSummary: String,
+    val modelConfigId: String,
+    val permissionMode: String,
+    val enabledSourcesJson: String,
+    val status: String,
+    @ColumnInfo(defaultValue = "0") val modelCallCount: Int = 0,
+    @ColumnInfo(defaultValue = "0") val usageReportedCallCount: Int = 0,
+    @ColumnInfo(defaultValue = "NULL") val inputTokens: Long? = null,
+    @ColumnInfo(defaultValue = "NULL") val outputTokens: Long? = null,
+    @ColumnInfo(defaultValue = "NULL") val totalTokens: Long? = null,
+    @ColumnInfo(defaultValue = "NULL") val cachedInputTokens: Long? = null,
+    @ColumnInfo(defaultValue = "NULL") val cacheRateInputTokens: Long? = null,
+    @ColumnInfo(defaultValue = "NULL") val reasoningTokens: Long? = null,
+    val startedAt: Long,
+    val completedAt: Long?,
+)
+
+data class AgentUsageAggregate(
+    val runCount: Long,
+    val modelCallCount: Long,
+    val usageReportedCallCount: Long,
+    val inputTokens: Long?,
+    val outputTokens: Long?,
+    val totalTokens: Long?,
+    val cachedInputTokens: Long?,
+    val cacheRateInputTokens: Long?,
+    val reasoningTokens: Long?,
+)
+
+@Entity(
+    tableName = "agent_tool_events",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentRunEntity::class,
+            parentColumns = ["runId"],
+            childColumns = ["runId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("runId"), Index(value = ["runId", "sequence"], unique = true)],
+)
+data class AgentToolEventEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val runId: String,
+    val sequence: Int,
+    val toolCallId: String,
+    val toolName: String,
+    val classification: String,
+    val status: String,
+    val target: String,
+    val summary: String,
+    val argumentsSummary: String,
+    val resultSummary: String,
+    val errorCode: String?,
+    val startedAt: Long,
+    val completedAt: Long?,
+)
+
+@Entity(
+    tableName = "agent_mutations",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentRunEntity::class,
+            parentColumns = ["runId"],
+            childColumns = ["runId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = AgentToolEventEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["toolEventId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("runId"), Index(value = ["toolEventId"], unique = true)],
+)
+data class AgentMutationEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val runId: String,
+    val toolEventId: Long,
+    val toolName: String,
+    val target: String,
+    val operation: String,
+    val summary: String,
+    val beforeContent: String,
+    val afterContent: String,
+    val undoPayload: String,
+    val status: String,
+    val createdAt: Long,
+    val undoneAt: Long?,
 )
 
 /**

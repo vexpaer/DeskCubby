@@ -33,7 +33,8 @@ class GameStatisticDaoTest {
     }
 
     @After
-    fun closeDatabase() {
+    fun closeDatabase() = runBlocking {
+        repository.shutdownForTest()
         database.close()
     }
 

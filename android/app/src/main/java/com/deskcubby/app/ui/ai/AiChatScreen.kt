@@ -32,25 +32,33 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.automirrored.outlined.FactCheck
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.AddComment
-import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Psychology
-import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.StopCircle
+import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -73,87 +81,109 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.deskcubby.app.agent.AgentApprovalRequest
+import com.deskcubby.app.agent.AgentExecutionStatus
+import com.deskcubby.app.agent.AgentExecutionUpdate
+import com.deskcubby.app.agent.AgentRunUsage
+import com.deskcubby.app.data.model.AgentDataSource
+import com.deskcubby.app.data.model.AgentPermissionMode
 import com.deskcubby.app.data.model.AiModelType
-import com.deskcubby.app.data.repository.AiChatImage
+import com.deskcubby.app.data.repository.AiAttachmentKind
+import com.deskcubby.app.data.repository.AiChatAttachment
 import com.deskcubby.app.data.repository.AiChatMessage
 import com.deskcubby.app.data.repository.AiChatRole
 import com.deskcubby.app.data.repository.AiConversation
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.theme.tr
+import java.text.NumberFormat
 
 @Composable
 fun AiChatScreen(
     padding: PaddingValues,
     viewModel: AiChatViewModel,
     onOpenSettings: () -> Unit,
+    onOpenReview: () -> Unit,
 ) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val approval by viewModel.pendingApproval.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
-    val textConfigs = settings.aiConfigs.filter { it.type == AiModelType.TEXT }
-    val selectedConfig = textConfigs.firstOrNull { it.id == settings.aiChatConfigId }
-    val configured = selectedConfig != null ||
-        settings.aiModel.isNotBlank() && settings.aiEndpointUrl.isNotBlank()
-    var showHistory by rememberSaveable { mutableStateOf(false) }
+    val textConfigs = settings.aiConfigs.filter { it.type == AiModelType.TEXT && it.enabled }
+    val selected = textConfigs.firstOrNull { it.id == settings.aiChatConfigId }
+    val configured = selected?.supportsToolCalling == true &&
+        selected.endpointUrl.isNotBlank() && selected.model.isNotBlank()
+    var historyVisible by rememberSaveable { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<AiConversation?>(null) }
     var deleteTarget by remember { mutableStateOf<AiConversation?>(null) }
-    var configMenuExpanded by remember { mutableStateOf(false) }
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { viewModel.attachImage(it.toString()) }
+    var configMenu by rememberSaveable { mutableStateOf(false) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        viewModel.attachFiles(uris.map(Uri::toString))
     }
 
-    LaunchedEffect(uiState.errorMessage) {
-        uiState.errorMessage?.let { message ->
-            snackbarHostState.showSnackbar(message)
+    LaunchedEffect(state.errorMessage) {
+        state.errorMessage?.let {
+            snackbar.showSnackbar(it)
             viewModel.consumeError()
         }
     }
-    LaunchedEffect(uiState.messages.lastOrNull()?.id, uiState.isSending) {
-        val itemCount = uiState.messages.size + if (uiState.isSending) 1 else 0
-        if (itemCount > 0) listState.animateScrollToItem(itemCount - 1)
+    LaunchedEffect(state.transientMessage) {
+        state.transientMessage?.let {
+            snackbar.showSnackbar(it)
+            viewModel.consumeTransientMessage()
+        }
+    }
+    LaunchedEffect(state.messages.lastOrNull()?.id, state.executionUpdates.size, state.isSending) {
+        val count = state.messages.size +
+            (if (state.executionUpdates.isNotEmpty()) 1 else 0) +
+            (if (state.isSending) 1 else 0)
+        if (count > 0) listState.animateScrollToItem(count - 1)
     }
 
     Scaffold(
-        modifier = Modifier
-            .padding(bottom = padding.calculateBottomPadding())
-            .imePadding(),
+        modifier = Modifier.padding(bottom = padding.calculateBottomPadding()).imePadding(),
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         topBar = {
             TopAppBar(
                 title = {
                     Column {
                         Text(
-                            uiState.activeConversationTitle.ifBlank { tr("AI 聊天", "AI chat") },
+                            state.activeConversationTitle.ifBlank { tr("DeskCubby Agent", "DeskCubby Agent") },
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        if (uiState.activeConversationId != null) {
-                            Text(
-                                tr("对话会自动保存", "Conversation saved automatically"),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        Text(
+                            if (state.activeConversationId == null) {
+                                tr("按需调用工具，不预加载全文", "Tools on demand; no bulk content preload")
+                            } else {
+                                tr("会话自动保存，可选择云同步", "Auto-saved; optional cloud sync")
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showHistory = true }) {
-                        Icon(Icons.Outlined.History, tr("对话历史", "Conversation history"))
+                    IconButton(onClick = onOpenReview) {
+                        Icon(Icons.AutoMirrored.Outlined.FactCheck, tr("Agent Review", "Agent Review"))
+                    }
+                    IconButton(onClick = { historyVisible = true }) {
+                        Icon(Icons.Outlined.History, tr("会话历史", "Conversation history"))
                     }
                     IconButton(
-                        enabled = !uiState.isSending && !uiState.isPreparingImage,
+                        enabled = !state.isSending && !state.isPreparingAttachments,
                         onClick = viewModel::startNewConversation,
                     ) {
-                        Icon(Icons.Outlined.AddComment, tr("新对话", "New conversation"))
+                        Icon(Icons.Outlined.AddComment, tr("新会话", "New conversation"))
                     }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Outlined.Settings, tr("AI 设置", "AI settings"))
@@ -161,86 +191,63 @@ fun AiChatScreen(
                 },
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            ChatComposer(
-                value = uiState.draft,
-                image = uiState.pendingImage,
-                contextCount = uiState.pendingContextKeys.size,
-                isSending = uiState.isSending,
-                isPreparingImage = uiState.isPreparingImage,
+            AgentComposer(
+                value = state.draft,
+                attachments = state.pendingAttachments,
+                isRunning = state.isSending,
+                isPreparing = state.isPreparingAttachments,
                 configured = configured,
                 onValueChange = viewModel::updateDraft,
-                onPickImage = { imagePicker.launch(arrayOf("image/*")) },
-                onPickDiaryContext = viewModel::openDiaryContextPicker,
-                onPickThoughtContext = viewModel::openThoughtContextPicker,
-                onRemoveImage = viewModel::removePendingImage,
-                onClearContext = viewModel::clearPendingContexts,
+                onPickFiles = {
+                    picker.launch(
+                        arrayOf(
+                            "image/*",
+                            "application/pdf",
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            "text/*",
+                            "application/json",
+                            "application/xml",
+                        ),
+                    )
+                },
+                onManageContext = viewModel::showContextManager,
+                onPermissionMode = viewModel::showPermissionMode,
+                onRemoveAttachment = viewModel::removePendingAttachment,
                 onSend = viewModel::sendMessage,
+                onStop = viewModel::stopAgent,
             )
         },
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-        ) {
-            if (textConfigs.isNotEmpty()) {
-                Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(enabled = !uiState.isSending) { configMenuExpanded = true },
-                        shape = MaterialTheme.shapes.large,
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    ) {
-                        Row(
-                            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(Icons.Outlined.Psychology, null, tint = MaterialTheme.colorScheme.primary)
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(tr("当前文字模型", "Current text model"), style = MaterialTheme.typography.labelSmall)
-                                Text(selectedConfig?.name.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                    }
-                    DropdownMenu(
-                        expanded = configMenuExpanded,
-                        onDismissRequest = { configMenuExpanded = false },
-                    ) {
-                        textConfigs.forEach { config ->
-                            DropdownMenuItem(
-                                text = { Text(config.name) },
-                                onClick = {
-                                    configMenuExpanded = false
-                                    viewModel.selectConfiguration(config.id)
-                                },
-                            )
-                        }
-                    }
-                }
+    ) { inner ->
+        Column(Modifier.fillMaxSize().padding(inner)) {
+            ModelSelector(
+                configs = textConfigs,
+                selectedId = settings.aiChatConfigId,
+                expanded = configMenu,
+                enabled = !state.isSending,
+                onExpanded = { configMenu = it },
+                onSelect = viewModel::selectConfiguration,
+            )
+            if (selected != null && !selected.supportsToolCalling) {
+                CapabilityNotice(onOpenSettings)
+            } else if (selected == null) {
+                ConfigurationNotice(onOpenSettings)
             }
-            if (!configured) ConfigurationNotice(onOpenSettings)
-
-            if (uiState.messages.isEmpty() && !uiState.isSending) {
+            if (state.messages.isEmpty() && !state.isSending) {
                 AppEmptyState(
                     icon = Icons.Outlined.Psychology,
-                    title = if (configured) {
-                        tr("开始一段对话", "Start a conversation")
-                    } else {
-                        tr("先完成 AI 配置", "Configure AI first")
-                    },
+                    title = if (configured) tr("交给 Agent 一项任务", "Give the Agent a task")
+                    else tr("先配置 Agent 模型", "Configure an Agent model first"),
                     description = if (configured) {
                         tr(
-                            "可导入日记等本机记录作为上下文；文字、图片、上下文快照和 AI 回答会随对话保存在本机。",
-                            "You can import local records such as diaries as context. Messages, images, frozen context, and AI replies are saved locally with the conversation.",
+                            "Agent 会先检索再读取，只能访问“管理上下文”中授权的数据源；任何写入都会遵守审批模式并留下可撤回 Review。",
+                            "The Agent searches before reading, can access only authorized sources, and records every mutation in Review with approval and Undo.",
                         )
                     } else {
                         tr(
-                            "请填写接口地址和模型名称，然后回到这里开始聊天。API 密钥可以留空。",
-                            "Set an endpoint and model, then return here to chat. The API key may be left empty.",
+                            "请选择支持 OpenAI-compatible 原生 tool calling 的文字模型配置。不会解析普通回复来偷偷执行工具。",
+                            "Choose a text model with native OpenAI-compatible tool calling. Ordinary prose is never parsed to execute tools.",
                         )
                     },
                     actionLabel = if (configured) null else tr("打开 AI 设置", "Open AI settings"),
@@ -254,97 +261,587 @@ fun AiChatScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(uiState.messages, key = AiChatMessage::id) { message ->
-                        ChatMessageBubble(message)
+                    items(state.messages, key = AiChatMessage::id) { AgentMessageBubble(it) }
+                    if (state.executionUpdates.isNotEmpty()) {
+                        item("agent-execution") {
+                            AgentExecutionPanel(
+                                updates = state.executionUpdates,
+                                usage = state.lastRunUsage,
+                                running = state.isSending,
+                            )
+                        }
                     }
-                    if (uiState.isSending) item(key = "ai-typing") { TypingBubble() }
+                    if (state.isSending && state.executionUpdates.isEmpty()) {
+                        item("agent-thinking") { AgentThinkingBubble() }
+                    }
                 }
             }
         }
     }
 
-    if (showHistory) {
+    if (historyVisible) {
         ConversationHistoryDialog(
-            conversations = conversations,
-            activeConversationId = uiState.activeConversationId,
-            onDismiss = { showHistory = false },
-            onNew = {
-                showHistory = false
-                viewModel.startNewConversation()
-            },
-            onOpen = { conversation ->
-                showHistory = false
-                viewModel.openConversation(conversation.id)
-            },
-            onRename = {
-                showHistory = false
-                renameTarget = it
-            },
-            onDelete = {
-                showHistory = false
-                deleteTarget = it
-            },
+            conversations,
+            state.activeConversationId,
+            onDismiss = { historyVisible = false },
+            onNew = { historyVisible = false; viewModel.startNewConversation() },
+            onOpen = { historyVisible = false; viewModel.openConversation(it.id) },
+            onRename = { historyVisible = false; renameTarget = it },
+            onDelete = { historyVisible = false; deleteTarget = it },
         )
     }
     renameTarget?.let { conversation ->
         RenameConversationDialog(
-            conversation = conversation,
+            conversation,
             onDismiss = { renameTarget = null },
-            onConfirm = { title ->
-                renameTarget = null
-                viewModel.renameConversation(conversation.id, title)
-            },
+            onConfirm = { title -> renameTarget = null; viewModel.renameConversation(conversation.id, title) },
         )
     }
     deleteTarget?.let { conversation ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
-            title = { Text(tr("删除这段对话？", "Delete this conversation?")) },
+            title = { Text(tr("删除这段会话？", "Delete this conversation?")) },
             text = {
                 Text(
                     tr(
-                        "“${conversation.title}”及其中的全部消息将从本机永久删除。",
-                        "\"${conversation.title}\" and all its messages will be permanently deleted from this device.",
+                        "“${conversation.title}”会从本机隐藏；启用 Agent 会话同步后，删除状态也会同步到其他设备。",
+                        "“${conversation.title}” will be hidden locally. If Agent chat sync is enabled, the deletion also syncs to other devices.",
                     ),
                 )
             },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        deleteTarget = null
-                        viewModel.deleteConversation(conversation.id)
-                    },
-                ) { Text(tr("删除", "Delete")) }
+                TextButton(onClick = { deleteTarget = null; viewModel.deleteConversation(conversation.id) }) {
+                    Text(tr("删除", "Delete"))
+                }
             },
-            dismissButton = {
-                TextButton(onClick = { deleteTarget = null }) { Text(tr("取消", "Cancel")) }
-            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text(tr("取消", "Cancel")) } },
         )
     }
-    val contextPickerSource = uiState.contextPickerSource
-    if (uiState.isContextPickerVisible && contextPickerSource != null) {
-        AiContextPickerDialog(
-            source = contextPickerSource,
-            candidates = uiState.contextCandidates,
-            selectedKeys = uiState.pendingContextKeys,
-            errorMessage = uiState.contextPickerErrorMessage,
-            isLoading = uiState.isLoadingContextCandidates,
-            isLoadingPreview = uiState.isLoadingContextPreview,
-            preview = uiState.contextPreview,
-            onDismiss = viewModel::closeContextPicker,
-            onRefresh = viewModel::refreshContextCandidates,
-            onToggle = viewModel::toggleContextCandidate,
-            onToggleGroup = viewModel::toggleContextGroup,
-            onPreview = viewModel::previewContextCandidate,
-            onDismissPreview = viewModel::dismissContextPreview,
+    if (state.isContextManagerVisible) {
+        AgentContextDialog(
+            selected = settings.agentEnabledSources,
+            enabled = !state.isSending,
+            onToggle = viewModel::setSourceEnabled,
+            onDismiss = viewModel::hideContextManager,
         )
+    }
+    if (state.isPermissionModeVisible) {
+        AgentPermissionDialog(
+            selected = settings.agentPermissionMode,
+            onSelect = viewModel::setPermissionMode,
+            onDismiss = viewModel::hidePermissionMode,
+        )
+    }
+    approval?.let { request ->
+        AgentApprovalDialog(
+            request,
+            onApprove = { viewModel.approveMutation(request.requestId) },
+            onReject = { viewModel.rejectMutation(request.requestId) },
+        )
+    }
+}
+
+@Composable
+private fun ModelSelector(
+    configs: List<com.deskcubby.app.data.model.AiModelConfig>,
+    selectedId: String?,
+    expanded: Boolean,
+    enabled: Boolean,
+    onExpanded: (Boolean) -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    if (configs.isEmpty()) return
+    val selected = configs.firstOrNull { it.id == selectedId }
+    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().clickable(enabled) { onExpanded(true) },
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+            Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Psychology, null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(tr("当前 Agent 模型", "Current Agent model"), style = MaterialTheme.typography.labelSmall)
+                    Text(selected?.name ?: tr("请选择", "Select one"), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (selected?.supportsToolCalling == true) {
+                    Icon(Icons.Outlined.CheckCircle, tr("支持工具调用", "Tool calling supported"), tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+        }
+        DropdownMenu(expanded, onDismissRequest = { onExpanded(false) }) {
+            configs.forEach { config ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(config.name)
+                            Text(
+                                if (config.supportsToolCalling) tr("原生工具调用", "Native tool calling")
+                                else tr("不支持 Agent 工具", "Agent tools unsupported"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    onClick = { onExpanded(false); onSelect(config.id) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentComposer(
+    value: String,
+    attachments: List<AiChatAttachment>,
+    isRunning: Boolean,
+    isPreparing: Boolean,
+    configured: Boolean,
+    onValueChange: (String) -> Unit,
+    onPickFiles: () -> Unit,
+    onManageContext: () -> Unit,
+    onPermissionMode: () -> Unit,
+    onRemoveAttachment: (String) -> Unit,
+    onSend: () -> Unit,
+    onStop: () -> Unit,
+) {
+    var menu by rememberSaveable { mutableStateOf(false) }
+    val canSend = configured && (value.isNotBlank() || attachments.isNotEmpty()) && !isRunning && !isPreparing
+    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp, shadowElevation = 6.dp) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+            attachments.forEach { attachment ->
+                AttachmentRow(attachment, enabled = !isRunning, onRemove = { onRemoveAttachment(attachment.uri) })
+                Spacer(Modifier.height(6.dp))
+            }
+            Row(verticalAlignment = Alignment.Bottom) {
+                Box {
+                    IconButton(enabled = !isRunning && !isPreparing, onClick = { menu = true }) {
+                        if (isPreparing) AppLoadingIndicator(size = 22.dp, strokeWidth = 2.dp)
+                        else Icon(Icons.Outlined.Apps, tr("Agent 工具与上下文", "Agent tools and context"))
+                    }
+                    DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(tr("插入图片 / 文档", "Insert image / document")) },
+                            leadingIcon = { Icon(Icons.Outlined.AttachFile, null) },
+                            onClick = { menu = false; onPickFiles() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(tr("管理上下文", "Manage context")) },
+                            leadingIcon = { Icon(Icons.Outlined.Storage, null) },
+                            onClick = { menu = false; onManageContext() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(tr("AI 权限模式", "AI permission mode")) },
+                            leadingIcon = { Icon(Icons.Outlined.Lock, null) },
+                            onClick = { menu = false; onPermissionMode() },
+                        )
+                    }
+                }
+                Spacer(Modifier.width(4.dp))
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = {
+                        Text(
+                            if (configured) tr("描述任务，Agent 会按需调用工具", "Describe a task; the Agent will use tools as needed")
+                            else tr("请先配置支持工具调用的模型", "Configure a tool-capable model first"),
+                        )
+                    },
+                    minLines = 1,
+                    maxLines = 6,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
+                    shape = MaterialTheme.shapes.large,
+                    trailingIcon = {
+                        if (isRunning) {
+                            IconButton(onClick = onStop) {
+                                Icon(Icons.Outlined.StopCircle, tr("中止 Agent", "Stop Agent"), tint = MaterialTheme.colorScheme.error)
+                            }
+                        } else {
+                            IconButton(enabled = canSend, onClick = onSend) {
+                                Icon(Icons.AutoMirrored.Outlined.Send, tr("运行 Agent", "Run Agent"))
+                            }
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttachmentRow(attachment: AiChatAttachment, enabled: Boolean, onRemove: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = MaterialTheme.shapes.medium) {
+        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (attachment.kind == AiAttachmentKind.IMAGE && attachment.uri.isNotBlank()) {
+                AsyncImage(
+                    model = Uri.parse(attachment.uri),
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp).clip(MaterialTheme.shapes.small),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Icon(
+                    if (attachment.kind == AiAttachmentKind.IMAGE) Icons.Outlined.Image else Icons.Outlined.Description,
+                    null,
+                    modifier = Modifier.size(30.dp),
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(attachment.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    if (attachment.kind == AiAttachmentKind.DOCUMENT) {
+                        tr("文档文字将作为不可信数据发送", "Document text is sent as untrusted data")
+                    } else {
+                        tr("图片将发送给当前模型", "Image is sent to the current model")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(enabled = enabled, onClick = onRemove) {
+                Icon(Icons.Outlined.Close, tr("移除附件", "Remove attachment"))
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentMessageBubble(message: AiChatMessage) {
+    if (message.role == AiChatRole.CONTEXT) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceContainer,
+        ) {
+            Text(
+                tr("旧版冻结上下文（只读兼容）", "Legacy frozen context (read-only compatibility)"),
+                modifier = Modifier.padding(12.dp),
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
+        return
+    }
+    val user = message.role == AiChatRole.USER
+    Box(Modifier.fillMaxWidth(), contentAlignment = if (user) Alignment.CenterEnd else Alignment.CenterStart) {
+        Surface(
+            modifier = Modifier.widthIn(max = 680.dp).fillMaxWidth(0.92f),
+            shape = MaterialTheme.shapes.large,
+            color = if (user) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = if (user) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+        ) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(if (user) Icons.Outlined.Person else Icons.Outlined.AutoAwesome, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (user) tr("我", "You") else tr("Agent", "Agent"), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium)
+                }
+                message.attachments.forEach { attachment ->
+                    Spacer(Modifier.height(8.dp))
+                    if (attachment.kind == AiAttachmentKind.IMAGE && attachment.uri.isNotBlank()) {
+                        AsyncImage(
+                            model = Uri.parse(attachment.uri),
+                            contentDescription = attachment.displayName,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 340.dp).clip(MaterialTheme.shapes.medium),
+                            contentScale = ContentScale.Crop,
+                        )
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                if (attachment.kind == AiAttachmentKind.IMAGE) Icons.Outlined.Image else Icons.Outlined.Description,
+                                null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(7.dp))
+                            Text(attachment.displayName, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+                if (message.content.isNotBlank()) {
+                    Spacer(Modifier.height(7.dp))
+                    SelectionContainer { Text(message.content, style = MaterialTheme.typography.bodyLarge) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentExecutionPanel(
+    updates: List<AgentExecutionUpdate>,
+    usage: AgentRunUsage?,
+    running: Boolean,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (running) AppLoadingIndicator(size = 20.dp, strokeWidth = 2.dp)
+                else Icon(Icons.Outlined.CheckCircle, null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (running) tr("Agent 执行中", "Agent running") else tr("执行记录", "Execution log"),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            updates.forEach { AgentExecutionRow(it) }
+            usage?.let { AgentUsageRow(it) }
+        }
+    }
+}
+
+@Composable
+private fun AgentExecutionRow(update: AgentExecutionUpdate) {
+    var expanded by rememberSaveable(update.toolCallId) { mutableStateOf(false) }
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+    ) {
+        Column(Modifier.padding(horizontal = 11.dp, vertical = 9.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(statusGlyph(update.status), modifier = Modifier.width(22.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(update.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                    if (update.target.isNotBlank()) {
+                        Text(update.target, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null)
+            }
+            if (expanded) {
+                HorizontalDivider(Modifier.padding(vertical = 7.dp))
+                Text("Tool: ${update.toolName}", style = MaterialTheme.typography.labelMedium)
+                if (update.argumentsSummary.isNotBlank()) {
+                    Text(
+                        update.argumentsSummary,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                if (update.resultSummary.isNotBlank()) {
+                    Spacer(Modifier.height(5.dp))
+                    Text(update.resultSummary, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+private fun statusGlyph(status: AgentExecutionStatus): String = when (status) {
+    AgentExecutionStatus.PREPARING -> "…"
+    AgentExecutionStatus.RUNNING -> "↻"
+    AgentExecutionStatus.WAITING_APPROVAL -> "?"
+    AgentExecutionStatus.APPROVED -> "✓"
+    AgentExecutionStatus.REJECTED -> "×"
+    AgentExecutionStatus.SUCCEEDED -> "✓"
+    AgentExecutionStatus.FAILED -> "!"
+    AgentExecutionStatus.CANCELED -> "■"
+}
+
+@Composable
+private fun AgentUsageRow(usage: AgentRunUsage) {
+    val formatter = NumberFormat.getIntegerInstance()
+    Text(
+        if (usage.reportedCallCount == 0) {
+            tr(
+                "${usage.modelCallCount} 次模型调用 · Provider 未报告 Token",
+                "${usage.modelCallCount} model calls · tokens not reported by provider",
+            )
+        } else {
+            val total = if (usage.totalTokensReported) formatter.format(usage.totalTokens) else "—"
+            val rate = usage.cacheRate?.let { String.format("%.1f%%", it * 100) } ?: "—"
+            tr(
+                "$total Token · 缓存率 $rate",
+                "$total tokens · cache rate $rate",
+            )
+        },
+        style = MaterialTheme.typography.labelSmall,
+    )
+}
+
+@Composable
+private fun AgentThinkingBubble() {
+    Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            AppLoadingIndicator(size = 22.dp, strokeWidth = 2.dp)
+            Spacer(Modifier.width(10.dp))
+            Text(tr("Agent 正在规划下一步…", "Agent is planning the next step…"))
+        }
+    }
+}
+
+@Composable
+private fun AgentContextDialog(
+    selected: Set<AgentDataSource>,
+    enabled: Boolean,
+    onToggle: (AgentDataSource, Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("管理上下文", "Manage context")) },
+        text = {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
+                item {
+                    Text(
+                        tr(
+                            "勾选表示授予检索和按需读取权限，不会把全部正文塞入 Prompt。取消授权后，Agent 工具立即无法访问该数据源。",
+                            "A check grants search and on-demand read access; it does not inject all content into the prompt. Removing access blocks the source immediately.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                items(AgentDataSource.entries, key = AgentDataSource::name) { source ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable(enabled) { onToggle(source, source !in selected) }.padding(vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = source in selected,
+                            onCheckedChange = if (enabled) ({ onToggle(source, it) }) else null,
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(sourceLabel(source), fontWeight = FontWeight.Medium)
+                            Text(sourceDescription(source), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(tr("完成", "Done")) } },
+    )
+}
+
+@Composable
+private fun sourceLabel(source: AgentDataSource): String = when (source) {
+    AgentDataSource.DIARY -> tr("日记", "Diary")
+    AgentDataSource.THOUGHTS -> tr("小巧思", "Thoughts")
+    AgentDataSource.DATE_RECORDS -> tr("日期", "Dates")
+    AgentDataSource.DAILY_EVENTS -> tr("日常事件", "Daily events")
+    AgentDataSource.NOTES -> tr("笔记", "Notes")
+    AgentDataSource.POEMS -> tr("诗词本", "Poetry book")
+    AgentDataSource.USAGE -> tr("手机使用时间", "Phone usage")
+    AgentDataSource.STATISTICS -> tr("统计数据", "Statistics")
+}
+
+@Composable
+private fun sourceDescription(source: AgentDataSource): String = when (source) {
+    AgentDataSource.DIARY -> tr("按日期检索与读取；允许创建、编辑、删除", "Search/read by date; create, edit, delete")
+    AgentDataSource.THOUGHTS -> tr("正文、分类与时间", "Text, categories, and timestamps")
+    AgentDataSource.DATE_RECORDS -> tr("重要日期名称与日期", "Important dates and names")
+    AgentDataSource.DAILY_EVENTS -> tr("日常记录模板", "Daily-record templates")
+    AgentDataSource.NOTES -> tr("已授权 SAF 笔记目录", "Authorized SAF notes tree")
+    AgentDataSource.POEMS -> tr("收藏诗词与分类", "Saved poems and categories")
+    AgentDataSource.USAGE -> tr("只读的按日/应用使用数据", "Read-only daily/app usage")
+    AgentDataSource.STATISTICS -> tr("只读聚合统计", "Read-only aggregate statistics")
+}
+
+@Composable
+private fun AgentPermissionDialog(
+    selected: AgentPermissionMode,
+    onSelect: (AgentPermissionMode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("AI 权限模式", "AI permission mode")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                PermissionModeCard(
+                    selected == AgentPermissionMode.REQUIRE_APPROVAL,
+                    tr("需要批准", "Require approval"),
+                    tr("读取无需确认；每一个创建、编辑、删除或设置修改都先显示预览。", "Reads run directly; every create, edit, delete, or setting change shows a preview first."),
+                ) { onSelect(AgentPermissionMode.REQUIRE_APPROVAL) }
+                PermissionModeCard(
+                    selected == AgentPermissionMode.FULL_AUTO,
+                    tr("全自动", "Full auto"),
+                    tr("修改直接执行，但仍逐项写入 Review，并可在安全时 Undo。", "Mutations run directly but remain individually recorded in Review with Undo where safe."),
+                ) { onSelect(AgentPermissionMode.FULL_AUTO) }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(tr("关闭", "Close")) } },
+    )
+}
+
+@Composable
+private fun PermissionModeCard(selected: Boolean, title: String, description: String, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = MaterialTheme.shapes.large,
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+            Checkbox(checked = selected, onCheckedChange = { onClick() })
+            Column(Modifier.padding(start = 6.dp)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(description, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentApprovalDialog(
+    request: AgentApprovalRequest,
+    onApprove: () -> Unit,
+    onReject: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onReject,
+        icon = { Icon(Icons.Outlined.Lock, null) },
+        title = { Text(tr("Agent 请求修改", "Agent requests a change")) },
+        text = {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 540.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                item { ReviewField(tr("工具", "Tool"), request.toolName) }
+                item { ReviewField(tr("目标", "Target"), request.target.ifBlank { "—" }) }
+                item { ReviewField(tr("计划", "Plan"), request.summary) }
+                if (request.before.isNotBlank()) item { ReviewCodeBlock(tr("修改前", "Before"), request.before) }
+                if (request.after.isNotBlank()) item { ReviewCodeBlock(tr("修改后", "After"), request.after) }
+            }
+        },
+        confirmButton = { TextButton(onClick = onApprove) { Text(tr("批准", "Approve")) } },
+        dismissButton = { TextButton(onClick = onReject) { Text(tr("拒绝", "Reject")) } },
+    )
+}
+
+@Composable
+private fun ReviewField(label: String, value: String) {
+    Column {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SelectionContainer { Text(value, style = MaterialTheme.typography.bodyMedium) }
+    }
+}
+
+@Composable
+private fun ReviewCodeBlock(label: String, value: String) {
+    Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
+        SelectionContainer {
+            Text(
+                value.take(256 * 1024),
+                modifier = Modifier.fillMaxWidth().padding(10.dp),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
     }
 }
 
 @Composable
 private fun ConversationHistoryDialog(
     conversations: List<AiConversation>,
-    activeConversationId: Long?,
+    activeId: Long?,
     onDismiss: () -> Unit,
     onNew: () -> Unit,
     onOpen: (AiConversation) -> Unit,
@@ -353,65 +850,32 @@ private fun ConversationHistoryDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(tr("对话历史", "Conversation history")) },
+        title = { Text(tr("会话历史", "Conversation history")) },
         text = {
-            if (conversations.isEmpty()) {
-                Text(tr("还没有保存的对话。", "No saved conversations yet."))
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(conversations, key = AiConversation::id) { conversation ->
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onOpen(conversation) },
-                            color = if (conversation.id == activeConversationId) {
-                                MaterialTheme.colorScheme.secondaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainer
-                            },
-                            shape = MaterialTheme.shapes.large,
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(start = 14.dp, top = 8.dp, bottom = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        conversation.title,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        fontWeight = if (conversation.id == activeConversationId) {
-                                            FontWeight.SemiBold
-                                        } else {
-                                            FontWeight.Normal
-                                        },
-                                    )
-                                    Text(
-                                        if (conversation.id == activeConversationId) {
-                                            tr("当前对话", "Current conversation")
-                                        } else {
-                                            tr("点击继续", "Tap to continue")
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                IconButton(onClick = { onRename(conversation) }) {
-                                    Icon(Icons.Outlined.Edit, tr("重命名", "Rename"))
-                                }
-                                IconButton(onClick = { onDelete(conversation) }) {
-                                    Icon(Icons.Outlined.Delete, tr("删除", "Delete"))
-                                }
+            if (conversations.isEmpty()) Text(tr("还没有保存的会话。", "No saved conversations yet."))
+            else LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(conversations, key = AiConversation::id) { conversation ->
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().clickable { onOpen(conversation) },
+                        color = if (conversation.id == activeId) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+                        shape = MaterialTheme.shapes.large,
+                    ) {
+                        Row(Modifier.padding(start = 14.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(conversation.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    if (conversation.id == activeId) tr("当前会话", "Current") else tr("点击继续", "Tap to continue"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
                             }
+                            IconButton(onClick = { onRename(conversation) }) { Icon(Icons.Outlined.Edit, tr("重命名", "Rename")) }
+                            IconButton(onClick = { onDelete(conversation) }) { Icon(Icons.Outlined.Delete, tr("删除", "Delete")) }
                         }
                     }
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onNew) { Text(tr("新对话", "New conversation")) } },
+        confirmButton = { TextButton(onClick = onNew) { Text(tr("新会话", "New conversation")) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(tr("关闭", "Close")) } },
     )
 }
@@ -425,327 +889,36 @@ private fun RenameConversationDialog(
     var title by rememberSaveable(conversation.id) { mutableStateOf(conversation.title) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(tr("重命名对话", "Rename conversation")) },
-        text = {
-            OutlinedTextField(
-                value = title,
-                onValueChange = { title = it.take(80) },
-                singleLine = true,
-                label = { Text(tr("标题", "Title")) },
-            )
-        },
-        confirmButton = {
-            TextButton(enabled = title.isNotBlank(), onClick = { onConfirm(title) }) {
-                Text(tr("保存", "Save"))
-            }
-        },
+        title = { Text(tr("重命名会话", "Rename conversation")) },
+        text = { OutlinedTextField(title, { title = it.take(80) }, singleLine = true) },
+        confirmButton = { TextButton(enabled = title.isNotBlank(), onClick = { onConfirm(title) }) { Text(tr("保存", "Save")) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) } },
     )
 }
 
 @Composable
 private fun ConfigurationNotice(onOpenSettings: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        shape = MaterialTheme.shapes.large,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Outlined.Settings, null, modifier = Modifier.size(20.dp))
+    Surface(color = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Settings, null)
+            Spacer(Modifier.width(10.dp))
+            Text(tr("请选择可用的文字模型", "Select an available text model"), modifier = Modifier.weight(1f))
+            TextButton(onClick = onOpenSettings) { Text(tr("设置", "Settings")) }
+        }
+    }
+}
+
+@Composable
+private fun CapabilityNotice(onOpenSettings: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Lock, null)
             Spacer(Modifier.width(10.dp))
             Text(
-                tr("请先填写接口地址和模型名称", "Set an endpoint and model first"),
-                style = MaterialTheme.typography.bodyMedium,
+                tr("该 Provider 未启用原生工具调用，Agent 不会运行。", "Native tool calling is disabled for this provider; Agent will not run."),
                 modifier = Modifier.weight(1f),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
-            TextButton(onClick = onOpenSettings) { Text(tr("去设置", "Settings")) }
-        }
-    }
-}
-
-@Composable
-private fun ChatMessageBubble(message: AiChatMessage) {
-    if (message.role == AiChatRole.CONTEXT) {
-        ContextMessageCard(message.id, message.content)
-        return
-    }
-    val isUser = message.role == AiChatRole.USER
-    Box(
-        modifier = Modifier.fillMaxWidth(),
-        contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
-    ) {
-        Surface(
-            modifier = Modifier.widthIn(max = 680.dp).fillMaxWidth(0.9f),
-            shape = MaterialTheme.shapes.large,
-            color = if (isUser) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceContainerHigh
-            },
-            contentColor = if (isUser) {
-                MaterialTheme.colorScheme.onPrimaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-            tonalElevation = if (isUser) 1.dp else 2.dp,
-        ) {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        if (isUser) Icons.Outlined.Person else Icons.Outlined.AutoAwesome,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        if (isUser) tr("我", "You") else tr("AI", "AI"),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-                message.image?.let { image ->
-                    Spacer(Modifier.height(9.dp))
-                    AsyncImage(
-                        model = Uri.parse(image.uri),
-                        contentDescription = tr("已上传图片", "Uploaded image"),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 120.dp, max = 360.dp)
-                            .clip(MaterialTheme.shapes.medium),
-                        contentScale = ContentScale.Crop,
-                    )
-                }
-                if (message.reasoning.isNotBlank()) {
-                    Spacer(Modifier.height(9.dp))
-                    ReasoningPanel(message.id, message.reasoning)
-                }
-                Spacer(Modifier.height(7.dp))
-                SelectionContainer {
-                    Text(
-                        message.content.ifBlank {
-                            tr("模型未返回最终回答。", "The model did not return a final answer.")
-                        },
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReasoningPanel(messageId: Long, reasoning: String) {
-    var expanded by rememberSaveable(messageId) { mutableStateOf(false) }
-    Surface(
-        modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.tertiaryContainer,
-        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-    ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Psychology, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(7.dp))
-                Text(
-                    tr("模型返回的思考过程", "Model-provided reasoning"),
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.weight(1f),
-                )
-                Icon(
-                    if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-                    if (expanded) tr("收起", "Collapse") else tr("展开", "Expand"),
-                )
-            }
-            if (expanded) {
-                Spacer(Modifier.height(8.dp))
-                SelectionContainer {
-                    Text(reasoning, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TypingBubble() {
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shape = MaterialTheme.shapes.large,
-            tonalElevation = 2.dp,
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AppLoadingIndicator(size = 22.dp, strokeWidth = 2.dp)
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    tr("正在思考…", "Thinking…"),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChatComposer(
-    value: String,
-    image: AiChatImage?,
-    contextCount: Int,
-    isSending: Boolean,
-    isPreparingImage: Boolean,
-    configured: Boolean,
-    onValueChange: (String) -> Unit,
-    onPickImage: () -> Unit,
-    onPickDiaryContext: () -> Unit,
-    onPickThoughtContext: () -> Unit,
-    onRemoveImage: () -> Unit,
-    onClearContext: () -> Unit,
-    onSend: () -> Unit,
-) {
-    val canSend = configured && (value.isNotBlank() || image != null) &&
-        !isSending && !isPreparingImage
-    var addMenuExpanded by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(isSending, isPreparingImage) {
-        if (isSending || isPreparingImage) addMenuExpanded = false
-    }
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 3.dp,
-        shadowElevation = 6.dp,
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-        ) {
-            if (contextCount > 0) {
-                PendingContextSummary(
-                    count = contextCount,
-                    onClear = onClearContext,
-                )
-                Spacer(Modifier.height(8.dp))
-            }
-            image?.let {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shape = MaterialTheme.shapes.medium,
-                ) {
-                    Row(
-                        modifier = Modifier.padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        AsyncImage(
-                            model = Uri.parse(it.uri),
-                            contentDescription = null,
-                            modifier = Modifier.size(56.dp).clip(MaterialTheme.shapes.small),
-                            contentScale = ContentScale.Crop,
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Icon(Icons.Outlined.Image, null)
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            tr(
-                                "图片将发送给当前模型",
-                                "Image will be sent to the current model",
-                            ),
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f),
-                        )
-                        IconButton(enabled = !isSending, onClick = onRemoveImage) {
-                            Icon(Icons.Outlined.Close, tr("移除图片", "Remove image"))
-                        }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-            Row(verticalAlignment = Alignment.Bottom) {
-                Box {
-                    IconButton(
-                        enabled = !isSending && !isPreparingImage,
-                        onClick = { addMenuExpanded = true },
-                    ) {
-                        if (isPreparingImage) {
-                            AppLoadingIndicator(size = 22.dp, strokeWidth = 2.dp)
-                        } else {
-                            Icon(
-                                Icons.Outlined.Add,
-                                tr("添加媒体或上下文", "Add media or context"),
-                            )
-                        }
-                    }
-                    DropdownMenu(
-                        expanded = addMenuExpanded,
-                        onDismissRequest = { addMenuExpanded = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text(tr("选择图片", "Choose image")) },
-                            leadingIcon = { Icon(Icons.Outlined.Image, null) },
-                            onClick = {
-                                addMenuExpanded = false
-                                onPickImage()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(tr("导入日记上下文", "Import diary context")) },
-                            leadingIcon = { Icon(Icons.Outlined.Article, null) },
-                            onClick = {
-                                addMenuExpanded = false
-                                onPickDiaryContext()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(tr("导入小巧思上下文", "Import thought context")) },
-                            leadingIcon = { Icon(Icons.Outlined.Lightbulb, null) },
-                            onClick = {
-                                addMenuExpanded = false
-                                onPickThoughtContext()
-                            },
-                        )
-                    }
-                }
-                Spacer(Modifier.width(4.dp))
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    modifier = Modifier.weight(1f),
-                    placeholder = {
-                        Text(
-                            if (configured) {
-                                tr(
-                                    "输入消息，可附带上下文或一张图片",
-                                    "Message, with optional context or one image",
-                                )
-                            } else {
-                                tr("请先完成 AI 配置", "Configure AI first")
-                            },
-                        )
-                    },
-                    minLines = 1,
-                    maxLines = 6,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
-                    shape = MaterialTheme.shapes.large,
-                    trailingIcon = {
-                        IconButton(
-                            enabled = canSend,
-                            onClick = onSend,
-                        ) {
-                            Icon(
-                                Icons.Outlined.Send,
-                                contentDescription = tr("发送", "Send"),
-                            )
-                        }
-                    },
-                )
-            }
+            TextButton(onClick = onOpenSettings) { Text(tr("检查", "Review")) }
         }
     }
 }

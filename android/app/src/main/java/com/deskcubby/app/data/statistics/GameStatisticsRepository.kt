@@ -6,7 +6,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -163,6 +165,11 @@ class GameStatisticsRepository @Inject constructor(
         }
         if (increments.isEmpty() && maxima.isEmpty()) return
         dao.applyMetrics(gameId, increments, maxima, System.currentTimeMillis())
+    }
+
+    /** Stops the eager Room collector before an in-memory database is closed by instrumentation. */
+    internal suspend fun shutdownForTest() {
+        scope.coroutineContext[Job]?.cancelAndJoin()
     }
 }
 

@@ -66,6 +66,9 @@ class AppDatabaseMigrationTest {
             assertEquals(1, cursor.getInt(0))
         }
 
+        // MigrationTestHelper opens a raw SQLite connection with foreign keys disabled. Room
+        // enables them for the real app, so turn them on before exercising the declared cascade.
+        database.execSQL("PRAGMA foreign_keys = ON")
         database.execSQL("DELETE FROM ai_conversations WHERE id = 7")
 
         database.query("SELECT COUNT(*) FROM ai_messages WHERE conversationId = 7").use { cursor ->
@@ -196,6 +199,7 @@ class AppDatabaseMigrationTest {
             """.trimIndent(),
         )
         database.execSQL("UPDATE saved_poems SET categoryId = 3 WHERE id = 7")
+        database.execSQL("PRAGMA foreign_keys = ON")
         database.execSQL("DELETE FROM poetry_categories WHERE id = 3")
         database.query("SELECT categoryId FROM saved_poems WHERE id = 7").use { cursor ->
             cursor.moveToFirst()
@@ -316,6 +320,7 @@ class AppDatabaseMigrationTest {
             cursor.moveToFirst()
             assertEquals(8000L, cursor.getLong(0))
         }
+        database.execSQL("PRAGMA foreign_keys = ON")
         database.execSQL("DELETE FROM usage_histories WHERE ownerId = 'device-1'")
         database.query("SELECT COUNT(*) FROM usage_app_durations").use { cursor ->
             cursor.moveToFirst()
@@ -375,6 +380,100 @@ class AppDatabaseMigrationTest {
             cursor.moveToFirst()
             assertEquals(40L, cursor.getLong(0))
             assertEquals(31L, cursor.getLong(1))
+        }
+        database.close()
+    }
+
+    @Test
+    fun migrate12To13PreservesLegacyChatAndAddsAgentReviewSchema() {
+        val databaseName = "agent-room-migration-test"
+        helper.createDatabase(databaseName, 12).apply {
+            execSQL(
+                """
+                INSERT INTO ai_conversations (id, title, modelConfigId, createdAt, updatedAt)
+                VALUES (7, '旧 AI 会话', 'legacy-model', 10, 20)
+                """.trimIndent(),
+            )
+            execSQL(
+                """
+                INSERT INTO ai_messages (
+                    id, conversationId, role, content, reasoning, imageUri, imageMimeType,
+                    imagePermissionOwned, createdAt
+                ) VALUES (9, 7, 'user', '迁移前消息', '', NULL, NULL, 0, 21)
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            databaseName,
+            13,
+            true,
+            AppDatabase.MIGRATION_12_13,
+        )
+
+        database.query(
+            "SELECT title, syncId, deletedAt FROM ai_conversations WHERE id = 7",
+        ).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("旧 AI 会话", cursor.getString(0))
+            assertEquals(true, cursor.isNull(1))
+            assertEquals(true, cursor.isNull(2))
+        }
+        database.query("SELECT content, syncId FROM ai_messages WHERE id = 9").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("迁移前消息", cursor.getString(0))
+            assertEquals(true, cursor.isNull(1))
+        }
+        database.execSQL(
+            """
+            INSERT INTO agent_runs (
+                runId, conversationId, conversationTitle, userRequestSummary, modelConfigId,
+                permissionMode, enabledSourcesJson, status, startedAt, completedAt
+            ) VALUES ('run-1', 7, '旧 AI 会话', '总结', 'legacy-model',
+                'REQUIRE_APPROVAL', '["diary"]', 'SUCCEEDED', 30, 40)
+            """.trimIndent(),
+        )
+        database.execSQL(
+            """
+            INSERT INTO agent_tool_events (
+                id, runId, sequence, toolCallId, toolName, classification, status, target,
+                summary, argumentsSummary, resultSummary, errorCode, startedAt, completedAt
+            ) VALUES (2, 'run-1', 1, 'call-1', 'edit_content', 'MUTATION', 'SUCCEEDED',
+                'thoughts/1', 'edited', 'entry=1', 'done', NULL, 31, 32)
+            """.trimIndent(),
+        )
+        database.execSQL(
+            """
+            INSERT INTO agent_mutations (
+                id, runId, toolEventId, toolName, target, operation, summary, beforeContent,
+                afterContent, undoPayload, status, createdAt, undoneAt
+            ) VALUES (3, 'run-1', 2, 'edit_content', 'thoughts/1', 'UPDATE', 'edited',
+                'before', 'after', 'undo', 'APPLIED', 32, NULL)
+            """.trimIndent(),
+        )
+        database.execSQL(
+            """
+            INSERT INTO ai_attachments (
+                messageId, uri, mimeType, displayName, sizeBytes, kind, extractedText,
+                permissionOwned, syncId
+            ) VALUES (9, '', 'text/plain', 'legacy.txt', 6, 'DOCUMENT', 'legacy', 0, 'a-1')
+            """.trimIndent(),
+        )
+        database.query("SELECT COUNT(*) FROM agent_mutations WHERE status = 'APPLIED'").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(1, cursor.getInt(0))
+        }
+        database.execSQL("PRAGMA foreign_keys = ON")
+        database.execSQL("DELETE FROM ai_messages WHERE id = 9")
+        database.query("SELECT COUNT(*) FROM ai_attachments").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(0, cursor.getInt(0))
+        }
+        database.execSQL("DELETE FROM agent_runs WHERE runId = 'run-1'")
+        database.query("SELECT COUNT(*) FROM agent_mutations").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(0, cursor.getInt(0))
         }
         database.close()
     }

@@ -18,7 +18,9 @@ class ThoughtRepository @Inject constructor(
     val recent = dao.observeRecent(5)
     val categories = categoryDao.observeAll()
 
-    suspend fun create(content: String, categoryId: Long? = null) {
+    suspend fun get(id: Long): FlashThoughtEntity? = dao.getById(id)
+
+    suspend fun create(content: String, categoryId: Long? = null): Long {
         val now = System.currentTimeMillis()
         val item = FlashThoughtEntity(
             content = content.trim(),
@@ -26,13 +28,15 @@ class ThoughtRepository @Inject constructor(
             updatedAt = now,
             categoryId = categoryId,
         )
-        try {
+        return try {
             dao.insertAtEnd(item)
         } catch (error: SQLiteConstraintException) {
             if (categoryId == null) throw error
             dao.insertAtEnd(item.copy(categoryId = null))
         }
     }
+
+    suspend fun restoreExact(item: FlashThoughtEntity) = dao.upsertForUndo(item)
 
     suspend fun update(id: Long, content: String) = dao.updateContent(id, content.trim(), System.currentTimeMillis())
     suspend fun togglePinned(id: Long) = dao.togglePinned(id, System.currentTimeMillis())

@@ -1683,7 +1683,11 @@ private val CHINESE_READER_CHAPTER_REGEX = Regex(
     "^(?:正文\\s*)?[【\\[〈《（(]?[☆★◎◇◆•·\\s]*第\\s*[0-9０-９零〇○一二三四五六七八九十百千万两壹贰叁肆伍陆柒捌玖拾佰仟]+\\s*[章节卷回部篇集幕]\\s*[】\\]〉》）)]?(?:\\s+|[:：、.．_\\-—]?)[^\\n]*$",
 )
 private val ENGLISH_READER_CHAPTER_REGEX = Regex(
-    "^(?:chapter|part|book|section|episode)\\s*(?:[0-9０-９]+|[ivxlcdm]+|[a-z]+(?:[ -][a-z]+){0,5})(?:\\s*[:：.\\-—]?\\s*.*)?$",
+    "^(?:chapter|part|book|section|episode)\\s*(?:[0-9０-９]+|[ivxlcdm]+|" +
+        "(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|" +
+        "thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|" +
+        "thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[ -](?:one|two|three|" +
+        "four|five|six|seven|eight|nine))?)(?:\\s*[:：.\\-—]?\\s*.*)?$",
     RegexOption.IGNORE_CASE,
 )
 private val NUMBERED_READER_CHAPTER_REGEX = Regex(

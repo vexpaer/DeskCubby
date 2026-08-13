@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.deskcubby.app.data.repository.AiChatRepository
+import com.deskcubby.app.data.repository.AiAttachmentService
 import com.deskcubby.app.data.repository.AiChatRole
 import com.deskcubby.app.data.repository.AiChatException
 import java.io.IOException
@@ -39,7 +40,7 @@ class AiChatDaoTest {
     }
 
     @Test
-    fun messagesPersistInOrderAndDeletingConversationCascades() = runBlocking {
+    fun messagesPersistInOrderAndDeletingConversationCreatesSyncTombstone() = runBlocking {
         val conversationId = dao.insertConversation(
             AiConversationEntity(
                 title = "第一条消息",
@@ -76,9 +77,11 @@ class AiChatDaoTest {
         assertEquals(listOf("问题", "回答"), dao.observeMessages(conversationId).first().map { it.content })
         assertEquals(30L, dao.observeConversations().first().single().updatedAt)
 
-        dao.deleteConversation(conversationId)
+        dao.deleteConversation(conversationId, 40)
 
-        assertTrue(dao.getMessages(conversationId).isEmpty())
+        assertTrue(dao.observeConversations().first().isEmpty())
+        assertEquals(2, dao.getMessages(conversationId).size)
+        assertEquals(40L, dao.getAllConversationsForSync().single().deletedAt)
     }
 
     @Test
@@ -124,7 +127,8 @@ class AiChatDaoTest {
             ),
         )
 
-        val messages = AiChatRepository(context, dao).getMessages(conversationId)
+        val messages = AiChatRepository(context, dao, AiAttachmentService(context))
+            .getMessages(conversationId)
 
         assertEquals(1, messages.size)
         assertEquals(AiChatRole.CONTEXT, messages.single().role)
@@ -196,7 +200,7 @@ class AiChatDaoTest {
     @Test
     fun successfulHttpBodyWithErrorObjectDoesNotExposeApiKey() {
         val apiKey = "PRIVATE-API-KEY-123"
-        val repository = AiChatRepository(context, dao)
+        val repository = AiChatRepository(context, dao, AiAttachmentService(context))
 
         val error = assertThrows(AiChatException::class.java) {
             repository.parseAssistantContent(

@@ -296,11 +296,37 @@ private inline fun <T> decodeBounded(json: String, decode: (JSONObject) -> T): T
 }
 
 private fun encodeBounded(root: JSONObject): String {
-    val encoded = root.toString()
+    // Android's org.json escapes every solidus while the JVM implementation does not. Normalize
+    // only syntactic solidus escapes so canonical statistics bytes (and their hashes) are stable
+    // across Android versions and desktop importers without changing decoded string values.
+    val encoded = root.toString().withoutEscapedJsonSolidus()
     if (encoded.toByteArray(StandardCharsets.UTF_8).size > MAX_STATISTICS_JSON_BYTES) {
         throw StatisticsJsonException("Statistics JSON exceeds $MAX_STATISTICS_JSON_BYTES bytes.")
     }
     return encoded
+}
+
+private fun String.withoutEscapedJsonSolidus(): String {
+    if ("\\/" !in this) return this
+    val normalized = StringBuilder(length)
+    var index = 0
+    while (index < length) {
+        if (this[index] != '\\') {
+            normalized.append(this[index++])
+            continue
+        }
+        val slashRunStart = index
+        while (index < length && this[index] == '\\') index++
+        val slashCount = index - slashRunStart
+        if (index < length && this[index] == '/' && slashCount % 2 == 1) {
+            repeat(slashCount - 1) { normalized.append('\\') }
+            normalized.append('/')
+            index++
+        } else {
+            repeat(slashCount) { normalized.append('\\') }
+        }
+    }
+    return normalized.toString()
 }
 
 internal fun validateUsageStatisticsHistory(history: UsageStatisticsHistory) {

@@ -11,6 +11,7 @@ import com.deskcubby.plugin.api.core.api.DiaryAPI
 import com.deskcubby.plugin.api.core.api.DiaryConflictException
 import com.deskcubby.plugin.api.core.api.DiaryDocument
 import com.deskcubby.plugin.api.core.api.DiaryEntry
+import com.deskcubby.plugin.api.core.api.DiaryTrashDocument
 import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -65,6 +66,28 @@ class DiaryApiAdapter @Inject constructor(
 
     override suspend fun moveToTrash(documentId: String): Boolean =
         repository.delete(documentId, settingsRepository.settings.first())
+
+    override suspend fun moveToTrashDocument(documentId: String): DiaryTrashDocument {
+        val settings = settingsRepository.settings.first()
+        val before = repository.scanTrash(settings).mapTo(hashSetOf()) { it.uri }
+        check(repository.delete(documentId, settings)) { "Diary could not be moved to trash" }
+        val trashed = repository.scanTrash(settings).firstOrNull { it.uri !in before }
+            ?: error("Diary trash entry could not be identified")
+        return DiaryTrashDocument(
+            documentId = trashed.uri,
+            originalName = trashed.originalName,
+            deletedAtMillis = trashed.deletedAt,
+        )
+    }
+
+    override suspend fun restoreFromTrash(trashDocumentId: String): DiaryDocument {
+        val settings = settingsRepository.settings.first()
+        val before = repository.scan(settings).mapTo(hashSetOf()) { it.uri }
+        check(repository.restore(trashDocumentId, settings)) { "Diary could not be restored" }
+        val restored = repository.scan(settings).firstOrNull { it.uri !in before }
+            ?: error("Restored diary could not be identified")
+        return repository.load(restored.uri).toPluginDocument()
+    }
 
     override suspend fun appendToToday(markdown: String, dateIso: String?): DiaryDocument =
         repository.appendTextToToday(

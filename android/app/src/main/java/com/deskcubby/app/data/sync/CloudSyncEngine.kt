@@ -356,6 +356,14 @@ class CloudSyncEngine(
                     throw CloudSyncException("阅读进度同步清单包含无效路径。")
                 }
             }
+        (local.asSequence().map(LocalSyncObject::key) +
+            remote.asSequence().map(RemoteSyncObject::key))
+            .filter { it.startsWith("${CloudSyncContent.AGENT_CHATS.remoteDirectory}/") }
+            .forEach { key ->
+                if (key != AGENT_CHAT_SYNC_KEY) {
+                    throw CloudSyncException("Agent 会话同步清单包含无效路径。")
+                }
+            }
     }
 
     private fun requireInventoryItem(
@@ -381,5 +389,6 @@ class CloudSyncEngine(
     private companion object {
         val SHA256_REGEX = Regex("[0-9a-f]{64}", RegexOption.IGNORE_CASE)
         const val READING_PROGRESS_SYNC_KEY = "reading/v1/progress.json"
+        const val AGENT_CHAT_SYNC_KEY = "agent/v1/chats.json"
     }
 }

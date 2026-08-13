@@ -28,6 +28,7 @@ class CloudSyncCoordinator(
     private val jsonBridge: CloudSyncJsonBridge? = null,
     private val usageBridge: CloudSyncUsageBridge? = null,
     private val readerProgressBridge: CloudSyncReaderProgressBridge? = null,
+    private val agentChatBridge: CloudSyncAgentChatBridge? = null,
     private val remoteStoreFactory: CloudSyncRemoteStoreFactory =
         DefaultCloudSyncRemoteStoreFactory(),
     private val stateStore: CloudSyncStateStore =
@@ -83,6 +84,7 @@ class CloudSyncCoordinator(
             jsonBridge = jsonBridge,
             usageBridge = usageBridge,
             readerProgressBridge = readerProgressBridge,
+            agentChatBridge = agentChatBridge,
         ),
         remoteStoreFactory = remoteStoreFactory,
         stateStore = stateStore,

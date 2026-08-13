@@ -16,6 +16,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SavedPoemEntity::class,
         AiConversationEntity::class,
         AiMessageEntity::class,
+        AiAttachmentEntity::class,
+        AgentRunEntity::class,
+        AgentToolEventEntity::class,
+        AgentMutationEntity::class,
         VaultItemEntity::class,
         GameStateEntity::class,
         GameStatisticEntity::class,
@@ -27,7 +31,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         StepDayEntity::class,
         LegacyStatisticsMigrationEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -39,6 +43,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun poetryCategoryDao(): PoetryCategoryDao
     abstract fun savedPoemDao(): SavedPoemDao
     abstract fun aiChatDao(): AiChatDao
+    abstract fun agentDao(): AgentDao
     abstract fun vaultItemDao(): VaultItemDao
     abstract fun gameStateDao(): GameStateDao
     abstract fun gameStatisticDao(): GameStatisticDao
@@ -408,6 +413,146 @@ abstract class AppDatabase : RoomDatabase() {
                         PRIMARY KEY(`gameId`, `metricKey`)
                     )
                     """.trimIndent(),
+                )
+            }
+        }
+
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `ai_conversations` ADD COLUMN `syncId` TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE `ai_conversations` ADD COLUMN `deletedAt` INTEGER DEFAULT NULL")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_ai_conversations_syncId` " +
+                        "ON `ai_conversations` (`syncId`)",
+                )
+                db.execSQL("ALTER TABLE `ai_messages` ADD COLUMN `syncId` TEXT DEFAULT NULL")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_ai_messages_syncId` " +
+                        "ON `ai_messages` (`syncId`)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `ai_attachments` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `messageId` INTEGER NOT NULL,
+                        `uri` TEXT NOT NULL,
+                        `mimeType` TEXT NOT NULL,
+                        `displayName` TEXT NOT NULL,
+                        `sizeBytes` INTEGER NOT NULL,
+                        `kind` TEXT NOT NULL,
+                        `extractedText` TEXT,
+                        `permissionOwned` INTEGER NOT NULL,
+                        `syncId` TEXT DEFAULT NULL,
+                        FOREIGN KEY(`messageId`) REFERENCES `ai_messages`(`id`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ai_attachments_messageId` " +
+                        "ON `ai_attachments` (`messageId`)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ai_attachments_uri` " +
+                        "ON `ai_attachments` (`uri`)",
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_ai_attachments_syncId` " +
+                        "ON `ai_attachments` (`syncId`)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `agent_runs` (
+                        `runId` TEXT NOT NULL,
+                        `conversationId` INTEGER,
+                        `conversationTitle` TEXT NOT NULL,
+                        `userRequestSummary` TEXT NOT NULL,
+                        `modelConfigId` TEXT NOT NULL,
+                        `permissionMode` TEXT NOT NULL,
+                        `enabledSourcesJson` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `modelCallCount` INTEGER NOT NULL DEFAULT 0,
+                        `usageReportedCallCount` INTEGER NOT NULL DEFAULT 0,
+                        `inputTokens` INTEGER DEFAULT NULL,
+                        `outputTokens` INTEGER DEFAULT NULL,
+                        `totalTokens` INTEGER DEFAULT NULL,
+                        `cachedInputTokens` INTEGER DEFAULT NULL,
+                        `cacheRateInputTokens` INTEGER DEFAULT NULL,
+                        `reasoningTokens` INTEGER DEFAULT NULL,
+                        `startedAt` INTEGER NOT NULL,
+                        `completedAt` INTEGER,
+                        PRIMARY KEY(`runId`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_agent_runs_conversationId` " +
+                        "ON `agent_runs` (`conversationId`)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_agent_runs_startedAt` " +
+                        "ON `agent_runs` (`startedAt`)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `agent_tool_events` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `runId` TEXT NOT NULL,
+                        `sequence` INTEGER NOT NULL,
+                        `toolCallId` TEXT NOT NULL,
+                        `toolName` TEXT NOT NULL,
+                        `classification` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `target` TEXT NOT NULL,
+                        `summary` TEXT NOT NULL,
+                        `argumentsSummary` TEXT NOT NULL,
+                        `resultSummary` TEXT NOT NULL,
+                        `errorCode` TEXT,
+                        `startedAt` INTEGER NOT NULL,
+                        `completedAt` INTEGER,
+                        FOREIGN KEY(`runId`) REFERENCES `agent_runs`(`runId`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_agent_tool_events_runId` " +
+                        "ON `agent_tool_events` (`runId`)",
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_tool_events_runId_sequence` " +
+                        "ON `agent_tool_events` (`runId`, `sequence`)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `agent_mutations` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `runId` TEXT NOT NULL,
+                        `toolEventId` INTEGER NOT NULL,
+                        `toolName` TEXT NOT NULL,
+                        `target` TEXT NOT NULL,
+                        `operation` TEXT NOT NULL,
+                        `summary` TEXT NOT NULL,
+                        `beforeContent` TEXT NOT NULL,
+                        `afterContent` TEXT NOT NULL,
+                        `undoPayload` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `undoneAt` INTEGER,
+                        FOREIGN KEY(`runId`) REFERENCES `agent_runs`(`runId`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE,
+                        FOREIGN KEY(`toolEventId`) REFERENCES `agent_tool_events`(`id`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_agent_mutations_runId` " +
+                        "ON `agent_mutations` (`runId`)",
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_mutations_toolEventId` " +
+                        "ON `agent_mutations` (`toolEventId`)",
                 )
             }
         }

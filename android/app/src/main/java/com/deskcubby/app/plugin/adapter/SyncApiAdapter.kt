@@ -70,6 +70,7 @@ private fun CloudSyncConfig.toPluginConfig(): SyncConfiguration = SyncConfigurat
             AppSyncContent.JSON_BACKUP -> SyncContent.JSON_BACKUP
             AppSyncContent.USAGE_STATISTICS -> SyncContent.USAGE_STATISTICS
             AppSyncContent.READING_PROGRESS -> SyncContent.READING_PROGRESS
+            AppSyncContent.AGENT_CHATS -> SyncContent.AGENT_CHATS
         }
     },
 )

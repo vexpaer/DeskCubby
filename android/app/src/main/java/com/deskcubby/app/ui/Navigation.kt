@@ -133,6 +133,8 @@ import com.deskcubby.app.ui.statshub.StatisticsHubViewModel
 import com.deskcubby.app.ui.usage.UsageStatisticsScreen
 import com.deskcubby.app.ui.usage.UsageStatisticsViewModel
 import com.deskcubby.app.ui.ai.AiChatScreen
+import com.deskcubby.app.ui.ai.AgentReviewScreen
+import com.deskcubby.app.ui.ai.AgentReviewViewModel
 import com.deskcubby.app.ui.ai.AiChatViewModel
 import com.deskcubby.app.ui.theme.DeskCubbyTheme
 import com.deskcubby.app.ui.theme.GlassPanel
@@ -170,6 +172,7 @@ object Routes {
     const val STATISTICS_USAGE = "statistics/screen-time"
     const val STATISTICS_HEALTH = "statistics/health"
     const val AI_SETTINGS = "settings/ai"
+    const val AI_REVIEW = "ai/review"
     const val POETRY_SETTINGS = "settings/poetry"
 }
 
@@ -422,6 +425,15 @@ fun DeskCubbyRoot(
                             padding = padding,
                             viewModel = aiChatViewModel,
                             onOpenSettings = { navController.navigate(Routes.AI_SETTINGS) },
+                            onOpenReview = { navController.navigate(Routes.AI_REVIEW) },
+                        )
+                    }
+                    composable(Routes.AI_REVIEW) {
+                        val reviewViewModel: AgentReviewViewModel = hiltViewModel()
+                        AgentReviewScreen(
+                            padding = padding,
+                            viewModel = reviewViewModel,
+                            onBack = { navController.popBackStack() },
                         )
                     }
                     composable(NavItemId.VAULT.route) {
@@ -822,6 +834,15 @@ private fun routeTutorialTarget(route: String?, settings: AppSettings): PageTuto
             "查看 Health Connect 提供的步数、距离与活动热量。",
             "View steps, distance, and active calories supplied by Health Connect.",
         )
+        Routes.AI_REVIEW -> target(
+            "page/ai-review",
+            "Agent Review",
+            "Agent Review",
+            "按 Agent 运行查看真实数据修改、前后内容，并安全撤回仍可恢复的操作。",
+            "Review real data changes by Agent run, compare before and after, and safely undo recoverable operations.",
+            "读取与网络查询保留在执行明细中；Review 首页聚焦真正改变数据的操作。" to
+                "Reads and web queries remain in execution details; Review focuses on actual data changes.",
+        )
         else -> {
             val id = NavItemId.entries.firstOrNull { it.route == route } ?: return null
             val config = settings.navItems.firstOrNull { it.id == id }
@@ -853,7 +874,8 @@ private fun routeTutorialTarget(route: String?, settings: AppSettings): PageTuto
                     tr("长按条目可编辑、分类、标重点或删除；四点手柄可排序。", "Long-press to edit, categorize, highlight, or delete; use the four-dot handle to reorder."),
                 )
                 NavItemId.AI_CHAT -> listOf(
-                    tr("发送前可从输入框左侧选择图片、日记或小巧思作为上下文。", "Before sending, use the left input menu to attach an image, diary, or thought context."),
+                    tr("输入框左侧四方块可插入图片/文档、管理数据源权限和选择审批模式。", "Use the four-square menu beside the input to attach images/documents, manage data-source grants, and choose approval mode."),
+                    tr("Agent 会按需检索和读取；可展开工具步骤、中止运行，并从顶部进入 Review 撤回修改。", "Agent retrieves only as needed; expand tool steps, stop a run, or open Review from the top to undo changes."),
                 )
                 NavItemId.VAULT -> listOf(
                     tr("密码与明文只在本机解锁会话中使用；忘记密码无法恢复。", "The password and plaintext are used only in the local unlock session; a forgotten password cannot be recovered."),

@@ -2,7 +2,10 @@ package com.deskcubby.app.plugin
 
 import com.deskcubby.app.BuildConfig
 import com.deskcubby.app.plugin.adapter.AiApiAdapter
+import com.deskcubby.app.plugin.adapter.AppApiAdapter
+import com.deskcubby.app.plugin.adapter.DeskCubbyDataApiAdapter
 import com.deskcubby.app.plugin.adapter.DiaryApiAdapter
+import com.deskcubby.app.plugin.adapter.FileApiAdapter
 import com.deskcubby.app.plugin.adapter.MediaApiAdapter
 import com.deskcubby.app.plugin.adapter.PluginStorageApiFactory
 import com.deskcubby.app.plugin.adapter.PluginUiRegistry
@@ -24,6 +27,9 @@ class AppPluginContextFactory @Inject constructor(
     private val mediaApi: Provider<MediaApiAdapter>,
     private val syncApi: Provider<SyncApiAdapter>,
     private val aiApi: Provider<AiApiAdapter>,
+    private val dataApi: Provider<DeskCubbyDataApiAdapter>,
+    private val fileApi: Provider<FileApiAdapter>,
+    private val appApi: Provider<AppApiAdapter>,
     private val uiRegistry: Provider<PluginUiRegistry>,
     private val storageFactory: Provider<PluginStorageApiFactory>,
 ) : PluginContextFactory {
@@ -39,6 +45,9 @@ class AppPluginContextFactory @Inject constructor(
         media = mediaApi.get(),
         sync = syncApi.get(),
         ai = aiApi.get(),
+        data = dataApi.get(),
+        files = fileApi.get(),
+        app = appApi.get(),
         ui = uiRegistry.get().apiFor(descriptor.id),
         storage = storageFactory.get().create(descriptor.id),
     )

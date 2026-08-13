@@ -19,6 +19,8 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.deskcubby.app.takeCodePoints
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.AgentDataSource
+import com.deskcubby.app.data.model.AgentPermissionMode
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.AppLanguage
@@ -184,6 +186,8 @@ class SettingsRepository @Inject constructor(
         val aiAllowInsecureHttp = booleanPreferencesKey("ai_allow_insecure_http")
         val aiConfigs = stringPreferencesKey("ai_configs_v2")
         val aiChatConfigId = stringPreferencesKey("ai_chat_config_id")
+        val agentEnabledSources = stringSetPreferencesKey("agent_enabled_sources_v1")
+        val agentPermissionMode = stringPreferencesKey("agent_permission_mode")
         val calorieEstimationEnabled = booleanPreferencesKey("calorie_estimation_enabled")
         val calorieTextConfigId = stringPreferencesKey("calorie_text_config_id")
         val calorieImageConfigId = stringPreferencesKey("calorie_image_config_id")
@@ -380,6 +384,13 @@ class SettingsRepository @Inject constructor(
             aiAllowInsecureHttp = prefs[Keys.aiAllowInsecureHttp] ?: defaults.aiAllowInsecureHttp,
             aiConfigs = normalizedConfigs,
             aiChatConfigId = chatId,
+            agentEnabledSources = prefs[Keys.agentEnabledSources]
+                .orEmpty()
+                .mapNotNullTo(linkedSetOf()) { value ->
+                    AgentDataSource.entries.firstOrNull { it.wireValue == value }
+                },
+            agentPermissionMode = prefs[Keys.agentPermissionMode]
+                .enumValueOr(defaults.agentPermissionMode),
             calorieEstimationEnabled = (prefs[Keys.calorieEstimationEnabled] ?: false) &&
                 calorieTextId != null && calorieImageId != null,
             calorieTextConfigId = calorieTextId,
@@ -687,6 +698,13 @@ class SettingsRepository @Inject constructor(
         context.settingsDataStore.edit { it.setOrRemove(Keys.aiChatConfigId, id?.takeIf(String::isNotBlank)) }
     }
 
+    suspend fun setAgentEnabledSources(sources: Set<AgentDataSource>) {
+        set(Keys.agentEnabledSources, sources.mapTo(linkedSetOf(), AgentDataSource::wireValue))
+    }
+
+    suspend fun setAgentPermissionMode(mode: AgentPermissionMode) =
+        set(Keys.agentPermissionMode, mode.name)
+
     suspend fun setCalorieEstimationSettings(
         enabled: Boolean, textConfigId: String?, imageConfigId: String?,
         visionPrompt: String, textPrompt: String,
@@ -989,6 +1007,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.aiAllowInsecureHttp] = value.aiAllowInsecureHttp
             prefs[Keys.aiConfigs] = encodeAiConfigs(value.aiConfigs)
             prefs.setOrRemove(Keys.aiChatConfigId, value.aiChatConfigId)
+            prefs[Keys.agentEnabledSources] = value.agentEnabledSources
+                .mapTo(linkedSetOf(), AgentDataSource::wireValue)
+            prefs[Keys.agentPermissionMode] = value.agentPermissionMode.name
             prefs[Keys.calorieEstimationEnabled] = value.calorieEstimationEnabled
             prefs.setOrRemove(Keys.calorieTextConfigId, value.calorieTextConfigId)
             prefs.setOrRemove(Keys.calorieImageConfigId, value.calorieImageConfigId)
@@ -1507,6 +1528,7 @@ class SettingsRepository @Inject constructor(
                     temperature = item.optDouble("temperature", 0.7).toFloat().coerceIn(0f, 2f),
                     systemPrompt = item.optString("systemPrompt").take(MAX_AI_SYSTEM_PROMPT_CHARS),
                     apiKey = item.optString("apiKey").take(MAX_AI_API_KEY_CHARS),
+                    supportsToolCalling = item.optBoolean("supportsToolCalling", false),
                 ))
             }
         }.filter { it.id.isNotBlank() && it.endpointUrl.isNotBlank() && it.model.isNotBlank() }.take(20)
@@ -1519,6 +1541,7 @@ class SettingsRepository @Inject constructor(
                 .put("endpointUrl", item.endpointUrl).put("model", item.model).put("enabled", item.enabled)
                 .put("allowInsecureHttp", item.allowInsecureHttp).put("temperature", item.temperature.toDouble())
                 .put("apiKey", item.apiKey.take(MAX_AI_API_KEY_CHARS))
+                .put("supportsToolCalling", item.supportsToolCalling)
             if (item.systemPrompt.isNotEmpty()) json.put("systemPrompt", item.systemPrompt)
             put(json)
         }

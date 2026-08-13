@@ -20,6 +20,10 @@ interface DiaryAPI {
 
     suspend fun moveToTrash(documentId: String): Boolean
 
+    suspend fun moveToTrashDocument(documentId: String): DiaryTrashDocument
+
+    suspend fun restoreFromTrash(trashDocumentId: String): DiaryDocument
+
     suspend fun appendToToday(markdown: String, dateIso: String? = null): DiaryDocument
 }
 
@@ -39,6 +43,12 @@ data class DiaryDocument(
     val name: String,
     val markdown: String,
     val version: ContentVersion,
+)
+
+data class DiaryTrashDocument(
+    val documentId: String,
+    val originalName: String,
+    val deletedAtMillis: Long,
 )
 
 class DiaryConflictException(

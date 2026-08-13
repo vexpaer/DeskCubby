@@ -23,7 +23,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class VaultRepositoryFailureBoundaryTest {
     @Test
-    fun `metadata read failure during construction keeps vault locked`() = runBlocking {
+    fun metadataReadFailureDuringConstructionKeepsVaultLocked() = runBlocking {
         val store = FakeVaultMetadataStore().apply {
             nextReadFailure = true
         }
@@ -35,7 +35,7 @@ class VaultRepositoryFailureBoundaryTest {
     }
 
     @Test
-    fun `prepared metadata write failure leaves old password and rows untouched`() = runBlocking {
+    fun preparedMetadataWriteFailureLeavesOldPasswordAndRowsUntouched() = runBlocking {
         val fixture = seededVault()
         fixture.store.nextPreparedFailure = FailureMode.BEFORE_COMMIT
 
@@ -56,7 +56,7 @@ class VaultRepositoryFailureBoundaryTest {
     }
 
     @Test
-    fun `Room failure before commit rolls prepared metadata back on old unlock`() = runBlocking {
+    fun roomFailureBeforeCommitRollsPreparedMetadataBackOnOldUnlock() = runBlocking {
         val fixture = seededVault()
         fixture.dao.nextReplaceFailure = FailureMode.BEFORE_COMMIT
 
@@ -77,7 +77,7 @@ class VaultRepositoryFailureBoundaryTest {
     }
 
     @Test
-    fun `Room failure after atomic commit is recoverable only with new password`() = runBlocking {
+    fun roomFailureAfterAtomicCommitIsRecoverableOnlyWithNewPassword() = runBlocking {
         val fixture = seededVault(includeLegacyPayload = true)
         fixture.dao.nextReplaceFailure = FailureMode.AFTER_COMMIT
 
@@ -105,7 +105,7 @@ class VaultRepositoryFailureBoundaryTest {
     }
 
     @Test
-    fun `final metadata failure before commit is completed by new-password unlock`() = runBlocking {
+    fun finalMetadataFailureBeforeCommitIsCompletedByNewPasswordUnlock() = runBlocking {
         val fixture = seededVault()
         fixture.store.nextStableFailure = FailureMode.BEFORE_COMMIT
 
@@ -126,7 +126,7 @@ class VaultRepositoryFailureBoundaryTest {
     }
 
     @Test
-    fun `final metadata failure after commit is already a valid stable new vault`() = runBlocking {
+    fun finalMetadataFailureAfterCommitIsAlreadyAValidStableNewVault() = runBlocking {
         val fixture = seededVault()
         fixture.store.nextStableFailure = FailureMode.AFTER_COMMIT
 
@@ -146,7 +146,7 @@ class VaultRepositoryFailureBoundaryTest {
     }
 
     @Test
-    fun `row mutations wait for password change and then use the new key`() = runBlocking {
+    fun rowMutationsWaitForPasswordChangeAndThenUseTheNewKey() = runBlocking {
         val fixture = seededVault()
         fixture.dao.replaceEntered = CompletableDeferred()
         fixture.dao.releaseReplace = CompletableDeferred()
