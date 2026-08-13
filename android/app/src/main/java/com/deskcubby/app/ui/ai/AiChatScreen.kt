@@ -86,6 +86,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.deskcubby.app.agent.AgentApprovalRequest
@@ -102,6 +103,7 @@ import com.deskcubby.app.data.repository.AiChatRole
 import com.deskcubby.app.data.repository.AiConversation
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.AppLoadingIndicator
+import com.deskcubby.app.ui.components.MarkdownText
 import com.deskcubby.app.ui.theme.tr
 import java.text.NumberFormat
 
@@ -199,6 +201,7 @@ fun AiChatScreen(
                 isRunning = state.isSending,
                 isPreparing = state.isPreparingAttachments,
                 configured = configured,
+                fontSizeSp = settings.aiPageFontSizeSp,
                 onValueChange = viewModel::updateDraft,
                 onPickFiles = {
                     picker.launch(
@@ -261,7 +264,14 @@ fun AiChatScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(state.messages, key = AiChatMessage::id) { AgentMessageBubble(it) }
+                    items(state.messages, key = AiChatMessage::id) {
+                        AgentMessageBubble(
+                            message = it,
+                            fontSizeSp = settings.aiPageFontSizeSp,
+                            replyBoxWidthDp = settings.aiReplyBoxWidthDp,
+                            headingSizesSp = settings.markdownHeadingSizesSp,
+                        )
+                    }
                     if (state.executionUpdates.isNotEmpty()) {
                         item("agent-execution") {
                             AgentExecutionPanel(
@@ -398,6 +408,7 @@ private fun AgentComposer(
     isRunning: Boolean,
     isPreparing: Boolean,
     configured: Boolean,
+    fontSizeSp: Float,
     onValueChange: (String) -> Unit,
     onPickFiles: () -> Unit,
     onManageContext: () -> Unit,
@@ -443,6 +454,7 @@ private fun AgentComposer(
                     value = value,
                     onValueChange = onValueChange,
                     modifier = Modifier.weight(1f),
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = fontSizeSp.sp),
                     placeholder = {
                         Text(
                             if (configured) tr("描述任务，Agent 会按需调用工具", "Describe a task; the Agent will use tools as needed")
@@ -510,7 +522,12 @@ private fun AttachmentRow(attachment: AiChatAttachment, enabled: Boolean, onRemo
 }
 
 @Composable
-private fun AgentMessageBubble(message: AiChatMessage) {
+private fun AgentMessageBubble(
+    message: AiChatMessage,
+    fontSizeSp: Float,
+    replyBoxWidthDp: Float,
+    headingSizesSp: List<Float>,
+) {
     if (message.role == AiChatRole.CONTEXT) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -528,7 +545,7 @@ private fun AgentMessageBubble(message: AiChatMessage) {
     val user = message.role == AiChatRole.USER
     Box(Modifier.fillMaxWidth(), contentAlignment = if (user) Alignment.CenterEnd else Alignment.CenterStart) {
         Surface(
-            modifier = Modifier.widthIn(max = 680.dp).fillMaxWidth(0.92f),
+            modifier = Modifier.widthIn(max = replyBoxWidthDp.dp).fillMaxWidth(0.92f),
             shape = MaterialTheme.shapes.large,
             color = if (user) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
             contentColor = if (user) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
@@ -562,7 +579,21 @@ private fun AgentMessageBubble(message: AiChatMessage) {
                 }
                 if (message.content.isNotBlank()) {
                     Spacer(Modifier.height(7.dp))
-                    SelectionContainer { Text(message.content, style = MaterialTheme.typography.bodyLarge) }
+                    if (user) {
+                        SelectionContainer {
+                            Text(
+                                message.content,
+                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = fontSizeSp.sp),
+                            )
+                        }
+                    } else {
+                        // Agent replies render Markdown (headings, lists, code, quotes, links).
+                        MarkdownText(
+                            markdown = message.content,
+                            headingSizesSp = headingSizesSp,
+                            baseTextSizeSp = fontSizeSp,
+                        )
+                    }
                 }
             }
         }

@@ -36,6 +36,16 @@ import com.deskcubby.app.data.model.DEFAULT_MEAL_BUTTON_ICONS
 import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
 import com.deskcubby.app.data.model.DEFAULT_CALORIE_TEXT_PROMPT
 import com.deskcubby.app.data.model.DEFAULT_CALORIE_VISION_PROMPT
+import com.deskcubby.app.data.model.DEFAULT_AGENT_PROMPT
+import com.deskcubby.app.data.model.DEFAULT_AI_PAGE_FONT_SIZE_SP
+import com.deskcubby.app.data.model.DEFAULT_AI_REPLY_BOX_WIDTH_DP
+import com.deskcubby.app.data.model.DEFAULT_MORE_PAGE_COLUMNS
+import com.deskcubby.app.data.model.MAX_AI_PAGE_FONT_SIZE_SP
+import com.deskcubby.app.data.model.MAX_AI_REPLY_BOX_WIDTH_DP
+import com.deskcubby.app.data.model.MAX_MORE_PAGE_COLUMNS
+import com.deskcubby.app.data.model.MIN_AI_PAGE_FONT_SIZE_SP
+import com.deskcubby.app.data.model.MIN_AI_REPLY_BOX_WIDTH_DP
+import com.deskcubby.app.data.model.MIN_MORE_PAGE_COLUMNS
 import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.normalizeHomeGameShortcutIds
 import com.deskcubby.app.data.model.DarkMode
@@ -188,6 +198,9 @@ class SettingsRepository @Inject constructor(
         val aiChatConfigId = stringPreferencesKey("ai_chat_config_id")
         val agentEnabledSources = stringSetPreferencesKey("agent_enabled_sources_v1")
         val agentPermissionMode = stringPreferencesKey("agent_permission_mode")
+        val aiPageFontSizeSp = floatPreferencesKey("ai_page_font_size_sp")
+        val aiReplyBoxWidthDp = floatPreferencesKey("ai_reply_box_width_dp")
+        val agentPrompt = stringPreferencesKey("agent_prompt")
         val calorieEstimationEnabled = booleanPreferencesKey("calorie_estimation_enabled")
         val calorieTextConfigId = stringPreferencesKey("calorie_text_config_id")
         val calorieImageConfigId = stringPreferencesKey("calorie_image_config_id")
@@ -198,6 +211,7 @@ class SettingsRepository @Inject constructor(
         val navigationIntroAcknowledged = booleanPreferencesKey("navigation_intro_acknowledged")
         val navItems = stringPreferencesKey("nav_items")
         val morePageOrder = stringPreferencesKey("more_page_order")
+        val morePageColumns = intPreferencesKey("more_page_columns")
         val defaultPage = stringPreferencesKey("default_page")
         val bottomNavShowLabels = booleanPreferencesKey("bottom_nav_show_labels")
         val musicVisualizerEnabled = booleanPreferencesKey("music_visualizer_enabled")
@@ -391,6 +405,18 @@ class SettingsRepository @Inject constructor(
                 },
             agentPermissionMode = prefs[Keys.agentPermissionMode]
                 .enumValueOr(defaults.agentPermissionMode),
+            aiPageFontSizeSp = (prefs[Keys.aiPageFontSizeSp]
+                ?: defaults.aiPageFontSizeSp)
+                .takeIf(Float::isFinite)
+                ?.coerceIn(MIN_AI_PAGE_FONT_SIZE_SP, MAX_AI_PAGE_FONT_SIZE_SP)
+                ?: defaults.aiPageFontSizeSp,
+            aiReplyBoxWidthDp = (prefs[Keys.aiReplyBoxWidthDp]
+                ?: defaults.aiReplyBoxWidthDp)
+                .takeIf(Float::isFinite)
+                ?.coerceIn(MIN_AI_REPLY_BOX_WIDTH_DP, MAX_AI_REPLY_BOX_WIDTH_DP)
+                ?: defaults.aiReplyBoxWidthDp,
+            agentPrompt = (prefs[Keys.agentPrompt] ?: defaults.agentPrompt)
+                .take(MAX_AI_SYSTEM_PROMPT_CHARS),
             calorieEstimationEnabled = (prefs[Keys.calorieEstimationEnabled] ?: false) &&
                 calorieTextId != null && calorieImageId != null,
             calorieTextConfigId = calorieTextId,
@@ -409,6 +435,8 @@ class SettingsRepository @Inject constructor(
                 ?: defaults.navigationIntroAcknowledged,
             navItems = nav,
             morePageOrder = decodeMorePageOrder(prefs[Keys.morePageOrder], nav),
+            morePageColumns = (prefs[Keys.morePageColumns] ?: defaults.morePageColumns)
+                .coerceIn(MIN_MORE_PAGE_COLUMNS, MAX_MORE_PAGE_COLUMNS),
             defaultPage = requestedDefault.takeIf { it in visibleIds } ?: visibleIds.firstOrNull() ?: NavItemId.SETTINGS,
             bottomNavShowLabels = prefs[Keys.bottomNavShowLabels] ?: defaults.bottomNavShowLabels,
             musicVisualizerEnabled = prefs[Keys.musicVisualizerEnabled]
@@ -821,6 +849,7 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setMorePageSettings(
         showDescriptions: Boolean,
+        columns: Int,
         items: List<NavItemConfig>,
     ) {
         val normalized = normalizeNavItems(items)
@@ -828,6 +857,28 @@ class SettingsRepository @Inject constructor(
             migrateMorePageOrderIfNeeded(prefs)
             prefs[Keys.navItems] = encodeNav(normalized)
             prefs[Keys.morePageShowDescriptions] = showDescriptions
+            prefs[Keys.morePageColumns] = columns.coerceIn(
+                MIN_MORE_PAGE_COLUMNS,
+                MAX_MORE_PAGE_COLUMNS,
+            )
+        }
+    }
+
+    suspend fun setAiPageSettings(
+        fontSizeSp: Float,
+        replyBoxWidthDp: Float,
+        agentPrompt: String,
+    ) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.aiPageFontSizeSp] = fontSizeSp
+                .takeIf(Float::isFinite)
+                ?.coerceIn(MIN_AI_PAGE_FONT_SIZE_SP, MAX_AI_PAGE_FONT_SIZE_SP)
+                ?: DEFAULT_AI_PAGE_FONT_SIZE_SP
+            prefs[Keys.aiReplyBoxWidthDp] = replyBoxWidthDp
+                .takeIf(Float::isFinite)
+                ?.coerceIn(MIN_AI_REPLY_BOX_WIDTH_DP, MAX_AI_REPLY_BOX_WIDTH_DP)
+                ?: DEFAULT_AI_REPLY_BOX_WIDTH_DP
+            prefs[Keys.agentPrompt] = agentPrompt.trim().take(MAX_AI_SYSTEM_PROMPT_CHARS)
         }
     }
 
@@ -1010,6 +1061,15 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.agentEnabledSources] = value.agentEnabledSources
                 .mapTo(linkedSetOf(), AgentDataSource::wireValue)
             prefs[Keys.agentPermissionMode] = value.agentPermissionMode.name
+            prefs[Keys.aiPageFontSizeSp] = value.aiPageFontSizeSp
+                .takeIf(Float::isFinite)
+                ?.coerceIn(MIN_AI_PAGE_FONT_SIZE_SP, MAX_AI_PAGE_FONT_SIZE_SP)
+                ?: DEFAULT_AI_PAGE_FONT_SIZE_SP
+            prefs[Keys.aiReplyBoxWidthDp] = value.aiReplyBoxWidthDp
+                .takeIf(Float::isFinite)
+                ?.coerceIn(MIN_AI_REPLY_BOX_WIDTH_DP, MAX_AI_REPLY_BOX_WIDTH_DP)
+                ?: DEFAULT_AI_REPLY_BOX_WIDTH_DP
+            prefs[Keys.agentPrompt] = value.agentPrompt.trim().take(MAX_AI_SYSTEM_PROMPT_CHARS)
             prefs[Keys.calorieEstimationEnabled] = value.calorieEstimationEnabled
             prefs.setOrRemove(Keys.calorieTextConfigId, value.calorieTextConfigId)
             prefs.setOrRemove(Keys.calorieImageConfigId, value.calorieImageConfigId)
@@ -1034,6 +1094,10 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.musicVisualizerMaxFrequencyHz] = musicVisualizerFrequencyBounds.second
             prefs[Keys.game2048AnimationSpeed] = value.game2048AnimationSpeed.name
             prefs[Keys.morePageShowDescriptions] = value.morePageShowDescriptions
+            prefs[Keys.morePageColumns] = value.morePageColumns.coerceIn(
+                MIN_MORE_PAGE_COLUMNS,
+                MAX_MORE_PAGE_COLUMNS,
+            )
             prefs[Keys.homeWidgetBordersEnabled] = value.homeWidgetBordersEnabled
             prefs[Keys.homeWidgets] = encodeStringList(value.homeWidgets.distinct())
             prefs[Keys.homeGameShortcuts] = encodeStringList(
@@ -1146,6 +1210,8 @@ class SettingsRepository @Inject constructor(
                                 item.optString("moreDescription", id.defaultDescription),
                             ),
                         ),
+                        moreButtonColorArgb = item.optNullableIntOrNull("moreButtonColorArgb"),
+                        moreCardColorArgb = item.optNullableIntOrNull("moreCardColorArgb"),
                     ),
                 )
             }
@@ -1187,6 +1253,9 @@ class SettingsRepository @Inject constructor(
     private fun encodeMorePageOrder(value: List<NavItemId>): String =
         JSONArray().apply { value.forEach { put(it.name) } }.toString()
 
+    private fun JSONObject.optNullableIntOrNull(key: String): Int? =
+        if (has(key) && !isNull(key)) optInt(key) else null
+
     private fun migrateMorePageOrderIfNeeded(prefs: MutablePreferences) {
         val legacyNav = decodeNav(prefs[Keys.navItems])
         prefs[Keys.morePageOrder] = encodeMorePageOrder(
@@ -1207,7 +1276,9 @@ class SettingsRepository @Inject constructor(
                         item.showInMore && item.id != NavItemId.HOME &&
                             item.id != NavItemId.MORE && item.id != NavItemId.SETTINGS,
                     )
-                    .put("moreDescription", normalizeMoreDescription(item.moreDescription)),
+                    .put("moreDescription", normalizeMoreDescription(item.moreDescription))
+                    .put("moreButtonColorArgb", item.moreButtonColorArgb ?: JSONObject.NULL)
+                    .put("moreCardColorArgb", item.moreCardColorArgb ?: JSONObject.NULL),
             )
         }
     }.toString()

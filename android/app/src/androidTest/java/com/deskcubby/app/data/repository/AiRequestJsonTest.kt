@@ -3,6 +3,11 @@ package com.deskcubby.app.data.repository
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
+import com.deskcubby.plugin.api.core.api.AIAgentMessage
+import com.deskcubby.plugin.api.core.api.AIAgentMessageRole
+import com.deskcubby.plugin.api.core.api.AIToolCall
+import com.deskcubby.plugin.api.core.api.AIToolCompletionRequest
+import com.deskcubby.plugin.api.core.api.AIToolDefinition
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -230,5 +235,85 @@ class AiRequestJsonTest {
             "Bearer [REDACTED]",
             sanitizeAiRemoteError("Bearer $apiKey", apiKey),
         )
+    }
+
+    @Test
+    fun agentBuilderOmitsNullContentOnToolOnlyAssistantTurn() {
+        val body = buildAgentRequestJson(
+            model = "agent-model",
+            temperature = 0.7f,
+            request = AIToolCompletionRequest(
+                systemPrompt = "You are a strict assistant.",
+                messages = listOf(
+                    AIAgentMessage(AIAgentMessageRole.USER, "请查找我的日记"),
+                    AIAgentMessage(
+                        role = AIAgentMessageRole.ASSISTANT,
+                        content = "",
+                        toolCalls = listOf(
+                            AIToolCall("call-1", "search_entries", mapOf("source" to "diary")),
+                        ),
+                    ),
+                    AIAgentMessage(
+                        role = AIAgentMessageRole.TOOL,
+                        content = "{\"ok\":true}",
+                        toolCallId = "call-1",
+                    ),
+                ),
+                tools = listOf(
+                    AIToolDefinition(
+                        "search_entries",
+                        "Search entries",
+                        "{\"type\":\"object\",\"properties\":{}}",
+                    ),
+                ),
+                modelConfigurationId = "model-1",
+            ),
+            imageDataUrls = emptyMap(),
+        )
+
+        val messages = body.getJSONArray("messages")
+        assertEquals(4, messages.length())
+        val assistant = messages.getJSONObject(2)
+        assertEquals("assistant", assistant.getString("role"))
+        assertFalse(assistant.has("content"))
+        val toolCalls = assistant.getJSONArray("tool_calls")
+        assertEquals(1, toolCalls.length())
+        assertEquals("call-1", toolCalls.getJSONObject(0).getString("id"))
+        assertEquals(
+            "search_entries",
+            toolCalls.getJSONObject(0).getJSONObject("function").getString("name"),
+        )
+        val tool = messages.getJSONObject(3)
+        assertEquals("tool", tool.getString("role"))
+        assertEquals("call-1", tool.getString("tool_call_id"))
+        assertFalse(tool.has("name"))
+    }
+
+    @Test
+    fun agentBuilderKeepsAssistantContentWhenPresent() {
+        val body = buildAgentRequestJson(
+            model = "agent-model",
+            temperature = 0.7f,
+            request = AIToolCompletionRequest(
+                systemPrompt = "You are a strict assistant.",
+                messages = listOf(
+                    AIAgentMessage(AIAgentMessageRole.USER, "你好"),
+                    AIAgentMessage(AIAgentMessageRole.ASSISTANT, "你好！有什么可以帮你？"),
+                ),
+                tools = listOf(
+                    AIToolDefinition(
+                        "search_entries",
+                        "Search entries",
+                        "{\"type\":\"object\",\"properties\":{}}",
+                    ),
+                ),
+                modelConfigurationId = "model-1",
+            ),
+            imageDataUrls = emptyMap(),
+        )
+
+        val messages = body.getJSONArray("messages")
+        assertEquals(3, messages.length())
+        assertEquals("你好！有什么可以帮你？", messages.getJSONObject(2).getString("content"))
     }
 }

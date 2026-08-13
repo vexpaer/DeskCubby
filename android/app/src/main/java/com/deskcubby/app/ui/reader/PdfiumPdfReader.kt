@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -37,10 +38,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -234,6 +238,11 @@ private fun PdfiumDocumentView(
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = safeInitialPage)
     val horizontalScrollState = rememberScrollState()
     var gestureZoom by remember(session) { mutableFloatStateOf(1f) }
+    // Live pinch transform: the content follows the fingers through a matrix scale around the
+    // pinch centroid without re-rendering. When the gesture ends the final scale is committed to
+    // gestureZoom, which re-renders pages at the new resolution, and the transform resets.
+    var gestureScale by remember(session) { mutableFloatStateOf(1f) }
+    var gestureTransformOrigin by remember(session) { mutableStateOf(TransformOrigin.Center) }
     var firstContentLoaded by remember(session) { mutableStateOf(false) }
     var searchMatches by remember(session) { mutableStateOf<List<Int>>(emptyList()) }
     var initialPositionRestored by rememberSaveable { mutableStateOf(false) }
@@ -362,23 +371,53 @@ private fun PdfiumDocumentView(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = gestureScale
+                    scaleY = gestureScale
+                    transformOrigin = gestureTransformOrigin
+                }
                 .pointerInput(preferences.pdfZoomPercent) {
                     awaitEachGesture {
-                        while (true) {
+                        awaitFirstDown(requireUnconsumed = false)
+                        var zoomChanged = false
+                        do {
                             val event = awaitPointerEvent()
-                            if (event.changes.count { it.pressed } >= 2) {
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.size >= 2) {
                                 val zoomChange = event.calculateZoom()
                                 if (zoomChange.isFinite() && zoomChange > 0f) {
+                                    val currentEffectiveZoom =
+                                        preferences.pdfZoomPercent * gestureZoom
                                     val minimum = MIN_READER_PDF_ZOOM_PERCENT /
-                                        preferences.pdfZoomPercent.toFloat()
+                                        currentEffectiveZoom
                                     val maximum = MAX_READER_PDF_ZOOM_PERCENT /
-                                        preferences.pdfZoomPercent.toFloat()
-                                    gestureZoom = (gestureZoom * zoomChange).coerceIn(minimum, maximum)
+                                        currentEffectiveZoom
+                                    gestureScale = (gestureScale * zoomChange)
+                                        .coerceIn(minimum, maximum)
+                                    val centroid = pressed.fold(Offset.Zero) { acc, change ->
+                                        acc + change.position
+                                    } / pressed.size.toFloat()
+                                    gestureTransformOrigin = TransformOrigin(
+                                        (centroid.x / size.width).coerceIn(0f, 1f),
+                                        (centroid.y / size.height).coerceIn(0f, 1f),
+                                    )
+                                    zoomChanged = true
                                 }
                                 event.changes.forEach { it.consume() }
                             }
-                            if (event.changes.none { it.pressed }) break
+                        } while (event.changes.any { it.pressed })
+                        if (zoomChanged) {
+                            // Commit the final scale: pages re-render at the new width, then the
+                            // transient matrix resets so the rendered content matches the scale.
+                            gestureZoom = (gestureZoom * gestureScale).coerceIn(
+                                MIN_READER_PDF_ZOOM_PERCENT /
+                                    preferences.pdfZoomPercent.toFloat(),
+                                MAX_READER_PDF_ZOOM_PERCENT /
+                                    preferences.pdfZoomPercent.toFloat(),
+                            )
                         }
+                        gestureScale = 1f
+                        gestureTransformOrigin = TransformOrigin.Center
                     }
                 },
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),

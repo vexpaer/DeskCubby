@@ -406,6 +406,23 @@ const val MIN_MARKDOWN_HEADING_SIZE_SP: Float = 12f
 const val MAX_MARKDOWN_HEADING_SIZE_SP: Float = 48f
 val DEFAULT_MARKDOWN_HEADING_SIZES_SP: List<Float> = listOf(32f, 28f, 24f, 21f, 19f, 17f)
 
+const val MIN_AI_PAGE_FONT_SIZE_SP: Float = 12f
+const val MAX_AI_PAGE_FONT_SIZE_SP: Float = 28f
+const val DEFAULT_AI_PAGE_FONT_SIZE_SP: Float = 16f
+const val MIN_AI_REPLY_BOX_WIDTH_DP: Float = 280f
+const val MAX_AI_REPLY_BOX_WIDTH_DP: Float = 1200f
+const val DEFAULT_AI_REPLY_BOX_WIDTH_DP: Float = 680f
+const val MIN_MORE_PAGE_COLUMNS: Int = 1
+const val MAX_MORE_PAGE_COLUMNS: Int = 3
+const val DEFAULT_MORE_PAGE_COLUMNS: Int = 2
+
+/**
+ * Default user-editable Agent instructions shown in AI settings. The built-in hard rules
+ * (AgentSystemPrompt) always take precedence; this only adds style and task preferences.
+ */
+const val DEFAULT_AGENT_PROMPT: String =
+    "回答简洁、准确、友好，使用与用户当前使用的语言。Be concise, accurate, and friendly; reply in the user's language."
+
 fun normalizeMarkdownHeadingSizes(values: List<Float>): List<Float> =
     DEFAULT_MARKDOWN_HEADING_SIZES_SP.mapIndexed { index, fallback ->
         values.getOrNull(index)
@@ -590,6 +607,10 @@ data class NavItemConfig(
     val visible: Boolean = id.defaultVisible,
     val showInMore: Boolean = id.defaultShowInMore,
     val moreDescription: String = id.defaultDescription,
+    /** Navigation-page icon button (tile) background; null keeps the themed default. */
+    val moreButtonColorArgb: Int? = null,
+    /** Navigation-page card background; null keeps the themed default. */
+    val moreCardColorArgb: Int? = null,
 )
 
 val MORE_PAGE_ORDERABLE_IDS: List<NavItemId> = NavItemId.entries.filter { id ->
@@ -721,6 +742,9 @@ data class AppSettings(
     val aiChatConfigId: String? = null,
     val agentEnabledSources: Set<AgentDataSource> = emptySet(),
     val agentPermissionMode: AgentPermissionMode = AgentPermissionMode.REQUIRE_APPROVAL,
+    val aiPageFontSizeSp: Float = DEFAULT_AI_PAGE_FONT_SIZE_SP,
+    val aiReplyBoxWidthDp: Float = DEFAULT_AI_REPLY_BOX_WIDTH_DP,
+    val agentPrompt: String = DEFAULT_AGENT_PROMPT,
     val calorieEstimationEnabled: Boolean = false,
     val calorieTextConfigId: String? = null,
     val calorieImageConfigId: String? = null,
@@ -733,6 +757,7 @@ data class AppSettings(
         NavItemConfig(id = id, visible = id.defaultVisible || id == NavItemId.MORE)
     },
     val morePageOrder: List<NavItemId> = normalizeMorePageOrder(emptyList(), navItems),
+    val morePageColumns: Int = DEFAULT_MORE_PAGE_COLUMNS,
     val defaultPage: NavItemId = NavItemId.HOME,
     val bottomNavShowLabels: Boolean = true,
     val musicVisualizerEnabled: Boolean = false,

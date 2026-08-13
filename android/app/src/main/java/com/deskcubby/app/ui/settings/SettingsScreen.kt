@@ -123,6 +123,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.boundsInRoot
@@ -168,6 +169,15 @@ import com.deskcubby.app.data.model.CloudSyncServiceType
 import com.deskcubby.app.data.model.CustomThemeBaseStyle
 import com.deskcubby.app.data.model.CustomThemePalette
 import com.deskcubby.app.data.model.CustomThemeSettings
+import com.deskcubby.app.data.model.DEFAULT_AGENT_PROMPT
+import com.deskcubby.app.data.model.DEFAULT_AI_PAGE_FONT_SIZE_SP
+import com.deskcubby.app.data.model.DEFAULT_AI_REPLY_BOX_WIDTH_DP
+import com.deskcubby.app.data.model.MAX_AI_PAGE_FONT_SIZE_SP
+import com.deskcubby.app.data.model.MAX_AI_REPLY_BOX_WIDTH_DP
+import com.deskcubby.app.data.model.MAX_MORE_PAGE_COLUMNS
+import com.deskcubby.app.data.model.MIN_AI_PAGE_FONT_SIZE_SP
+import com.deskcubby.app.data.model.MIN_AI_REPLY_BOX_WIDTH_DP
+import com.deskcubby.app.data.model.MIN_MORE_PAGE_COLUMNS
 import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_ANIMATION_SCALE
@@ -254,6 +264,7 @@ private enum class SettingsPage {
     POETRY,
     RSS,
     AI,
+    AI_CONFIGS,
     AI_DETAIL,
     NAVIGATION,
     MORE_PAGE,
@@ -885,7 +896,26 @@ fun SettingsScreen(
                 },
             )
 
-            SettingsPage.AI -> AiConfigurationsSettingsPage(
+            SettingsPage.AI -> AiSettingsPage(
+                settings = settings,
+                contentPadding = inner,
+                saveCoordinator = saveCoordinator,
+                onOpenConfigs = {
+                    navigateAfterHandlingUnsaved { page = SettingsPage.AI_CONFIGS }
+                },
+                onSave = { fontSizeSp, replyBoxWidthDp, agentPrompt, onDone ->
+                    viewModel.setAiPageSettings(
+                        fontSizeSp = fontSizeSp,
+                        replyBoxWidthDp = replyBoxWidthDp,
+                        agentPrompt = agentPrompt,
+                    ) { success ->
+                        onDone(success)
+                        if (success) completeSave(SettingsPage.SUBPAGES)
+                    }
+                },
+            )
+
+            SettingsPage.AI_CONFIGS -> AiConfigurationsSettingsPage(
                 settings = settings,
                 contentPadding = inner,
                 onAdd = {
@@ -911,7 +941,7 @@ fun SettingsScreen(
                     saveCoordinator = saveCoordinator,
                     onSave = { changed ->
                         viewModel.saveAiConfig(changed) { success ->
-                            if (success) completeSave(SettingsPage.AI)
+                            if (success) completeSave(SettingsPage.AI_CONFIGS)
                         }
                     },
                 )
@@ -943,8 +973,12 @@ fun SettingsScreen(
                 settings = settings,
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
-                onSave = { showDescriptions, navItems, onDone ->
-                    viewModel.setMorePageSettings(showDescriptions, navItems) { success ->
+                onSave = { showDescriptions, columns, navItems, onDone ->
+                    viewModel.setMorePageSettings(
+                        showDescriptions = showDescriptions,
+                        columns = columns,
+                        items = navItems,
+                    ) { success ->
                         onDone(success)
                         if (success) completeSave(SettingsPage.SUBPAGES)
                     }
@@ -1099,10 +1133,16 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
         SettingsPage.RSS,
     ),
     SettingsSearchEntry(
+        tr("AI 设置", "AI settings"),
+        tr("页面字体、回复框宽度、Agent 提示词与模型配置", "Page font size, reply box width, Agent prompt, and model configurations"),
+        "ai api key model prompt agent font width 模型 密钥 提示词 字体 宽度 恢复",
+        SettingsPage.AI,
+    ),
+    SettingsSearchEntry(
         tr("AI 配置", "AI configurations"),
         tr("兼容接口、模型、系统提示词与 API 密钥", "Endpoint, model, system prompt and API key"),
-        "ai api key model prompt 模型 密钥 提示词 热量",
-        SettingsPage.AI,
+        "ai config endpoint model system prompt api key 配置 接口 模型 密钥",
+        SettingsPage.AI_CONFIGS,
     ),
     SettingsSearchEntry(
         tr("应用数据", "App data"),
@@ -1121,8 +1161,8 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
     ),
     SettingsSearchEntry(
         tr("导航页", "Navigation page"),
-        tr("收纳页面、双列卡片与自定义描述", "Collected pages, two-column cards and custom descriptions"),
-        "more navigation page description staggered 导航页 描述 双列 收纳",
+        tr("收纳页面、列数、模块名称与颜色", "Collected pages, column count, module names and colors"),
+        "more navigation page description columns color 导航页 描述 列 一列 两列 三列 收纳 颜色 底色 名称",
         SettingsPage.MORE_PAGE,
     ),
     SettingsSearchEntry(
@@ -1776,8 +1816,8 @@ private fun CloudSyncSettingsPage(
             text = {
                 Text(
                     tr(
-                        "这会按所选备份的版本导入应用设置和结构化数据；当前格式为 v30，并兼容导入 v1–v29。导入会恢复 Agent 来源授权/权限模式/模型工具能力、自定义主题、Markdown 标题字号、主页小游戏快捷入口、背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Agent 会话/Review、日记、笔记、媒体与背景图片文件不会被替换。",
-                        "This imports app settings and structured data according to the selected backup version; the current format is v30 and v1–v29 remain accepted. It restores Agent source grants, permission mode, model tool capability, the custom theme, Markdown heading sizes, Home mini-game shortcuts, background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. Agent chats/Review, diary, note, media, and background-image files are not replaced.",
+                        "这会按所选备份的版本导入应用设置和结构化数据；当前格式为 v31，并兼容导入 v1–v30。导入会恢复 Agent 来源授权/权限模式/模型工具能力、自定义主题、Markdown 标题字号、主页小游戏快捷入口、背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Agent 会话/Review、日记、笔记、媒体与背景图片文件不会被替换。",
+                        "This imports app settings and structured data according to the selected backup version; the current format is v31 and v1–v30 remain accepted. It restores Agent source grants, permission mode, model tool capability, the custom theme, Markdown heading sizes, Home mini-game shortcuts, background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. Agent chats/Review, diary, note, media, and background-image files are not replaced.",
                     ),
                 )
             },
@@ -2123,8 +2163,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.JSON_BACKUP in selectedContents) {
                     Text(
                         tr(
-                            "v30 应用 JSON 包含 Agent 来源/权限/模型能力、自定义主题、Markdown 显示设置、主页小游戏快捷入口、全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "The v30 app JSON contains Agent source/permission/model-capability settings, the custom theme, Markdown display settings, Home mini-game shortcuts, global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
+                            "v31 应用 JSON 包含 Agent 来源/权限/模型能力、自定义主题、Markdown 显示设置、主页小游戏快捷入口、全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
+                            "The v31 app JSON contains Agent source/permission/model-capability settings, the custom theme, Markdown display settings, Home mini-game shortcuts, global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2495,8 +2535,8 @@ private fun BackupSettingsPage(
             text = {
                 Text(
                     tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。当前 v30（并兼容 v1–v29）还会恢复 Agent 来源授权/权限模式/模型工具能力、自定义主题、Markdown 标题字号、主页小游戏快捷入口、全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。Agent 会话/Review、日记、笔记、媒体和背景图片文件不会被修改。确定继续吗？",
-                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. Current v30 backups (with v1–v29 still accepted) also restore Agent source grants, permission mode, model tool capability, the custom theme, Markdown heading sizes, Home mini-game shortcuts, global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merge games and per-device screen time while leaving the Vault locked. Agent chats/Review, diary, note, media, and background-image files are unchanged. Continue?",
+                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。当前 v31（并兼容 v1–v30）还会恢复 Agent 来源授权/权限模式/模型工具能力、自定义主题、Markdown 标题字号、主页小游戏快捷入口、全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。Agent 会话/Review、日记、笔记、媒体和背景图片文件不会被修改。确定继续吗？",
+                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. Current v31 backups (with v1–v30 still accepted) also restore Agent source grants, permission mode, model tool capability, the custom theme, Markdown heading sizes, Home mini-game shortcuts, global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merge games and per-device screen time while leaving the Vault locked. Agent chats/Review, diary, note, media, and background-image files are unchanged. Continue?",
                     ),
                 )
             },
@@ -2671,8 +2711,8 @@ private fun BackupSettingsPage(
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "v30 包含应用设置（含 Agent 来源授权/权限模式/模型工具能力、自定义主题、Markdown 标题字号与笔记目录引用、主页小游戏快捷入口、全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。",
-                        "v30 includes app settings (including Agent source grants, permission mode, model tool capability, the custom theme, Markdown heading sizes and the notes-folder reference, Home mini-game shortcuts, global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time.",
+                        "v31 包含应用设置（含 Agent 来源授权/权限模式/模型工具能力、自定义主题、Markdown 标题字号与笔记目录引用、主页小游戏快捷入口、全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。",
+                        "v31 includes app settings (including Agent source grants, permission mode, model tool capability, the custom theme, Markdown heading sizes and the notes-folder reference, Home mini-game shortcuts, global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -5289,6 +5329,166 @@ private fun RssSettingsPage(
     }
 }
 
+@Composable
+private fun AiSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onOpenConfigs: () -> Unit,
+    onSave: (Float, Float, String, (Boolean) -> Unit) -> Unit,
+) {
+    var fontSizeSp by rememberSaveable(settings.aiPageFontSizeSp) {
+        mutableFloatStateOf(settings.aiPageFontSizeSp)
+    }
+    var replyWidthDp by rememberSaveable(settings.aiReplyBoxWidthDp) {
+        mutableFloatStateOf(settings.aiReplyBoxWidthDp)
+    }
+    var agentPrompt by remember(settings.agentPrompt) { mutableStateOf(settings.agentPrompt) }
+    var saving by remember { mutableStateOf(false) }
+    val dirty = fontSizeSp != settings.aiPageFontSizeSp ||
+        replyWidthDp != settings.aiReplyBoxWidthDp ||
+        agentPrompt != settings.agentPrompt
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = dirty,
+        enabled = !saving && agentPrompt.length <= 20_000,
+        onReset = {
+            val defaults = AppSettings()
+            fontSizeSp = defaults.aiPageFontSizeSp
+            replyWidthDp = defaults.aiReplyBoxWidthDp
+            agentPrompt = defaults.agentPrompt
+        },
+    ) {
+        saving = true
+        onSave(fontSizeSp, replyWidthDp, agentPrompt) { saving = false }
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            SettingsSection(tr("AI 配置", "AI configurations")) {
+                Text(
+                    tr(
+                        "文字/图片模型配置已移到独立子页；在 AI 聊天页选择模型，点右上角齿轮也会回到本页。",
+                        "Text/image model configurations now live in their own subpage; pick a model on the AI chat page, and its gear button returns here.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenConfigs),
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Outlined.SmartToy, null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(tr("AI 配置", "AI configurations"), fontWeight = FontWeight.Medium)
+                            Text(
+                                tr(
+                                    "接口、模型、API Key 与工具能力",
+                                    "Endpoints, models, API keys and tool capability",
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(Icons.Outlined.ChevronRight, null)
+                    }
+                }
+            }
+        }
+        item {
+            SettingsSection(tr("AI 页面显示", "AI page display")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(tr("字体大小", "Font size"))
+                    Text(fontSizeSp.roundToInt().toString() + " sp", color = MaterialTheme.colorScheme.primary)
+                }
+                Slider(
+                    value = fontSizeSp,
+                    onValueChange = { fontSizeSp = it.roundToInt().toFloat() },
+                    valueRange = MIN_AI_PAGE_FONT_SIZE_SP..MAX_AI_PAGE_FONT_SIZE_SP,
+                    steps = (MAX_AI_PAGE_FONT_SIZE_SP - MIN_AI_PAGE_FONT_SIZE_SP).toInt() - 1,
+                )
+                Text(
+                    tr(
+                        "作用于 AI 聊天页的消息气泡与输入框。",
+                        "Applies to message bubbles and the input box on the AI chat page.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(tr("回复框宽度", "Reply box width"))
+                    Text(replyWidthDp.roundToInt().toString() + " dp", color = MaterialTheme.colorScheme.primary)
+                }
+                Slider(
+                    value = replyWidthDp,
+                    onValueChange = { replyWidthDp = (it / 10f).roundToInt() * 10f },
+                    valueRange = MIN_AI_REPLY_BOX_WIDTH_DP..MAX_AI_REPLY_BOX_WIDTH_DP,
+                    steps = ((MAX_AI_REPLY_BOX_WIDTH_DP - MIN_AI_REPLY_BOX_WIDTH_DP) / 10f).toInt() - 1,
+                )
+                Text(
+                    tr(
+                        "限制消息气泡的最大宽度；手机窄屏会自动收窄。",
+                        "Limits the maximum bubble width; narrow screens still shrink automatically.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            SettingsSection(tr("Agent 提示词", "Agent prompt")) {
+                Text(
+                    tr(
+                        "作为风格与任务偏好附加在严格的内置规则之后，不能扩大权限；也可在“AI 配置 → 附加模型指令”按模型补充。",
+                        "Appended after the strict built-in rules as style and task preferences; it cannot expand permissions. You can still add per-model instructions under AI configurations.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = agentPrompt,
+                    onValueChange = { agentPrompt = it.take(20_000) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(tr("Agent 提示词", "Agent prompt")) },
+                    minLines = 4,
+                    supportingText = {
+                        Text(
+                            tr(
+                                "最多 20000 个字符",
+                                "Up to 20000 characters",
+                            ),
+                        )
+                    },
+                )
+                TextButton(onClick = { agentPrompt = DEFAULT_AGENT_PROMPT }) {
+                    Icon(Icons.Outlined.Restore, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text(tr("恢复 Agent 提示词", "Restore Agent prompt"))
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AiConfigurationsSettingsPage(
@@ -6212,15 +6412,19 @@ private fun MorePageSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
     saveCoordinator: SettingsSaveCoordinator,
-    onSave: (Boolean, List<NavItemConfig>, (Boolean) -> Unit) -> Unit,
+    onSave: (Boolean, Int, List<NavItemConfig>, (Boolean) -> Unit) -> Unit,
 ) {
     var showDescriptions by remember(settings.morePageShowDescriptions) {
         mutableStateOf(settings.morePageShowDescriptions)
+    }
+    var columns by rememberSaveable(settings.morePageColumns) {
+        mutableIntStateOf(settings.morePageColumns)
     }
     var navItems by remember(settings.navItems) {
         mutableStateOf(settings.navItems.map { it.copy() })
     }
     var saving by remember { mutableStateOf(false) }
+    var colorTarget by remember { mutableStateOf<Pair<Int, String>?>(null) }
     val language = LocalAppLanguage.current
     val editableItems = navItems.withIndex().filter { (_, item) ->
         item.id != NavItemId.HOME &&
@@ -6231,16 +6435,18 @@ private fun MorePageSettingsPage(
     RegisterSettingsSave(
         coordinator = saveCoordinator,
         dirty = showDescriptions != settings.morePageShowDescriptions ||
+            columns != settings.morePageColumns ||
             navItems != settings.navItems,
         enabled = !saving,
         onReset = {
             val defaults = AppSettings()
             showDescriptions = defaults.morePageShowDescriptions
+            columns = defaults.morePageColumns
             navItems = defaults.navItems
         },
     ) {
         saving = true
-        onSave(showDescriptions, navItems) { saving = false }
+        onSave(showDescriptions, columns, navItems) { saving = false }
     }
 
     LazyColumn(
@@ -6248,6 +6454,39 @@ private fun MorePageSettingsPage(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        item {
+            SettingsSection(tr("页面布局", "Layout")) {
+                Text(
+                    tr(
+                        "选择导航页模块按一列、两列或三列显示。",
+                        "Choose whether navigation modules display in one, two, or three columns.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    (MIN_MORE_PAGE_COLUMNS..MAX_MORE_PAGE_COLUMNS).forEachIndexed { index, option ->
+                        SegmentedButton(
+                            selected = columns == option,
+                            onClick = { columns = option },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index,
+                                MAX_MORE_PAGE_COLUMNS - MIN_MORE_PAGE_COLUMNS + 1,
+                            ),
+                        ) {
+                            Text(
+                                when (option) {
+                                    1 -> tr("一列", "1 column")
+                                    2 -> tr("两列", "2 columns")
+                                    else -> tr("三列", "3 columns")
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
         item {
             SettingsSection(tr("描述显示", "Descriptions")) {
                 Row(
@@ -6276,8 +6515,8 @@ private fun MorePageSettingsPage(
             SettingsSection(tr("导航页内容", "Navigation page content")) {
                 Text(
                     tr(
-                        "左右两列会分别按卡片实际高度连续排列。可单独收纳页面并修改描述；留空会隐藏该页描述。",
-                        "The two columns flow independently by each card's real height. Choose pages and customize descriptions; leave one empty to hide it.",
+                        "可按列数连续排列；单独设置每个模块的名称、按钮底色与整体底色，并修改描述。",
+                        "Modules flow by the selected column count; set each module's name, button background, card background, and description individually.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -6302,6 +6541,47 @@ private fun MorePageSettingsPage(
                             },
                         )
                     }
+                    OutlinedTextField(
+                        value = if (
+                            language == AppLanguage.ENGLISH &&
+                            item.label == item.id.defaultLabel
+                        ) {
+                            item.id.englishLabel
+                        } else {
+                            item.label
+                        },
+                        onValueChange = { value ->
+                            navItems = navItems.toMutableList().apply {
+                                set(index, item.copy(label = value.take(32)))
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(tr("模块名称", "Module name")) },
+                        singleLine = true,
+                        supportingText = {
+                            Text(tr("最多 32 个字符", "Up to 32 characters"))
+                        },
+                    )
+                    MoreModuleColorRow(
+                        label = tr("按钮底色", "Button background"),
+                        colorArgb = item.moreButtonColorArgb,
+                        onPick = { colorTarget = index to "button" },
+                        onClear = {
+                            navItems = navItems.toMutableList().apply {
+                                set(index, item.copy(moreButtonColorArgb = null))
+                            }
+                        },
+                    )
+                    MoreModuleColorRow(
+                        label = tr("模块整体底色", "Card background"),
+                        colorArgb = item.moreCardColorArgb,
+                        onPick = { colorTarget = index to "card" },
+                        onClear = {
+                            navItems = navItems.toMutableList().apply {
+                                set(index, item.copy(moreCardColorArgb = null))
+                            }
+                        },
+                    )
                     OutlinedTextField(
                         value = if (
                             language == AppLanguage.ENGLISH &&
@@ -6330,6 +6610,72 @@ private fun MorePageSettingsPage(
                         },
                     )
                 }
+            }
+        }
+    }
+    colorTarget?.let { (index, kind) ->
+        val item = navItems.getOrNull(index)
+        if (item == null) {
+            colorTarget = null
+        } else {
+            val current = if (kind == "button") {
+                item.moreButtonColorArgb
+            } else {
+                item.moreCardColorArgb
+            }
+            ColorPickerDialog(
+                initialColorArgb = current ?: MaterialTheme.colorScheme.primaryContainer.toArgb(),
+                title = if (kind == "button") {
+                    tr("按钮底色", "Button background")
+                } else {
+                    tr("模块整体底色", "Card background")
+                },
+                onDismiss = { colorTarget = null },
+                onConfirm = { picked ->
+                    navItems = navItems.toMutableList().apply {
+                        set(
+                            index,
+                            if (kind == "button") {
+                                item.copy(moreButtonColorArgb = picked)
+                            } else {
+                                item.copy(moreCardColorArgb = picked)
+                            },
+                        )
+                    }
+                    colorTarget = null
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun MoreModuleColorRow(
+    label: String,
+    colorArgb: Int?,
+    onPick: () -> Unit,
+    onClear: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        if (colorArgb != null) {
+            Box(
+                modifier = Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(Color(colorArgb))
+                    .clickable(onClick = onPick),
+            )
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = onClear) {
+                Text(tr("默认", "Default"))
+            }
+        } else {
+            TextButton(onClick = onPick) {
+                Text(tr("自定义颜色", "Custom color"))
             }
         }
     }
@@ -7009,6 +7355,10 @@ private fun settingsPageTutorialTarget(page: SettingsPage): PageTutorialTarget {
             "Adjust the item limit and summaries per feed. Feed URLs are managed on the RSS page.",
         )
         SettingsPage.AI -> tr(
+            "调整 AI 页面字体、回复框宽度与 Agent 提示词；模型配置在独立的“AI 配置”子页管理。",
+            "Adjust AI page font size, reply box width, and the Agent prompt; model configurations live in the separate AI configurations subpage.",
+        )
+        SettingsPage.AI_CONFIGS -> tr(
             "管理文字/图片模型配置；点按编辑，长按可复制或删除。",
             "Manage text/image model configurations; tap to edit, or long-press to copy or delete.",
         )
@@ -7077,7 +7427,8 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.VAULT -> tr("收藏夹", "Vault")
     SettingsPage.POETRY -> tr("诗词本", "Poetry book")
     SettingsPage.RSS -> tr("RSS 订阅", "RSS")
-    SettingsPage.AI -> tr("AI 配置", "AI configurations")
+    SettingsPage.AI -> tr("AI 设置", "AI settings")
+    SettingsPage.AI_CONFIGS -> tr("AI 配置", "AI configurations")
     SettingsPage.AI_DETAIL -> tr("AI 配置详情", "AI configuration")
     SettingsPage.NAVIGATION -> tr("底部导航", "Bottom navigation")
     SettingsPage.MORE_PAGE -> tr("导航页", "Navigation page")
@@ -7102,7 +7453,8 @@ private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
     SettingsPage.STEPS,
     -> SettingsPage.SUBPAGES
 
-    SettingsPage.AI_DETAIL -> SettingsPage.AI
+    SettingsPage.AI_CONFIGS -> SettingsPage.AI
+    SettingsPage.AI_DETAIL -> SettingsPage.AI_CONFIGS
     SettingsPage.SYNC_DETAIL -> SettingsPage.SYNC
     SettingsPage.SYNC -> SettingsPage.BACKUP
 

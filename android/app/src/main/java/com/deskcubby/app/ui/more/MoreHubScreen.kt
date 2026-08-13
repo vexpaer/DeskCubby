@@ -1,11 +1,16 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+)
 
 package com.deskcubby.app.ui.more
 
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,6 +29,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -49,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -57,6 +64,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.deskcubby.app.data.model.AppLanguage
@@ -103,13 +115,16 @@ internal fun morePageDropTargetIndex(
 fun MoreHubScreen(
     padding: PaddingValues,
     items: List<NavItemConfig>,
+    columns: Int,
     showDescriptions: Boolean,
     onOpenPage: (NavItemId) -> Unit,
     onItemsReordered: (List<NavItemId>, (Boolean) -> Unit) -> Unit,
     onOpenNavigationSettings: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    val columnCount = columns.coerceIn(1, 3)
     var orderedItems by remember { mutableStateOf(items) }
+    var editMode by rememberSaveable { mutableStateOf(false) }
     val cardBounds = remember { mutableStateMapOf<NavItemId, Rect>() }
     val snackbarHostState = remember { SnackbarHostState() }
     val latestItems by rememberUpdatedState(items)
@@ -243,117 +258,158 @@ fun MoreHubScreen(
                     }
                 },
                 actions = {
-                    onOpenNavigationSettings?.let { openSettings ->
-                        IconButton(onClick = openSettings) {
+                    if (editMode) {
+                        IconButton(onClick = { editMode = false }) {
                             Icon(
-                                imageVector = Icons.Outlined.Tune,
+                                imageVector = Icons.Outlined.Check,
                                 contentDescription = tr(
-                                    "设置导航页",
-                                    "Navigation page settings",
+                                    "完成布局更改",
+                                    "Finish layout editing",
                                 ),
                             )
+                        }
+                    } else {
+                        onOpenNavigationSettings?.let { openSettings ->
+                            IconButton(onClick = openSettings) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Tune,
+                                    contentDescription = tr(
+                                        "设置导航页",
+                                        "Navigation page settings",
+                                    ),
+                                )
+                            }
                         }
                     }
                 },
             )
         },
     ) { innerPadding ->
-        if (orderedItems.isEmpty()) {
-            EmptyMorePage(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(16.dp),
-                onOpenNavigationSettings = onOpenNavigationSettings,
-            )
-        } else {
-            LazyVerticalStaggeredGrid(
-                columns = StaggeredGridCells.Fixed(2),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                contentPadding = PaddingValues(
-                    start = 16.dp,
-                    top = 12.dp,
-                    end = 16.dp,
-                    bottom = 28.dp,
-                ),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalItemSpacing = 12.dp,
-            ) {
-                itemsIndexed(
-                    items = orderedItems,
-                    key = { _, item -> item.id.route },
-                ) { index, item ->
-                    key(item.id) {
-                        val isDragging = draggingItemId == item.id
-                        val isDropTarget = draggingItemId != null &&
-                            dragTargetIndex == index &&
-                            dragSourceIndex != index
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .zIndex(if (isDragging) 2f else 0f)
-                                .onGloballyPositioned {
-                                    cardBounds[item.id] = it.boundsInRoot()
-                                },
-                        ) {
-                            MorePageCard(
-                                modifier = Modifier.graphicsLayer {
-                                    translationX = if (isDragging) dragOffsetPx.x else 0f
-                                    translationY = if (isDragging) dragOffsetPx.y else 0f
-                                    alpha = if (isDragging) 0.7f else 1f
-                                },
-                                item = item,
-                                index = index,
-                                totalItems = orderedItems.size,
-                                showDescription = showDescriptions,
-                                clickEnabled = draggingItemId == null,
-                                onClick = { onOpenPage(item.id) },
-                                onDragStarted = {
-                                    draggingItemId = item.id
-                                    dragOffsetPx = Offset.Zero
-                                    dragOrigin = cardBounds[item.id]?.center
-                                    dragTargetIndex = index
-                                },
-                                onDragChanged = { offset ->
-                                    dragOffsetPx = offset
-                                    targetIndexFor(index, offset)?.let { target ->
-                                        dragTargetIndex = target
-                                    }
-                                },
-                                onDragCancelled = ::clearDrag,
-                                onMoveUp = if (index > 0) {
-                                    { moveItem(index, index - 1) }
-                                } else {
-                                    null
-                                },
-                                onMoveDown = if (index < orderedItems.lastIndex) {
-                                    { moveItem(index, index + 1) }
-                                } else {
-                                    null
-                                },
-                                onDragFinished = { offset ->
-                                    val target = targetIndexFor(index, offset)
-                                        ?: dragTargetIndex
-                                    clearDrag()
-                                    if (target != null) moveItem(index, target)
-                                },
-                            )
-                            if (isDropTarget) {
-                                HorizontalDivider(
-                                    modifier = Modifier
-                                        .align(
-                                            if (index > (dragSourceIndex ?: index)) {
-                                                Alignment.BottomCenter
-                                            } else {
-                                                Alignment.TopCenter
-                                            },
-                                        )
-                                        .fillMaxWidth(),
-                                    thickness = 2.dp,
-                                    color = MaterialTheme.colorScheme.primary,
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+        ) {
+            if (editMode) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Outlined.Edit, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            tr(
+                                "拖动模块右上角的四点手柄调整顺序，点右上角对勾完成。",
+                                "Drag the four-dot handle on each module to reorder; tap the check mark when done.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+            if (orderedItems.isEmpty()) {
+                EmptyMorePage(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    onOpenNavigationSettings = onOpenNavigationSettings,
+                )
+            } else {
+                LazyVerticalStaggeredGrid(
+                    columns = StaggeredGridCells.Fixed(columnCount),
+                    modifier = Modifier
+                        .fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        top = 12.dp,
+                        end = 16.dp,
+                        bottom = 28.dp,
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalItemSpacing = 12.dp,
+                ) {
+                    itemsIndexed(
+                        items = orderedItems,
+                        key = { _, item -> item.id.route },
+                    ) { index, item ->
+                        key(item.id) {
+                            val isDragging = draggingItemId == item.id
+                            val isDropTarget = draggingItemId != null &&
+                                dragTargetIndex == index &&
+                                dragSourceIndex != index
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .zIndex(if (isDragging) 2f else 0f)
+                                    .onGloballyPositioned {
+                                        cardBounds[item.id] = it.boundsInRoot()
+                                    },
+                            ) {
+                                MorePageCard(
+                                    modifier = Modifier.graphicsLayer {
+                                        translationX = if (isDragging) dragOffsetPx.x else 0f
+                                        translationY = if (isDragging) dragOffsetPx.y else 0f
+                                        alpha = if (isDragging) 0.7f else 1f
+                                    },
+                                    item = item,
+                                    index = index,
+                                    totalItems = orderedItems.size,
+                                    showDescription = showDescriptions,
+                                    editMode = editMode,
+                                    clickEnabled = !editMode && draggingItemId == null,
+                                    onClick = { onOpenPage(item.id) },
+                                    onLongPress = { editMode = true },
+                                    onDragStarted = {
+                                        draggingItemId = item.id
+                                        dragOffsetPx = Offset.Zero
+                                        dragOrigin = cardBounds[item.id]?.center
+                                        dragTargetIndex = index
+                                    },
+                                    onDragChanged = { offset ->
+                                        dragOffsetPx = offset
+                                        targetIndexFor(index, offset)?.let { target ->
+                                            dragTargetIndex = target
+                                        }
+                                    },
+                                    onDragCancelled = ::clearDrag,
+                                    onMoveUp = if (index > 0) {
+                                        { moveItem(index, index - 1) }
+                                    } else {
+                                        null
+                                    },
+                                    onMoveDown = if (index < orderedItems.lastIndex) {
+                                        { moveItem(index, index + 1) }
+                                    } else {
+                                        null
+                                    },
+                                    onDragFinished = { offset ->
+                                        val target = targetIndexFor(index, offset)
+                                            ?: dragTargetIndex
+                                        clearDrag()
+                                        if (target != null) moveItem(index, target)
+                                    },
                                 )
+                                if (isDropTarget) {
+                                    HorizontalDivider(
+                                        modifier = Modifier
+                                            .align(
+                                                if (index > (dragSourceIndex ?: index)) {
+                                                    Alignment.BottomCenter
+                                                } else {
+                                                    Alignment.TopCenter
+                                                },
+                                            )
+                                            .fillMaxWidth(),
+                                        thickness = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
                             }
                         }
                     }
@@ -370,8 +426,10 @@ private fun MorePageCard(
     index: Int,
     totalItems: Int,
     showDescription: Boolean,
+    editMode: Boolean,
     clickEnabled: Boolean,
     onClick: () -> Unit,
+    onLongPress: () -> Unit,
     onDragStarted: () -> Unit,
     onDragChanged: (Offset) -> Unit,
     onDragCancelled: () -> Unit,
@@ -389,30 +447,31 @@ private fun MorePageCard(
         2 -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.primary
     }
-    val iconContainerColor = when (index % 3) {
+    val defaultIconContainerColor = when (index % 3) {
         1 -> MaterialTheme.colorScheme.secondaryContainer
         2 -> MaterialTheme.colorScheme.tertiaryContainer
         else -> MaterialTheme.colorScheme.primaryContainer
     }
+    val iconContainerColor = item.moreButtonColorArgb?.let(::Color) ?: defaultIconContainerColor
     val panelRole = when (index % 3) {
         1 -> PanelRole.FEATURE
         2 -> PanelRole.MEDIA
         else -> PanelRole.STANDARD
     }
 
-    GlassPanel(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(
-                enabled = clickEnabled,
-                onClickLabel = tr("打开$label", "Open $label"),
-                role = Role.Button,
-                onClick = onClick,
-            ),
-        cornerRadius = 22.dp,
-        role = panelRole,
-        padding = PaddingValues(16.dp),
-    ) {
+    val clickModifier = if (editMode) {
+        Modifier
+    } else {
+        Modifier.combinedClickable(
+            enabled = clickEnabled,
+            onClickLabel = tr("打开$label", "Open $label"),
+            role = Role.Button,
+            onClick = onClick,
+            onLongClickLabel = tr("更改布局", "Change layout"),
+            onLongClick = onLongPress,
+        )
+    }
+    val cardContent: @Composable BoxScope.() -> Unit = {
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.SpaceBetween,
@@ -436,20 +495,22 @@ private fun MorePageCard(
                         modifier = Modifier.size(25.dp),
                     )
                 }
-                FourDotDragHandle(
-                    modifier = Modifier.semantics {
-                        stateDescription = orderDescription
-                    },
-                    enabled = totalItems > 1,
-                    translateSelf = false,
-                    onDragStarted = onDragStarted,
-                    onDragOffsetChanged = onDragChanged,
-                    onDragCancelled = onDragCancelled,
-                    onMoveUp = onMoveUp,
-                    onMoveDown = onMoveDown,
-                    onDragFinished = {},
-                    onDragOffsetFinished = onDragFinished,
-                )
+                if (editMode) {
+                    FourDotDragHandle(
+                        modifier = Modifier.semantics {
+                            stateDescription = orderDescription
+                        },
+                        enabled = totalItems > 1,
+                        translateSelf = false,
+                        onDragStarted = onDragStarted,
+                        onDragOffsetChanged = onDragChanged,
+                        onDragCancelled = onDragCancelled,
+                        onMoveUp = onMoveUp,
+                        onMoveDown = onMoveDown,
+                        onDragFinished = {},
+                        onDragOffsetFinished = onDragFinished,
+                    )
+                }
             }
             Spacer(Modifier.height(18.dp))
             Text(
@@ -471,6 +532,28 @@ private fun MorePageCard(
                     )
                 }
         }
+    }
+    val customCardColor = item.moreCardColorArgb?.let(::Color)
+    val shape = RoundedCornerShape(22.dp)
+    if (customCardColor != null) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .then(clickModifier)
+                .clip(shape)
+                .background(customCardColor)
+                .padding(16.dp),
+            contentAlignment = Alignment.TopStart,
+        ) { cardContent() }
+    } else {
+        GlassPanel(
+            modifier = modifier
+                .fillMaxWidth()
+                .then(clickModifier),
+            cornerRadius = 22.dp,
+            role = panelRole,
+            padding = PaddingValues(16.dp),
+        ) { cardContent() }
     }
 }
 

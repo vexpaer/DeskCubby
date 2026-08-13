@@ -47,7 +47,12 @@ internal fun buildAgentRequestJson(
 
             AIAgentMessageRole.ASSISTANT -> {
                 json.put("role", "assistant")
-                json.put("content", message.content.takeIf(String::isNotBlank) ?: JSONObject.NULL)
+                // Providers disagree on how to serialize tool-only assistant turns: some reject
+                // "content":null and others reject "content":"" alongside tool_calls. Omitting
+                // the key entirely is accepted by every OpenAI-compatible implementation, and a
+                // blank assistant turn without tool calls never reaches this builder.
+                val content = message.content.takeIf(String::isNotBlank)
+                if (content != null) json.put("content", content)
                 if (message.toolCalls.isNotEmpty()) {
                     json.put(
                         "tool_calls",
@@ -73,7 +78,9 @@ internal fun buildAgentRequestJson(
             AIAgentMessageRole.TOOL -> {
                 json.put("role", "tool")
                 json.put("tool_call_id", requireNotNull(message.toolCallId))
-                message.toolName?.let { json.put("name", it) }
+                // The "name" field is not part of the OpenAI tool-message schema; several strict
+                // OpenAI-compatible providers reject it. The tool identity is already conveyed by
+                // the assistant turn's tool_calls entries.
                 json.put("content", message.content)
             }
         }

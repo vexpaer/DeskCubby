@@ -770,10 +770,20 @@ class SettingsViewModel @Inject constructor(
     }
     fun setMorePageSettings(
         showDescriptions: Boolean,
+        columns: Int,
         items: List<NavItemConfig>,
         onDone: (Boolean) -> Unit = {},
     ) = launchSave(onDone) {
-        repository.setMorePageSettings(showDescriptions, items)
+        repository.setMorePageSettings(showDescriptions, columns, items)
+    }
+
+    fun setAiPageSettings(
+        fontSizeSp: Float,
+        replyBoxWidthDp: Float,
+        agentPrompt: String,
+        onDone: (Boolean) -> Unit = {},
+    ) = launchSave(onDone) {
+        repository.setAiPageSettings(fontSizeSp, replyBoxWidthDp, agentPrompt)
     }
     fun setMorePageOrder(
         value: List<NavItemId>,

@@ -514,6 +514,7 @@ fun DeskCubbyRoot(
                                 allItems = settings.navItems,
                                 order = settings.morePageOrder,
                             ),
+                            columns = settings.morePageColumns,
                             showDescriptions = settings.morePageShowDescriptions,
                             onOpenPage = { itemId ->
                                 navController.navigate(itemId.route) {

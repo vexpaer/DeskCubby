@@ -90,6 +90,72 @@ class BackupJsonCodecTest {
     }
 
     @Test
+    fun versionThirtyOneRoundTripsAiPageAndMorePageSettings() {
+        val source = AppBackup(
+            exportedAt = 31,
+            settings = AppSettings(
+                aiPageFontSizeSp = 20f,
+                aiReplyBoxWidthDp = 900f,
+                agentPrompt = "请始终使用简体中文回答。",
+                morePageColumns = 3,
+                navItems = AppSettings().navItems.map { item ->
+                    if (item.id == NavItemId.DIARY) {
+                        item.copy(
+                            label = "日记本",
+                            moreButtonColorArgb = 0xFF112233.toInt(),
+                            moreCardColorArgb = 0xFF445566.toInt(),
+                        )
+                    } else {
+                        item
+                    }
+                },
+            ),
+            thoughts = emptyList(),
+            favorites = emptyList(),
+        )
+
+        val decoded = BackupJsonCodec.decode(BackupJsonCodec.encode(source))
+
+        assertEquals(20f, decoded.settings.aiPageFontSizeSp, 0f)
+        assertEquals(900f, decoded.settings.aiReplyBoxWidthDp, 0f)
+        assertEquals("请始终使用简体中文回答。", decoded.settings.agentPrompt)
+        assertEquals(3, decoded.settings.morePageColumns)
+        val diary = decoded.settings.navItems.first { it.id == NavItemId.DIARY }
+        assertEquals("日记本", diary.label)
+        assertEquals(0xFF112233.toInt(), diary.moreButtonColorArgb)
+        assertEquals(0xFF445566.toInt(), diary.moreCardColorArgb)
+    }
+
+    @Test
+    fun versionThirtyUsesDefaultsForV31AiAndMoreFields() {
+        val json = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 30,
+                    settings = AppSettings(),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        json.put("version", 30)
+        json.remove("aiPageFontSizeSp")
+        json.remove("aiReplyBoxWidthDp")
+        json.remove("agentPrompt")
+        json.remove("morePageColumns")
+
+        val decoded = BackupJsonCodec.decode(json.toString())
+
+        assertEquals(AppSettings().aiPageFontSizeSp, decoded.settings.aiPageFontSizeSp, 0f)
+        assertEquals(AppSettings().aiReplyBoxWidthDp, decoded.settings.aiReplyBoxWidthDp, 0f)
+        assertEquals(AppSettings().agentPrompt, decoded.settings.agentPrompt)
+        assertEquals(AppSettings().morePageColumns, decoded.settings.morePageColumns)
+        assertNull(
+            decoded.settings.navItems.first { it.id == NavItemId.DIARY }.moreButtonColorArgb,
+        )
+    }
+
+    @Test
     fun versionTwentyNineUsesSafeAgentDefaultsAndKeepsOldAiConfig() {
         val json = JSONObject(
             BackupJsonCodec.encode(

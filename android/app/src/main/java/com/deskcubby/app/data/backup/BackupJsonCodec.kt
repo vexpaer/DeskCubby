@@ -11,6 +11,12 @@ import com.deskcubby.app.data.local.SavedPoemEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.local.VaultItemEntity
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.MAX_AI_PAGE_FONT_SIZE_SP
+import com.deskcubby.app.data.model.MAX_AI_REPLY_BOX_WIDTH_DP
+import com.deskcubby.app.data.model.MAX_MORE_PAGE_COLUMNS
+import com.deskcubby.app.data.model.MIN_AI_PAGE_FONT_SIZE_SP
+import com.deskcubby.app.data.model.MIN_AI_REPLY_BOX_WIDTH_DP
+import com.deskcubby.app.data.model.MIN_MORE_PAGE_COLUMNS
 import com.deskcubby.app.data.model.AgentDataSource
 import com.deskcubby.app.data.model.AgentPermissionMode
 import com.deskcubby.app.data.model.AiModelConfig
@@ -106,7 +112,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 data class AppBackup(
-    val formatVersion: Int = 30,
+    val formatVersion: Int = BackupJsonCodec.FORMAT_VERSION,
     val exportedAt: Long,
     val settings: AppSettings,
     val thoughts: List<FlashThoughtEntity>,
@@ -143,7 +149,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 30
+    const val FORMAT_VERSION: Int = 31
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -477,6 +483,9 @@ object BackupJsonCodec {
             },
         )
         .put("agentPermissionMode", settings.agentPermissionMode.name)
+        .put("aiPageFontSizeSp", settings.aiPageFontSizeSp)
+        .put("aiReplyBoxWidthDp", settings.aiReplyBoxWidthDp)
+        .put("agentPrompt", settings.agentPrompt)
         .put("calorieEstimationEnabled", settings.calorieEstimationEnabled)
         .putNullable("calorieTextConfigId", settings.calorieTextConfigId)
         .putNullable("calorieImageConfigId", settings.calorieImageConfigId)
@@ -495,7 +504,9 @@ object BackupJsonCodec {
                         .put("iconKey", item.iconKey)
                         .put("visible", item.visible)
                         .put("showInMore", item.showInMore)
-                        .put("moreDescription", item.moreDescription),
+                        .put("moreDescription", item.moreDescription)
+                        .putNullable("moreButtonColorArgb", item.moreButtonColorArgb)
+                        .putNullable("moreCardColorArgb", item.moreCardColorArgb),
                 )
             }
         })
@@ -515,6 +526,7 @@ object BackupJsonCodec {
         .put("musicVisualizerMaxFrequencyHz", settings.musicVisualizerMaxFrequencyHz)
         .put("game2048AnimationSpeed", settings.game2048AnimationSpeed.name)
         .put("morePageShowDescriptions", settings.morePageShowDescriptions)
+        .put("morePageColumns", settings.morePageColumns)
         .put("homeWidgets", settings.homeWidgets.toJsonArray())
         .put(
             "homeGameShortcuts",
@@ -1233,6 +1245,35 @@ object BackupJsonCodec {
             } else {
                 defaults.agentPermissionMode
             },
+            aiPageFontSizeSp = if (version >= 31) {
+                json.requiredFiniteNumber("aiPageFontSizeSp")
+                    .also { value ->
+                        require(value in MIN_AI_PAGE_FONT_SIZE_SP.toDouble()..
+                            MAX_AI_PAGE_FONT_SIZE_SP.toDouble()) {
+                            "aiPageFontSizeSp is out of range"
+                        }
+                    }
+                    .toFloat()
+            } else {
+                defaults.aiPageFontSizeSp
+            },
+            aiReplyBoxWidthDp = if (version >= 31) {
+                json.requiredFiniteNumber("aiReplyBoxWidthDp")
+                    .also { value ->
+                        require(value in MIN_AI_REPLY_BOX_WIDTH_DP.toDouble()..
+                            MAX_AI_REPLY_BOX_WIDTH_DP.toDouble()) {
+                            "aiReplyBoxWidthDp is out of range"
+                        }
+                    }
+                    .toFloat()
+            } else {
+                defaults.aiReplyBoxWidthDp
+            },
+            agentPrompt = if (version >= 31) {
+                json.requiredString("agentPrompt").requireMaxLength("agentPrompt", 20_000)
+            } else {
+                defaults.agentPrompt
+            },
             calorieEstimationEnabled = if (version >= 10) json.requiredBoolean("calorieEstimationEnabled") else false,
             calorieTextConfigId = if (version >= 11) json.requiredNullableString("calorieTextConfigId")?.requireMaxLength("calorieTextConfigId", 80) else null,
             calorieImageConfigId = if (version >= 11) json.requiredNullableString("calorieImageConfigId")?.requireMaxLength("calorieImageConfigId", 80) else null,
@@ -1282,6 +1323,15 @@ object BackupJsonCodec {
                 json.requiredBoolean("morePageShowDescriptions")
             } else {
                 defaults.morePageShowDescriptions
+            },
+            morePageColumns = if (version >= 31) {
+                json.requiredInt("morePageColumns").also { value ->
+                    require(value in MIN_MORE_PAGE_COLUMNS..MAX_MORE_PAGE_COLUMNS) {
+                        "morePageColumns is out of range"
+                    }
+                }
+            } else {
+                defaults.morePageColumns
             },
             homeWidgets = homeWidgets,
             homeGameShortcuts = homeGameShortcuts,
@@ -1593,6 +1643,16 @@ object BackupJsonCodec {
                                 )
                         } else {
                             id.defaultDescription
+                        },
+                        moreButtonColorArgb = if (version >= 31) {
+                            item.optionalNullableInt("moreButtonColorArgb")
+                        } else {
+                            null
+                        },
+                        moreCardColorArgb = if (version >= 31) {
+                            item.optionalNullableInt("moreCardColorArgb")
+                        } else {
+                            null
                         },
                     ),
                 )
@@ -2611,6 +2671,11 @@ private fun JSONObject.requiredInt(name: String): Int {
     val value = requiredLong(name)
     require(value in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) { "$name must be a 32-bit integer" }
     return value.toInt()
+}
+
+private fun JSONObject.optionalNullableInt(name: String): Int? {
+    if (!has(name) || isNull(name)) return null
+    return requiredInt(name)
 }
 
 private fun JSONObject.requiredCoercedInt(name: String, minimum: Int, maximum: Int): Int {

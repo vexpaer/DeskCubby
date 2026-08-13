@@ -278,7 +278,10 @@ class AiChatViewModel @Inject constructor(
                     conversationTitle = mutableUiState.value.activeConversationTitle,
                     userRequest = effectiveRequest,
                     modelConfigId = textConfig.id,
-                    customModelInstructions = textConfig.systemPrompt,
+                    customModelInstructions = buildAgentCustomInstructions(
+                        currentSettings.agentPrompt,
+                        textConfig.systemPrompt,
+                    ),
                     allowedSources = currentSettings.agentEnabledSources.mapTo(linkedSetOf()) {
                         it.wireValue
                     },
@@ -478,6 +481,14 @@ class AiChatViewModel @Inject constructor(
     private fun localized(chinese: String, english: String): String =
         if (settings.value.appLanguage == AppLanguage.ENGLISH) english else chinese
 
+    private fun buildAgentCustomInstructions(
+        globalPrompt: String,
+        configPrompt: String,
+    ): String = buildString {
+        globalPrompt.trim().takeIf(String::isNotBlank)?.let { append(it).append("\n") }
+        configPrompt.trim().takeIf(String::isNotBlank)?.let { append(it) }
+    }.trim().take(MAX_AGENT_INSTRUCTIONS_CHARS)
+
     private fun String.xmlEscape(): String = replace("&", "&amp;")
         .replace("\"", "&quot;")
         .replace("<", "&lt;")
@@ -485,6 +496,7 @@ class AiChatViewModel @Inject constructor(
         .take(500)
 
     private companion object {
+        const val MAX_AGENT_INSTRUCTIONS_CHARS = 20_000
         const val MAX_DRAFT_CHARS = 100_000
         const val MAX_ATTACHMENTS = 5
         const val MAX_HISTORY_MESSAGES = 80

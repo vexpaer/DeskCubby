@@ -251,6 +251,25 @@ private fun MarkdownFormattedText(
     markdown: String,
     headingSizesSp: List<Float>,
 ) {
+    MarkdownText(
+        markdown = markdown,
+        headingSizesSp = headingSizesSp,
+        baseTextSizeSp = MaterialTheme.typography.bodyLarge.fontSize.value,
+    )
+}
+
+/**
+ * Renders CommonMark as selectable, tappable text inside a single TextView. Used by diaries,
+ * notes, and Agent chat replies; [baseTextSizeSp] can be overridden per page (e.g. the AI page
+ * font-size setting). Heading sizes follow the user's Markdown preview settings.
+ */
+@Composable
+fun MarkdownText(
+    markdown: String,
+    headingSizesSp: List<Float>,
+    baseTextSizeSp: Float,
+    modifier: Modifier = Modifier,
+) {
     val parser = remember { Parser.builder().build() }
     val renderer = remember { HtmlRenderer.builder().build() }
     val normalizedSizes = remember(headingSizesSp) {
@@ -265,9 +284,8 @@ private fun MarkdownFormattedText(
 
     val textColor = MaterialTheme.colorScheme.onSurface.toArgb()
     val linkColor = MaterialTheme.colorScheme.primary.toArgb()
-    val baseTextSize = MaterialTheme.typography.bodyLarge.fontSize.value
     AndroidView(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         factory = { context ->
             TextView(context).apply {
                 setTextIsSelectable(true)
@@ -280,7 +298,7 @@ private fun MarkdownFormattedText(
             view.text = spanned
             view.setTextColor(textColor)
             view.setLinkTextColor(linkColor)
-            view.textSize = baseTextSize
+            view.textSize = baseTextSizeSp
         },
     )
 }
