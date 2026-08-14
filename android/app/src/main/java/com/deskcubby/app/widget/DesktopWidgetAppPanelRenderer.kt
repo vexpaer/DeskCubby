@@ -5,8 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.net.Uri
 import android.view.View
@@ -16,8 +16,8 @@ import com.deskcubby.app.R
 import com.deskcubby.app.data.local.UsageStatisticsDao
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.NavItemId
-import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.ReaderBookType
 import com.deskcubby.app.data.repository.ReaderRepository
 import com.deskcubby.app.data.sync.AppCloudSyncService
@@ -32,7 +32,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
-import kotlin.math.roundToInt
+import kotlin.math.ceil
+import kotlin.math.sqrt
 
 /**
  * Renders the non-game app modules (reader, screen-time visualizations, music visualizer and the
@@ -41,7 +42,6 @@ import kotlin.math.roundToInt
 @Singleton
 class DesktopWidgetAppPanelRenderer @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val settingsRepository: SettingsRepository,
     private val readerRepository: ReaderRepository,
     private val usageDeviceRepository: UsageDeviceRepository,
     private val usageStatisticsDao: UsageStatisticsDao,
@@ -55,15 +55,14 @@ class DesktopWidgetAppPanelRenderer @Inject constructor(
         appWidgetId: Int,
         moduleId: String,
         settings: AppSettings,
-        usageRangeDays: Int,
+        config: DesktopWidgetConfig,
     ): RemoteViews {
+        if (moduleId in VISUAL_ONLY_MODULES) {
+            return renderVisualModule(appWidgetId, moduleId, settings, config)
+        }
         val views = RemoteViews(context.packageName, R.layout.desktop_widget_apps)
         val title = when (moduleId) {
             "reader" -> translate("阅读", "Reader", settings.appLanguage)
-            "usage_overview" -> translate("使用时间总览", "Screen time overview", settings.appLanguage)
-            "usage_chart" -> translate("使用时间图表", "Screen time chart", settings.appLanguage)
-            "usage_apps" -> translate("使用时间应用排行", "Top apps by usage", settings.appLanguage)
-            "music_visualizer" -> translate("音乐可视化", "Music visualizer", settings.appLanguage)
             "cloud_sync" -> translate("云端同步", "Cloud sync", settings.appLanguage)
             else -> translate("应用", "Apps", settings.appLanguage)
         }
@@ -73,13 +72,6 @@ class DesktopWidgetAppPanelRenderer @Inject constructor(
         try {
             when (moduleId) {
                 "reader" -> drawReader(canvas, settings)
-                "usage_overview" -> drawUsageOverview(canvas, settings, usageRangeDays)
-                "usage_chart" -> drawUsageChart(canvas, settings, usageRangeDays)
-                "usage_apps" -> drawUsageApps(canvas, settings, usageRangeDays)
-                "music_visualizer" -> {
-                    drawMusicPlaceholder(canvas, settings)
-                    DesktopWidgetMusicVisualizerService.ensureRunning(context)
-                }
                 "cloud_sync" -> {
                     drawCloudStatus(canvas, settings)
                     configureCloudButtons(views, appWidgetId, settings)
@@ -113,6 +105,64 @@ class DesktopWidgetAppPanelRenderer @Inject constructor(
                 Intent(context, MainActivity::class.java)
                     .putExtra(DesktopWidgetRenderer.EXTRA_START_ROUTE, route)
                     .setData(Uri.parse("deskcubby://widget-app/" + appWidgetId + "/" + moduleId))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            ),
+        )
+        return views
+    }
+
+    private suspend fun renderVisualModule(
+        appWidgetId: Int,
+        moduleId: String,
+        settings: AppSettings,
+        config: DesktopWidgetConfig,
+    ): RemoteViews {
+        val views = RemoteViews(context.packageName, R.layout.desktop_widget_visual)
+        val size = desktopWidgetBitmapSize(context, appWidgetId, config)
+        val board = Bitmap.createBitmap(size.width, size.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(board)
+        try {
+            when (moduleId) {
+                "usage_overview" -> drawUsageOverview(
+                    canvas,
+                    config.usageRangeDays,
+                    config.textColorArgb,
+                )
+                "usage_chart" -> drawUsageChart(
+                    canvas,
+                    config.usageRangeDays,
+                    config.textColorArgb,
+                )
+                "usage_apps" -> drawUsageApps(
+                    canvas,
+                    config.usageRangeDays,
+                    config.textColorArgb,
+                )
+                "music_visualizer" -> {
+                    drawMusicPlaceholder(canvas, config.textColorArgb)
+                    DesktopWidgetMusicVisualizerService.ensureRunning(context)
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // A transparent full-bleed panel is still a valid fallback.
+        }
+        views.setImageViewBitmap(R.id.widget_apps_board, board)
+        val route = if (moduleId.startsWith("usage_")) {
+            NavItemId.USAGE.route
+        } else {
+            NavItemId.SETTINGS.route
+        }
+        views.setOnClickPendingIntent(
+            R.id.widget_apps_root,
+            PendingIntent.getActivity(
+                context,
+                appWidgetId * 7 + route.hashCode(),
+                Intent(context, MainActivity::class.java)
+                    .putExtra(DesktopWidgetRenderer.EXTRA_START_ROUTE, route)
+                    .setData(Uri.parse("deskcubby://widget-app/$appWidgetId/$moduleId"))
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             ),
@@ -164,120 +214,104 @@ class DesktopWidgetAppPanelRenderer @Inject constructor(
 
     private suspend fun drawUsageOverview(
         canvas: Canvas,
-        settings: AppSettings,
         rangeDays: Int,
+        color: Int,
     ) {
-        val rows = usageRows(settings, rangeDays)
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = panelTextColor(settings)
-            textSize = 22f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        val rows = usageRows(rangeDays)
+        val byDate = rows.groupBy { it.dayDateIso.orEmpty() }
+        val values = usageDays(rangeDays).map { date ->
+            byDate[date]?.sumOf { it.foregroundMillis ?: 0L } ?: 0L
         }
-        val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = panelTextColor(settings).withAlpha(0xDD) }
-        canvas.drawColor(panelBackgroundColor(settings))
-        val totalMillis = rows.sumOf { it.foregroundMillis ?: 0L }
-        val activeDays = rows.map { it.dayDateIso }.distinct().count { it != null }
-        val total = formatMinutes(totalMillis / 60000)
-        canvas.drawText(translate("近 " + rangeDays + " 天总时长", "Total (" + rangeDays + "d)", settings.appLanguage), 24f, 52f, textPaint)
-        canvas.drawText(total, 24f, 92f, textPaint)
-        val avg = if (activeDays > 0) totalMillis / activeDays else 0L
-        canvas.drawText(
-            translate("日均 " + formatMinutes(avg / 60000), "Daily avg " + formatMinutes(avg / 60000), settings.appLanguage),
-            24f,
-            132f,
-            bodyPaint,
-        )
-        canvas.drawText(
-            translate("活跃 " + activeDays + " 天", activeDays.toString() + " active days", settings.appLanguage),
-            24f,
-            162f,
-            bodyPaint,
-        )
+        val maximum = values.maxOrNull()?.coerceAtLeast(1L) ?: 1L
+        val aspect = canvas.width.toFloat() / canvas.height.coerceAtLeast(1)
+        val columns = ceil(sqrt(values.size * aspect)).toInt().coerceIn(1, values.size)
+        val rowsCount = ceil(values.size / columns.toFloat()).toInt().coerceAtLeast(1)
+        val gap = (minOf(canvas.width, canvas.height) * 0.018f).coerceAtLeast(2f)
+        val cellWidth = (canvas.width - gap * (columns + 1)) / columns
+        val cellHeight = (canvas.height - gap * (rowsCount + 1)) / rowsCount
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        values.forEachIndexed { index, value ->
+            val column = index % columns
+            val row = index / columns
+            val intensity = value.toFloat() / maximum
+            paint.color = color.withAlpha((36 + intensity * 219).toInt())
+            val left = gap + column * (cellWidth + gap)
+            val top = gap + row * (cellHeight + gap)
+            canvas.drawRoundRect(
+                RectF(left, top, left + cellWidth, top + cellHeight),
+                minOf(cellWidth, cellHeight) * 0.18f,
+                minOf(cellWidth, cellHeight) * 0.18f,
+                paint,
+            )
+        }
     }
 
     private suspend fun drawUsageChart(
         canvas: Canvas,
-        settings: AppSettings,
         rangeDays: Int,
+        color: Int,
     ) {
-        val rows = usageRows(settings, rangeDays)
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = panelTextColor(settings)
-            textSize = 16f
-        }
-        canvas.drawColor(panelBackgroundColor(settings))
+        val rows = usageRows(rangeDays)
         val byDate = rows.groupBy { it.dayDateIso ?: "" }
-        val days = (0 until rangeDays).map { LocalDate.now().minusDays((rangeDays - 1 - it).toLong()).toString() }
+        val days = usageDays(rangeDays)
         val values = days.map { date -> byDate[date]?.sumOf { it.foregroundMillis ?: 0L } ?: 0L }
         val max = values.maxOrNull()?.coerceAtLeast(1L) ?: 1L
-        val chartLeft = 36f
-        val chartRight = boardWidthPx - 12f
-        val chartTop = 28f
-        val chartBottom = boardHeightPx - 44f
-        val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = panelAccentColor(settings) }
-        val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = panelTextColor(settings).withAlpha(0x33)
-            strokeWidth = 1f
-        }
-        val step = (chartRight - chartLeft) / rangeDays
+        val inset = minOf(canvas.width, canvas.height) * 0.06f
+        val width = (canvas.width - inset * 2).coerceAtLeast(1f)
+        val height = (canvas.height - inset * 2).coerceAtLeast(1f)
+        val path = Path()
         values.forEachIndexed { index, value ->
-            val left = chartLeft + index * step + step * 0.18f
-            val right = chartLeft + (index + 1) * step - step * 0.18f
-            val height = (value.toFloat() / max * (chartBottom - chartTop)).coerceAtLeast(2f)
-            canvas.drawRoundRect(
-                RectF(left, chartBottom - height, right, chartBottom),
-                step * 0.1f,
-                step * 0.1f,
-                barPaint,
-            )
+            val x = inset + index * width / values.lastIndex.coerceAtLeast(1)
+            val y = canvas.height - inset - value.toFloat() / max * height
+            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
-        canvas.drawLine(chartLeft, chartBottom, chartRight, chartBottom, gridPaint)
-        val maxText = formatMinutes(max / 60000)
-        canvas.drawText(maxText, 4f, chartTop + 8f, textPaint)
-        val todayLabel = if (settings.appLanguage == AppLanguage.ENGLISH) "today" else "今天"
-        canvas.drawText(todayLabel, chartRight - 40f, boardHeightPx - 14f, textPaint)
+        canvas.drawPath(
+            path,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                this.color = color
+                style = Paint.Style.STROKE
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
+                strokeWidth = (minOf(canvas.width, canvas.height) * 0.025f).coerceAtLeast(3f)
+            },
+        )
     }
 
     private suspend fun drawUsageApps(
         canvas: Canvas,
-        settings: AppSettings,
         rangeDays: Int,
+        color: Int,
     ) {
-        val rows = usageRows(settings, rangeDays)
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = panelTextColor(settings)
-            textSize = 18f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-        val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = panelTextColor(settings).withAlpha(0xDD) }
-        canvas.drawColor(panelBackgroundColor(settings))
+        val rows = usageRows(rangeDays)
         val totals = rows.groupBy { it.packageName ?: "" }
             .mapValues { (_, dayRows) -> dayRows.sumOf { it.foregroundMillis ?: 0L } }
             .filterKeys { it.isNotBlank() }
             .toList()
             .sortedByDescending { it.second }
-            .take(5)
-        if (totals.isEmpty()) {
-            canvas.drawText(
-                translate("暂无使用时间数据", "No screen time data yet", settings.appLanguage),
-                24f,
-                60f,
-                bodyPaint,
+            .take(7)
+        val maximum = totals.maxOfOrNull { it.second }?.coerceAtLeast(1L) ?: return
+        val gap = (canvas.height * 0.035f).coerceAtLeast(3f)
+        val barHeight = (canvas.height - gap * (totals.size + 1)) / totals.size
+        val maximumWidth = canvas.width - gap * 2
+        totals.forEachIndexed { index, (_, millis) ->
+            val top = gap + index * (barHeight + gap)
+            val right = gap + maximumWidth * millis.toFloat() / maximum
+            canvas.drawRoundRect(
+                RectF(gap, top, right, top + barHeight),
+                barHeight / 2f,
+                barHeight / 2f,
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    this.color = color.withAlpha((255 - index * 20).coerceAtLeast(96))
+                },
             )
-            return
-        }
-        totals.forEachIndexed { index, (packageName, millis) ->
-            val y = 48f + index * 52f
-            val label = packageName.substringAfterLast('.').take(16)
-            canvas.drawText((index + 1).toString() + ". " + label, 24f, y, textPaint)
-            canvas.drawText(formatMinutes(millis / 60000), boardWidthPx - 90f, y, bodyPaint)
         }
     }
 
-    private suspend fun usageRows(
-        settings: AppSettings,
-        rangeDays: Int,
-    ): List<com.deskcubby.app.data.local.UsageHistoryRoomRow> {
+    private fun usageDays(rangeDays: Int): List<String> = (0 until rangeDays).map { index ->
+        LocalDate.now().minusDays((rangeDays - 1 - index).toLong()).toString()
+    }
+
+    private suspend fun usageRows(rangeDays: Int): List<com.deskcubby.app.data.local.UsageHistoryRoomRow> {
         val identity = try {
             usageDeviceRepository.identity.first()
         } catch (cancelled: CancellationException) {
@@ -296,19 +330,23 @@ class DesktopWidgetAppPanelRenderer @Inject constructor(
         return rows.filter { row -> row.dayDateIso != null && row.dayDateIso >= from }
     }
 
-    private fun drawMusicPlaceholder(canvas: Canvas, settings: AppSettings) {
-        canvas.drawColor(panelBackgroundColor(settings))
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = panelTextColor(settings).withAlpha(0xCC)
-            textSize = 20f
-            textAlign = Paint.Align.CENTER
+    private fun drawMusicPlaceholder(canvas: Canvas, color: Int) {
+        val count = 18
+        val gap = (canvas.width * 0.008f).coerceAtLeast(2f)
+        val barWidth = (canvas.width - gap * (count + 1)) / count
+        val base = canvas.height.toFloat()
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color.withAlpha(0x42) }
+        repeat(count) { index ->
+            val phase = (index % 6 + 1) / 7f
+            val height = canvas.height * (0.12f + phase * 0.34f)
+            val left = gap + index * (barWidth + gap)
+            canvas.drawRoundRect(
+                RectF(left, base - height, left + barWidth, base),
+                barWidth / 2f,
+                barWidth / 2f,
+                paint,
+            )
         }
-        canvas.drawText(
-            translate("播放音乐时在桌面显示频谱", "Spectrum appears here while music plays", settings.appLanguage),
-            boardWidthPx / 2f,
-            boardHeightPx / 2f,
-            paint,
-        )
     }
 
     private fun drawCloudStatus(canvas: Canvas, settings: AppSettings) {
@@ -359,21 +397,11 @@ class DesktopWidgetAppPanelRenderer @Inject constructor(
 
     /** (uploaded, downloaded, conflicts) from the last completed run, or null. */
     private fun cloudSyncTotals(): Triple<Int, Int, Int>? {
-        val runs = cloudSyncService.status.value.lastRuns
-        if (runs.isEmpty()) return null
-        var uploaded = 0
-        var downloaded = 0
-        var conflicts = 0
-        var any = false
-        runs.forEach { run ->
-            run.result?.let { result ->
-                uploaded += result.uploadedCount
-                downloaded += result.downloadedCount
-                conflicts += result.conflictCount
-                any = true
-            }
-        }
-        return if (any) Triple(uploaded, downloaded, conflicts) else null
+        val status = cloudSyncService.status.value
+        val uploaded = status.lastUploadedCount ?: return null
+        val downloaded = status.lastDownloadedCount ?: return null
+        val conflicts = status.lastConflictCount ?: return null
+        return Triple(uploaded, downloaded, conflicts)
     }
 
     private fun configureCloudButtons(
@@ -466,22 +494,15 @@ class DesktopWidgetAppPanelRenderer @Inject constructor(
             0xFFFFFFFF.toInt()
         }
 
-    private fun panelAccentColor(settings: AppSettings): Int =
-        if (androidx.core.graphics.ColorUtils.calculateLuminance(panelBackgroundColor(settings)) > 0.48) {
-            Color.rgb(0x2E, 0x6E, 0xE6)
-        } else {
-            Color.rgb(0x8A, 0xB4, 0xF8)
-        }
-
-    private fun formatMinutes(minutes: Long): String {
-        val hours = minutes / 60
-        val mins = minutes % 60
-        return if (hours > 0) hours.toString() + "h " + mins + "m" else mins.toString() + "m"
-    }
-
     companion object {
         const val EXTRA_WIDGET_ID = "com.deskcubby.app.extra.WIDGET_ID"
         const val EXTRA_MODULE_ID = "com.deskcubby.app.extra.WIDGET_MODULE_ID"
+        private val VISUAL_ONLY_MODULES = setOf(
+            "music_visualizer",
+            "usage_overview",
+            "usage_chart",
+            "usage_apps",
+        )
     }
 }
 

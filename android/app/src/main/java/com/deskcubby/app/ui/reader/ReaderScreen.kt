@@ -1610,10 +1610,21 @@ private fun LegacyContinuousPdfReader(
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
-        val pageWidth = ((maxWidth - 24.dp) * zoomPercent / 100f).coerceAtLeast(160.dp)
+        val pageViewportWidth = (maxWidth - 24.dp).coerceAtLeast(1.dp)
+        val pageWidth = (pageViewportWidth * zoomPercent / 100f).coerceAtLeast(160.dp)
         val targetWidthPx = with(density) { pageWidth.roundToPx() }
-        maxHorizontalPx = (targetWidthPx - with(density) { maxWidth.roundToPx() })
-            .coerceAtLeast(0)
+        val pageViewportWidthPx = with(density) { pageViewportWidth.roundToPx() }
+        val calculatedMaxHorizontalPx = readerPdfMaxHorizontalOffset(
+            viewportWidthPx = pageViewportWidthPx,
+            contentWidthPx = targetWidthPx,
+        )
+        LaunchedEffect(book.id, calculatedMaxHorizontalPx) {
+            maxHorizontalPx = calculatedMaxHorizontalPx
+            horizontalOffsetPx = horizontalOffsetPx.coerceIn(
+                0f,
+                calculatedMaxHorizontalPx.toFloat(),
+            )
+        }
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -1747,28 +1758,41 @@ private fun LegacyPdfPage(
         value = runCatching { viewModel.renderPdfPage(book, page, targetWidthPx) }
     }
     val bitmap = rendered?.getOrNull()
-    Box(
-        Modifier
-            .fillMaxWidth()
-            // The page is translated by the shared 2D-pan offset; the LazyColumn-level nested
-            // scroll connection forwards the horizontal component of every drag for free 2D pan.
-            .graphicsLayer { translationX = -horizontalOffsetPx }
-            .padding(vertical = 2.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        when {
-            rendered == null -> Box(
+    when {
+        rendered == null -> Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
                 Modifier.fillMaxWidth().height(360.dp),
                 contentAlignment = Alignment.Center,
             ) { CircularProgressIndicator() }
-            bitmap != null -> Image(
+        }
+        bitmap != null -> ReaderPdfPageViewport(
+            displayWidth = displayWidth,
+            imageWidthPx = bitmap.width,
+            imageHeightPx = bitmap.height,
+            horizontalOffsetPx = horizontalOffsetPx,
+        ) {
+            Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = tr("PDF 第 ${page + 1} 页", "PDF page ${page + 1}"),
-                modifier = Modifier.width(displayWidth),
-                contentScale = ContentScale.FillWidth,
+                contentScale = ContentScale.FillBounds,
                 colorFilter = readerPdfColorFilter(background, foreground),
             )
-            else -> Text(tr("这一页无法显示", "This page could not be rendered"), color = MaterialTheme.colorScheme.error)
+        }
+        else -> Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                tr("这一页无法显示", "This page could not be rendered"),
+                color = MaterialTheme.colorScheme.error,
+            )
         }
     }
 }

@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 class DeskCubbyWidgetProvider : AppWidgetProvider() {
     @Inject lateinit var renderer: DesktopWidgetRenderer
     @Inject lateinit var instanceStore: DesktopWidgetInstanceStore
+    @Inject lateinit var thoughtDraftStore: DesktopWidgetThoughtDraftStore
 
     override fun onEnabled(context: Context) {
         DesktopWidgetUpdateScheduler.ensurePeriodic(context)
@@ -23,6 +24,7 @@ class DeskCubbyWidgetProvider : AppWidgetProvider() {
 
     override fun onDisabled(context: Context) {
         DesktopWidgetUpdateScheduler.cancel(context)
+        DesktopWidgetMusicVisualizerService.stop(context)
     }
 
     override fun onUpdate(
@@ -53,6 +55,17 @@ class DeskCubbyWidgetProvider : AppWidgetProvider() {
 
     override fun onDeleted(context: Context, appWidgetIds: IntArray) {
         instanceStore.remove(appWidgetIds)
+        thoughtDraftStore.remove(appWidgetIds)
+        val manager = AppWidgetManager.getInstance(context)
+        val deleted = appWidgetIds.toSet()
+        val remaining = manager.getAppWidgetIds(
+            ComponentName(context, DeskCubbyWidgetProvider::class.java),
+        ).filterNot(deleted::contains).toIntArray()
+        if (remaining.isEmpty()) {
+            DesktopWidgetMusicVisualizerService.stop(context)
+        } else {
+            requestUpdate(context, remaining)
+        }
     }
 
     companion object {

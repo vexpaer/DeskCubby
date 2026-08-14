@@ -93,6 +93,11 @@
             android:enabled="true"
             android:exported="false" />
 
+        <receiver
+            android:name=".widget.DesktopWidgetQuickThoughtReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
         <service
             android:name=".widget.DesktopWidgetMusicVisualizerService"
             android:exported="false"

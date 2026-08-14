@@ -6,6 +6,7 @@ import com.deskcubby.app.data.model.normalizeDesktopWidgetHomeModuleId
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
+import com.deskcubby.app.data.model.DESKTOP_WIDGET_USAGE_RANGES
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_CELLS
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
@@ -100,7 +101,7 @@ class DesktopWidgetInstanceStore @Inject constructor(
 }
 
 internal object DesktopWidgetInstanceSnapshotCodec {
-    private const val SCHEMA_VERSION = 1
+    private const val SCHEMA_VERSION = 2
 
     fun encode(config: DesktopWidgetConfig): String = JSONObject()
         .put("schemaVersion", SCHEMA_VERSION)
@@ -118,13 +119,14 @@ internal object DesktopWidgetInstanceSnapshotCodec {
         .put("textScalePercent", config.textScalePercent)
         .put("contentType", config.contentType.name)
         .put("homeModuleId", config.homeModuleId)
+        .put("usageRangeDays", config.usageRangeDays)
         .put("appPackageName", config.appPackageName ?: JSONObject.NULL)
         .put("appLabel", config.appLabel ?: JSONObject.NULL)
         .toString()
 
     fun decodeOrNull(raw: String): DesktopWidgetConfig? = runCatching {
         val json = JSONObject(raw)
-        require(json.getInt("schemaVersion") == SCHEMA_VERSION)
+        require(json.getInt("schemaVersion") in 1..SCHEMA_VERSION)
         val id = json.getString("id").trim()
         val name = json.getString("name").trim()
         require(id.isNotBlank() && name.isNotBlank())
@@ -160,6 +162,9 @@ internal object DesktopWidgetInstanceSnapshotCodec {
             ),
             contentType = contentType,
             homeModuleId = homeModuleId,
+            usageRangeDays = json.optInt("usageRangeDays", 7)
+                .takeIf { it in DESKTOP_WIDGET_USAGE_RANGES }
+                ?: 7,
             appPackageName = json.optString("appPackageName")
                 .takeIf { !json.isNull("appPackageName") && it.isNotBlank() },
             appLabel = json.optString("appLabel")

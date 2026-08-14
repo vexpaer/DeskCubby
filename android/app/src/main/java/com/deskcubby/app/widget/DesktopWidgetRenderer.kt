@@ -3,10 +3,12 @@ package com.deskcubby.app.widget
 import android.app.PendingIntent
 import com.deskcubby.app.ui.theme.translate
 import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.net.Uri
 import android.util.TypedValue
 import android.view.Gravity
@@ -75,6 +77,7 @@ class DesktopWidgetRenderer @Inject constructor(
     private val gameRenderer: DesktopWidgetGameRenderer,
     private val appPanelRenderer: DesktopWidgetAppPanelRenderer,
     private val cloudSyncUndoStore: com.deskcubby.app.data.sync.CloudSyncUndoStore,
+    private val thoughtDraftStore: DesktopWidgetThoughtDraftStore,
 ) {
     suspend fun update(
         manager: AppWidgetManager,
@@ -114,7 +117,7 @@ class DesktopWidgetRenderer @Inject constructor(
                 queuedCloudMode = CloudSyncManualQueueState.queuedMode(context),
             )
         }
-        return appWidgetIds.count { appWidgetId ->
+        val updatedCount = appWidgetIds.count { appWidgetId ->
             val storedSnapshot = instanceStore.snapshot(appWidgetId)
             val legacyConfigId = if (storedSnapshot == null) {
                 instanceStore.configId(appWidgetId)
@@ -141,6 +144,29 @@ class DesktopWidgetRenderer @Inject constructor(
                 // A launcher may retire an ID between getAppWidgetIds() and this update.
                 false
             }
+        }
+        reconcileMusicVisualizer(manager, settings)
+        return updatedCount
+    }
+
+    private fun reconcileMusicVisualizer(
+        manager: AppWidgetManager,
+        settings: AppSettings,
+    ) {
+        val placedIds = manager.getAppWidgetIds(ComponentName(context, DeskCubbyWidgetProvider::class.java))
+        val hasVisualizer = placedIds.any { appWidgetId ->
+            val snapshot = instanceStore.snapshot(appWidgetId)
+            val legacyConfigId = if (snapshot == null) instanceStore.configId(appWidgetId) else null
+            resolveDesktopWidgetConfig(snapshot, legacyConfigId, settings.desktopWidgetConfigs)
+                ?.let { config ->
+                    config.contentType == DesktopWidgetContentType.APP_MODULE &&
+                        config.homeModuleId == "music_visualizer"
+                } == true
+        }
+        if (hasVisualizer) {
+            DesktopWidgetMusicVisualizerService.ensureRunning(context)
+        } else {
+            DesktopWidgetMusicVisualizerService.stop(context)
         }
     }
 
@@ -343,7 +369,7 @@ class DesktopWidgetRenderer @Inject constructor(
         val views = if (gameId != null) {
             gameRenderer.render(appWidgetId, gameId, null, -1, settings)
         } else {
-            appPanelRenderer.render(appWidgetId, moduleId, settings, config.usageRangeDays)
+            appPanelRenderer.render(appWidgetId, moduleId, settings, config)
         } ?: RemoteViews(context.packageName, R.layout.desktop_widget_apps)
         val backgroundAlpha = config.backgroundOpacityPercent * 255 / 100
         views.setInt(
@@ -617,7 +643,6 @@ class DesktopWidgetRenderer @Inject constructor(
             R.id.widget_poem_refresh,
             R.id.widget_poem_save,
             R.id.widget_quick_input_field,
-            R.id.widget_quick_input_send,
             R.id.widget_module_row_1,
             R.id.widget_module_row_2,
             R.id.widget_module_row_3,
@@ -628,7 +653,7 @@ class DesktopWidgetRenderer @Inject constructor(
             R.id.widget_module_row_8,
             R.id.widget_module_footer_primary,
             R.id.widget_module_footer_secondary,
-        ) + MEAL_ACTION_VIEW_IDS.flatten()
+        )
         actionIds.forEach { id ->
             views.setTextColor(id, config.textColorArgb)
             views.setInt(id, "setBackgroundColor", config.textColorArgb.withAlpha(0x33))
@@ -657,6 +682,7 @@ class DesktopWidgetRenderer @Inject constructor(
             }
             DesktopWidgetInteractionMode.QUICK_INPUT -> {
                 views.setViewVisibility(R.id.widget_quick_input_actions, View.VISIBLE)
+                views.setViewVisibility(R.id.widget_content_row, View.GONE)
                 views.setViewVisibility(R.id.widget_value, View.GONE)
                 views.setViewVisibility(R.id.widget_detail, View.GONE)
                 val pendingIntent = DesktopWidgetInteractionActivity.quickInputPendingIntent(
@@ -666,21 +692,26 @@ class DesktopWidgetRenderer @Inject constructor(
                 bindAction(
                     views,
                     R.id.widget_quick_input_field,
-                    localized(settings, "点按输入小巧思", "Tap to capture a thought"),
+                    thoughtDraftStore.get(appWidgetId)
+                        .ifBlank { localized(settings, "点按输入小巧思", "Tap to type a thought") },
                     pendingIntent,
                 )
-                bindAction(
-                    views,
+                views.setInt(R.id.widget_quick_input_send, "setBackgroundColor", Color.TRANSPARENT)
+                views.setInt(R.id.widget_quick_input_send, "setColorFilter", config.textColorArgb)
+                views.setContentDescription(
                     R.id.widget_quick_input_send,
-                    localized(settings, "发送", "Send"),
-                    pendingIntent,
-                    localized(settings, "发送（长按可先选分类）", "Send (long-press to pick a category)"),
+                    localized(settings, "发送到未分类", "Send to uncategorized"),
+                )
+                views.setOnClickPendingIntent(
+                    R.id.widget_quick_input_send,
+                    DesktopWidgetQuickThoughtReceiver.sendPendingIntent(context, appWidgetId),
                 )
             }
             DesktopWidgetInteractionMode.MEAL_ACTIONS_WIDE,
             DesktopWidgetInteractionMode.MEAL_ACTIONS_3_BY_2,
             DesktopWidgetInteractionMode.MEAL_ACTIONS_2_BY_3,
             -> {
+                views.setViewVisibility(R.id.widget_content_row, View.GONE)
                 views.setViewVisibility(R.id.widget_value, View.GONE)
                 views.setViewVisibility(R.id.widget_detail, View.GONE)
                 val groupIndex = when (mode) {
@@ -701,13 +732,7 @@ class DesktopWidgetRenderer @Inject constructor(
                     val configuredIcon = settings.mealButtonIcons.getOrNull(index)
                         ?.trim()
                         ?.takeIf(String::isNotBlank)
-                    val visibleLabel = if (settings.mealButtonsUseIcons) {
-                        configuredIcon ?: category.defaultIcon
-                    } else if (settings.appLanguage == AppLanguage.ENGLISH) {
-                        category.englishLabel
-                    } else {
-                        category.chineseLabel
-                    }
+                    val visibleLabel = configuredIcon ?: category.defaultIcon
                     val description = if (settings.appLanguage == AppLanguage.ENGLISH) {
                         "Add ${category.englishLabel} photo"
                     } else {
@@ -724,6 +749,7 @@ class DesktopWidgetRenderer @Inject constructor(
                         ),
                         description,
                     )
+                    views.setInt(viewId, "setBackgroundColor", Color.TRANSPARENT)
                 }
             }
         }

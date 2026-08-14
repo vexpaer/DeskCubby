@@ -55,6 +55,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
     @Inject lateinit var diaryFileRepository: DiaryFileRepository
     @Inject lateinit var calorieEstimationRepository: CalorieEstimationRepository
     @Inject lateinit var dateRecordRepository: DateRecordRepository
+    @Inject lateinit var thoughtDraftStore: DesktopWidgetThoughtDraftStore
 
     private var settings: AppSettings = AppSettings()
     private var settingsLoaded: Boolean = false
@@ -107,7 +108,8 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
             ensureSettingsLoaded()
             when (intent.getStringExtra(EXTRA_ACTION)) {
                 ACTION_QUICK_INPUT -> showQuickInput(
-                    savedInstanceState?.getString(STATE_INPUT).orEmpty(),
+                    savedInstanceState?.getString(STATE_INPUT)
+                        ?: thoughtDraftStore.get(currentAppWidgetId()),
                     intent.getLongExtra(EXTRA_QUICK_INPUT_CATEGORY, -1L),
                 )
                 ACTION_QUICK_INPUT_CATEGORIES -> showQuickInputCategoryPicker()
@@ -241,11 +243,16 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         } else {
             translate("快速输入", "Quick input", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
         }
+        val positiveLabel = if (categoryId >= 0L) {
+            translate("添加到分类", "Add to category", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+        } else {
+            translate("保存到卡片", "Save to widget", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+        }
         val dialog = AlertDialog.Builder(this)
             .setTitle(dialogTitle)
             .setView(editor)
             .setNegativeButton(translate("取消", "Cancel", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) { _, _ -> finish() }
-            .setPositiveButton(translate("发送", "Send", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE), null)
+            .setPositiveButton(positiveLabel, null)
             .setOnCancelListener { finish() }
             .create()
         dialog.setOnShowListener {
@@ -255,11 +262,15 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                     editor.error = translate("请输入内容", "Enter some text", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
                 } else {
                     dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                    persistThought(content, dialog, categoryId)
+                    if (categoryId >= 0L) {
+                        persistThought(content, dialog, categoryId)
+                    } else {
+                        saveThoughtDraft(content, dialog)
+                    }
                 }
             }
-            // Long-press Send keeps the typed text and lets the user pick a category first
-            // (the desktop widget's send button opens this same dialog).
+            // Launchers do not forward a widget long-click to RemoteViews. Keep the requested
+            // category shortcut on this editor's primary action instead.
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnLongClickListener {
                 switchingToCategoryPicker = true
                 val value = editor.text?.toString().orEmpty()
@@ -279,6 +290,18 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
             switchingToCategoryPicker = false
         }
         dialog.show()
+    }
+
+    private fun saveThoughtDraft(content: String, dialog: AlertDialog) {
+        val english = settings.appLanguage == AppLanguage.ENGLISH
+        thoughtDraftStore.set(currentAppWidgetId(), content)
+        requestWidgetRefresh()
+        Toast.makeText(
+            this,
+            translate("已放入桌面输入框", "Draft placed in the widget", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+            Toast.LENGTH_SHORT,
+        ).show()
+        dialog.dismiss()
     }
 
     private fun showDateRecordInput() {
@@ -434,6 +457,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                 withContext(Dispatchers.IO) {
                     thoughtRepository.create(content, categoryId.takeIf { it >= 0 })
                 }
+                thoughtDraftStore.clear(currentAppWidgetId())
                 requestWidgetRefresh()
                 Toast.makeText(
                     this@DesktopWidgetInteractionActivity,
@@ -681,15 +705,17 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         ?.let { key -> MealCategory.entries.firstOrNull { it.key == key } }
 
     private fun requestWidgetRefresh() {
-        val widgetId = intent.getIntExtra(
-            AppWidgetManager.EXTRA_APPWIDGET_ID,
-            AppWidgetManager.INVALID_APPWIDGET_ID,
-        )
+        val widgetId = currentAppWidgetId()
         DeskCubbyWidgetProvider.requestUpdate(
             this,
             widgetId.takeIf { it != AppWidgetManager.INVALID_APPWIDGET_ID }?.let { intArrayOf(it) },
         )
     }
+
+    private fun currentAppWidgetId(): Int = intent.getIntExtra(
+        AppWidgetManager.EXTRA_APPWIDGET_ID,
+        AppWidgetManager.INVALID_APPWIDGET_ID,
+    )
 
     companion object {
         private const val EXTRA_ACTION = "com.deskcubby.app.extra.WIDGET_ACTION"

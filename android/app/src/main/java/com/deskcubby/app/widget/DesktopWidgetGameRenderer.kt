@@ -591,23 +591,22 @@ class DesktopWidgetGameRenderer @Inject constructor(
         views.setViewVisibility(R.id.widget_apps_actions, View.GONE)
         views.setViewVisibility(R.id.widget_apps_grid, View.GONE)
         views.setViewVisibility(R.id.widget_apps_columns, View.GONE)
+        views.setViewVisibility(R.id.widget_apps_2048_gesture_zones, View.GONE)
         when (gameId) {
             "2048", "2048_5", "2048_6" -> {
-                views.setViewVisibility(R.id.widget_apps_dpad, View.VISIBLE)
-                views.setViewVisibility(R.id.widget_apps_actions, View.VISIBLE)
-                bindGameAction(views, R.id.widget_apps_btn_up, "UP", appWidgetId, gameId, WidgetGameAction.UP)
-                bindGameAction(views, R.id.widget_apps_btn_down, "DOWN", appWidgetId, gameId, WidgetGameAction.DOWN)
-                bindGameAction(views, R.id.widget_apps_btn_left, "LEFT", appWidgetId, gameId, WidgetGameAction.LEFT)
-                bindGameAction(views, R.id.widget_apps_btn_right, "RIGHT", appWidgetId, gameId, WidgetGameAction.RIGHT)
-                bindGameAction(
+                views.setViewVisibility(R.id.widget_apps_2048_gesture_zones, View.VISIBLE)
+                bindInvisibleGameAction(views, R.id.widget_apps_2048_hit_up, translate("向上", "Up", settings.appLanguage), appWidgetId, gameId, WidgetGameAction.UP)
+                bindInvisibleGameAction(views, R.id.widget_apps_2048_hit_down, translate("向下", "Down", settings.appLanguage), appWidgetId, gameId, WidgetGameAction.DOWN)
+                bindInvisibleGameAction(views, R.id.widget_apps_2048_hit_left, translate("向左", "Left", settings.appLanguage), appWidgetId, gameId, WidgetGameAction.LEFT)
+                bindInvisibleGameAction(views, R.id.widget_apps_2048_hit_right, translate("向右", "Right", settings.appLanguage), appWidgetId, gameId, WidgetGameAction.RIGHT)
+                bindInvisibleGameAction(
                     views,
-                    R.id.widget_apps_action_1,
+                    R.id.widget_apps_2048_hit_new,
                     translate("新游戏", "New", settings.appLanguage),
                     appWidgetId,
                     gameId,
                     WidgetGameAction.NEW,
                 )
-                views.setViewVisibility(R.id.widget_apps_action_2, View.GONE)
             }
             "snake" -> {
                 views.setViewVisibility(R.id.widget_apps_dpad, View.VISIBLE)
@@ -754,6 +753,18 @@ class DesktopWidgetGameRenderer @Inject constructor(
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             ),
         )
+    }
+
+    private fun bindInvisibleGameAction(
+        views: RemoteViews,
+        viewId: Int,
+        description: String,
+        appWidgetId: Int,
+        gameId: String,
+        action: WidgetGameAction,
+    ) {
+        bindGameAction(views, viewId, "", appWidgetId, gameId, action)
+        views.setContentDescription(viewId, description)
     }
 
     private fun applyAppPanelBase(views: RemoteViews, settings: AppSettings, title: String) {

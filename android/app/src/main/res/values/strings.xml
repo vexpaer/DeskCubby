@@ -1,4 +1,5 @@
 <resources>
+    <string name="widget_quick_send">Send thought</string>
     <string name="app_name">DeskCubby</string>
     <string name="launcher_name_default">Desk Cubby</string>
     <string name="launcher_name_chinese">桌洞</string>

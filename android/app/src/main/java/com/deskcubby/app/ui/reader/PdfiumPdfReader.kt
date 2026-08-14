@@ -441,11 +441,22 @@ private fun PdfiumDocumentView(
         val effectiveZoomPercent = (preferences.pdfZoomPercent * gestureZoom)
             .roundToInt()
             .coerceIn(MIN_READER_PDF_ZOOM_PERCENT, MAX_READER_PDF_ZOOM_PERCENT)
-        val pageWidth = ((maxWidth - 24.dp) * effectiveZoomPercent / 100f)
+        val pageViewportWidth = (maxWidth - 24.dp).coerceAtLeast(1.dp)
+        val pageWidth = (pageViewportWidth * effectiveZoomPercent / 100f)
             .coerceAtLeast(160.dp)
         val targetWidthPx = with(density) { pageWidth.roundToPx() }
-        maxHorizontalPx = (targetWidthPx - with(density) { maxWidth.roundToPx() })
-            .coerceAtLeast(0)
+        val pageViewportWidthPx = with(density) { pageViewportWidth.roundToPx() }
+        val calculatedMaxHorizontalPx = readerPdfMaxHorizontalOffset(
+            viewportWidthPx = pageViewportWidthPx,
+            contentWidthPx = targetWidthPx,
+        )
+        LaunchedEffect(session, calculatedMaxHorizontalPx) {
+            maxHorizontalPx = calculatedMaxHorizontalPx
+            horizontalOffsetPx = horizontalOffsetPx.coerceIn(
+                0f,
+                calculatedMaxHorizontalPx.toFloat(),
+            )
+        }
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -619,29 +630,38 @@ private fun PdfiumPage(
             rendered?.isFailure == true -> onInitialRenderFailed()
         }
     }
-    Box(
-        Modifier
-            .fillMaxWidth()
-            // The page is translated by the shared 2D-pan offset (the LazyColumn-level nested
-            // scroll connection forwards the horizontal component of every drag), so diagonal or
-            // circular drags move both axes at once instead of being classified as one direction.
-            .graphicsLayer { translationX = -horizontalOffsetPx }
-            .padding(vertical = 2.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        when {
-            rendered == null -> Box(
+    when {
+        rendered == null -> Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
                 Modifier.fillMaxWidth().height(360.dp),
                 contentAlignment = Alignment.Center,
             ) { CircularProgressIndicator() }
-            bitmap != null -> Image(
+        }
+        bitmap != null -> ReaderPdfPageViewport(
+            displayWidth = displayWidth,
+            imageWidthPx = bitmap.width,
+            imageHeightPx = bitmap.height,
+            horizontalOffsetPx = horizontalOffsetPx,
+        ) {
+            Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = tr("PDF 第 ${pageIndex + 1} 页", "PDF page ${pageIndex + 1}"),
-                modifier = Modifier.width(displayWidth),
-                contentScale = ContentScale.FillWidth,
+                contentScale = ContentScale.FillBounds,
                 colorFilter = pdfiumColorFilter(background, foreground),
             )
-            else -> Text(
+        }
+        else -> Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
                 tr("这一页无法显示", "This page could not be rendered"),
                 color = MaterialTheme.colorScheme.error,
             )

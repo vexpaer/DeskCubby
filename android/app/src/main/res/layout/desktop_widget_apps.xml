@@ -41,14 +41,69 @@
             android:textSize="12sp"
             android:textStyle="bold" />
 
-        <ImageView
-            android:id="@+id/widget_apps_board"
+        <FrameLayout
+            android:id="@+id/widget_apps_board_container"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:layout_marginTop="4dp"
-            android:contentDescription="@null"
-            android:scaleType="fitCenter" />
+            android:layout_marginTop="4dp">
+
+            <ImageView
+                android:id="@+id/widget_apps_board"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="fitCenter" />
+
+            <!-- RemoteViews cannot receive arbitrary swipe callbacks. These invisible edge zones
+                 preserve direct board play without showing directional controls. -->
+            <LinearLayout
+                android:id="@+id/widget_apps_2048_gesture_zones"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/widget_apps_2048_hit_up"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:background="@android:color/transparent" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:orientation="horizontal">
+                    <TextView
+                        android:id="@+id/widget_apps_2048_hit_left"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:background="@android:color/transparent" />
+                    <TextView
+                        android:id="@+id/widget_apps_2048_hit_new"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:background="@android:color/transparent" />
+                    <TextView
+                        android:id="@+id/widget_apps_2048_hit_right"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:background="@android:color/transparent" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/widget_apps_2048_hit_down"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:background="@android:color/transparent" />
+            </LinearLayout>
+        </FrameLayout>
 
         <!-- Direction controls for playable games (2048, snake, tetris, spider). -->
         <LinearLayout

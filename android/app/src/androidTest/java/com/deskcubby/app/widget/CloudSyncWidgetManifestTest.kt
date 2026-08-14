@@ -61,6 +61,27 @@ class CloudSyncWidgetManifestTest {
     }
 
     @Test
+    fun quickThoughtReceiverIsPrivateAndDraftsAreDeviceLocal() {
+        val info = receiverInfo(DesktopWidgetQuickThoughtReceiver::class.java)
+        assertTrue(info.enabled)
+        assertFalse(info.exported)
+        assertEquals(
+            1,
+            countSharedPreferenceExcludes(
+                R.xml.backup_rules,
+                "desktop_widget_thought_drafts.xml",
+            ),
+        )
+        assertEquals(
+            2,
+            countSharedPreferenceExcludes(
+                R.xml.data_extraction_rules,
+                "desktop_widget_thought_drafts.xml",
+            ),
+        )
+    }
+
+    @Test
     fun transientManualQueueStateIsExcludedFromBackupAndTransfer() {
         assertEquals(1, countSharedPreferenceExcludes(R.xml.backup_rules, "cloud_sync_manual_queue.xml"))
         assertEquals(

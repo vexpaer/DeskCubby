@@ -70,6 +70,48 @@ internal data class ReaderPdfRenderSize(
     val height: Int,
 )
 
+internal data class ReaderPdfPagePlacement(
+    val contentX: Int,
+    val horizontalOffset: Int,
+    val maxHorizontalOffset: Int,
+)
+
+/**
+ * Places a rendered PDF page inside its clipped viewport.
+ *
+ * A page narrower than the viewport is centered and cannot retain stale pan. A page wider than
+ * the viewport keeps its requested pan, clamped to the real overflow width. Keeping this policy
+ * independent from bitmap render resolution is important: a memory-bounded bitmap may still be
+ * displayed above 100% without Compose measuring it back down to the viewport.
+ */
+internal fun readerPdfPagePlacement(
+    viewportWidthPx: Int,
+    contentWidthPx: Int,
+    requestedHorizontalOffsetPx: Float,
+): ReaderPdfPagePlacement {
+    require(viewportWidthPx > 0)
+    require(contentWidthPx > 0)
+    val maxOffset = (contentWidthPx - viewportWidthPx).coerceAtLeast(0)
+    val offset = requestedHorizontalOffsetPx
+        .roundToInt()
+        .coerceIn(0, maxOffset)
+    val centeredX = ((viewportWidthPx - contentWidthPx) / 2).coerceAtLeast(0)
+    return ReaderPdfPagePlacement(
+        contentX = centeredX - offset,
+        horizontalOffset = offset,
+        maxHorizontalOffset = maxOffset,
+    )
+}
+
+internal fun readerPdfMaxHorizontalOffset(
+    viewportWidthPx: Int,
+    contentWidthPx: Int,
+): Int = readerPdfPagePlacement(
+    viewportWidthPx = viewportWidthPx,
+    contentWidthPx = contentWidthPx,
+    requestedHorizontalOffsetPx = 0f,
+).maxHorizontalOffset
+
 internal interface ReaderPdfAcquisitionGuard {
     val isAbandoned: Boolean
 

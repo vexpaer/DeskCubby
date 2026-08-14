@@ -53,6 +53,9 @@
             path="desktop_widget_instances.xml" />
         <exclude
             domain="sharedpref"
+            path="desktop_widget_thought_drafts.xml" />
+        <exclude
+            domain="sharedpref"
             path="cloud_sync_runtime.xml" />
         <exclude
             domain="sharedpref"
@@ -107,6 +110,9 @@
         <exclude
             domain="sharedpref"
             path="desktop_widget_instances.xml" />
+        <exclude
+            domain="sharedpref"
+            path="desktop_widget_thought_drafts.xml" />
         <exclude
             domain="sharedpref"
             path="cloud_sync_runtime.xml" />

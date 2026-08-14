@@ -40,10 +40,26 @@ data class AppCloudSyncStatus(
     val progress: CloudSyncProgress? = null,
     val lastFinishedAt: Long? = null,
     val lastRuns: List<CloudSyncConfigRun> = emptyList(),
+    val lastUploadedCount: Int? = null,
+    val lastDownloadedCount: Int? = null,
+    val lastConflictCount: Int? = null,
     val message: String? = null,
     val error: String? = null,
     val pendingJsonCount: Int = 0,
 )
+
+internal data class CloudSyncTransferTotals(
+    val uploaded: Int,
+    val downloaded: Int,
+    val conflicts: Int,
+)
+
+internal fun cloudSyncTransferTotals(runs: List<CloudSyncConfigRun>): CloudSyncTransferTotals =
+    CloudSyncTransferTotals(
+        uploaded = runs.sumOf { it.result?.uploadedCount ?: 0 },
+        downloaded = runs.sumOf { it.result?.downloadedCount ?: 0 },
+        conflicts = runs.sumOf { it.result?.conflictCount ?: 0 },
+    )
 
 data class PendingCloudSyncJson(
     val fileName: String,
@@ -87,6 +103,15 @@ class AppCloudSyncService @Inject constructor(
             lastFinishedAt = runtimePreferences
                 .getLong(KEY_LAST_FINISHED_AT, 0L)
                 .takeIf { it > 0L },
+            lastUploadedCount = runtimePreferences
+                .getInt(KEY_LAST_UPLOADED_COUNT, -1)
+                .takeIf { it >= 0 },
+            lastDownloadedCount = runtimePreferences
+                .getInt(KEY_LAST_DOWNLOADED_COUNT, -1)
+                .takeIf { it >= 0 },
+            lastConflictCount = runtimePreferences
+                .getInt(KEY_LAST_CONFLICT_COUNT, -1)
+                .takeIf { it >= 0 },
             pendingJsonCount = pendingIncomingJson().size,
         ),
     )
@@ -124,13 +149,17 @@ class AppCloudSyncService @Inject constructor(
             val finishedAt = runs.mapNotNull { it.result?.finishedAtMillis }
                 .maxOrNull()
                 ?: System.currentTimeMillis()
-            persistLastFinishedAt(finishedAt)
+            val totals = cloudSyncTransferTotals(runs)
+            persistLastRun(finishedAt, totals)
             mutableStatus.value = mutableStatus.value.copy(
                 running = false,
                 activeConfigId = null,
                 progress = null,
                 lastFinishedAt = finishedAt,
                 lastRuns = runs,
+                lastUploadedCount = totals.uploaded,
+                lastDownloadedCount = totals.downloaded,
+                lastConflictCount = totals.conflicts,
                 message = if (failed == 0) {
                     when (mode) {
                         CloudSyncRunMode.NORMAL -> "云端同步完成 / Cloud sync completed"
@@ -185,7 +214,8 @@ class AppCloudSyncService @Inject constructor(
                 mutableStatus.update { it.copy(progress = progress) }
                 requestGeneralWidgetUpdate()
             }.also { result ->
-                persistLastFinishedAt(result.finishedAtMillis)
+                val totals = cloudSyncTransferTotals(listOf(CloudSyncConfigRun(configId, result)))
+                persistLastRun(result.finishedAtMillis, totals)
                 mutableStatus.update {
                     it.copy(
                         running = false,
@@ -193,6 +223,9 @@ class AppCloudSyncService @Inject constructor(
                         progress = null,
                         lastFinishedAt = result.finishedAtMillis,
                         lastRuns = listOf(CloudSyncConfigRun(configId, result)),
+                        lastUploadedCount = totals.uploaded,
+                        lastDownloadedCount = totals.downloaded,
+                        lastConflictCount = totals.conflicts,
                         message = "云端同步完成 / Cloud sync completed",
                         pendingJsonCount = pendingIncomingJson().size,
                     )
@@ -330,9 +363,14 @@ class AppCloudSyncService @Inject constructor(
         return file
     }
 
-    private fun persistLastFinishedAt(value: Long) {
+    private fun persistLastRun(value: Long, totals: CloudSyncTransferTotals) {
         if (value <= 0L) return
-        runtimePreferences.edit().putLong(KEY_LAST_FINISHED_AT, value).apply()
+        runtimePreferences.edit()
+            .putLong(KEY_LAST_FINISHED_AT, value)
+            .putInt(KEY_LAST_UPLOADED_COUNT, totals.uploaded.coerceAtLeast(0))
+            .putInt(KEY_LAST_DOWNLOADED_COUNT, totals.downloaded.coerceAtLeast(0))
+            .putInt(KEY_LAST_CONFLICT_COUNT, totals.conflicts.coerceAtLeast(0))
+            .apply()
     }
 
     private companion object {
@@ -341,6 +379,9 @@ class AppCloudSyncService @Inject constructor(
         const val MAX_INCOMING_JSON_BYTES = BackupJsonCodec.MAX_JSON_BYTES.toLong()
         const val RUNTIME_PREFERENCES = "cloud_sync_runtime"
         const val KEY_LAST_FINISHED_AT = "last_finished_at"
+        const val KEY_LAST_UPLOADED_COUNT = "last_uploaded_count"
+        const val KEY_LAST_DOWNLOADED_COUNT = "last_downloaded_count"
+        const val KEY_LAST_CONFLICT_COUNT = "last_conflict_count"
     }
 }
 

@@ -484,6 +484,7 @@ fun SettingsScreen(
     val backupJsonPreview by viewModel.backupJsonPreview.collectAsStateWithLifecycle()
     val autoBackupStatus by viewModel.autoBackupStatus.collectAsStateWithLifecycle()
     val cloudSyncStatus by viewModel.cloudSyncStatus.collectAsStateWithLifecycle()
+    val cloudSyncUndoAvailable by viewModel.cloudSyncUndoAvailable.collectAsStateWithLifecycle()
     val appDataUsage by viewModel.appDataUsage.collectAsStateWithLifecycle()
     val settingsError by viewModel.settingsError.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -688,6 +689,7 @@ fun SettingsScreen(
             SettingsPage.SYNC -> CloudSyncSettingsPage(
                 settings = settings,
                 status = cloudSyncStatus,
+                undoAvailable = cloudSyncUndoAvailable,
                 pendingJson = viewModel.pendingCloudSyncJson(),
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
@@ -731,6 +733,7 @@ fun SettingsScreen(
                     }
                 },
                 onSyncNow = viewModel::syncCloudNow,
+                onUndo = viewModel::undoLastCloudSync,
                 onForceUpload = viewModel::forceUploadCloudNow,
                 onForceDownload = viewModel::forceDownloadCloudNow,
                 onRestoreIncomingJson = { fileName ->
@@ -1530,6 +1533,7 @@ private fun AppSettings.menuAccentColor(index: Int): Color {
 private fun CloudSyncSettingsPage(
     settings: AppSettings,
     status: AppCloudSyncStatus,
+    undoAvailable: Boolean,
     pendingJson: List<PendingCloudSyncJson>,
     contentPadding: PaddingValues,
     saveCoordinator: SettingsSaveCoordinator,
@@ -1539,6 +1543,7 @@ private fun CloudSyncSettingsPage(
     onCopy: (CloudSyncConfig) -> Unit,
     onDelete: (CloudSyncConfig) -> Unit,
     onSyncNow: () -> Unit,
+    onUndo: () -> Unit,
     onForceUpload: () -> Unit,
     onForceDownload: () -> Unit,
     onRestoreIncomingJson: (String) -> Unit,
@@ -1622,10 +1627,10 @@ private fun CloudSyncSettingsPage(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                status.lastRuns.takeIf(List<*>::isNotEmpty)?.let { runs ->
-                    val uploaded = runs.sumOf { it.result?.uploadedCount ?: 0 }
-                    val downloaded = runs.sumOf { it.result?.downloadedCount ?: 0 }
-                    val conflicts = runs.sumOf { it.result?.conflictCount ?: 0 }
+                val uploaded = status.lastUploadedCount
+                val downloaded = status.lastDownloadedCount
+                val conflicts = status.lastConflictCount
+                if (uploaded != null && downloaded != null && conflicts != null) {
                     Text(
                         tr(
                             "上次：上传 $uploaded，下载 $downloaded，冲突副本 $conflicts",
@@ -1634,19 +1639,39 @@ private fun CloudSyncSettingsPage(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                Button(
-                    onClick = onSyncNow,
-                    enabled = enabled &&
-                        enabled == settings.cloudSyncEnabled &&
-                        !status.running,
+                Row(
                     modifier = Modifier.fillMaxWidth().height(48.dp),
+                    horizontalArrangement = Arrangement.spacedBy(1.dp),
                 ) {
-                    Icon(Icons.Outlined.Sync, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        if (status.running) tr("正在同步", "Syncing")
-                        else tr("立即同步", "Sync now"),
-                    )
+                    Button(
+                        onClick = onSyncNow,
+                        enabled = enabled &&
+                            enabled == settings.cloudSyncEnabled &&
+                            !status.running,
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        shape = SegmentedButtonDefaults.itemShape(0, 2),
+                    ) {
+                        Icon(Icons.Outlined.Sync, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (status.running) tr("正在同步", "Syncing")
+                            else tr("立即同步", "Sync now"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Button(
+                        onClick = onUndo,
+                        enabled = undoAvailable && !status.running,
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        shape = SegmentedButtonDefaults.itemShape(1, 2),
+                    ) {
+                        Text(
+                            tr("撤回一次", "Undo last"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth().height(48.dp),

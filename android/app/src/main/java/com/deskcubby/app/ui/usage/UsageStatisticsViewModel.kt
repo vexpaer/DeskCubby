@@ -14,6 +14,7 @@ import com.deskcubby.app.data.statistics.StatisticsCollectionState
 import com.deskcubby.app.data.statistics.StatisticsOverview
 import com.deskcubby.app.data.statistics.StatisticsPoint
 import com.deskcubby.app.data.statistics.StatisticsRange
+import com.deskcubby.app.data.statistics.StatisticsRefreshOutcome
 import com.deskcubby.app.data.statistics.UsageStatisticsDay
 import com.deskcubby.app.data.statistics.UsageStatisticsHistory
 import com.deskcubby.app.data.statistics.UsageStatisticsRepository
@@ -23,6 +24,7 @@ import com.deskcubby.app.data.statistics.UsageDeviceIdentity
 import com.deskcubby.app.data.statistics.combineUsageDeviceHistories
 import com.deskcubby.app.data.statistics.overview
 import com.deskcubby.app.data.statistics.withinStatisticsRange
+import com.deskcubby.app.widget.DeskCubbyWidgetProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.LocalDate
@@ -210,14 +212,24 @@ class UsageStatisticsViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             enabled.collect { isEnabled ->
-                if (isEnabled) repository.refresh() else repository.markDisabled()
+                if (isEnabled) {
+                    if (repository.refresh() == StatisticsRefreshOutcome.SUCCESS) {
+                        DeskCubbyWidgetProvider.requestUpdate(context)
+                    }
+                } else {
+                    repository.markDisabled()
+                }
             }
         }
     }
 
     fun refresh() {
         if (!uiState.value.enabled) return
-        viewModelScope.launch { repository.refresh() }
+        viewModelScope.launch {
+            if (repository.refresh() == StatisticsRefreshOutcome.SUCCESS) {
+                DeskCubbyWidgetProvider.requestUpdate(context)
+            }
+        }
     }
 
     fun selectDevice(deviceId: String?) {

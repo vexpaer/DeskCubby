@@ -255,11 +255,15 @@
                 android:paddingStart="10dp"
                 android:paddingEnd="10dp" />
 
-            <TextView
+            <ImageButton
                 android:id="@+id/widget_quick_input_send"
-                style="@style/DesktopWidgetActionText"
                 android:layout_width="52dp"
-                android:layout_height="match_parent" />
+                android:layout_height="match_parent"
+                android:background="@android:color/transparent"
+                android:contentDescription="@string/widget_quick_send"
+                android:padding="9dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_widget_send" />
         </LinearLayout>
 
         <LinearLayout

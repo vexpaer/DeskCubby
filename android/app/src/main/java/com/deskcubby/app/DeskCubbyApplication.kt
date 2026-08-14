@@ -6,6 +6,7 @@ import com.deskcubby.app.data.repository.PoetryRepository
 import com.deskcubby.app.data.repository.PoetryRefreshResult
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.statistics.UsageStatisticsRepository
+import com.deskcubby.app.data.statistics.StatisticsRefreshOutcome
 import com.deskcubby.app.data.statistics.StatisticsScheduler
 import com.deskcubby.app.data.sync.CloudSyncScheduler
 import com.deskcubby.app.plugin.PluginRuntime
@@ -61,7 +62,12 @@ class DeskCubbyApplication : Application() {
         applicationScope.launch {
             try {
                 if (settingsRepository.settings.first().usageTrackingEnabled) {
-                    usageStatisticsRepository.refreshOnAppOpenIfNeeded()
+                    if (
+                        usageStatisticsRepository.refreshOnAppOpenIfNeeded() ==
+                        StatisticsRefreshOutcome.SUCCESS
+                    ) {
+                        DeskCubbyWidgetProvider.requestUpdate(this@DeskCubbyApplication)
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled

@@ -50,6 +50,7 @@ import com.deskcubby.app.data.repository.AppDataUsageSnapshot
 import com.deskcubby.app.data.sync.AppCloudSyncService
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncSecretStore
+import com.deskcubby.app.data.sync.CloudSyncUndoStore
 import com.deskcubby.app.data.sync.CloudSyncRunMode
 import com.deskcubby.app.data.sync.PendingCloudSyncJson
 import com.deskcubby.app.data.sync.formatCloudSyncError
@@ -71,6 +72,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
@@ -132,6 +134,7 @@ class SettingsViewModel @Inject constructor(
     private val legacyAiKeyMigrationStore: LegacyAiKeyMigrationStore,
     private val cloudSyncService: AppCloudSyncService,
     private val cloudSyncSecretStore: CloudSyncSecretStore,
+    private val cloudSyncUndoStore: CloudSyncUndoStore,
     private val updateRepository: UpdateRepository,
     private val appDataUsageRepository: AppDataUsageRepository,
     @ApplicationContext private val context: Context,
@@ -162,6 +165,18 @@ class SettingsViewModel @Inject constructor(
     val backupJsonPreview: StateFlow<BackupJsonPreviewState> = _backupJsonPreview.asStateFlow()
     val autoBackupStatus: StateFlow<AutoBackupStatus> = autoBackupCoordinator.status
     val cloudSyncStatus: StateFlow<AppCloudSyncStatus> = cloudSyncService.status
+    private val _cloudSyncUndoAvailable = MutableStateFlow(cloudSyncUndoStore.hasUndo())
+    val cloudSyncUndoAvailable: StateFlow<Boolean> = _cloudSyncUndoAvailable.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            cloudSyncService.status.collect { status ->
+                if (!status.running) {
+                    _cloudSyncUndoAvailable.value = cloudSyncUndoStore.hasUndo()
+                }
+            }
+        }
+    }
     private val _appDataUsage = MutableStateFlow(AppDataUsageState())
     val appDataUsage: StateFlow<AppDataUsageState> = _appDataUsage.asStateFlow()
 
@@ -740,6 +755,20 @@ class SettingsViewModel @Inject constructor(
             throw error
         } catch (error: Exception) {
             _settingsError.value = formatCloudSyncError(error)
+        } finally {
+            _cloudSyncUndoAvailable.value = cloudSyncUndoStore.hasUndo()
+        }
+    }
+
+    fun undoLastCloudSync() = viewModelScope.launch {
+        try {
+            cloudSyncService.undoLastSync()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _settingsError.value = formatCloudSyncError(error)
+        } finally {
+            _cloudSyncUndoAvailable.value = cloudSyncUndoStore.hasUndo()
         }
     }
 

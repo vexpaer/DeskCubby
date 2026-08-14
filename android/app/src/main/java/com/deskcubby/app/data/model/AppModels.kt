@@ -266,7 +266,7 @@ val DESKTOP_WIDGET_HOME_MODULE_IDS: List<String> = listOf(
 )
 
 /** Screen-time visualization ranges offered by the desktop usage modules. */
-val DESKTOP_WIDGET_USAGE_RANGES: List<Int> = listOf(3, 7, 30)
+val DESKTOP_WIDGET_USAGE_RANGES: List<Int> = listOf(7, 30, 90)
 
 /**
  * Desktop app-module ids: playable mini games (including the 5x5 and 6x6 2048 variants),
@@ -321,7 +321,7 @@ data class DesktopWidgetConfig(
     val homeModuleId: String = "today",
     val appPackageName: String? = null,
     val appLabel: String? = null,
-    /** Days shown by the usage_overview/usage_chart/usage_apps modules (3/7/30). */
+    /** Days shown by the usage_overview/usage_chart/usage_apps modules (7/30/90). */
     val usageRangeDays: Int = 7,
 )
 

@@ -112,4 +112,18 @@ class DesktopWidgetInstanceStoreTest {
 
         assertEquals("cloud_sync", store.snapshot(71)?.homeModuleId)
     }
+
+    @Test
+    fun usageRangeSurvivesPerInstanceSnapshot() {
+        val config = DesktopWidgetConfig(
+            id = "usage-90",
+            name = "Usage 90 days",
+            homeModuleId = "usage_chart",
+            usageRangeDays = 90,
+        )
+
+        store.bind(81, config)
+
+        assertEquals(90, store.snapshot(81)?.usageRangeDays)
+    }
 }

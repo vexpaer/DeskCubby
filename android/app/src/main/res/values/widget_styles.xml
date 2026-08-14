@@ -17,7 +17,10 @@
         <item name="android:layout_height">match_parent</item>
         <item name="android:layout_margin">2dp</item>
         <item name="android:layout_weight">1</item>
-        <item name="android:textSize">15sp</item>
+        <item name="android:background">#00000000</item>
+        <item name="android:paddingStart">0dp</item>
+        <item name="android:paddingEnd">0dp</item>
+        <item name="android:textSize">22sp</item>
     </style>
 
     <style name="DesktopWidgetMealRow">

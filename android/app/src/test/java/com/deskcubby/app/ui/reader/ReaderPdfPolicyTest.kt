@@ -60,6 +60,43 @@ class ReaderPdfPolicyTest {
     }
 
     @Test
+    fun pagePlacementKeepsZoomedContentWiderThanViewport() {
+        assertEquals(
+            ReaderPdfPagePlacement(
+                contentX = -420,
+                horizontalOffset = 420,
+                maxHorizontalOffset = 1_200,
+            ),
+            readerPdfPagePlacement(
+                viewportWidthPx = 1_200,
+                contentWidthPx = 2_400,
+                requestedHorizontalOffsetPx = 420f,
+            ),
+        )
+    }
+
+    @Test
+    fun pagePlacementCentersShrunkContentAndDropsStalePan() {
+        assertEquals(
+            ReaderPdfPagePlacement(
+                contentX = 300,
+                horizontalOffset = 0,
+                maxHorizontalOffset = 0,
+            ),
+            readerPdfPagePlacement(
+                viewportWidthPx = 1_200,
+                contentWidthPx = 600,
+                requestedHorizontalOffsetPx = 900f,
+            ),
+        )
+    }
+
+    @Test
+    fun pagePlacementUsesContentViewportRatherThanOuterWindow() {
+        assertEquals(800, readerPdfMaxHorizontalOffset(1_000, 1_800))
+    }
+
+    @Test
     fun resourceOwnerReleasesExactlyOnceWhenFollowingCloseFails() {
         val resource = Any()
         val released = mutableListOf<Any>()

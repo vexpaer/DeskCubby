@@ -755,6 +755,19 @@ private fun CloudSyncHomeWidget(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        val uploaded = status.lastUploadedCount
+        val downloaded = status.lastDownloadedCount
+        val conflicts = status.lastConflictCount
+        if (uploaded != null && downloaded != null && conflicts != null) {
+            Text(
+                tr(
+                    "上次：上传 $uploaded，下载 $downloaded，冲突 $conflicts",
+                    "Last: $uploaded uploaded, $downloaded downloaded, $conflicts conflicts",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (!forceActions && status.pendingJsonCount > 0) {
             Text(
                 tr(

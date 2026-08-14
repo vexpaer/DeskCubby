@@ -19,7 +19,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * On-device smoke tests for the app-module widget panel (0.16.1 "App module" content type).
+ * On-device smoke tests for the app-module widget panels (0.16.2 "App module" content type).
  *
  * These run on an emulator/device and verify that the RemoteViews layouts the renderers bind
  * actually exist, are inflatable, expose every id the renderers reference, and that the removed
@@ -35,6 +35,14 @@ class DesktopWidgetAppModuleLayoutTest {
         assertNotNull(root.findViewById<View>(R.id.widget_apps_root))
         assertNotNull(root.findViewById<View>(R.id.widget_apps_title))
         assertNotNull(root.findViewById<View>(R.id.widget_apps_board))
+        assertNotNull(root.findViewById<View>(R.id.widget_apps_2048_gesture_zones))
+        listOf(
+            R.id.widget_apps_2048_hit_up,
+            R.id.widget_apps_2048_hit_left,
+            R.id.widget_apps_2048_hit_new,
+            R.id.widget_apps_2048_hit_right,
+            R.id.widget_apps_2048_hit_down,
+        ).forEach { assertNotNull("missing 2048 hit zone " + it, root.findViewById<View>(it)) }
         // D-pad buttons used by 2048 / snake / tetris.
         listOf(
             R.id.widget_apps_btn_up,
@@ -69,6 +77,21 @@ class DesktopWidgetAppModuleLayoutTest {
         assertEquals(View.GONE, root.findViewById<View>(R.id.widget_apps_columns).visibility)
         assertEquals(View.GONE, root.findViewById<View>(R.id.widget_apps_grid).visibility)
         assertEquals(View.GONE, root.findViewById<View>(R.id.widget_apps_cloud_actions).visibility)
+        assertEquals(View.GONE, root.findViewById<View>(R.id.widget_apps_2048_gesture_zones).visibility)
+    }
+
+    @Test
+    fun fullBleedVisualLayoutHasNoVisibleTextOrInsets() {
+        val root = LayoutInflater.from(context).inflate(R.layout.desktop_widget_visual, null)
+        assertNotNull(root.findViewById<View>(R.id.widget_apps_root))
+        assertNotNull(root.findViewById<View>(R.id.widget_apps_board))
+        assertNotNull(root.findViewById<View>(R.id.widget_apps_background_image))
+        assertNotNull(root.findViewById<View>(R.id.widget_apps_scrim))
+        assertEquals(View.GONE, root.findViewById<View>(R.id.widget_apps_title).visibility)
+        assertEquals(0, root.paddingLeft)
+        assertEquals(0, root.paddingTop)
+        assertEquals(0, root.paddingRight)
+        assertEquals(0, root.paddingBottom)
     }
 
     @Test

@@ -7,6 +7,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.deskcubby.app.data.preferences.SettingsRepository
+import com.deskcubby.app.widget.DeskCubbyWidgetProvider
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -44,9 +45,12 @@ class StatisticsWorker(
         )
         return try {
             val settings = entryPoint.settingsRepository().settings.first()
+            var usageUpdated = false
             val outcomes = buildList {
                 if (settings.usageTrackingEnabled) {
-                    add(entryPoint.usageStatisticsRepository().refresh())
+                    val usageOutcome = entryPoint.usageStatisticsRepository().refresh()
+                    add(usageOutcome)
+                    usageUpdated = usageOutcome == StatisticsRefreshOutcome.SUCCESS
                 }
                 if (settings.stepTrackingEnabled) {
                     val steps = entryPoint.stepStatisticsRepository()
@@ -55,6 +59,7 @@ class StatisticsWorker(
                     }
                 }
             }
+            if (usageUpdated) DeskCubbyWidgetProvider.requestUpdate(applicationContext)
             if (StatisticsRefreshOutcome.ERROR in outcomes) Result.retry() else Result.success()
         } catch (cancelled: CancellationException) {
             throw cancelled

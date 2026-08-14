@@ -628,6 +628,7 @@ class SettingsRepositoryTest {
                     backgroundImageUri = " file:///private/image.jpg ",
                     homeModuleId = "not-a-module",
                     appLabel = " App\rName ",
+                    usageRangeDays = 3,
                 ),
             ),
         ).single()
@@ -643,6 +644,7 @@ class SettingsRepositoryTest {
         assertEquals(null, normalized.backgroundImageUri)
         assertEquals("today", normalized.homeModuleId)
         assertEquals("App Name", normalized.appLabel)
+        assertEquals(7, normalized.usageRangeDays)
     }
 
     @Test

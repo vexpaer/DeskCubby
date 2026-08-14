@@ -35,18 +35,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
-import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ColorLens
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Remove
-import androidx.compose.material.icons.outlined.VideogameAsset
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -316,19 +317,10 @@ fun DesktopWidgetsScreen(
         HomeModulePicker(
             current = draft?.homeModuleId.orEmpty(),
             english = english,
-            appOnly = draft?.contentType == DesktopWidgetContentType.APP_MODULE,
+            contentType = draft?.contentType ?: DesktopWidgetContentType.HOME_MODULE,
             onDismiss = { modulePickerVisible = false },
             onSelected = { module ->
-                draft = draft?.copy(
-                    homeModuleId = module,
-                    contentType = when {
-                        module in DESKTOP_WIDGET_APP_MODULE_IDS ->
-                            DesktopWidgetContentType.APP_MODULE
-                        draft?.contentType == DesktopWidgetContentType.APP_MODULE ->
-                            DesktopWidgetContentType.HOME_MODULE
-                        else -> draft?.contentType ?: DesktopWidgetContentType.HOME_MODULE
-                    },
-                )
+                draft = draft?.copy(homeModuleId = module)
                 modulePickerVisible = false
             },
         )
@@ -446,6 +438,7 @@ private fun WidgetCardEditor(
     onPickModule: () -> Unit,
     onPickApp: () -> Unit,
 ) {
+    var contentTypeMenuExpanded by remember(draft.id) { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
@@ -462,31 +455,37 @@ private fun WidgetCardEditor(
         }
         item {
             EditorSection(tr("显示内容", "Content")) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = draft.contentType == DesktopWidgetContentType.HOME_MODULE,
-                        onClick = {
-                            onChange(draft.copy(contentType = DesktopWidgetContentType.HOME_MODULE))
+                ExposedDropdownMenuBox(
+                    expanded = contentTypeMenuExpanded,
+                    onExpandedChange = { contentTypeMenuExpanded = it },
+                ) {
+                    OutlinedTextField(
+                        value = desktopWidgetContentTypeLabel(draft.contentType),
+                        onValueChange = {},
+                        readOnly = true,
+                        singleLine = true,
+                        label = { Text(tr("内容类型", "Content type")) },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(contentTypeMenuExpanded)
                         },
-                        label = { Text(tr("主页模块", "Home module")) },
-                        leadingIcon = { Icon(Icons.Outlined.Home, null) },
+                        modifier = Modifier
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                            .fillMaxWidth(),
                     )
-                    FilterChip(
-                        selected = draft.contentType == DesktopWidgetContentType.APP_MODULE,
-                        onClick = {
-                            onChange(draft.copy(contentType = DesktopWidgetContentType.APP_MODULE))
-                        },
-                        label = { Text(tr("应用模块", "App module")) },
-                        leadingIcon = { Icon(Icons.Outlined.VideogameAsset, null) },
-                    )
-                    FilterChip(
-                        selected = draft.contentType == DesktopWidgetContentType.APP_SHORTCUT,
-                        onClick = {
-                            onChange(draft.copy(contentType = DesktopWidgetContentType.APP_SHORTCUT))
-                        },
-                        label = { Text(tr("应用启动", "App launcher")) },
-                        leadingIcon = { Icon(Icons.Outlined.Apps, null) },
-                    )
+                    ExposedDropdownMenu(
+                        expanded = contentTypeMenuExpanded,
+                        onDismissRequest = { contentTypeMenuExpanded = false },
+                    ) {
+                        DesktopWidgetContentType.entries.forEach { contentType ->
+                            DropdownMenuItem(
+                                text = { Text(desktopWidgetContentTypeLabel(contentType)) },
+                                onClick = {
+                                    onChange(draft.switchContentType(contentType))
+                                    contentTypeMenuExpanded = false
+                                },
+                            )
+                        }
+                    }
                 }
                 if (draft.contentType == DesktopWidgetContentType.APP_SHORTCUT) {
                     OutlinedButton(onClick = onPickApp, modifier = Modifier.fillMaxWidth()) {
@@ -735,40 +734,32 @@ private val DESKTOP_WIDGET_HOME_MODULE_IDS_WITHOUT_APP = DESKTOP_WIDGET_HOME_MOD
 private fun HomeModulePicker(
     current: String,
     english: Boolean,
-    appOnly: Boolean = false,
+    contentType: DesktopWidgetContentType,
     onDismiss: () -> Unit,
     onSelected: (String) -> Unit,
 ) {
+    val modules = if (contentType == DesktopWidgetContentType.APP_MODULE) {
+        DESKTOP_WIDGET_APP_MODULE_IDS
+    } else {
+        DESKTOP_WIDGET_HOME_MODULE_IDS_WITHOUT_APP
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(tr("选择模块", "Choose module")) },
         text = {
             LazyColumn(modifier = Modifier.height(440.dp)) {
-                if (!appOnly) {
-                    item {
-                        Text(
-                            tr("主页模块", "Home modules"),
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        )
-                    }
-                    items(DESKTOP_WIDGET_HOME_MODULE_IDS_WITHOUT_APP, key = { "home-" + it }) { module ->
-                        TextButton(onClick = { onSelected(module) }, modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                homeModuleLabel(module, english) + if (module == current) "  ✓" else "",
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    }
-                }
                 item {
                     Text(
-                        tr("应用模块", "App modules"),
+                        if (contentType == DesktopWidgetContentType.APP_MODULE) {
+                            tr("应用模块", "App modules")
+                        } else {
+                            tr("主页模块", "Home modules")
+                        },
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     )
                 }
-                items(DESKTOP_WIDGET_APP_MODULE_IDS, key = { "app-" + it }) { module ->
+                items(modules, key = { "module-" + it }) { module ->
                     TextButton(onClick = { onSelected(module) }, modifier = Modifier.fillMaxWidth()) {
                         Text(
                             homeModuleLabel(module, english) + if (module == current) "  ✓" else "",
@@ -782,6 +773,28 @@ private fun HomeModulePicker(
         dismissButton = { TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) } },
     )
 }
+
+@Composable
+private fun desktopWidgetContentTypeLabel(type: DesktopWidgetContentType): String = when (type) {
+    DesktopWidgetContentType.HOME_MODULE -> tr("主页模块", "Home module")
+    DesktopWidgetContentType.APP_MODULE -> tr("应用模块", "App module")
+    DesktopWidgetContentType.APP_SHORTCUT -> tr("应用按钮", "App button")
+}
+
+private fun DesktopWidgetConfig.switchContentType(
+    target: DesktopWidgetContentType,
+): DesktopWidgetConfig = copy(
+    contentType = target,
+    homeModuleId = when (target) {
+        DesktopWidgetContentType.HOME_MODULE -> homeModuleId
+            .takeIf { it in DESKTOP_WIDGET_HOME_MODULE_IDS_WITHOUT_APP }
+            ?: "today"
+        DesktopWidgetContentType.APP_MODULE -> homeModuleId
+            .takeIf { it in DESKTOP_WIDGET_APP_MODULE_IDS }
+            ?: DESKTOP_WIDGET_APP_MODULE_IDS.first()
+        DesktopWidgetContentType.APP_SHORTCUT -> homeModuleId
+    },
+)
 
 @Composable
 private fun LaunchableAppPicker(
