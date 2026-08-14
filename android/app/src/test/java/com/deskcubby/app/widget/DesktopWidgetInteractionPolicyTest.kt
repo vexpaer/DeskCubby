@@ -14,7 +14,7 @@ import org.junit.Test
 class DesktopWidgetInteractionPolicyTest {
     @Test
     fun narrowOneColumnCardsAlwaysRemainNavigationOnly() {
-        listOf("poem", "quick_input", "meal_photos", "cloud_sync_force").forEach { module ->
+        listOf("poem", "quick_input", "meal_photos").forEach { module ->
             assertEquals(
                 DesktopWidgetInteractionMode.NAVIGATION_ONLY,
                 DesktopWidgetInteractionPolicy.mode(module, widthDp = 70, heightDp = 280),
@@ -33,7 +33,7 @@ class DesktopWidgetInteractionPolicyTest {
             DesktopWidgetInteractionPolicy.mode("quick_input", 180, 110),
         )
         assertEquals(
-            DesktopWidgetInteractionMode.MEAL_ACTIONS_WIDE,
+            DesktopWidgetInteractionMode.MEAL_ACTIONS_3_BY_2,
             DesktopWidgetInteractionPolicy.mode("meal_photos", 180, 150),
         )
         assertEquals(
@@ -46,10 +46,10 @@ class DesktopWidgetInteractionPolicyTest {
         )
         assertEquals(
             DesktopWidgetInteractionMode.NAVIGATION_ONLY,
-            DesktopWidgetInteractionPolicy.mode("meal_photos", 109, 210),
+            DesktopWidgetInteractionPolicy.mode("meal_photos", 89, 210),
         )
-        // Compact thresholds: a 4x1 card (about 280x70dp) shows poem actions, quick input and the
-        // six meal capture buttons instead of degrading to navigation-only.
+        // Compact thresholds: even a 3x1 card (about 150x50dp) shows poem actions, quick input
+        // and the six meal capture buttons instead of degrading to navigation-only.
         assertEquals(
             DesktopWidgetInteractionMode.POEM_ACTIONS,
             DesktopWidgetInteractionPolicy.mode("poem", 200, 70),
@@ -61,6 +61,18 @@ class DesktopWidgetInteractionPolicyTest {
         assertEquals(
             DesktopWidgetInteractionMode.MEAL_ACTIONS_WIDE,
             DesktopWidgetInteractionPolicy.mode("meal_photos", 200, 60),
+        )
+        assertEquals(
+            DesktopWidgetInteractionMode.POEM_ACTIONS,
+            DesktopWidgetInteractionPolicy.mode("poem", 150, 50),
+        )
+        assertEquals(
+            DesktopWidgetInteractionMode.QUICK_INPUT,
+            DesktopWidgetInteractionPolicy.mode("quick_input", 140, 50),
+        )
+        assertEquals(
+            DesktopWidgetInteractionMode.MEAL_ACTIONS_WIDE,
+            DesktopWidgetInteractionPolicy.mode("meal_photos", 150, 50),
         )
     }
 
@@ -152,12 +164,12 @@ class DesktopWidgetInteractionPolicyTest {
             DesktopWidgetInteractionPolicy.expandedMode("recent_diary", 180, 240),
         )
         assertEquals(
-            ExpandedWidgetMode.CLOUD_STATUS,
+            ExpandedWidgetMode.NONE,
             DesktopWidgetInteractionPolicy.expandedMode("cloud_sync_now", 180, 180),
         )
         assertEquals(
             ExpandedWidgetMode.NONE,
-            DesktopWidgetInteractionPolicy.expandedMode("daily_records", 159, 400),
+            DesktopWidgetInteractionPolicy.expandedMode("daily_records", 100, 400),
         )
         assertEquals(
             ExpandedWidgetMode.YEAR_PROGRESS,
@@ -179,6 +191,14 @@ class DesktopWidgetInteractionPolicyTest {
         assertEquals(
             ExpandedWidgetMode.DATE_RECORDS_TWO,
             DesktopWidgetInteractionPolicy.expandedMode("date_records", 200, 140),
+        )
+        assertEquals(
+            ExpandedWidgetMode.DATE_RECORDS_ONE,
+            DesktopWidgetInteractionPolicy.expandedMode("date_records", 150, 60),
+        )
+        assertEquals(
+            ExpandedWidgetMode.DATE_RECORDS_TWO,
+            DesktopWidgetInteractionPolicy.expandedMode("date_records", 150, 115),
         )
     }
 

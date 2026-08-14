@@ -93,9 +93,7 @@ class DesktopWidgetGameActionReceiver : BroadcastReceiver() {
                     val manager = AppWidgetManager.getInstance(context)
                     val placed = manager.getAppWidgetIds(
                         ComponentName(context, DeskCubbyWidgetProvider::class.java),
-                    ).contains(appWidgetId) || manager.getAppWidgetIds(
-                        ComponentName(context, CloudSyncNowWidgetProvider::class.java),
-                    ).isEmpty()
+                    ).contains(appWidgetId)
                     if (placed) scheduleTick(context, appWidgetId, gameId)
                 }
             } finally {

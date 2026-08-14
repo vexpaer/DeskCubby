@@ -320,15 +320,20 @@ class DesktopWidgetAppPanelRenderer @Inject constructor(
         }
         val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = panelTextColor(settings).withAlpha(0xCC) }
         val queued = CloudSyncManualQueueState.queuedMode(context)
+        val totals = cloudSyncTotals()
         val stateLine = when {
             status.running -> translate("正在同步…", "Syncing...", settings.appLanguage)
             queued != null -> translate("同步已排队", "Sync queued", settings.appLanguage)
+            totals != null -> translate(
+                "已完成 ↑" + totals.first + " ↓" + totals.second + " 冲突" + totals.third,
+                "Done ↑" + totals.first + " ↓" + totals.second + " ⚠" + totals.third,
+                settings.appLanguage,
+            )
             !settings.cloudSyncEnabled -> translate("云同步尚未开启", "Cloud sync is off", settings.appLanguage)
             settings.cloudSyncConfigs.none { it.enabled } -> translate("没有已启用来源", "No enabled source", settings.appLanguage)
             else -> translate("已就绪", "Ready", settings.appLanguage)
         }
         canvas.drawText(stateLine, 24f, 56f, paint)
-        val totals = cloudSyncTotals()
         if (totals != null) {
             val line = translate(
                 "上次：上传 " + totals.first + " · 下载 " + totals.second + " · 冲突 " + totals.third,

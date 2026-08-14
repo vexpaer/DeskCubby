@@ -201,7 +201,7 @@ enum class MealPhotosPerRow { TWO, THREE, SMART }
 
 enum class PoetryTextAlignment { START, CENTER }
 
-enum class DesktopWidgetContentType { HOME_MODULE, APP_SHORTCUT }
+enum class DesktopWidgetContentType { HOME_MODULE, APP_MODULE, APP_SHORTCUT }
 
 enum class DesktopWidgetTextAlignment { START, CENTER, END }
 
@@ -247,11 +247,11 @@ val DESKTOP_WIDGET_HOME_MODULE_IDS: List<String> = listOf(
     "notes",
     "game_shortcuts",
     "record_overview",
-    "cloud_sync_now",
-    "cloud_sync_force",
     // App modules: playable mini games that run directly on the home screen, music visualizer,
     // reader, three screen-time visualizations and the combined cloud-sync module.
     "game_2048",
+    "game_2048_5",
+    "game_2048_6",
     "game_snake",
     "game_tetris",
     "game_minesweeper",
@@ -268,8 +268,30 @@ val DESKTOP_WIDGET_HOME_MODULE_IDS: List<String> = listOf(
 /** Screen-time visualization ranges offered by the desktop usage modules. */
 val DESKTOP_WIDGET_USAGE_RANGES: List<Int> = listOf(3, 7, 30)
 
+/**
+ * Desktop app-module ids: playable mini games (including the 5x5 and 6x6 2048 variants),
+ * music visualizer, reader, three screen-time visualizations and the combined cloud-sync panel.
+ */
+val DESKTOP_WIDGET_APP_MODULE_IDS: List<String> = listOf(
+    "game_2048",
+    "game_2048_5",
+    "game_2048_6",
+    "game_snake",
+    "game_tetris",
+    "game_minesweeper",
+    "game_spider",
+    "game_go",
+    "music_visualizer",
+    "reader",
+    "usage_overview",
+    "usage_chart",
+    "usage_apps",
+    "cloud_sync",
+)
+
 fun normalizeDesktopWidgetHomeModuleId(value: String): String = when (value) {
-    "cloud_sync" -> "cloud_sync_now"
+    "cloud_sync_now" -> "cloud_sync"
+    "cloud_sync_force" -> "cloud_sync"
     in DESKTOP_WIDGET_HOME_MODULE_IDS -> value
     else -> "today"
 }

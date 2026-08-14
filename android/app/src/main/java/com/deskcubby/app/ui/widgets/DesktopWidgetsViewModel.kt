@@ -20,8 +20,6 @@ import com.deskcubby.app.widget.DeskCubbyWidgetProvider
 import com.deskcubby.app.widget.DesktopWidgetPinResultReceiver
 import com.deskcubby.app.widget.DesktopWidgetNavigationTokenStore
 import com.deskcubby.app.widget.DesktopWidgetInstanceStore
-import com.deskcubby.app.widget.CloudSyncForceWidgetProvider
-import com.deskcubby.app.widget.CloudSyncNowWidgetProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.text.Collator
@@ -198,35 +196,6 @@ class DesktopWidgetsViewModel @Inject constructor(
         if (!accepted) {
             DesktopWidgetNavigationTokenStore.discardConfigToken(configToken)
             DesktopWidgetNavigationTokenStore.discardConfigToken(callbackToken)
-        }
-        _message.value = if (accepted) {
-            desktopWidgetPinAcceptedMessage(english)
-        } else {
-            desktopWidgetManualAddMessage(english)
-        }
-    }
-
-    fun requestPinSyncWidget(forceActions: Boolean, english: Boolean) {
-        val manager = AppWidgetManager.getInstance(context)
-        val pinSupported = runCatching { manager.isRequestPinAppWidgetSupported }
-            .getOrDefault(false)
-        if (!pinSupported) {
-            _message.value = desktopWidgetManualAddMessage(english)
-            return
-        }
-        val provider = if (forceActions) {
-            CloudSyncForceWidgetProvider::class.java
-        } else {
-            CloudSyncNowWidgetProvider::class.java
-        }
-        val accepted = try {
-            manager.requestPinAppWidget(ComponentName(context, provider), null, null)
-        } catch (_: IllegalStateException) {
-            false
-        } catch (_: SecurityException) {
-            false
-        } catch (_: RuntimeException) {
-            false
         }
         _message.value = if (accepted) {
             desktopWidgetPinAcceptedMessage(english)

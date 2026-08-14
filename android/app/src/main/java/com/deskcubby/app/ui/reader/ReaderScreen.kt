@@ -871,6 +871,9 @@ private fun ReaderBookPage(
                                 pdfFallbackNoticeCount += 1
                             }
                         },
+                        onPdfZoomPercentChanged = { zoom ->
+                            viewModel.updatePreferences(preferences.copy(pdfZoomPercent = zoom))
+                        },
                         viewModel = viewModel,
                     )
                 }
@@ -1437,6 +1440,7 @@ private fun PdfReader(
     onChaptersChanged: (List<ReaderChapter>) -> Unit,
     onChapterScanRunningChanged: (Boolean) -> Unit,
     onEnhancedReaderUnavailable: () -> Unit,
+    onPdfZoomPercentChanged: (Int) -> Unit,
     viewModel: ReaderViewModel,
 ) {
     var currentPdfPage by rememberSaveable(book.id) {
@@ -1499,6 +1503,7 @@ private fun PdfReader(
                 onChaptersChanged = onChaptersChanged,
                 onChapterScanRunningChanged = onChapterScanRunningChanged,
                 onEnhancedReaderUnavailable = onEnhancedReaderUnavailable,
+                onZoomPercentChanged = onPdfZoomPercentChanged,
             )
         } else {
             LaunchedEffect(Unit) {

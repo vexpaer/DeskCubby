@@ -157,6 +157,7 @@ internal fun PdfiumPdfReader(
     onChaptersChanged: (List<ReaderChapter>) -> Unit,
     onChapterScanRunningChanged: (Boolean) -> Unit,
     onEnhancedReaderUnavailable: () -> Unit,
+    onZoomPercentChanged: (Int) -> Unit = {},
 ) {
     val resolver = LocalContext.current.applicationContext.contentResolver
     val sessionResult by key(uri) {
@@ -228,6 +229,7 @@ internal fun PdfiumPdfReader(
                 onChaptersChanged = onChaptersChanged,
                 onChapterScanRunningChanged = onChapterScanRunningChanged,
                 onEnhancedReaderUnavailable = onEnhancedReaderUnavailable,
+                onZoomPercentChanged = onZoomPercentChanged,
             )
         }
     }
@@ -249,6 +251,7 @@ private fun PdfiumDocumentView(
     onChaptersChanged: (List<ReaderChapter>) -> Unit,
     onChapterScanRunningChanged: (Boolean) -> Unit,
     onEnhancedReaderUnavailable: () -> Unit,
+    onZoomPercentChanged: (Int) -> Unit = {},
 ) {
     val restoredPosition = remember(session) {
         ReaderPagePosition(
@@ -441,6 +444,8 @@ private fun PdfiumDocumentView(
         val pageWidth = ((maxWidth - 24.dp) * effectiveZoomPercent / 100f)
             .coerceAtLeast(160.dp)
         val targetWidthPx = with(density) { pageWidth.roundToPx() }
+        maxHorizontalPx = (targetWidthPx - with(density) { maxWidth.roundToPx() })
+            .coerceAtLeast(0)
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -505,6 +510,17 @@ private fun PdfiumDocumentView(
                                 MAX_READER_PDF_ZOOM_PERCENT /
                                     preferences.pdfZoomPercent.toFloat(),
                             )
+                            // Persist the committed percentage so a later reload keeps the zoom.
+                            if (gestureScale != 1f) {
+                                onZoomPercentChanged(
+                                    (preferences.pdfZoomPercent * gestureZoom)
+                                        .roundToInt()
+                                        .coerceIn(
+                                            MIN_READER_PDF_ZOOM_PERCENT,
+                                            MAX_READER_PDF_ZOOM_PERCENT,
+                                        ),
+                                )
+                            }
                             val anchorPage = lastAnchorPage
                             if (anchorPage >= 0 && gestureScale != 1f) {
                                 val item = listState.layoutInfo.visibleItemsInfo

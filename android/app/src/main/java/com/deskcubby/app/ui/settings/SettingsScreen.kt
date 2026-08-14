@@ -2773,6 +2773,7 @@ private fun BackupSettingsPage(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppearanceSettingsPage(
     settings: AppSettings,
@@ -3210,13 +3211,33 @@ private fun AppearanceSettingsPage(
         }
         item {
             SettingsSection(tr("软件语言", "App language")) {
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    AppLanguage.entries.forEachIndexed { index, item ->
-                        SegmentedButton(
-                            selected = language == item,
-                            onClick = { language = item },
-                            shape = SegmentedButtonDefaults.itemShape(index, AppLanguage.entries.size),
-                        ) { Text(if (item == AppLanguage.CHINESE) "中文" else "English") }
+                var languageMenuExpanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(
+                    expanded = languageMenuExpanded,
+                    onExpandedChange = { languageMenuExpanded = it },
+                ) {
+                    OutlinedTextField(
+                        value = appLanguageLabel(language),
+                        onValueChange = {},
+                        readOnly = true,
+                        singleLine = true,
+                        label = { Text(tr("软件语言", "App language")) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = languageMenuExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    )
+                    ExposedDropdownMenu(
+                        expanded = languageMenuExpanded,
+                        onDismissRequest = { languageMenuExpanded = false },
+                    ) {
+                        AppLanguage.entries.forEach { item ->
+                            DropdownMenuItem(
+                                text = { Text(appLanguageLabel(item)) },
+                                onClick = {
+                                    language = item
+                                    languageMenuExpanded = false
+                                },
+                            )
+                        }
                     }
                 }
             }

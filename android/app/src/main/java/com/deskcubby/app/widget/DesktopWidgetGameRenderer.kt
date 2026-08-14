@@ -34,6 +34,8 @@ enum class WidgetGameAction {
 
 fun desktopGameIdForModule(moduleId: String): String? = when (moduleId) {
     "game_2048" -> "2048"
+    "game_2048_5" -> "2048_5"
+    "game_2048_6" -> "2048_6"
     "game_snake" -> "snake"
     "game_tetris" -> "tetris"
     "game_minesweeper" -> "minesweeper"
@@ -64,7 +66,9 @@ class DesktopWidgetGameRenderer @Inject constructor(
         val canvas = Canvas(board)
         try {
             when (gameId) {
-                "2048" -> render2048(canvas, action)
+                "2048" -> render2048(canvas, action, 4)
+                "2048_5" -> render2048(canvas, action, 5)
+                "2048_6" -> render2048(canvas, action, 6)
                 "snake" -> renderSnake(canvas, action)
                 "tetris" -> renderTetris(canvas, action)
                 "minesweeper" -> renderMinesweeper(canvas, action, cell)
@@ -82,10 +86,11 @@ class DesktopWidgetGameRenderer @Inject constructor(
         return views
     }
 
-    private suspend fun render2048(canvas: Canvas, action: WidgetGameAction?) {
-        var game = gamePersistence.loadSave("2048")?.let(Game2048::fromJson) ?: Game2048()
+    private suspend fun render2048(canvas: Canvas, action: WidgetGameAction?, size: Int) {
+        val saveKey = if (size == 4) "2048" else "2048_$size"
+        var game = gamePersistence.loadSave(saveKey)?.let(Game2048::fromJson) ?: Game2048(size)
         if (action == WidgetGameAction.NEW) {
-            game = Game2048()
+            game = Game2048(size)
         } else if (action != null) {
             val direction = when (action) {
                 WidgetGameAction.UP -> Game2048.Direction.UP
@@ -98,14 +103,14 @@ class DesktopWidgetGameRenderer @Inject constructor(
                 val result = game.moveWithResult(d)
                 if (result != null) {
                     gamePersistence.recordStatistics(
-                        "2048",
+                        saveKey,
                         mapOf(GameStatisticMetric.EFFECTIVE_MOVES to 1L),
                         mapOf(GameStatisticMetric.HIGHEST_TILE to result.statisticsDelta.highestTile.toLong()),
                     )
                 }
             }
         }
-        if (action != null) gamePersistence.saveProgress("2048", game.toJson(), game.score)
+        if (action != null) gamePersistence.saveProgress(saveKey, game.toJson(), game.score)
         draw2048(canvas, game)
     }
 
@@ -587,7 +592,7 @@ class DesktopWidgetGameRenderer @Inject constructor(
         views.setViewVisibility(R.id.widget_apps_grid, View.GONE)
         views.setViewVisibility(R.id.widget_apps_columns, View.GONE)
         when (gameId) {
-            "2048" -> {
+            "2048", "2048_5", "2048_6" -> {
                 views.setViewVisibility(R.id.widget_apps_dpad, View.VISIBLE)
                 views.setViewVisibility(R.id.widget_apps_actions, View.VISIBLE)
                 bindGameAction(views, R.id.widget_apps_btn_up, "UP", appWidgetId, gameId, WidgetGameAction.UP)
@@ -766,6 +771,8 @@ class DesktopWidgetGameRenderer @Inject constructor(
 
     private fun boardTitle(gameId: String, settings: AppSettings): String = when (gameId) {
         "2048" -> "2048"
+        "2048_5" -> "2048 5x5"
+        "2048_6" -> "2048 6x6"
         "snake" -> translate("贪吃蛇", "Snake", settings.appLanguage)
         "tetris" -> translate("俄罗斯方块", "Tetris", settings.appLanguage)
         "minesweeper" -> translate("扫雷", "Minesweeper", settings.appLanguage)

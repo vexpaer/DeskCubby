@@ -41,6 +41,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Remove
+import androidx.compose.material.icons.outlined.VideogameAsset
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.AlertDialog
@@ -81,6 +82,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.deskcubby.app.data.model.AppLanguage
+import com.deskcubby.app.data.model.DESKTOP_WIDGET_APP_MODULE_IDS
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_USAGE_RANGES
 import com.deskcubby.app.data.model.DesktopWidgetConfig
@@ -226,8 +228,6 @@ fun DesktopWidgetsScreen(
                 },
                 onDelete = { deleteCandidate = it },
                 onPin = { viewModel.requestPin(it, english) },
-                onPinSyncNow = { viewModel.requestPinSyncWidget(false, english) },
-                onPinForceSync = { viewModel.requestPinSyncWidget(true, english) },
             )
         } else {
             WidgetCardEditor(
@@ -316,9 +316,19 @@ fun DesktopWidgetsScreen(
         HomeModulePicker(
             current = draft?.homeModuleId.orEmpty(),
             english = english,
+            appOnly = draft?.contentType == DesktopWidgetContentType.APP_MODULE,
             onDismiss = { modulePickerVisible = false },
             onSelected = { module ->
-                draft = draft?.copy(homeModuleId = module)
+                draft = draft?.copy(
+                    homeModuleId = module,
+                    contentType = when {
+                        module in DESKTOP_WIDGET_APP_MODULE_IDS ->
+                            DesktopWidgetContentType.APP_MODULE
+                        draft?.contentType == DesktopWidgetContentType.APP_MODULE ->
+                            DesktopWidgetContentType.HOME_MODULE
+                        else -> draft?.contentType ?: DesktopWidgetContentType.HOME_MODULE
+                    },
+                )
                 modulePickerVisible = false
             },
         )
@@ -347,8 +357,6 @@ private fun WidgetCardList(
     onEdit: (DesktopWidgetConfig) -> Unit,
     onDelete: (DesktopWidgetConfig) -> Unit,
     onPin: (DesktopWidgetConfig) -> Unit,
-    onPinSyncNow: () -> Unit,
-    onPinForceSync: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -362,7 +370,7 @@ private fun WidgetCardList(
                 shape = MaterialTheme.shapes.large,
             ) {
                 Text(
-                    tr("先在这里设计可复用卡片，再添加到桌面。保存的尺寸用于布局预览；最终占用格数由 Android 桌面决定，添加后仍可继续缩放。", "Design reusable cards here, then add them to the home screen. The saved size controls the layout preview; Android launchers make the final grid decision and allow further resizing."),
+                    tr("先在这里设计可复用卡片，再添加到桌面。放置后长按桌面实例即可调整大小；内容会根据空间自动适配。", "Design reusable cards here, then add them to the home screen. Long-press a placed instance to resize it; content adapts to the available space automatically."),
                     modifier = Modifier.padding(16.dp),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -374,36 +382,6 @@ private fun WidgetCardList(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text(
-                        tr("云同步小组件", "Cloud sync widgets"),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        tr(
-                            "同步动作会在联网约束的串行队列中执行。强制操作不传播删除且仍执行条件校验；强制下载要求仅启用一个云端来源。",
-                            "Sync actions run in a network-constrained serial queue. Forced actions never propagate deletions and still use conditional checks; force download requires one enabled cloud source.",
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    OutlinedButton(onClick = onPinSyncNow, modifier = Modifier.fillMaxWidth()) {
-                        Text(tr("添加“立即同步”", "Add Sync now"))
-                    }
-                    OutlinedButton(onClick = onPinForceSync, modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            tr("添加“强制上传/下载”", "Add Force upload/download"),
-                        )
-                    }
-                }
-            }
         }
         if (configs.isEmpty()) {
             item {
@@ -473,7 +451,6 @@ private fun WidgetCardEditor(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item { WidgetPreview(draft, english) }
         item {
             OutlinedTextField(
                 value = draft.name,
@@ -495,6 +472,14 @@ private fun WidgetCardEditor(
                         leadingIcon = { Icon(Icons.Outlined.Home, null) },
                     )
                     FilterChip(
+                        selected = draft.contentType == DesktopWidgetContentType.APP_MODULE,
+                        onClick = {
+                            onChange(draft.copy(contentType = DesktopWidgetContentType.APP_MODULE))
+                        },
+                        label = { Text(tr("应用模块", "App module")) },
+                        leadingIcon = { Icon(Icons.Outlined.VideogameAsset, null) },
+                    )
+                    FilterChip(
                         selected = draft.contentType == DesktopWidgetContentType.APP_SHORTCUT,
                         onClick = {
                             onChange(draft.copy(contentType = DesktopWidgetContentType.APP_SHORTCUT))
@@ -503,14 +488,23 @@ private fun WidgetCardEditor(
                         leadingIcon = { Icon(Icons.Outlined.Apps, null) },
                     )
                 }
-                if (draft.contentType == DesktopWidgetContentType.HOME_MODULE) {
+                if (draft.contentType == DesktopWidgetContentType.APP_SHORTCUT) {
+                    OutlinedButton(onClick = onPickApp, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            draft.appLabel ?: draft.appPackageName
+                                ?: tr("选择应用", "Choose an app"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                } else {
                     OutlinedButton(onClick = onPickModule, modifier = Modifier.fillMaxWidth()) {
                         Text(homeModuleLabel(draft.homeModuleId, english))
                     }
                     Text(
                         tr(
-                            "应用模块包含可直接在桌面游玩的小游戏、音乐可视化、阅读、使用时间图表和云端同步。",
-                            "App modules include mini games playable right on the home screen, music visualizer, reader, screen-time charts and cloud sync.",
+                            "应用模块包含可直接在桌面游玩的小游戏（2048 三档棋盘、贪吃蛇、俄罗斯方块、扫雷、蜘蛛纸牌、围棋）、音乐可视化、阅读、使用时间图表和云端同步。",
+                            "App modules include mini games playable right on the home screen (2048 in three board sizes, snake, tetris, minesweeper, spider, go), music visualizer, reader, screen-time charts and cloud sync.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -530,20 +524,12 @@ private fun WidgetCardEditor(
                             }
                         }
                     }
-                } else {
-                    OutlinedButton(onClick = onPickApp, modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            draft.appLabel ?: draft.appPackageName
-                                ?: tr("选择应用", "Choose an app"),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
                 }
             }
         }
         item {
             EditorSection(tr("外观", "Appearance")) {
+                WidgetPreview(draft, english)
                 WidgetToggle(
                     label = tr("显示卡片名称", "Show card name"),
                     checked = draft.showName,
@@ -691,12 +677,6 @@ private fun WidgetPreview(config: DesktopWidgetConfig, english: Boolean) {
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Text(
-            "${config.widthCells} × ${config.heightCells}",
-            modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
-            color = Color(config.textColorArgb).copy(alpha = 0.82f),
-            style = MaterialTheme.typography.labelSmall,
-        )
     }
 }
 
@@ -747,21 +727,6 @@ private fun CellStepper(label: String, value: Int, onValueChange: (Int) -> Unit)
     }
 }
 
-private val DESKTOP_WIDGET_APP_MODULE_IDS = listOf(
-    "game_2048",
-    "game_snake",
-    "game_tetris",
-    "game_minesweeper",
-    "game_spider",
-    "game_go",
-    "music_visualizer",
-    "reader",
-    "usage_overview",
-    "usage_chart",
-    "usage_apps",
-    "cloud_sync",
-)
-
 private val DESKTOP_WIDGET_HOME_MODULE_IDS_WITHOUT_APP = DESKTOP_WIDGET_HOME_MODULE_IDS.filterNot {
     it in DESKTOP_WIDGET_APP_MODULE_IDS
 }
@@ -770,6 +735,7 @@ private val DESKTOP_WIDGET_HOME_MODULE_IDS_WITHOUT_APP = DESKTOP_WIDGET_HOME_MOD
 private fun HomeModulePicker(
     current: String,
     english: Boolean,
+    appOnly: Boolean = false,
     onDismiss: () -> Unit,
     onSelected: (String) -> Unit,
 ) {
@@ -778,19 +744,21 @@ private fun HomeModulePicker(
         title = { Text(tr("选择模块", "Choose module")) },
         text = {
             LazyColumn(modifier = Modifier.height(440.dp)) {
-                item {
-                    Text(
-                        tr("主页模块", "Home modules"),
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
-                }
-                items(DESKTOP_WIDGET_HOME_MODULE_IDS_WITHOUT_APP, key = { "home-" + it }) { module ->
-                    TextButton(onClick = { onSelected(module) }, modifier = Modifier.fillMaxWidth()) {
+                if (!appOnly) {
+                    item {
                         Text(
-                            homeModuleLabel(module, english) + if (module == current) "  ✓" else "",
-                            modifier = Modifier.fillMaxWidth(),
+                            tr("主页模块", "Home modules"),
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                         )
+                    }
+                    items(DESKTOP_WIDGET_HOME_MODULE_IDS_WITHOUT_APP, key = { "home-" + it }) { module ->
+                        TextButton(onClick = { onSelected(module) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                homeModuleLabel(module, english) + if (module == current) "  ✓" else "",
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
                 }
                 item {
@@ -901,9 +869,9 @@ private fun homeModuleLabel(id: String, english: Boolean): String {
         "notes" -> "笔记" to "Notes"
         "game_shortcuts" -> "小游戏" to "Mini games"
         "record_overview" -> "记录概览" to "Record overview"
-        "cloud_sync_now" -> "立即同步" to "Sync now"
-        "cloud_sync_force" -> "强制上传/下载" to "Force upload/download"
         "game_2048" -> "2048（桌面直接玩）" to "2048 (play on desktop)"
+        "game_2048_5" -> "2048 五阶（桌面直接玩）" to "2048 5x5 (play on desktop)"
+        "game_2048_6" -> "2048 六阶（桌面直接玩）" to "2048 6x6 (play on desktop)"
         "game_snake" -> "贪吃蛇（桌面直接玩）" to "Snake (play on desktop)"
         "game_tetris" -> "俄罗斯方块（桌面直接玩）" to "Tetris (play on desktop)"
         "game_minesweeper" -> "扫雷（桌面直接玩）" to "Minesweeper (play on desktop)"

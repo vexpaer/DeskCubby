@@ -318,45 +318,6 @@
             </LinearLayout>
         </LinearLayout>
 
-        <LinearLayout
-            android:id="@+id/widget_cloud_sync_actions"
-            android:layout_width="match_parent"
-            android:layout_height="38dp"
-            android:layout_marginTop="6dp"
-            android:orientation="horizontal"
-            android:visibility="gone">
-            <TextView
-                android:id="@+id/widget_cloud_sync_now"
-                style="@style/DesktopWidgetActionText"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_marginEnd="4dp"
-                android:layout_weight="1"
-                android:visibility="gone" />
-            <TextView
-                android:id="@+id/widget_cloud_sync_undo"
-                style="@style/DesktopWidgetActionText"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_marginEnd="4dp"
-                android:layout_weight="1"
-                android:visibility="gone" />
-            <TextView
-                android:id="@+id/widget_cloud_sync_upload"
-                style="@style/DesktopWidgetActionText"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_marginEnd="4dp"
-                android:layout_weight="1"
-                android:visibility="gone" />
-            <TextView
-                android:id="@+id/widget_cloud_sync_download"
-                style="@style/DesktopWidgetActionText"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:visibility="gone" />
-        </LinearLayout>
     </LinearLayout>
 
     <!-- App shortcuts intentionally use a separate overlay: the activity/alias icon keeps the

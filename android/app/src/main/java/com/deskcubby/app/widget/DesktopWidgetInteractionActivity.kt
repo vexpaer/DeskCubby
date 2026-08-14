@@ -62,6 +62,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
     private var input: EditText? = null
     private var pendingCameraPath: String? = null
     private var externalSourceLaunched: Boolean = false
+    private var switchingToCategoryPicker: Boolean = false
 
     private val photoPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         externalSourceLaunched = false
@@ -198,7 +199,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
     }
 
     /** Quick-send: pick a category (or none) first, then type and send in one go. */
-    private fun showQuickInputCategoryPicker() {
+    private fun showQuickInputCategoryPicker(initialValue: String = "") {
         val english = settings.appLanguage == AppLanguage.ENGLISH
         lifecycleScope.launch {
             val categories = runCatching {
@@ -213,7 +214,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                 .setItems(labels.toTypedArray()) { _, which ->
                     val categoryId = if (which == 0) -1L else categories[which - 1].id
                     val label = if (which == 0) null else categories[which - 1].name
-                    showQuickInput("", categoryId, label)
+                    showQuickInput(initialValue, categoryId, label)
                 }
                 .setNegativeButton(translate("取消", "Cancel", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) { _, _ -> finish() }
                 .setOnCancelListener { finish() }
@@ -257,6 +258,15 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                     persistThought(content, dialog, categoryId)
                 }
             }
+            // Long-press Send keeps the typed text and lets the user pick a category first
+            // (the desktop widget's send button opens this same dialog).
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnLongClickListener {
+                switchingToCategoryPicker = true
+                val value = editor.text?.toString().orEmpty()
+                dialog.dismiss()
+                showQuickInputCategoryPicker(value)
+                true
+            }
             editor.requestFocus()
             editor.post {
                 getSystemService(InputMethodManager::class.java)
@@ -265,7 +275,8 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         }
         dialog.setOnDismissListener {
             input = null
-            if (!isFinishing && !isChangingConfigurations) finish()
+            if (!isFinishing && !isChangingConfigurations && !switchingToCategoryPicker) finish()
+            switchingToCategoryPicker = false
         }
         dialog.show()
     }

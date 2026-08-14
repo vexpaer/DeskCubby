@@ -41,10 +41,10 @@ DeskCubby is a **local-first** journal and personal knowledge base for Android a
 | --- | --- |
 | **Markdown journals** | Daily diaries with templates, a meal calendar, photo records and writing statistics — stored as plain `.md` files you can open anywhere. |
 | **Note library** | Obsidian-compatible Markdown notes organized in your own folders, with previews, links and media. |
-| **TXT / PDF reader** | Import books, resume exactly where you stopped, search the full text and jump via the table of contents; PDF pinch-zoom keeps the exact size and position after reload and supports free 2D panning. |
+| **TXT / PDF reader** | Import books, resume exactly where you stopped, search the full text and jump via the table of contents; PDF pinch-zoom keeps the exact size and position after reload, saves your zoom for next time and supports free 2D panning. |
 | **AI Agent** | Chat with any OpenAI-compatible model. The Agent searches and reads *your* records through native tool calling, asks before every change, and keeps an undoable review. |
 | **Capture kit** | Quick thoughts, important dates, daily records, poems, RSS feeds, a password-protected vault and eight mini-games. |
-| **Home-screen widgets** | Android widgets with full mini-game play on the home screen (2048, Snake, Tetris, Minesweeper, Spider, Go), a live music spectrum, screen-time charts, reader progress, journals, statistics and cloud sync with one-tap undo — your layout, your colors. |
+| **Home-screen widgets** | Android widgets with full mini-game play on the home screen (2048 in 4×4/5×5/6×6, Snake, Tetris, Minesweeper, Spider, Go), a live music spectrum, screen-time charts, reader progress, journals, statistics, quick capture with direct photo buttons and cloud sync showing upload/download/conflict counts with one-tap undo — your layout, your colors. |
 | **Make it yours** | Three visual styles (Material, Liquid Glass, Organic Future), light/dark mode, custom themes and a five-language UI (Simplified/Traditional Chinese, English, Korean, Japanese) chosen on first launch. |
 | **Private by design** | No account, no telemetry, no mandatory cloud. Files stay in your folders; sync is always opt-in. |
 

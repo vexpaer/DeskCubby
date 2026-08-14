@@ -59,9 +59,9 @@ class SettingsRepositoryTest {
                 "notes",
                 "game_shortcuts",
                 "record_overview",
-                "cloud_sync_now",
-                "cloud_sync_force",
                 "game_2048",
+                "game_2048_5",
+                "game_2048_6",
                 "game_snake",
                 "game_tetris",
                 "game_minesweeper",
@@ -680,9 +680,14 @@ class SettingsRepositoryTest {
                     name = "Legacy cloud",
                     homeModuleId = "cloud_sync",
                 ),
+                DesktopWidgetConfig(
+                    id = "legacy-now",
+                    name = "Legacy sync now",
+                    homeModuleId = "cloud_sync_now",
+                ),
             ),
-        ).single()
+        )
 
-        assertEquals("cloud_sync_now", normalized.homeModuleId)
+        assertEquals(listOf("cloud_sync", "cloud_sync"), normalized.map { it.homeModuleId })
     }
 }

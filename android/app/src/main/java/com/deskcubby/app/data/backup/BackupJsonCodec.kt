@@ -149,7 +149,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 32
+    const val FORMAT_VERSION: Int = 33
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -614,10 +614,11 @@ object BackupJsonCodec {
                     },
                     contentType = item.requiredEnum("contentType"),
                     homeModuleId = item.requiredString("homeModuleId").let { homeModuleId ->
-                        if (version <= 29 && homeModuleId == "cloud_sync") {
-                            "cloud_sync_now"
-                        } else {
-                            homeModuleId
+                        when {
+                            homeModuleId == "cloud_sync_now" ||
+                                homeModuleId == "cloud_sync_force" -> "cloud_sync"
+                            version <= 29 && homeModuleId == "cloud_sync" -> "cloud_sync"
+                            else -> homeModuleId
                         }
                     },
                     appPackageName = item.requiredNullableString("appPackageName"),

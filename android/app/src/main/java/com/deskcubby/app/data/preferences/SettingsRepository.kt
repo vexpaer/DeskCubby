@@ -50,6 +50,7 @@ import com.deskcubby.app.data.model.DEFAULT_THEME_SECONDARY_COLORS_ARGB
 import com.deskcubby.app.data.model.normalizeHomeGameShortcutIds
 import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.DEFAULT_DESKTOP_WIDGET_CONFIGS
+import com.deskcubby.app.data.model.DESKTOP_WIDGET_APP_MODULE_IDS
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
 import com.deskcubby.app.data.model.normalizeDesktopWidgetHomeModuleId
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_USAGE_RANGES
@@ -2056,6 +2057,13 @@ internal fun normalizeDesktopWidgetConfigs(
                 ?.take(MAX_URL_CHARS)
                 ?.takeIf { it.startsWith("content://") },
             homeModuleId = normalizeDesktopWidgetHomeModuleId(item.homeModuleId),
+            contentType = when {
+                normalizeDesktopWidgetHomeModuleId(item.homeModuleId) in DESKTOP_WIDGET_APP_MODULE_IDS ->
+                    DesktopWidgetContentType.APP_MODULE
+                item.contentType == DesktopWidgetContentType.APP_MODULE ->
+                    DesktopWidgetContentType.HOME_MODULE
+                else -> item.contentType
+            },
             appPackageName = packageName,
             appLabel = item.appLabel
                 ?.trim()

@@ -113,6 +113,9 @@ class CloudSyncWorker(
                                 finalCloudWidgetState(terminalWidgetState),
                             )
                         }
+                        // Refresh every desktop card (the combined cloud-sync app panel shows
+                        // the upload/download/conflict counts of the last completed run).
+                        runCatching { DeskCubbyWidgetProvider.requestUpdate(applicationContext) }
                     }
                 }
             }

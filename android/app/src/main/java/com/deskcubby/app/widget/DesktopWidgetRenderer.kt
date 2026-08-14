@@ -144,7 +144,7 @@ class DesktopWidgetRenderer @Inject constructor(
         }
     }
 
-    private fun render(
+    private suspend fun render(
         manager: AppWidgetManager,
         appWidgetId: Int,
         config: DesktopWidgetConfig?,
@@ -178,6 +178,9 @@ class DesktopWidgetRenderer @Inject constructor(
             return views
         }
 
+        if (config.contentType == DesktopWidgetContentType.APP_MODULE) {
+            return renderAppModule(appWidgetId, config, settings)
+        }
         val text = if (config.contentType == DesktopWidgetContentType.APP_SHORTCUT) {
             appShortcutText(config, settings)
         } else {
@@ -327,6 +330,56 @@ class DesktopWidgetRenderer @Inject constructor(
             R.id.widget_root,
             clickIntent ?: deskCubbyPendingIntent(appWidgetId, NavItemId.WIDGETS.route),
         )
+        return views
+    }
+
+    private suspend fun renderAppModule(
+        appWidgetId: Int,
+        config: DesktopWidgetConfig,
+        settings: AppSettings,
+    ): RemoteViews {
+        val moduleId = config.homeModuleId
+        val gameId = desktopGameIdForModule(moduleId)
+        val views = if (gameId != null) {
+            gameRenderer.render(appWidgetId, gameId, null, -1, settings)
+        } else {
+            appPanelRenderer.render(appWidgetId, moduleId, settings, config.usageRangeDays)
+        } ?: RemoteViews(context.packageName, R.layout.desktop_widget_apps)
+        val backgroundAlpha = config.backgroundOpacityPercent * 255 / 100
+        views.setInt(
+            R.id.widget_apps_root,
+            "setBackgroundColor",
+            config.backgroundColorArgb.withAlpha(backgroundAlpha),
+        )
+        views.setTextColor(R.id.widget_apps_title, config.textColorArgb)
+        if (config.backgroundImageUri != null && gameId == null) {
+            val options = runCatching {
+                AppWidgetManager.getInstance(context).getAppWidgetOptions(appWidgetId)
+            }.getOrDefault(android.os.Bundle.EMPTY)
+            val widthDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)
+                .takeIf { it > 0 } ?: (config.widthCells * APPROX_CELL_DP)
+            val heightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT)
+                .takeIf { it > 0 } ?: (config.heightCells * APPROX_CELL_DP)
+            config.backgroundImageUri?.let { raw ->
+                loadBackgroundBitmap(raw, widthDp, heightDp)?.let { bitmap ->
+                    views.setImageViewBitmap(R.id.widget_apps_background_image, bitmap)
+                    views.setInt(R.id.widget_apps_background_image, "setImageAlpha", backgroundAlpha)
+                    views.setViewVisibility(R.id.widget_apps_background_image, View.VISIBLE)
+                    views.setViewVisibility(R.id.widget_apps_scrim, View.VISIBLE)
+                    views.setInt(
+                        R.id.widget_apps_scrim,
+                        "setBackgroundColor",
+                        0x52000000.withAlpha(0x52 * config.backgroundOpacityPercent / 100),
+                    )
+                }
+            }
+        }
+        if (gameId != null) {
+            views.setOnClickPendingIntent(
+                R.id.widget_apps_root,
+                deskCubbyPendingIntent(appWidgetId, NavItemId.GAMES.route),
+            )
+        }
         return views
     }
 
@@ -518,16 +571,6 @@ class DesktopWidgetRenderer @Inject constructor(
                 translate("${snapshot.dateRecords.size} 条日期记录", "${snapshot.dateRecords.size} date records", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
                 route = NavItemId.STATISTICS.route,
             )
-            "cloud_sync_now" -> DesktopWidgetText(
-                localized(settings, "立即同步", "Sync now"),
-                cloudSyncAvailability(settings),
-                translate("${settings.cloudSyncConfigs.count { it.enabled }} 个已启用来源", "${settings.cloudSyncConfigs.count { it.enabled }} enabled sources", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
-            )
-            "cloud_sync_force" -> DesktopWidgetText(
-                localized(settings, "强制上传 / 下载", "Force upload / download"),
-                cloudSyncAvailability(settings),
-                localized(settings, "选择单一来源为准", "Choose one source of truth"),
-            )
             else -> DesktopWidgetText(
                 localized(settings, "小卡片", "Widget"),
                 localized(settings, "点按打开 DeskCubby", "Tap to open DeskCubby"),
@@ -563,29 +606,18 @@ class DesktopWidgetRenderer @Inject constructor(
             R.id.widget_meal_actions_wide,
             R.id.widget_meal_actions_3_by_2,
             R.id.widget_meal_actions_2_by_3,
-            R.id.widget_cloud_sync_actions,
             R.id.widget_calendar_grid,
             R.id.widget_module_list,
             R.id.widget_cloud_status,
             R.id.widget_year_progress,
         )
         containers.forEach { views.setViewVisibility(it, View.GONE) }
-        listOf(
-            R.id.widget_cloud_sync_now,
-            R.id.widget_cloud_sync_upload,
-            R.id.widget_cloud_sync_download,
-            R.id.widget_cloud_sync_undo,
-        ).forEach { views.setViewVisibility(it, View.GONE) }
 
         val actionIds = listOf(
             R.id.widget_poem_refresh,
             R.id.widget_poem_save,
             R.id.widget_quick_input_field,
             R.id.widget_quick_input_send,
-            R.id.widget_cloud_sync_now,
-            R.id.widget_cloud_sync_undo,
-            R.id.widget_cloud_sync_upload,
-            R.id.widget_cloud_sync_download,
             R.id.widget_module_row_1,
             R.id.widget_module_row_2,
             R.id.widget_module_row_3,
@@ -641,11 +673,8 @@ class DesktopWidgetRenderer @Inject constructor(
                     views,
                     R.id.widget_quick_input_send,
                     localized(settings, "发送", "Send"),
-                    DesktopWidgetInteractionActivity.quickInputCategoriesPendingIntent(
-                        context,
-                        appWidgetId,
-                    ),
-                    localized(settings, "选择分类并发送", "Pick a category and send"),
+                    pendingIntent,
+                    localized(settings, "发送（长按可先选分类）", "Send (long-press to pick a category)"),
                 )
             }
             DesktopWidgetInteractionMode.MEAL_ACTIONS_WIDE,
@@ -696,73 +725,6 @@ class DesktopWidgetRenderer @Inject constructor(
                         description,
                     )
                 }
-            }
-            DesktopWidgetInteractionMode.CLOUD_SYNC_NOW -> {
-                views.setViewVisibility(R.id.widget_cloud_sync_actions, View.VISIBLE)
-                views.setViewVisibility(R.id.widget_cloud_sync_now, View.VISIBLE)
-                views.setViewVisibility(R.id.widget_cloud_sync_undo, View.VISIBLE)
-                views.setViewVisibility(R.id.widget_detail, View.GONE)
-                val canRun = cloudActionCanRun(settings, snapshot.cloudStatus, snapshot.queuedCloudMode)
-                val undoAvailable = runCatching { cloudSyncUndoStore.hasUndo() }.getOrDefault(false) &&
-                    !snapshot.cloudStatus.running && snapshot.queuedCloudMode == null
-                bindOptionalAction(
-                    views = views,
-                    viewId = R.id.widget_cloud_sync_now,
-                    label = localized(settings, "立即同步", "Sync now"),
-                    pendingIntent = cloudSyncPendingIntent(
-                        appWidgetId,
-                        CloudSyncWidgetActionReceiver.ACTION_SYNC_NOW,
-                    ).takeIf { canRun },
-                )
-                bindOptionalAction(
-                    views = views,
-                    viewId = R.id.widget_cloud_sync_undo,
-                    label = localized(settings, "撤回一次", "Undo last"),
-                    pendingIntent = cloudSyncPendingIntent(
-                        appWidgetId,
-                        CloudSyncWidgetActionReceiver.ACTION_SYNC_UNDO,
-                    ).takeIf { undoAvailable },
-                )
-            }
-            DesktopWidgetInteractionMode.CLOUD_SYNC_FORCE -> {
-                views.setViewVisibility(R.id.widget_cloud_sync_actions, View.VISIBLE)
-                views.setViewVisibility(R.id.widget_cloud_sync_undo, View.VISIBLE)
-                views.setViewVisibility(R.id.widget_cloud_sync_upload, View.VISIBLE)
-                views.setViewVisibility(R.id.widget_cloud_sync_download, View.VISIBLE)
-                views.setViewVisibility(R.id.widget_detail, View.GONE)
-                val canRun = cloudActionCanRun(settings, snapshot.cloudStatus, snapshot.queuedCloudMode)
-                val undoAvailable = runCatching { cloudSyncUndoStore.hasUndo() }.getOrDefault(false) &&
-                    !snapshot.cloudStatus.running && snapshot.queuedCloudMode == null
-                bindOptionalAction(
-                    views = views,
-                    viewId = R.id.widget_cloud_sync_undo,
-                    label = localized(settings, "撤回一次", "Undo last"),
-                    pendingIntent = cloudSyncPendingIntent(
-                        appWidgetId,
-                        CloudSyncWidgetActionReceiver.ACTION_SYNC_UNDO,
-                    ).takeIf { undoAvailable },
-                )
-                val enabledSources = settings.cloudSyncConfigs.count { it.enabled }
-                bindOptionalAction(
-                    views,
-                    R.id.widget_cloud_sync_upload,
-                    localized(settings, "强制上传", "Force upload"),
-                    DesktopWidgetInteractionActivity.forceCloudPendingIntent(
-                        context,
-                        appWidgetId,
-                        CloudSyncRunMode.FORCE_UPLOAD,
-                    ).takeIf { canRun },
-                )
-                bindOptionalAction(
-                    views,
-                    R.id.widget_cloud_sync_download,
-                    localized(settings, "强制下载", "Force download"),
-                    DesktopWidgetInteractionActivity.forceCloudPendingIntent(
-                        context,
-                        appWidgetId,
-                        CloudSyncRunMode.FORCE_DOWNLOAD,
-                    ).takeIf { canRun && enabledSources == 1 },
-                )
             }
         }
         configureExpandedModule(
@@ -845,13 +807,6 @@ class DesktopWidgetRenderer @Inject constructor(
                 settings,
                 snapshot,
                 maxRows = 8,
-            )
-            ExpandedWidgetMode.CLOUD_STATUS -> bindCloudStatus(
-                views,
-                config,
-                settings,
-                snapshot.cloudStatus,
-                snapshot.queuedCloudMode,
             )
             ExpandedWidgetMode.YEAR_PROGRESS -> {
                 val today = LocalDate.now()
