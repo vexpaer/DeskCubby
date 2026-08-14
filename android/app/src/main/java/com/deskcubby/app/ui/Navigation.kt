@@ -212,9 +212,9 @@ fun DeskCubbyRoot(
     // activity. This controls rotation only; LayoutMode below decides UI structure from
     // the resulting window geometry. It reads the same context used by the Reader orientation
     // effect and is cleared when this composable (and its reader) leaves composition.
-    val orientationActivity = LocalContext.current.findActivityCompat()
-    OrientationPreferenceEffect(orientationActivity, settings.orientationPreference)
-
+    // The Reader owns a per-book orientation preference that must win over the app-level
+    // preference while reading. The global lock is therefore applied below, after the reader
+    // open state is known, and is suspended while the reader is active.
     DeskCubbyTheme(settings) {
         AppBackground(settings) {
         if (!ready) {
@@ -232,8 +232,16 @@ fun DeskCubbyRoot(
                 settings.launcherIcon,
             )
         }
+        val orientationActivity = LocalContext.current.findActivityCompat()
         var settingsSubpageOpen by remember { mutableStateOf(false) }
         var readerOpen by remember { mutableStateOf(false) }
+        // Apply the app-level orientation lock only while the reader is not the active
+        // surface; the reader's per-book orientation effect handles rotation while reading.
+        OrientationPreferenceEffect(
+            activity = orientationActivity,
+            preference = settings.orientationPreference,
+            suspendWhileReaderOpen = readerOpen,
+        )
         var gameOpen by remember { mutableStateOf(false) }
         var requestedGameId by remember { mutableStateOf<String?>(null) }
         var childTutorialTarget by remember { mutableStateOf<PageTutorialTarget?>(null) }
@@ -328,22 +336,20 @@ fun DeskCubbyRoot(
                 }
             },
         ) { padding ->
-            Box(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxSize()) {
                 if (showWorkspaceRail) {
                     DeskCubbyNavigationRail(
                         items = visibleTabs,
                         selectedRoute = bottomSelectedRoute,
                         onSelected = { item -> navigateMain(item.id.route) },
                         onOpenSettings = { navigateMain(NavItemId.SETTINGS.route) },
-                        modifier = Modifier.align(Alignment.CenterStart),
                     )
                 }
+                Box(Modifier.weight(1f).fillMaxSize()) {
                 NavHost(
                     navController = navController,
                     startDestination = initialStartDestination,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .then(if (showWorkspaceRail) Modifier.padding(start = 84.dp) else Modifier),
+                    modifier = Modifier.fillMaxSize(),
                     enterTransition = {
                         when {
                             organicMotionEnabled -> fadeIn(tween(organicEnterMillis)) +
@@ -763,6 +769,7 @@ fun DeskCubbyRoot(
                         )
                     }
                 }
+                }
             }
         }
         }
@@ -1174,17 +1181,28 @@ fun iconFor(key: String): ImageVector = when (key) {
 }
 
 @Composable
-private fun OrientationPreferenceEffect(activity: Activity?, preference: OrientationPreference) {
-    DisposableEffect(activity, preference) {
-        val previous = activity?.requestedOrientation
-        activity?.requestedOrientation = when (preference) {
+private fun OrientationPreferenceEffect(
+    activity: Activity?,
+    preference: OrientationPreference,
+    suspendWhileReaderOpen: Boolean,
+) {
+    DisposableEffect(activity, preference, suspendWhileReaderOpen) {
+        if (activity == null) return@DisposableEffect onDispose {}
+        if (suspendWhileReaderOpen) {
+            // The reader owns rotation while open; leave its value untouched and do not
+            // overwrite or restore anything that could fight its per-book orientation effect.
+            return@DisposableEffect onDispose {}
+        }
+        val previous = activity.requestedOrientation
+        activity.requestedOrientation = when (preference) {
             OrientationPreference.PORTRAIT -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             OrientationPreference.LANDSCAPE -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             OrientationPreference.AUTO -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
         onDispose {
-            activity?.requestedOrientation =
-                previous ?: android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            // Only unwind to the reader's exit baseline (AUTO) when this effect itself owns the
+            // lock; never clobber a live reader preference.
+            activity.requestedOrientation = previous
         }
     }
 }
