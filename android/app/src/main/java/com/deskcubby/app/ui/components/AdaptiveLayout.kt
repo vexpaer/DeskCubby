@@ -162,8 +162,6 @@ fun DeskCubbyNavigationRail(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Spacer(Modifier.height(8.dp))
-                AppLogoMark()
-                Spacer(Modifier.height(8.dp))
                 NavigationRail(
                     modifier = Modifier.fillMaxSize(),
                     containerColor = Color.Transparent,
@@ -209,26 +207,6 @@ fun DeskCubbyNavigationRail(
                     .background(backgroundColor),
             ) { surface() }
         }
-    }
-}
-
-@Composable
-private fun AppLogoMark() {
-    Box(
-        modifier = Modifier
-            .width(34.dp)
-            .height(34.dp)
-            .background(
-                MaterialTheme.colorScheme.primary,
-                androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = "C",
-            color = MaterialTheme.colorScheme.onPrimary,
-            style = MaterialTheme.typography.titleMedium,
-        )
     }
 }
 

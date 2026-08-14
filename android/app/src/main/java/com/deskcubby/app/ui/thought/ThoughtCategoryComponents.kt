@@ -11,6 +11,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -106,7 +107,8 @@ internal fun ThoughtCategoryDrawer(
 ) {
     val layoutMode = LocalLayoutMode.current
     val railInset = if (layoutMode != LayoutMode.COMPACT) 84.dp else 0.dp
-    ModalDrawerSheet(modifier = Modifier.padding(start = railInset, bottom = bottomPadding)) {
+    Box(Modifier.offset(x = railInset)) {
+    ModalDrawerSheet(modifier = Modifier.padding(bottom = bottomPadding)) {
         Column(Modifier.fillMaxHeight().padding(vertical = 12.dp)) {
             Text(
                 tr("小巧思分类", "Thought categories"),
@@ -155,6 +157,7 @@ internal fun ThoughtCategoryDrawer(
                 }
             }
         }
+    }
     }
 }
 

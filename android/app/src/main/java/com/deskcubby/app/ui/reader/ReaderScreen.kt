@@ -25,6 +25,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -1440,8 +1441,8 @@ private fun ReaderChapterDrawer(
     val currentChapter = chapters.lastOrNull { it.pageIndex <= currentPage }
     val layoutMode = LocalLayoutMode.current
     val railInset = if (layoutMode != LayoutMode.COMPACT) 84.dp else 0.dp
+    Box(Modifier.offset(x = railInset)) {
     ModalDrawerSheet(
-        modifier = Modifier.padding(start = railInset),
         drawerContainerColor = background,
         drawerContentColor = foreground,
     ) {
@@ -1518,6 +1519,7 @@ private fun ReaderChapterDrawer(
                 }
             }
         }
+    }
     }
 
 }
