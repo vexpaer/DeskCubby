@@ -185,7 +185,7 @@ enum class DarkMode { SYSTEM, LIGHT, DARK }
 
 enum class BrowserTheme { SYSTEM, LIGHT, DARK }
 
-enum class AppLanguage { CHINESE, ENGLISH }
+enum class AppLanguage { CHINESE, TRADITIONAL_CHINESE, ENGLISH, KOREAN, JAPANESE }
 
 enum class MusicVisualizerStyle { BARS, WAVEFORM, CURVE }
 
@@ -249,7 +249,24 @@ val DESKTOP_WIDGET_HOME_MODULE_IDS: List<String> = listOf(
     "record_overview",
     "cloud_sync_now",
     "cloud_sync_force",
+    // App modules: playable mini games that run directly on the home screen, music visualizer,
+    // reader, three screen-time visualizations and the combined cloud-sync module.
+    "game_2048",
+    "game_snake",
+    "game_tetris",
+    "game_minesweeper",
+    "game_spider",
+    "game_go",
+    "music_visualizer",
+    "reader",
+    "usage_overview",
+    "usage_chart",
+    "usage_apps",
+    "cloud_sync",
 )
+
+/** Screen-time visualization ranges offered by the desktop usage modules. */
+val DESKTOP_WIDGET_USAGE_RANGES: List<Int> = listOf(3, 7, 30)
 
 fun normalizeDesktopWidgetHomeModuleId(value: String): String = when (value) {
     "cloud_sync" -> "cloud_sync_now"
@@ -269,7 +286,7 @@ data class DesktopWidgetConfig(
     val id: String,
     val name: String,
     val widthCells: Int = 2,
-    val heightCells: Int = 2,
+    val heightCells: Int = 1,
     val backgroundColorArgb: Int = 0xFF263238.toInt(),
     val textColorArgb: Int = 0xFFFFFFFF.toInt(),
     val backgroundImageUri: String? = null,
@@ -282,6 +299,8 @@ data class DesktopWidgetConfig(
     val homeModuleId: String = "today",
     val appPackageName: String? = null,
     val appLabel: String? = null,
+    /** Days shown by the usage_overview/usage_chart/usage_apps modules (3/7/30). */
+    val usageRangeDays: Int = 7,
 )
 
 val DEFAULT_DESKTOP_WIDGET_CONFIGS: List<DesktopWidgetConfig> = listOf(

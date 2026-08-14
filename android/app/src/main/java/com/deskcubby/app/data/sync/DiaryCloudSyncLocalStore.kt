@@ -1,6 +1,7 @@
 package com.deskcubby.app.data.sync
 
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.repository.DiaryTextUtils
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.repository.DiaryCloudSyncArea
 import com.deskcubby.app.data.repository.DiaryCloudSyncFile
@@ -106,8 +107,12 @@ class DiaryCloudSyncLocalStore(
     private val usageBridge: CloudSyncUsageBridge? = null,
     private val readerProgressBridge: CloudSyncReaderProgressBridge? = null,
     private val agentChatBridge: CloudSyncAgentChatBridge? = null,
+    private val cloudSyncUndoStore: CloudSyncUndoStore? = null,
 ) : CloudSyncLocalStore {
     private val mutex = Mutex()
+    // Key -> scanned file, kept so the undo store can snapshot the exact local bytes that a
+    // downloaded diary file is about to replace.
+    private var lastListedDiaryFiles: Map<String, DiaryCloudSyncFile> = emptyMap()
     private var jsonSnapshot: CloudSyncJsonSnapshot? = null
     private var usageSnapshots: Map<String, CloudSyncUsageSnapshot> = emptyMap()
     private var readerProgressSnapshot: CloudSyncReaderProgressSnapshot? = null
@@ -128,6 +133,7 @@ class DiaryCloudSyncLocalStore(
             maxObjectBytes = limits.maxObjectBytes,
             maxObjects = limits.maxObjects,
         )
+        lastListedDiaryFiles = files.associateBy { file -> file.toLocalObject().key }
         val result = files.map { it.toLocalObject() }.toMutableList()
         if (CloudSyncContent.JSON_BACKUP in selectedContents) {
             val bridge = jsonBridge ?: throw CloudSyncConfigurationException(
@@ -366,6 +372,21 @@ class DiaryCloudSyncLocalStore(
         }
 
         val (content, area, fileName) = parseDiaryOrMediaKey(key)
+        // One-shot undo snapshot: remember the exact local bytes a downloaded diary file is about
+        // to replace (and files the run creates) so "撤回一次" can restore them afterwards.
+        val undoStore = cloudSyncUndoStore
+        val scannedBefore = if (undoStore != null && area == DiaryCloudSyncArea.DIARY) {
+            lastListedDiaryFiles[key]
+        } else {
+            null
+        }
+        val previousBytes: ByteArray? = if (undoStore != null && scannedBefore != null) {
+            runCatching {
+                diaryRepository.readForCloudSync(scannedBefore, limits.maxObjectBytes)
+            }.getOrNull()
+        } else {
+            null
+        }
         val result = diaryRepository.writeFromCloudSync(
             settings = settingsProvider(),
             area = area,
@@ -375,6 +396,25 @@ class DiaryCloudSyncLocalStore(
             expectedLocalSha256 = expectedLocalSha256,
             maxObjectBytes = limits.maxObjectBytes,
         )
+        if (undoStore != null && area == DiaryCloudSyncArea.DIARY) {
+            when (result) {
+                is DiaryCloudSyncWriteResult.Applied -> {
+                    if (previousBytes != null && scannedBefore != null) {
+                        runCatching {
+                            undoStore.captureBeforeOverwrite(
+                                key = key,
+                                uri = scannedBefore.uri,
+                                bytes = previousBytes,
+                                sha256 = DiaryTextUtils.sha256(previousBytes),
+                            )
+                        }
+                    } else {
+                        runCatching { undoStore.captureCreated(key, result.file.uri) }
+                    }
+                }
+                is DiaryCloudSyncWriteResult.ConflictCopy -> Unit
+            }
+        }
         if (area == DiaryCloudSyncArea.DIARY) {
             // A durable file write is the source of truth; rebuild Room only afterwards.
             diaryRepository.scan(settingsProvider())

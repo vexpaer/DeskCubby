@@ -52,6 +52,7 @@ import com.deskcubby.app.data.model.DarkMode
 import com.deskcubby.app.data.model.DEFAULT_DESKTOP_WIDGET_CONFIGS
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
 import com.deskcubby.app.data.model.normalizeDesktopWidgetHomeModuleId
+import com.deskcubby.app.data.model.DESKTOP_WIDGET_USAGE_RANGES
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
@@ -121,6 +122,8 @@ class SettingsRepository @Inject constructor(
         val customTheme = stringPreferencesKey("custom_theme_v1")
         val darkMode = stringPreferencesKey("dark_mode")
         val appLanguage = stringPreferencesKey("app_language")
+        // Device-local flag: the first-launch language chooser is shown once and never backed up.
+        val languageSelected = booleanPreferencesKey("language_selected")
         val userName = stringPreferencesKey("user_name")
         val homeGreetings = stringPreferencesKey("home_greetings_v1")
         val themeColorArgb = intPreferencesKey("theme_color_argb")
@@ -505,6 +508,15 @@ class SettingsRepository @Inject constructor(
     suspend fun setVisualStyle(value: VisualStyle) = set(Keys.visualStyle, value.name)
     suspend fun setDarkMode(value: DarkMode) = set(Keys.darkMode, value.name)
     suspend fun setAppLanguage(value: AppLanguage) = set(Keys.appLanguage, value.name)
+
+    /** True once the user has picked a language on first launch (device-local, never backed up). */
+    val languageSelected: Flow<Boolean> = context.settingsDataStore.data
+        .catch { error ->
+            if (error is IOException) emit(emptyPreferences()) else throw error
+        }
+        .map { prefs -> prefs[Keys.languageSelected] ?: false }
+
+    suspend fun markLanguageSelected() = set(Keys.languageSelected, true)
     suspend fun setUserName(value: String) = set(Keys.userName, normalizeUserName(value))
     suspend fun setHomeGreetingSettings(
         userName: String,
@@ -1404,6 +1416,7 @@ class SettingsRepository @Inject constructor(
                             } else {
                                 item.optString("appLabel").takeIf(String::isNotBlank)
                             },
+                            usageRangeDays = item.optInt("usageRangeDays", 7),
                         ),
                     )
                 }
@@ -1437,6 +1450,7 @@ class SettingsRepository @Inject constructor(
                         .put("textScalePercent", item.textScalePercent)
                         .put("contentType", item.contentType.name)
                         .put("homeModuleId", item.homeModuleId)
+                        .put("usageRangeDays", item.usageRangeDays)
                         .put("appPackageName", item.appPackageName ?: JSONObject.NULL)
                         .put("appLabel", item.appLabel ?: JSONObject.NULL),
                 )
@@ -2048,6 +2062,11 @@ internal fun normalizeDesktopWidgetConfigs(
                 ?.replaceLineBreaks()
                 ?.takeCodePoints(MAX_DESKTOP_WIDGET_APP_LABEL_CODE_POINTS)
                 ?.takeIf(String::isNotBlank),
+            usageRangeDays = if (item.usageRangeDays in DESKTOP_WIDGET_USAGE_RANGES) {
+                item.usageRangeDays
+            } else {
+                7
+            },
         )
     }
     .filter { item ->

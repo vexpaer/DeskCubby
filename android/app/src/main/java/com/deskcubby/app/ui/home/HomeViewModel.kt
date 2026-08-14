@@ -44,6 +44,8 @@ class HomeViewModel @Inject constructor(
     private val poetryBookRepository: PoetryBookRepository,
     private val diaryFileRepository: DiaryFileRepository,
     private val calorieRepository: CalorieEstimationRepository,
+    private val cloudSyncService: com.deskcubby.app.data.sync.AppCloudSyncService,
+    private val cloudSyncUndoStore: com.deskcubby.app.data.sync.CloudSyncUndoStore,
 ) : ViewModel() {
     val diaries: StateFlow<List<DiaryIndexEntity>> = diaryIndexDao.observeAll().stateIn(
         viewModelScope,
@@ -271,6 +273,30 @@ class HomeViewModel @Inject constructor(
 
     fun consumeMessage() {
         _message.value = null
+    }
+
+    private val _cloudSyncUndoAvailable = MutableStateFlow(false)
+    val cloudSyncUndoAvailable: StateFlow<Boolean> = _cloudSyncUndoAvailable.asStateFlow()
+
+    fun refreshCloudSyncUndoAvailable() {
+        viewModelScope.launch {
+            _cloudSyncUndoAvailable.value = cloudSyncUndoStore.hasUndo()
+        }
+    }
+
+    /** "撤回一次": restores the local diary files changed by the most recent sync run. */
+    fun undoLastCloudSync(onDone: (Int) -> Unit = {}) {
+        viewModelScope.launch {
+            try {
+                val restored = cloudSyncService.undoLastSync()
+                _cloudSyncUndoAvailable.value = cloudSyncUndoStore.hasUndo()
+                onDone(restored)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                onDone(0)
+            }
+        }
     }
 
     fun recordCloudSyncEnqueue(mode: CloudSyncRunMode, accepted: Boolean) {

@@ -7611,3 +7611,12 @@ private fun localizedNavLabel(item: NavItemConfig): String =
 
 private fun String.isDefaultLabelFor(id: NavItemId): Boolean =
     this == id.defaultLabel || (id == NavItemId.BLOG && this == "博客") || (id == NavItemId.THOUGHT && this == "闪思")
+
+
+private fun appLanguageLabel(item: AppLanguage): String = when (item) {
+    AppLanguage.CHINESE -> "简体中文"
+    AppLanguage.TRADITIONAL_CHINESE -> "繁體中文"
+    AppLanguage.ENGLISH -> "English"
+    AppLanguage.KOREAN -> "한국어"
+    AppLanguage.JAPANESE -> "日本語"
+}

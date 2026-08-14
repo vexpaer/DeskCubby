@@ -334,6 +334,14 @@
                 android:layout_weight="1"
                 android:visibility="gone" />
             <TextView
+                android:id="@+id/widget_cloud_sync_undo"
+                style="@style/DesktopWidgetActionText"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:visibility="gone" />
+            <TextView
                 android:id="@+id/widget_cloud_sync_upload"
                 style="@style/DesktopWidgetActionText"
                 android:layout_width="0dp"

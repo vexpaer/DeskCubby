@@ -49,6 +49,16 @@
         <item name="android:textStyle">normal</item>
     </style>
 
+    <style name="DesktopWidgetCell" parent="DesktopWidgetActionText">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">0dp</item>
+        <item name="android:layout_columnWeight">1</item>
+        <item name="android:layout_rowWeight">1</item>
+        <item name="android:layout_margin">1dp</item>
+        <item name="android:background">#00000000</item>
+        <item name="android:textSize">10sp</item>
+    </style>
+
     <style name="DesktopWidgetStatusRow">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">0dp</item>

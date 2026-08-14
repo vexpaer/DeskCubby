@@ -33,7 +33,7 @@ class DesktopWidgetInteractionPolicyTest {
             DesktopWidgetInteractionPolicy.mode("quick_input", 180, 110),
         )
         assertEquals(
-            DesktopWidgetInteractionMode.MEAL_ACTIONS_3_BY_2,
+            DesktopWidgetInteractionMode.MEAL_ACTIONS_WIDE,
             DesktopWidgetInteractionPolicy.mode("meal_photos", 180, 150),
         )
         assertEquals(
@@ -46,7 +46,21 @@ class DesktopWidgetInteractionPolicyTest {
         )
         assertEquals(
             DesktopWidgetInteractionMode.NAVIGATION_ONLY,
-            DesktopWidgetInteractionPolicy.mode("meal_photos", 129, 210),
+            DesktopWidgetInteractionPolicy.mode("meal_photos", 109, 210),
+        )
+        // Compact thresholds: a 4x1 card (about 280x70dp) shows poem actions, quick input and the
+        // six meal capture buttons instead of degrading to navigation-only.
+        assertEquals(
+            DesktopWidgetInteractionMode.POEM_ACTIONS,
+            DesktopWidgetInteractionPolicy.mode("poem", 200, 70),
+        )
+        assertEquals(
+            DesktopWidgetInteractionMode.QUICK_INPUT,
+            DesktopWidgetInteractionPolicy.mode("quick_input", 200, 60),
+        )
+        assertEquals(
+            DesktopWidgetInteractionMode.MEAL_ACTIONS_WIDE,
+            DesktopWidgetInteractionPolicy.mode("meal_photos", 200, 60),
         )
     }
 
@@ -143,7 +157,7 @@ class DesktopWidgetInteractionPolicyTest {
         )
         assertEquals(
             ExpandedWidgetMode.NONE,
-            DesktopWidgetInteractionPolicy.expandedMode("daily_records", 179, 400),
+            DesktopWidgetInteractionPolicy.expandedMode("daily_records", 159, 400),
         )
         assertEquals(
             ExpandedWidgetMode.YEAR_PROGRESS,
@@ -151,11 +165,20 @@ class DesktopWidgetInteractionPolicyTest {
         )
         assertEquals(
             ExpandedWidgetMode.FOUR_ROW_LIST,
-            DesktopWidgetInteractionPolicy.expandedMode("game_shortcuts", 180, 379),
+            DesktopWidgetInteractionPolicy.expandedMode("game_shortcuts", 180, 339),
         )
         assertEquals(
             ExpandedWidgetMode.EIGHT_ROW_LIST,
-            DesktopWidgetInteractionPolicy.expandedMode("game_shortcuts", 180, 380),
+            DesktopWidgetInteractionPolicy.expandedMode("game_shortcuts", 180, 340),
+        )
+        // Date records get compact rows: 3x1/4x1 shows one record, 3x2/4x2 shows two.
+        assertEquals(
+            ExpandedWidgetMode.DATE_RECORDS_ONE,
+            DesktopWidgetInteractionPolicy.expandedMode("date_records", 200, 80),
+        )
+        assertEquals(
+            ExpandedWidgetMode.DATE_RECORDS_TWO,
+            DesktopWidgetInteractionPolicy.expandedMode("date_records", 200, 140),
         )
     }
 

@@ -369,7 +369,20 @@ private fun TextUnit.scaledBy(scale: Float): TextUnit =
 
 @Composable
 fun tr(chinese: String, english: String): String =
-    if (LocalAppLanguage.current == AppLanguage.ENGLISH) english else chinese
+    translate(chinese, english, LocalAppLanguage.current)
+
+/**
+ * Language resolution shared by Compose screens ([tr]) and widget/RemoteViews rendering that
+ * cannot read CompositionLocals. Strings are keyed by the Simplified Chinese source text; when a
+ * target language has no translation yet it falls back to Simplified Chinese.
+ */
+fun translate(chinese: String, english: String, language: AppLanguage): String = when (language) {
+    AppLanguage.CHINESE -> chinese
+    AppLanguage.ENGLISH -> english
+    AppLanguage.TRADITIONAL_CHINESE -> AppTranslations.TRADITIONAL[chinese] ?: chinese
+    AppLanguage.KOREAN -> AppTranslations.KOREAN[chinese] ?: chinese
+    AppLanguage.JAPANESE -> AppTranslations.JAPANESE[chinese] ?: chinese
+}
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this

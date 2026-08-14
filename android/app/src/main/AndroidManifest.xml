@@ -10,6 +10,7 @@
          enables it and grants the runtime audio permission. No samples are stored. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- User-initiated GitHub Release updates still require Android's per-source
          "install unknown apps" confirmation on API 26+. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -114,6 +115,16 @@
             android:name=".widget.CloudSyncWidgetActionReceiver"
             android:enabled="true"
             android:exported="false" />
+
+        <receiver
+            android:name=".widget.DesktopWidgetGameActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <service
+            android:name=".widget.DesktopWidgetMusicVisualizerService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
         <receiver
             android:name=".widget.DesktopWidgetActionReceiver"

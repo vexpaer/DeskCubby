@@ -22,6 +22,9 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -99,6 +102,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -111,6 +115,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
@@ -1567,14 +1572,48 @@ private fun LegacyContinuousPdfReader(
             .distinctUntilChanged()
             .collect(onCurrentPositionChanged)
     }
-    val sharedHorizontalScroll = rememberScrollState()
+    // Same free 2D pan as the enhanced view: the horizontal component of every drag is forwarded
+    // here while the vertical component keeps going through the LazyColumn scrollable.
+    var horizontalOffsetPx by remember(book.id) { mutableFloatStateOf(0f) }
+    var maxHorizontalPx by remember(book.id) { mutableIntStateOf(0) }
+    val twoDimensionalPan = remember(book.id) {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(
+                available: Offset,
+                source: androidx.compose.ui.input.nestedscroll.NestedScrollSource,
+            ): Offset {
+                if (available.x == 0f || maxHorizontalPx <= 0) return Offset.Zero
+                val previous = horizontalOffsetPx
+                horizontalOffsetPx = (previous - available.x)
+                    .coerceIn(0f, maxHorizontalPx.toFloat())
+                return Offset(previous - horizontalOffsetPx, 0f)
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (available.x == 0f || maxHorizontalPx <= 0) return Velocity.Zero
+                val start = horizontalOffsetPx
+                val end = (start - available.x * 0.12f)
+                    .coerceIn(0f, maxHorizontalPx.toFloat())
+                if (kotlin.math.abs(end - start) < 1f) return Velocity.Zero
+                val animatable = androidx.compose.animation.core.Animatable(start)
+                animatable.animateTo(end, animationSpec = androidx.compose.animation.core.tween(220)) {
+                    horizontalOffsetPx = value
+                }
+                return Velocity(available.x, 0f)
+            }
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val pageWidth = ((maxWidth - 24.dp) * zoomPercent / 100f).coerceAtLeast(160.dp)
         val targetWidthPx = with(density) { pageWidth.roundToPx() }
+        maxHorizontalPx = (targetWidthPx - with(density) { maxWidth.roundToPx() })
+            .coerceAtLeast(0)
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .nestedScroll(twoDimensionalPan),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -1584,7 +1623,7 @@ private fun LegacyContinuousPdfReader(
                     page = page,
                     displayWidth = pageWidth,
                     targetWidthPx = targetWidthPx,
-                    horizontalScrollState = sharedHorizontalScroll,
+                    horizontalOffsetPx = horizontalOffsetPx,
                     background = background,
                     foreground = foreground,
                     viewModel = viewModel,
@@ -1694,7 +1733,7 @@ private fun LegacyPdfPage(
     page: Int,
     displayWidth: androidx.compose.ui.unit.Dp,
     targetWidthPx: Int,
-    horizontalScrollState: androidx.compose.foundation.ScrollState,
+    horizontalOffsetPx: Float,
     background: Color,
     foreground: Color,
     viewModel: ReaderViewModel,
@@ -1706,7 +1745,9 @@ private fun LegacyPdfPage(
     Box(
         Modifier
             .fillMaxWidth()
-            .horizontalScroll(horizontalScrollState)
+            // The page is translated by the shared 2D-pan offset; the LazyColumn-level nested
+            // scroll connection forwards the horizontal component of every drag for free 2D pan.
+            .graphicsLayer { translationX = -horizontalOffsetPx }
             .padding(vertical = 2.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
@@ -1755,10 +1796,13 @@ private fun ReaderSettingsDialog(
                             value = draft.pdfZoomPercent.toFloat(),
                             range = MIN_READER_PDF_ZOOM_PERCENT.toFloat()..
                                 MAX_READER_PDF_ZOOM_PERCENT.toFloat(),
-                            steps = 24,
+                            steps = 249,
                         ) {
                             draft = draft.copy(
-                                pdfZoomPercent = (it / 10f).roundToInt() * 10,
+                                pdfZoomPercent = it.roundToInt().coerceIn(
+                                    MIN_READER_PDF_ZOOM_PERCENT,
+                                    MAX_READER_PDF_ZOOM_PERCENT,
+                                ),
                             )
                         }
                         Text(

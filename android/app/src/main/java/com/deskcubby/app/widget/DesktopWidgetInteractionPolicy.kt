@@ -13,34 +13,36 @@ internal object DesktopWidgetInteractionPolicy {
         val width = widthDp.coerceAtLeast(0)
         val height = heightDp.coerceAtLeast(0)
         return when (moduleId) {
+            // Thresholds are deliberately compact: modules show their controls on 3x1/4x1 cards
+            // (about 210x70dp) instead of reserving actions for large panels only.
             "poem" -> if (
-                (width >= 200 && height >= 100) ||
-                (width >= 130 && height >= 180)
+                (width >= 170 && height >= 56) ||
+                (width >= 110 && height >= 150)
             ) {
                 DesktopWidgetInteractionMode.POEM_ACTIONS
             } else {
                 DesktopWidgetInteractionMode.NAVIGATION_ONLY
             }
             "quick_input" -> if (
-                (width >= 180 && height >= 90) ||
-                (width >= 130 && height >= 150)
+                (width >= 160 && height >= 56) ||
+                (width >= 110 && height >= 120)
             ) {
                 DesktopWidgetInteractionMode.QUICK_INPUT
             } else {
                 DesktopWidgetInteractionMode.NAVIGATION_ONLY
             }
             "meal_photos" -> when {
-                width >= 270 && height >= 90 -> DesktopWidgetInteractionMode.MEAL_ACTIONS_WIDE
-                width >= 180 && height >= 150 -> DesktopWidgetInteractionMode.MEAL_ACTIONS_3_BY_2
-                width >= 130 && height >= 210 -> DesktopWidgetInteractionMode.MEAL_ACTIONS_2_BY_3
+                width >= 180 && height >= 56 -> DesktopWidgetInteractionMode.MEAL_ACTIONS_WIDE
+                width >= 150 && height >= 120 -> DesktopWidgetInteractionMode.MEAL_ACTIONS_3_BY_2
+                width >= 110 && height >= 180 -> DesktopWidgetInteractionMode.MEAL_ACTIONS_2_BY_3
                 else -> DesktopWidgetInteractionMode.NAVIGATION_ONLY
             }
-            "cloud_sync_now" -> if (width >= 120 && height >= 90) {
+            "cloud_sync_now" -> if (width >= 110 && height >= 56) {
                 DesktopWidgetInteractionMode.CLOUD_SYNC_NOW
             } else {
                 DesktopWidgetInteractionMode.NAVIGATION_ONLY
             }
-            "cloud_sync_force" -> if (width >= 180 && height >= 90) {
+            "cloud_sync_force" -> if (width >= 160 && height >= 56) {
                 DesktopWidgetInteractionMode.CLOUD_SYNC_FORCE
             } else {
                 DesktopWidgetInteractionMode.NAVIGATION_ONLY
@@ -76,15 +78,20 @@ internal object DesktopWidgetInteractionPolicy {
     ): Boolean = syncEnabled && enabledSourceCount > 0 && !running && !queued
 
     fun expandedMode(moduleId: String, widthDp: Int, heightDp: Int): ExpandedWidgetMode = when {
-        moduleId == "calendar" && widthDp >= 230 && heightDp >= 250 ->
+        moduleId == "calendar" && widthDp >= 200 && heightDp >= 220 ->
             ExpandedWidgetMode.CALENDAR
-        moduleId == "game_shortcuts" && widthDp >= 180 && heightDp >= 380 ->
+        moduleId == "game_shortcuts" && widthDp >= 160 && heightDp >= 340 ->
             ExpandedWidgetMode.EIGHT_ROW_LIST
-        moduleId in EXPANDED_LIST_MODULES && widthDp >= 180 && heightDp >= 240 ->
+        // Date records get compact rows on 3x1/4x1 (one record) and 3x2/4x2 (two records).
+        moduleId == "date_records" && widthDp >= 170 && heightDp >= 130 ->
+            ExpandedWidgetMode.DATE_RECORDS_TWO
+        moduleId == "date_records" && widthDp >= 170 && heightDp >= 70 ->
+            ExpandedWidgetMode.DATE_RECORDS_ONE
+        moduleId in EXPANDED_LIST_MODULES && widthDp >= 160 && heightDp >= 200 ->
             ExpandedWidgetMode.FOUR_ROW_LIST
-        moduleId in CLOUD_MODULES && widthDp >= 180 && heightDp >= 180 ->
+        moduleId in CLOUD_MODULES && widthDp >= 160 && heightDp >= 150 ->
             ExpandedWidgetMode.CLOUD_STATUS
-        moduleId == "year_progress" && widthDp >= 180 && heightDp >= 100 ->
+        moduleId == "year_progress" && widthDp >= 150 && heightDp >= 80 ->
             ExpandedWidgetMode.YEAR_PROGRESS
         else -> ExpandedWidgetMode.NONE
     }
@@ -106,6 +113,8 @@ internal enum class ExpandedWidgetMode {
     EIGHT_ROW_LIST,
     CLOUD_STATUS,
     YEAR_PROGRESS,
+    DATE_RECORDS_ONE,
+    DATE_RECORDS_TWO,
 }
 
 internal enum class ForceCloudAvailability {

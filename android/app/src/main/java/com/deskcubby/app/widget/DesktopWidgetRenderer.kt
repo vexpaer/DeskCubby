@@ -1,6 +1,7 @@
 package com.deskcubby.app.widget
 
 import android.app.PendingIntent
+import com.deskcubby.app.ui.theme.translate
 import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
@@ -71,6 +72,9 @@ class DesktopWidgetRenderer @Inject constructor(
     private val dateRecordRepository: DateRecordRepository,
     private val poetryRepository: PoetryRepository,
     private val cloudSyncService: AppCloudSyncService,
+    private val gameRenderer: DesktopWidgetGameRenderer,
+    private val appPanelRenderer: DesktopWidgetAppPanelRenderer,
+    private val cloudSyncUndoStore: com.deskcubby.app.data.sync.CloudSyncUndoStore,
 ) {
     suspend fun update(
         manager: AppWidgetManager,
@@ -389,7 +393,7 @@ class DesktopWidgetRenderer @Inject constructor(
             "calendar" -> DesktopWidgetText(
                 localized(settings, "日历", "Calendar"),
                 today.dayOfMonth.toString(),
-                today.format(DateTimeFormatter.ofPattern(if (english) "MMMM yyyy" else "yyyy年M月")),
+                today.format(DateTimeFormatter.ofPattern(translate("yyyy年M月", "MMMM yyyy", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))),
             )
             "weather" -> DesktopWidgetText(
                 localized(settings, "天气缓存", "Weather cache"),
@@ -411,19 +415,19 @@ class DesktopWidgetRenderer @Inject constructor(
             )
             "date_records" -> DesktopWidgetText(
                 localized(settings, "日期记录", "Date records"),
-                if (english) "${snapshot.dateRecords.size} records" else "${snapshot.dateRecords.size} 条记录",
+                translate("${snapshot.dateRecords.size} 条记录", "${snapshot.dateRecords.size} records", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
                 route = NavItemId.DATE.route,
             )
             "streak" -> DesktopWidgetText(
                 localized(settings, "连续记录", "Writing streak"),
-                if (english) "${streakDays(snapshot.diaries, today)} days" else "${streakDays(snapshot.diaries, today)} 天",
+                translate("${streakDays(snapshot.diaries, today)} 天", "${streakDays(snapshot.diaries, today)} days", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
                 route = NavItemId.DIARY.route,
             )
             "month_diaries" -> {
                 val count = snapshot.diaries.count { it.dateIso.startsWith(today.toString().take(7)) }
                 DesktopWidgetText(
                     localized(settings, "本月日记", "Diaries this month"),
-                    if (english) "$count entries" else "$count 篇",
+                    translate("$count 篇", "$count entries", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
                     route = NavItemId.DIARY.route,
                 )
             }
@@ -453,7 +457,7 @@ class DesktopWidgetRenderer @Inject constructor(
             )
             "daily_records" -> DesktopWidgetText(
                 localized(settings, "日常记录", "Daily records"),
-                if (english) "${settings.dailyEventTemplates.size} templates" else "${settings.dailyEventTemplates.size} 个模板",
+                translate("${settings.dailyEventTemplates.size} 个模板", "${settings.dailyEventTemplates.size} templates", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
                 route = Routes.DAILY_RECORDS_TODAY,
             )
             "meal_photos" -> DesktopWidgetText(
@@ -476,7 +480,7 @@ class DesktopWidgetRenderer @Inject constructor(
                 DesktopWidgetText(
                     localized(settings, "年度进度", "Year progress"),
                     "$percent%",
-                    if (english) "Day ${today.dayOfYear} / $total" else "第 ${today.dayOfYear} / $total 天",
+                    translate("第 ${today.dayOfYear} / $total 天", "Day ${today.dayOfYear} / $total", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
                 )
             }
             "website" -> DesktopWidgetText(
@@ -510,23 +514,14 @@ class DesktopWidgetRenderer @Inject constructor(
             }
             "record_overview" -> DesktopWidgetText(
                 localized(settings, "记录概览", "Record overview"),
-                if (english) {
-                    "${snapshot.diaries.size} diaries · ${snapshot.thoughtCount} thoughts"
-                } else {
-                    "${snapshot.diaries.size} 篇日记 · ${snapshot.thoughtCount} 条小巧思"
-                },
-                if (english) "${snapshot.dateRecords.size} date records"
-                else "${snapshot.dateRecords.size} 条日期记录",
+                translate("${snapshot.diaries.size} 篇日记 · ${snapshot.thoughtCount} 条小巧思", "${snapshot.diaries.size} diaries · ${snapshot.thoughtCount} thoughts", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+                translate("${snapshot.dateRecords.size} 条日期记录", "${snapshot.dateRecords.size} date records", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
                 route = NavItemId.STATISTICS.route,
             )
             "cloud_sync_now" -> DesktopWidgetText(
                 localized(settings, "立即同步", "Sync now"),
                 cloudSyncAvailability(settings),
-                if (english) {
-                    "${settings.cloudSyncConfigs.count { it.enabled }} enabled sources"
-                } else {
-                    "${settings.cloudSyncConfigs.count { it.enabled }} 个已启用来源"
-                },
+                translate("${settings.cloudSyncConfigs.count { it.enabled }} 个已启用来源", "${settings.cloudSyncConfigs.count { it.enabled }} enabled sources", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
             )
             "cloud_sync_force" -> DesktopWidgetText(
                 localized(settings, "强制上传 / 下载", "Force upload / download"),
@@ -579,6 +574,7 @@ class DesktopWidgetRenderer @Inject constructor(
             R.id.widget_cloud_sync_now,
             R.id.widget_cloud_sync_upload,
             R.id.widget_cloud_sync_download,
+            R.id.widget_cloud_sync_undo,
         ).forEach { views.setViewVisibility(it, View.GONE) }
 
         val actionIds = listOf(
@@ -587,6 +583,7 @@ class DesktopWidgetRenderer @Inject constructor(
             R.id.widget_quick_input_field,
             R.id.widget_quick_input_send,
             R.id.widget_cloud_sync_now,
+            R.id.widget_cloud_sync_undo,
             R.id.widget_cloud_sync_upload,
             R.id.widget_cloud_sync_download,
             R.id.widget_module_row_1,
@@ -610,6 +607,9 @@ class DesktopWidgetRenderer @Inject constructor(
             DesktopWidgetInteractionMode.POEM_ACTIONS -> {
                 views.setViewVisibility(R.id.widget_poem_actions, View.VISIBLE)
                 views.setViewVisibility(R.id.widget_detail, View.GONE)
+                // Keep the poem text itself visible next to the actions; a 4x2 card must show
+                // both the poem and its refresh/save buttons (regression fix).
+                views.setViewVisibility(R.id.widget_value, View.VISIBLE)
                 bindAction(
                     views,
                     R.id.widget_poem_refresh,
@@ -641,8 +641,11 @@ class DesktopWidgetRenderer @Inject constructor(
                     views,
                     R.id.widget_quick_input_send,
                     localized(settings, "发送", "Send"),
-                    pendingIntent,
-                    localized(settings, "打开输入并发送", "Open input and send"),
+                    DesktopWidgetInteractionActivity.quickInputCategoriesPendingIntent(
+                        context,
+                        appWidgetId,
+                    ),
+                    localized(settings, "选择分类并发送", "Pick a category and send"),
                 )
             }
             DesktopWidgetInteractionMode.MEAL_ACTIONS_WIDE,
@@ -697,8 +700,11 @@ class DesktopWidgetRenderer @Inject constructor(
             DesktopWidgetInteractionMode.CLOUD_SYNC_NOW -> {
                 views.setViewVisibility(R.id.widget_cloud_sync_actions, View.VISIBLE)
                 views.setViewVisibility(R.id.widget_cloud_sync_now, View.VISIBLE)
+                views.setViewVisibility(R.id.widget_cloud_sync_undo, View.VISIBLE)
                 views.setViewVisibility(R.id.widget_detail, View.GONE)
                 val canRun = cloudActionCanRun(settings, snapshot.cloudStatus, snapshot.queuedCloudMode)
+                val undoAvailable = runCatching { cloudSyncUndoStore.hasUndo() }.getOrDefault(false) &&
+                    !snapshot.cloudStatus.running && snapshot.queuedCloudMode == null
                 bindOptionalAction(
                     views = views,
                     viewId = R.id.widget_cloud_sync_now,
@@ -708,13 +714,34 @@ class DesktopWidgetRenderer @Inject constructor(
                         CloudSyncWidgetActionReceiver.ACTION_SYNC_NOW,
                     ).takeIf { canRun },
                 )
+                bindOptionalAction(
+                    views = views,
+                    viewId = R.id.widget_cloud_sync_undo,
+                    label = localized(settings, "撤回一次", "Undo last"),
+                    pendingIntent = cloudSyncPendingIntent(
+                        appWidgetId,
+                        CloudSyncWidgetActionReceiver.ACTION_SYNC_UNDO,
+                    ).takeIf { undoAvailable },
+                )
             }
             DesktopWidgetInteractionMode.CLOUD_SYNC_FORCE -> {
                 views.setViewVisibility(R.id.widget_cloud_sync_actions, View.VISIBLE)
+                views.setViewVisibility(R.id.widget_cloud_sync_undo, View.VISIBLE)
                 views.setViewVisibility(R.id.widget_cloud_sync_upload, View.VISIBLE)
                 views.setViewVisibility(R.id.widget_cloud_sync_download, View.VISIBLE)
                 views.setViewVisibility(R.id.widget_detail, View.GONE)
                 val canRun = cloudActionCanRun(settings, snapshot.cloudStatus, snapshot.queuedCloudMode)
+                val undoAvailable = runCatching { cloudSyncUndoStore.hasUndo() }.getOrDefault(false) &&
+                    !snapshot.cloudStatus.running && snapshot.queuedCloudMode == null
+                bindOptionalAction(
+                    views = views,
+                    viewId = R.id.widget_cloud_sync_undo,
+                    label = localized(settings, "撤回一次", "Undo last"),
+                    pendingIntent = cloudSyncPendingIntent(
+                        appWidgetId,
+                        CloudSyncWidgetActionReceiver.ACTION_SYNC_UNDO,
+                    ).takeIf { undoAvailable },
+                )
                 val enabledSources = settings.cloudSyncConfigs.count { it.enabled }
                 bindOptionalAction(
                     views,
@@ -789,6 +816,20 @@ class DesktopWidgetRenderer @Inject constructor(
         when (expandedMode) {
             ExpandedWidgetMode.NONE -> Unit
             ExpandedWidgetMode.CALENDAR -> bindCalendar(views, config, settings)
+            ExpandedWidgetMode.DATE_RECORDS_ONE -> bindDateRecordsCompact(
+                views,
+                appWidgetId,
+                settings,
+                snapshot,
+                maxRows = 1,
+            )
+            ExpandedWidgetMode.DATE_RECORDS_TWO -> bindDateRecordsCompact(
+                views,
+                appWidgetId,
+                settings,
+                snapshot,
+                maxRows = 2,
+            )
             ExpandedWidgetMode.FOUR_ROW_LIST -> bindExpandedList(
                 views,
                 appWidgetId,
@@ -884,6 +925,59 @@ class DesktopWidgetRenderer @Inject constructor(
         }
     }
 
+    /**
+     * Compact date-records rows: 3x1/4x1 shows the single nearest record plus an add button;
+     * 3x2/4x2 shows the two nearest records.
+     */
+    private fun bindDateRecordsCompact(
+        views: RemoteViews,
+        appWidgetId: Int,
+        settings: AppSettings,
+        snapshot: DesktopWidgetContentSnapshot,
+        maxRows: Int,
+    ) {
+        val english = settings.appLanguage == AppLanguage.ENGLISH
+        val records = nearestDesktopDateRecords(snapshot.dateRecords, LocalDate.now()).take(maxRows)
+        views.setViewVisibility(R.id.widget_module_list, View.VISIBLE)
+        views.setViewVisibility(R.id.widget_value, View.GONE)
+        views.setViewVisibility(R.id.widget_detail, View.GONE)
+        views.setViewVisibility(R.id.widget_icon, View.GONE)
+        MODULE_ROW_VIEW_IDS.forEachIndexed { index, viewId ->
+            val record = records.getOrNull(index)
+            if (record != null) {
+                val date = runCatching { LocalDate.parse(record.dateIso) }.getOrNull()
+                val days = date?.let { ChronoUnit.DAYS.between(LocalDate.now(), it) }
+                val distance = when {
+                    days == null -> ""
+                    days < 0 -> if (english) (-days).toString() + "d ago" else "已过去 " + (-days) + " 天"
+                    days > 0 -> if (english) "in " + days + "d" else "还有 " + days + " 天"
+                    else -> if (english) "today" else "就是今天"
+                }
+                bindAction(
+                    views,
+                    viewId,
+                    (record.icon.ifBlank { "🎯" } + " " + record.name + " · " + distance).take(60),
+                    deskCubbyPendingIntent(appWidgetId, NavItemId.DATE.route),
+                )
+                views.setViewVisibility(viewId, View.VISIBLE)
+            } else {
+                views.setViewVisibility(viewId, View.GONE)
+            }
+        }
+        bindAction(
+            views,
+            R.id.widget_module_footer_primary,
+            localized(settings, "添加", "Add"),
+            DesktopWidgetInteractionActivity.dateRecordAddPendingIntent(context, appWidgetId),
+        )
+        bindAction(
+            views,
+            R.id.widget_module_footer_secondary,
+            localized(settings, "查看全部", "View all"),
+            deskCubbyPendingIntent(appWidgetId, NavItemId.DATE.route),
+        )
+    }
+
     private fun bindExpandedList(
         views: RemoteViews,
         appWidgetId: Int,
@@ -902,9 +996,9 @@ class DesktopWidgetRenderer @Inject constructor(
                     val date = LocalDate.parse(record.dateIso)
                     val days = ChronoUnit.DAYS.between(LocalDate.now(), date)
                     val distance = when {
-                        days < 0 -> if (english) "${-days}d since" else "已过去 ${-days} 天"
-                        days > 0 -> if (english) "in ${days}d" else "还有 $days 天"
-                        else -> if (english) "today" else "就是今天"
+                        days < 0 -> translate("已过去 ${-days} 天", "${-days}d since", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                        days > 0 -> translate("还有 $days 天", "in ${days}d", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                        else -> translate("就是今天", "today", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
                     }
                     ExpandedWidgetRow(
                         "${record.icon.ifBlank { "🎯" }} ${record.name} · $distance",
@@ -1032,11 +1126,7 @@ class DesktopWidgetRenderer @Inject constructor(
         val english = settings.appLanguage == AppLanguage.ENGLISH
         val progress = status.progress
         val state = when {
-            status.running && progress != null && progress.totalObjects > 0 -> if (english) {
-                "Syncing ${progress.completedObjects}/${progress.totalObjects}"
-            } else {
-                "正在同步 ${progress.completedObjects}/${progress.totalObjects}"
-            }
+            status.running && progress != null && progress.totalObjects > 0 -> translate("正在同步 ${progress.completedObjects}/${progress.totalObjects}", "Syncing ${progress.completedObjects}/${progress.totalObjects}", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
             status.running -> localized(settings, "正在同步", "Syncing")
             queuedMode != null -> when (queuedMode) {
                 CloudSyncRunMode.NORMAL -> localized(settings, "立即同步已排队", "Sync now queued")
@@ -1055,15 +1145,11 @@ class DesktopWidgetRenderer @Inject constructor(
                 DateFormat.SHORT,
                 locale,
             ).format(Date(timestamp))
-            if (english) "Last completed: $formatted" else "上次完成：$formatted"
+            translate("上次完成：$formatted", "Last completed: $formatted", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
         } ?: localized(settings, "尚无完成记录", "No completed run yet")
         val result = status.error ?: status.message
             ?: localized(settings, "没有错误", "No error")
-        val pending = if (english) {
-            "Pending app JSON: ${status.pendingJsonCount}"
-        } else {
-            "待确认应用 JSON：${status.pendingJsonCount}"
-        }
+        val pending = translate("待确认应用 JSON：${status.pendingJsonCount}", "Pending app JSON: ${status.pendingJsonCount}", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
         val rows = listOf(state, lastFinished, result.safeWidgetLine(), pending)
         views.setViewVisibility(R.id.widget_cloud_status, View.VISIBLE)
         views.setViewVisibility(R.id.widget_value, View.GONE)
@@ -1125,11 +1211,11 @@ class DesktopWidgetRenderer @Inject constructor(
         "2048" -> "2048 · 4×4"
         "2048_5" -> "2048 · 5×5"
         "2048_6" -> "2048 · 6×6"
-        "snake" -> if (english) "Snake" else "贪吃蛇"
-        "tetris" -> if (english) "Tetris" else "俄罗斯方块"
-        "minesweeper" -> if (english) "Minesweeper" else "扫雷"
-        "spider" -> if (english) "Spider" else "蜘蛛纸牌"
-        "go" -> if (english) "Go" else "围棋"
+        "snake" -> translate("贪吃蛇", "Snake", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+        "tetris" -> translate("俄罗斯方块", "Tetris", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+        "minesweeper" -> translate("扫雷", "Minesweeper", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+        "spider" -> translate("蜘蛛纸牌", "Spider", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+        "go" -> translate("围棋", "Go", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
         else -> null
     }
 
@@ -1261,6 +1347,14 @@ class DesktopWidgetRenderer @Inject constructor(
     )
 
     companion object {
+        val APP_PANEL_MODULE_IDS = setOf(
+            "reader",
+            "music_visualizer",
+            "usage_overview",
+            "usage_chart",
+            "usage_apps",
+            "cloud_sync",
+        )
         const val EXTRA_START_ROUTE = "com.deskcubby.app.extra.START_ROUTE"
         const val EXTRA_DIARY_TOKEN = "com.deskcubby.app.extra.DIARY_TOKEN"
         const val EXTRA_GAME_ID = "com.deskcubby.app.extra.GAME_ID"

@@ -5,7 +5,9 @@ import com.deskcubby.app.data.backup.AppBackupRepository
 import com.deskcubby.app.data.backup.BackupJsonCodec
 import com.deskcubby.app.data.backup.BackupSummary
 import com.deskcubby.app.data.model.CloudSyncConfig
+import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.preferences.SettingsRepository
+import com.deskcubby.app.data.repository.DiaryCloudSyncArea
 import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.ReaderProgressRecord
 import com.deskcubby.app.data.repository.ReaderRepository
@@ -53,10 +55,11 @@ data class PendingCloudSyncJson(
 @Singleton
 class AppCloudSyncService @Inject constructor(
     @ApplicationContext private val context: Context,
-    diaryRepository: DiaryFileRepository,
+    private val diaryRepository: DiaryFileRepository,
     private val settingsRepository: SettingsRepository,
     private val backupRepository: AppBackupRepository,
     private val secretStore: CloudSyncSecretStore,
+    private val cloudSyncUndoStore: CloudSyncUndoStore,
     usageDeviceRepository: UsageDeviceRepository,
     readerRepository: ReaderRepository,
     agentChatSyncRepository: AgentChatSyncRepository,
@@ -77,6 +80,7 @@ class AppCloudSyncService @Inject constructor(
         usageBridge = AppCloudSyncUsageBridge(usageDeviceRepository),
         readerProgressBridge = AppCloudSyncReaderProgressBridge(readerRepository),
         agentChatBridge = AppCloudSyncAgentChatBridge(agentChatSyncRepository),
+        cloudSyncUndoStore = cloudSyncUndoStore,
     )
     private val mutableStatus = MutableStateFlow(
         AppCloudSyncStatus(
@@ -213,6 +217,73 @@ class AppCloudSyncService @Inject constructor(
             throw error
         }
     }
+
+    /**
+     * "撤回一次": undoes the most recent sync run's local changes. Overwritten diary files are
+     * restored from the one-shot snapshot and files the run created are moved to the diary trash.
+     * Returns the number of entries restored; JSON/usage/reader merges are not part of the
+     * snapshot and are intentionally left untouched.
+     */
+    suspend fun undoLastSync(): Int {
+        val settings = settingsRepository.settings.first()
+        val entries = cloudSyncUndoStore.entries()
+        if (entries.isEmpty()) return 0
+        var restored = 0
+        for (entry in entries) {
+            try {
+                when {
+                    entry.isOverwrite -> {
+                        val backupName = entry.backupName ?: continue
+                        val bytes = cloudSyncUndoStore.readBackup(backupName) ?: continue
+                        val directory = entry.key.substringBefore('/')
+                        val name = entry.key.substringAfter('/', "")
+                        if (
+                            directory != CloudSyncContent.DIARIES.remoteDirectory ||
+                            name.isBlank() || '/' in name
+                        ) {
+                            continue
+                        }
+                        val expectedSha = entry.sha256 ?: sha256(bytes)
+                        val currentBytes = readUndoCurrentBytes(entry.uri)
+                        diaryRepository.writeFromCloudSync(
+                            settings = settings,
+                            area = DiaryCloudSyncArea.DIARY,
+                            name = name,
+                            bytes = bytes,
+                            expectedSha256 = expectedSha,
+                            expectedLocalSha256 = currentBytes?.let { sha256(it) },
+                            maxObjectBytes = CloudSyncLimits().maxObjectBytes,
+                        )
+                        restored++
+                    }
+                    entry.isCreate -> {
+                        val deleted = diaryRepository.delete(entry.uri, settings)
+                        if (deleted) restored++
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // One failing entry must not stop the rest of the undo.
+            }
+            cloudSyncUndoStore.removeEntry(entry)
+        }
+        requestGeneralWidgetUpdate()
+        return restored
+    }
+
+    private suspend fun readUndoCurrentBytes(uri: String): ByteArray? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val parsed = android.net.Uri.parse(uri)
+                val fd = context.contentResolver.openAssetFileDescriptor(parsed, "r")
+                    ?: return@runCatching null
+                fd.use {
+                    if (it.length > CloudSyncLimits().maxObjectBytes) return@runCatching null
+                    it.createInputStream().use { input -> input.readBytes() }
+                }
+            }.getOrNull()
+        }
 
     fun pendingIncomingJson(): List<PendingCloudSyncJson> = runCatching {
         incomingDirectory.listFiles()

@@ -10,9 +10,11 @@ import android.os.Build
 import android.os.Bundle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.preferences.SettingsRepository
+import com.deskcubby.app.ui.theme.translate
 import com.deskcubby.app.widget.DeskCubbyWidgetConfigureActivity
 import com.deskcubby.app.widget.DeskCubbyWidgetProvider
 import com.deskcubby.app.widget.DesktopWidgetPinResultReceiver
@@ -244,23 +246,23 @@ class DesktopWidgetsViewModel @Inject constructor(
 
 internal fun desktopWidgetManualAddMessage(
     english: Boolean,
-): String = if (english) {
+): String = translate(
+    "桌面未完成应用内放置。请在桌面空白处双指捏合或长按，进入“小组件/窗口小工具”，" +
+        "再选择 DeskCubby。若列表中没有，请检查桌面的小组件/快捷方式权限及系统后台活动设置；" +
+        "最终放置仍由系统桌面决定。",
     "The launcher did not complete in-app placement. Pinch or touch and hold an empty area of " +
         "the home screen, open Widgets, and choose DeskCubby. If it is missing, check the " +
         "launcher's widget/shortcut permission and the system background-activity setting. " +
-        "The launcher makes the final placement decision."
-} else {
-    "桌面未完成应用内放置。请在桌面空白处双指捏合或长按，进入“小组件/窗口小工具”，" +
-        "再选择 DeskCubby。若列表中没有，请检查桌面的小组件/快捷方式权限及系统后台活动设置；" +
-        "最终放置仍由系统桌面决定。"
-}
+        "The launcher makes the final placement decision.",
+    if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE,
+)
 
 internal fun desktopWidgetPinAcceptedMessage(
     english: Boolean,
-): String = if (english) {
-    "Sent to the launcher. Confirm placement; if no prompt appears, open the home-screen " +
-        "Widgets panel and choose DeskCubby. Resize it there if needed."
-} else {
+): String = translate(
     "已交给桌面，请确认放置；若没有出现确认窗口，请打开桌面“小组件/窗口小工具”面板选择 " +
-        "DeskCubby。需要时可在桌面继续拖动缩放。"
-}
+        "DeskCubby。需要时可在桌面继续拖动缩放。",
+    "Sent to the launcher. Confirm placement; if no prompt appears, open the home-screen " +
+        "Widgets panel and choose DeskCubby. Resize it there if needed.",
+    if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE,
+)

@@ -82,6 +82,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
+import com.deskcubby.app.data.model.DESKTOP_WIDGET_USAGE_RANGES
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
 import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
@@ -92,6 +93,7 @@ import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCEN
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_CELLS
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
 import com.deskcubby.app.ui.components.ColorPickerDialog
+import com.deskcubby.app.ui.theme.translate
 import com.deskcubby.app.ui.theme.tr
 import java.util.UUID
 import kotlin.math.roundToInt
@@ -360,11 +362,7 @@ private fun WidgetCardList(
                 shape = MaterialTheme.shapes.large,
             ) {
                 Text(
-                    if (english) {
-                        "Design reusable cards here, then add them to the home screen. The saved size controls the layout preview; Android launchers make the final grid decision and allow further resizing."
-                    } else {
-                        "先在这里设计可复用卡片，再添加到桌面。保存的尺寸用于布局预览；最终占用格数由 Android 桌面决定，添加后仍可继续缩放。"
-                    },
+                    tr("先在这里设计可复用卡片，再添加到桌面。保存的尺寸用于布局预览；最终占用格数由 Android 桌面决定，添加后仍可继续缩放。", "Design reusable cards here, then add them to the home screen. The saved size controls the layout preview; Android launchers make the final grid decision and allow further resizing."),
                     modifier = Modifier.padding(16.dp),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -372,11 +370,7 @@ private fun WidgetCardList(
         }
         item {
             Text(
-                if (english) {
-                    "Each placed widget keeps an independent snapshot. Long-press it and choose Reconfigure to apply another saved design."
-                } else {
-                    "每个已放置小组件保留独立快照；长按桌面实例并选择“重新配置”可换用其他设计。"
-                },
+                tr("每个已放置小组件保留独立快照；长按桌面实例并选择“重新配置”可换用其他设计。", "Each placed widget keeps an independent snapshot. Long-press it and choose Reconfigure to apply another saved design."),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -388,28 +382,24 @@ private fun WidgetCardList(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text(
-                        if (english) "Cloud sync widgets" else "云同步小组件",
+                        tr("云同步小组件", "Cloud sync widgets"),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        if (english) {
-                            "Sync actions run in a network-constrained serial queue. Forced actions " +
-                                "never propagate deletions and still use conditional checks; " +
-                                "force download requires one enabled cloud source."
-                        } else {
-                            "同步动作会在联网约束的串行队列中执行。强制操作不传播删除且仍执行条件校验；强制下载要求仅启用一个云端来源。"
-                        },
+                        tr(
+                            "同步动作会在联网约束的串行队列中执行。强制操作不传播删除且仍执行条件校验；强制下载要求仅启用一个云端来源。",
+                            "Sync actions run in a network-constrained serial queue. Forced actions never propagate deletions and still use conditional checks; force download requires one enabled cloud source.",
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     OutlinedButton(onClick = onPinSyncNow, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (english) "Add Sync now" else "添加“立即同步”")
+                        Text(tr("添加“立即同步”", "Add Sync now"))
                     }
                     OutlinedButton(onClick = onPinForceSync, modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            if (english) "Add Force upload/download"
-                            else "添加“强制上传/下载”",
+                            tr("添加“强制上传/下载”", "Add Force upload/download"),
                         )
                     }
                 }
@@ -423,7 +413,7 @@ private fun WidgetCardList(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Icon(Icons.Outlined.Widgets, null, modifier = Modifier.size(56.dp))
-                    Text(if (english) "No cards yet" else "还没有小卡片")
+                    Text(tr("还没有小卡片", "No cards yet"))
                 }
             }
         }
@@ -431,15 +421,13 @@ private fun WidgetCardList(
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    WidgetPreview(config, english)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(config.name, style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "${config.widthCells} × ${config.heightCells} · " +
-                                    widgetContentSummary(config, english),
+                                widgetContentSummary(config, english),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
@@ -453,11 +441,14 @@ private fun WidgetCardList(
                             Icon(Icons.Outlined.Delete, if (english) "Delete" else "删除")
                         }
                     }
-                    Button(onClick = { onPin(config) }, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Outlined.Add, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (english) "Add to home screen" else "添加到桌面")
-                    }
+                    Text(
+                        tr(
+                            "长按已放置的桌面实例并选择“重新配置”，即可套用这张卡片的设计。",
+                            "Long-press a placed launcher instance and choose Reconfigure to apply this card design.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -487,89 +478,109 @@ private fun WidgetCardEditor(
             OutlinedTextField(
                 value = draft.name,
                 onValueChange = { onChange(draft.copy(name = it.take(80))) },
-                label = { Text(if (english) "Card name" else "卡片名称") },
+                label = { Text(tr("卡片名称", "Card name")) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
         item {
-            EditorSection(if (english) "Size" else "大小") {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    COMMON_WIDGET_SIZES.forEach { (width, height) ->
-                        FilterChip(
-                            selected = draft.widthCells == width && draft.heightCells == height,
-                            onClick = { onChange(draft.copy(widthCells = width, heightCells = height)) },
-                            label = { Text("$width × $height") },
+            EditorSection(tr("显示内容", "Content")) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = draft.contentType == DesktopWidgetContentType.HOME_MODULE,
+                        onClick = {
+                            onChange(draft.copy(contentType = DesktopWidgetContentType.HOME_MODULE))
+                        },
+                        label = { Text(tr("主页模块", "Home module")) },
+                        leadingIcon = { Icon(Icons.Outlined.Home, null) },
+                    )
+                    FilterChip(
+                        selected = draft.contentType == DesktopWidgetContentType.APP_SHORTCUT,
+                        onClick = {
+                            onChange(draft.copy(contentType = DesktopWidgetContentType.APP_SHORTCUT))
+                        },
+                        label = { Text(tr("应用启动", "App launcher")) },
+                        leadingIcon = { Icon(Icons.Outlined.Apps, null) },
+                    )
+                }
+                if (draft.contentType == DesktopWidgetContentType.HOME_MODULE) {
+                    OutlinedButton(onClick = onPickModule, modifier = Modifier.fillMaxWidth()) {
+                        Text(homeModuleLabel(draft.homeModuleId, english))
+                    }
+                    Text(
+                        tr(
+                            "应用模块包含可直接在桌面游玩的小游戏、音乐可视化、阅读、使用时间图表和云端同步。",
+                            "App modules include mini games playable right on the home screen, music visualizer, reader, screen-time charts and cloud sync.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (draft.homeModuleId in DESKTOP_WIDGET_USAGE_MODULE_IDS) {
+                        Text(tr("使用时间范围", "Screen-time range"), fontWeight = FontWeight.SemiBold)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            DESKTOP_WIDGET_USAGE_RANGES.forEach { days ->
+                                FilterChip(
+                                    selected = draft.usageRangeDays == days,
+                                    onClick = { onChange(draft.copy(usageRangeDays = days)) },
+                                    label = { Text("$days " + tr("天", "d")) },
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    OutlinedButton(onClick = onPickApp, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            draft.appLabel ?: draft.appPackageName
+                                ?: tr("选择应用", "Choose an app"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
-                CellStepper(
-                    label = if (english) "Width" else "宽度",
-                    value = draft.widthCells,
-                    onValueChange = { onChange(draft.copy(widthCells = it)) },
-                )
-                CellStepper(
-                    label = if (english) "Height" else "高度",
-                    value = draft.heightCells,
-                    onValueChange = { onChange(draft.copy(heightCells = it)) },
-                )
-                Text(
-                    if (english) "Custom range: 1–6 cells in each direction." else "宽高均可在 1–6 格之间自定义。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
         item {
-            EditorSection(if (english) "Appearance" else "外观") {
+            EditorSection(tr("外观", "Appearance")) {
                 WidgetToggle(
-                    label = if (english) "Show card name" else "显示卡片名称",
+                    label = tr("显示卡片名称", "Show card name"),
                     checked = draft.showName,
                     onCheckedChange = { onChange(draft.copy(showName = it)) },
                 )
                 WidgetToggle(
-                    label = if (english) "Show icon when space allows" else "空间足够时显示图标",
+                    label = tr("空间足够时显示图标", "Show icon when space allows"),
                     checked = draft.showIcon,
                     onCheckedChange = { onChange(draft.copy(showIcon = it)) },
                 )
                 OutlinedButton(onClick = onPickBackgroundColor, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Outlined.ColorLens, null, tint = Color(draft.backgroundColorArgb))
                     Spacer(Modifier.width(8.dp))
-                    Text(if (english) "Background color" else "背景颜色")
+                    Text(tr("背景颜色", "Background color"))
                 }
                 OutlinedButton(onClick = onPickTextColor, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Outlined.ColorLens, null, tint = Color(draft.textColorArgb))
                     Spacer(Modifier.width(8.dp))
-                    Text(if (english) "Text color" else "文字颜色")
+                    Text(tr("文字颜色", "Text color"))
                 }
                 OutlinedButton(onClick = onPickBackground, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Outlined.AddPhotoAlternate, null)
                     Spacer(Modifier.width(8.dp))
                     Text(
                         if (draft.backgroundImageUri == null) {
-                            if (english) "Choose background image" else "选择背景图片"
-                        } else if (english) {
-                            "Replace background image"
-                        } else {
-                            "更换背景图片"
-                        },
+                            tr("选择背景图片", "Choose background image")
+                        } else tr("更换背景图片", "Replace background image"),
                     )
                 }
                 if (draft.backgroundImageUri != null) {
                     TextButton(
                         onClick = { onChange(draft.copy(backgroundImageUri = null)) },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text(if (english) "Remove background image" else "移除背景图片") }
+                    ) { Text(tr("移除背景图片", "Remove background image")) }
                 }
                 Text(
-                    if (english) {
-                        "Background opacity: ${draft.backgroundOpacityPercent}%"
-                    } else {
-                        "背景透明度：${draft.backgroundOpacityPercent}%"
-                    },
+                    tr("背景透明度：${draft.backgroundOpacityPercent}%", "Background opacity: ${draft.backgroundOpacityPercent}%"),
                 )
                 Slider(
                     value = draft.backgroundOpacityPercent.toFloat(),
@@ -581,16 +592,16 @@ private fun WidgetCardEditor(
                         MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT.toFloat(),
                     steps = 19,
                 )
-                Text(if (english) "Text alignment" else "文字对齐")
+                Text(tr("文字对齐", "Text alignment"))
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     DesktopWidgetTextAlignment.entries.forEach { alignment ->
                         val label = when (alignment) {
-                            DesktopWidgetTextAlignment.START -> if (english) "Start" else "左侧"
-                            DesktopWidgetTextAlignment.CENTER -> if (english) "Center" else "居中"
-                            DesktopWidgetTextAlignment.END -> if (english) "End" else "右侧"
+                            DesktopWidgetTextAlignment.START -> tr("左侧", "Start")
+                            DesktopWidgetTextAlignment.CENTER -> tr("居中", "Center")
+                            DesktopWidgetTextAlignment.END -> tr("右侧", "End")
                         }
                         FilterChip(
                             selected = draft.textAlignment == alignment,
@@ -600,8 +611,7 @@ private fun WidgetCardEditor(
                     }
                 }
                 Text(
-                    if (english) "Text size: ${draft.textScalePercent}%"
-                    else "文字大小：${draft.textScalePercent}%",
+                    tr("文字大小：${draft.textScalePercent}%", "Text size: ${draft.textScalePercent}%"),
                 )
                 Slider(
                     value = draft.textScalePercent.toFloat(),
@@ -613,42 +623,6 @@ private fun WidgetCardEditor(
                         MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT.toFloat(),
                     steps = 14,
                 )
-            }
-        }
-        item {
-            EditorSection(if (english) "Content" else "显示内容") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = draft.contentType == DesktopWidgetContentType.HOME_MODULE,
-                        onClick = {
-                            onChange(draft.copy(contentType = DesktopWidgetContentType.HOME_MODULE))
-                        },
-                        label = { Text(if (english) "Home module" else "主页模块") },
-                        leadingIcon = { Icon(Icons.Outlined.Home, null) },
-                    )
-                    FilterChip(
-                        selected = draft.contentType == DesktopWidgetContentType.APP_SHORTCUT,
-                        onClick = {
-                            onChange(draft.copy(contentType = DesktopWidgetContentType.APP_SHORTCUT))
-                        },
-                        label = { Text(if (english) "App button" else "应用启动按钮") },
-                        leadingIcon = { Icon(Icons.Outlined.Apps, null) },
-                    )
-                }
-                if (draft.contentType == DesktopWidgetContentType.HOME_MODULE) {
-                    OutlinedButton(onClick = onPickModule, modifier = Modifier.fillMaxWidth()) {
-                        Text(homeModuleLabel(draft.homeModuleId, english))
-                    }
-                } else {
-                    OutlinedButton(onClick = onPickApp, modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            draft.appLabel ?: draft.appPackageName
-                                ?: if (english) "Choose an app" else "选择应用",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
             }
         }
         item { Spacer(Modifier.height(28.dp)) }
@@ -773,6 +747,25 @@ private fun CellStepper(label: String, value: Int, onValueChange: (Int) -> Unit)
     }
 }
 
+private val DESKTOP_WIDGET_APP_MODULE_IDS = listOf(
+    "game_2048",
+    "game_snake",
+    "game_tetris",
+    "game_minesweeper",
+    "game_spider",
+    "game_go",
+    "music_visualizer",
+    "reader",
+    "usage_overview",
+    "usage_chart",
+    "usage_apps",
+    "cloud_sync",
+)
+
+private val DESKTOP_WIDGET_HOME_MODULE_IDS_WITHOUT_APP = DESKTOP_WIDGET_HOME_MODULE_IDS.filterNot {
+    it in DESKTOP_WIDGET_APP_MODULE_IDS
+}
+
 @Composable
 private fun HomeModulePicker(
     current: String,
@@ -782,10 +775,32 @@ private fun HomeModulePicker(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(tr("选择主页模块", "Choose home module")) },
+        title = { Text(tr("选择模块", "Choose module")) },
         text = {
-            LazyColumn(modifier = Modifier.height(420.dp)) {
-                items(DESKTOP_WIDGET_HOME_MODULE_IDS, key = { it }) { module ->
+            LazyColumn(modifier = Modifier.height(440.dp)) {
+                item {
+                    Text(
+                        tr("主页模块", "Home modules"),
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+                items(DESKTOP_WIDGET_HOME_MODULE_IDS_WITHOUT_APP, key = { "home-" + it }) { module ->
+                    TextButton(onClick = { onSelected(module) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            homeModuleLabel(module, english) + if (module == current) "  ✓" else "",
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                item {
+                    Text(
+                        tr("应用模块", "App modules"),
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+                items(DESKTOP_WIDGET_APP_MODULE_IDS, key = { "app-" + it }) { module ->
                     TextButton(onClick = { onSelected(module) }, modifier = Modifier.fillMaxWidth()) {
                         Text(
                             homeModuleLabel(module, english) + if (module == current) "  ✓" else "",
@@ -859,7 +874,8 @@ private fun LaunchableAppPicker(
 
 private fun widgetContentSummary(config: DesktopWidgetConfig, english: Boolean): String =
     if (config.contentType == DesktopWidgetContentType.APP_SHORTCUT) {
-        config.appLabel ?: config.appPackageName ?: if (english) "App button" else "应用启动按钮"
+        config.appLabel ?: config.appPackageName
+            ?: translate("应用启动", "App launcher", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
     } else {
         homeModuleLabel(config.homeModuleId, english)
     }
@@ -887,9 +903,21 @@ private fun homeModuleLabel(id: String, english: Boolean): String {
         "record_overview" -> "记录概览" to "Record overview"
         "cloud_sync_now" -> "立即同步" to "Sync now"
         "cloud_sync_force" -> "强制上传/下载" to "Force upload/download"
+        "game_2048" -> "2048（桌面直接玩）" to "2048 (play on desktop)"
+        "game_snake" -> "贪吃蛇（桌面直接玩）" to "Snake (play on desktop)"
+        "game_tetris" -> "俄罗斯方块（桌面直接玩）" to "Tetris (play on desktop)"
+        "game_minesweeper" -> "扫雷（桌面直接玩）" to "Minesweeper (play on desktop)"
+        "game_spider" -> "蜘蛛纸牌（桌面直接玩）" to "Spider (play on desktop)"
+        "game_go" -> "围棋（桌面直接玩）" to "Go (play on desktop)"
+        "music_visualizer" -> "音乐可视化" to "Music visualizer"
+        "reader" -> "阅读" to "Reader"
+        "usage_overview" -> "使用时间总览" to "Screen time overview"
+        "usage_chart" -> "使用时间图表" to "Screen time chart"
+        "usage_apps" -> "使用时间应用排行" to "Top apps by usage"
+        "cloud_sync" -> "云端同步（合并）" to "Cloud sync (combined)"
         else -> "主页模块" to "Home module"
     }
-    return if (english) labels.second else labels.first
+    return translate(labels.first, labels.second, if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
 }
 
 private enum class WidgetColorTarget { BACKGROUND, TEXT }
@@ -905,3 +933,5 @@ private val COMMON_WIDGET_SIZES = listOf(
     4 to 2,
     4 to 4,
 )
+
+private val DESKTOP_WIDGET_USAGE_MODULE_IDS = setOf("usage_overview", "usage_chart", "usage_apps")

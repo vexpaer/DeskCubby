@@ -149,7 +149,7 @@ data class BackupSummary(
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 31
+    const val FORMAT_VERSION: Int = 32
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -562,7 +562,8 @@ object BackupJsonCodec {
                     .put("contentType", item.contentType.name)
                     .put("homeModuleId", item.homeModuleId)
                     .putNullable("appPackageName", item.appPackageName)
-                    .putNullable("appLabel", item.appLabel),
+                    .putNullable("appLabel", item.appLabel)
+                    .put("usageRangeDays", item.usageRangeDays),
             )
         }
     }
@@ -621,6 +622,11 @@ object BackupJsonCodec {
                     },
                     appPackageName = item.requiredNullableString("appPackageName"),
                     appLabel = item.requiredNullableString("appLabel"),
+                    usageRangeDays = if (version >= 32) {
+                        item.optInt("usageRangeDays", 7)
+                    } else {
+                        7
+                    },
                 )
                 validateDesktopWidgetConfig(decoded, "desktopWidgetConfigs[$index]")
                 require(ids.add(decoded.id)) {

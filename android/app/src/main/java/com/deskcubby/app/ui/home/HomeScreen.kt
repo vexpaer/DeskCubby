@@ -177,6 +177,10 @@ fun HomeScreen(
     val mealUploadInProgress by viewModel.mealUploadInProgress.collectAsStateWithLifecycle()
     val dailyRecordInProgress by viewModel.dailyRecordInProgress.collectAsStateWithLifecycle()
     val cloudSyncActionState by viewModel.cloudSyncActionState.collectAsStateWithLifecycle()
+    val cloudSyncUndoAvailable by viewModel.cloudSyncUndoAvailable.collectAsStateWithLifecycle()
+    LaunchedEffect(cloudSyncStatus) {
+        viewModel.refreshCloudSyncUndoAvailable()
+    }
     val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingMealKey by rememberSaveable { mutableStateOf<String?>(null) }
@@ -372,11 +376,13 @@ fun HomeScreen(
                     onOpenStatistics = onOpenStatistics,
                     cloudSyncStatus = cloudSyncStatus,
                     cloudSyncActionState = cloudSyncActionState,
+                    cloudSyncUndoAvailable = cloudSyncUndoAvailable,
                     onRunCloudSync = { mode ->
                         val accepted = CloudSyncManualScheduler.enqueue(context, mode)
                         viewModel.recordCloudSyncEnqueue(mode, accepted)
                         accepted
                     },
+                    onUndoCloudSync = { viewModel.undoLastCloudSync() },
                 )
             }
             item { Spacer(Modifier.height(20.dp)) }
@@ -412,7 +418,9 @@ private fun HomeWidget(
     onOpenStatistics: () -> Unit,
     cloudSyncStatus: AppCloudSyncStatus,
     cloudSyncActionState: HomeCloudSyncActionState,
+    cloudSyncUndoAvailable: Boolean,
     onRunCloudSync: (CloudSyncRunMode) -> Boolean,
+    onUndoCloudSync: () -> Unit,
 ) {
     val today = LocalDate.now()
     val locale = if (settings.appLanguage == AppLanguage.ENGLISH) Locale.ENGLISH else Locale.SIMPLIFIED_CHINESE
@@ -633,18 +641,22 @@ private fun HomeWidget(
             settings = settings,
             status = cloudSyncStatus,
             actionState = cloudSyncActionState,
+            undoAvailable = cloudSyncUndoAvailable,
             showTitle = showTitle,
             showBorder = settings.homeWidgetBordersEnabled,
             onRun = onRunCloudSync,
+            onUndo = onUndoCloudSync,
         )
         "cloud_sync_force" -> CloudSyncHomeWidget(
             forceActions = true,
             settings = settings,
             status = cloudSyncStatus,
             actionState = cloudSyncActionState,
+            undoAvailable = cloudSyncUndoAvailable,
             showTitle = showTitle,
             showBorder = settings.homeWidgetBordersEnabled,
             onRun = onRunCloudSync,
+            onUndo = onUndoCloudSync,
         )
     }
 }
@@ -655,9 +667,11 @@ private fun CloudSyncHomeWidget(
     settings: AppSettings,
     status: AppCloudSyncStatus,
     actionState: HomeCloudSyncActionState,
+    undoAvailable: Boolean,
     showTitle: Boolean,
     showBorder: Boolean,
     onRun: (CloudSyncRunMode) -> Boolean,
+    onUndo: () -> Unit,
 ) {
     val enabledSourceCount = settings.cloudSyncConfigs.count { it.enabled }
     val canRun = settings.cloudSyncEnabled && enabledSourceCount > 0 && !status.running
@@ -775,6 +789,12 @@ private fun CloudSyncHomeWidget(
                     enabled = canRun && actionState.queuedMode == null,
                 ) {
                     Text(tr("立即同步", "Sync now"))
+                }
+                OutlinedButton(
+                    onClick = onUndo,
+                    enabled = undoAvailable && !status.running && actionState.queuedMode == null,
+                ) {
+                    Text(tr("撤回一次", "Undo last"))
                 }
             }
         }

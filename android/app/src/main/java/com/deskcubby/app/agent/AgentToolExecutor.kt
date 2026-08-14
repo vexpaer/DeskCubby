@@ -1,5 +1,7 @@
 package com.deskcubby.app.agent
 
+import com.deskcubby.app.ui.theme.translate
+import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AgentPermissionMode
 import com.deskcubby.plugin.api.core.api.AIToolCall
 import java.util.UUID
@@ -224,12 +226,12 @@ class AgentToolExecutor @Inject constructor(
     )
 
     private fun titleFor(name: String, english: Boolean): String = when (name) {
-        "web_search" -> if (english) "Searching the web" else "正在搜索网络"
-        "read_web_page" -> if (english) "Reading a web page" else "正在读取网页"
-        "search_entries" -> if (english) "Searching DeskCubby" else "正在搜索 DeskCubby"
-        "read_entry", "read_entries" -> if (english) "Reading DeskCubby data" else "正在读取 DeskCubby 数据"
-        "list_entries", "list_sources" -> if (english) "Listing DeskCubby data" else "正在列出 DeskCubby 数据"
-        else -> if (english) "Running $name" else "正在执行 $name"
+        "web_search" -> translate("正在搜索网络", "Searching the web", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+        "read_web_page" -> translate("正在读取网页", "Reading a web page", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+        "search_entries" -> translate("正在搜索 DeskCubby", "Searching DeskCubby", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+        "read_entry", "read_entries" -> translate("正在读取 DeskCubby 数据", "Reading DeskCubby data", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+        "list_entries", "list_sources" -> translate("正在列出 DeskCubby 数据", "Listing DeskCubby data", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+        else -> translate("正在执行 $name", "Running $name", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
     }
 }
 

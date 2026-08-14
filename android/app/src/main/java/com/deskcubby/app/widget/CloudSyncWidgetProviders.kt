@@ -11,11 +11,13 @@ import android.widget.RemoteViews
 import androidx.core.graphics.ColorUtils
 import com.deskcubby.app.R
 import com.deskcubby.app.data.model.AppLanguage
+import com.deskcubby.app.ui.theme.translate
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.sync.CloudSyncManualScheduler
 import com.deskcubby.app.data.sync.CloudSyncManualQueueState
 import com.deskcubby.app.data.sync.AppCloudSyncService
+import com.deskcubby.app.data.sync.CloudSyncUndoStore
 import com.deskcubby.app.data.sync.CloudSyncRunMode
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -45,6 +47,7 @@ class CloudSyncWidgetRenderer @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val cloudSyncService: AppCloudSyncService,
+    private val cloudSyncUndoStore: CloudSyncUndoStore,
 ) {
     suspend fun update(mode: CloudSyncRunMode, state: CloudSyncWidgetState) =
         renderSequencer.serialized {
@@ -93,24 +96,37 @@ class CloudSyncWidgetRenderer @Inject constructor(
             val background = opaque(settings.themeColorArgb)
             views.setInt(R.id.cloud_sync_now_root, "setBackgroundColor", background)
             views.setTextColor(R.id.cloud_sync_now_text, contentColor(background))
-            views.setTextViewText(
-                R.id.cloud_sync_now_text,
-                stateLabel(settings, CloudSyncRunMode.NORMAL, effectiveState),
+            views.setTextColor(R.id.cloud_sync_now_undo, contentColor(background))
+            views.setInt(
+                R.id.cloud_sync_now_undo,
+                "setBackgroundColor",
+                (contentColor(background) and 0x00FFFFFF) or (0x22 shl 24),
             )
-            views.setContentDescription(
-                R.id.cloud_sync_now_root,
-                stateLabel(settings, CloudSyncRunMode.NORMAL, effectiveState),
+            val label = stateLabel(settings, CloudSyncRunMode.NORMAL, effectiveState)
+            views.setTextViewText(R.id.cloud_sync_now_text, label)
+            views.setContentDescription(R.id.cloud_sync_now_root, label)
+            val canRun = shouldEnableCloudWidgetAction(
+                syncEnabled = settings.cloudSyncEnabled,
+                enabledSourceCount = settings.cloudSyncConfigs.count { it.enabled },
+                busy = effectiveState.isBusy(),
+                download = false,
             )
             views.setOnClickPendingIntent(
-                R.id.cloud_sync_now_root,
-                actionPendingIntent(id, CloudSyncRunMode.NORMAL).takeIf {
-                    shouldEnableCloudWidgetAction(
-                        syncEnabled = settings.cloudSyncEnabled,
-                        enabledSourceCount = settings.cloudSyncConfigs.count { it.enabled },
-                        busy = effectiveState.isBusy(),
-                        download = false,
-                    )
-                },
+                R.id.cloud_sync_now_text,
+                actionPendingIntent(id, CloudSyncRunMode.NORMAL).takeIf { canRun },
+            )
+            val undoAvailable = cloudSyncUndoStore.hasUndo() && !effectiveState.isBusy()
+            val undoLabel = localized(
+                settings.appLanguage == AppLanguage.ENGLISH,
+                "撤回一次",
+                "Undo last",
+            )
+            views.setTextViewText(R.id.cloud_sync_now_undo, undoLabel)
+            views.setContentDescription(R.id.cloud_sync_now_undo, undoLabel)
+            views.setBoolean(R.id.cloud_sync_now_undo, "setEnabled", undoAvailable)
+            views.setOnClickPendingIntent(
+                R.id.cloud_sync_now_undo,
+                actionPendingIntent(id * 3 + 7, CloudSyncRunMode.NORMAL, undo = true).takeIf { undoAvailable },
             )
             runCatching { manager.updateAppWidget(id, views) }
         }
@@ -204,14 +220,24 @@ class CloudSyncWidgetRenderer @Inject constructor(
         AppSettings()
     }
 
-    private fun actionPendingIntent(requestCode: Int, mode: CloudSyncRunMode): PendingIntent =
-        PendingIntent.getBroadcast(
+    private fun actionPendingIntent(
+        requestCode: Int,
+        mode: CloudSyncRunMode,
+        undo: Boolean = false,
+    ): PendingIntent {
+        val action = if (undo) {
+            CloudSyncWidgetActionReceiver.ACTION_SYNC_UNDO
+        } else {
+            actionFor(mode)
+        }
+        return PendingIntent.getBroadcast(
             context,
             requestCode,
             Intent(context, CloudSyncWidgetActionReceiver::class.java)
-                .setAction(actionFor(mode)),
+                .setAction(action),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+    }
 
     private fun stateLabel(
         settings: AppSettings,
@@ -231,7 +257,18 @@ class CloudSyncWidgetRenderer @Inject constructor(
                 CloudSyncRunMode.FORCE_UPLOAD -> localized(english, "正在上传", "Uploading")
                 CloudSyncRunMode.FORCE_DOWNLOAD -> localized(english, "正在下载", "Downloading")
             }
-            CloudSyncWidgetState.SUCCEEDED -> localized(english, "已完成", "Completed")
+            CloudSyncWidgetState.SUCCEEDED -> {
+                val counts = lastRunCounts()
+                if (counts == null) {
+                    localized(english, "已完成", "Completed")
+                } else {
+                    localized(
+                        english,
+                        "已完成 ↑" + counts.first + " ↓" + counts.second + " 冲突" + counts.third,
+                        "Done ↑" + counts.first + " ↓" + counts.second + " ⚠" + counts.third,
+                    )
+                }
+            }
             CloudSyncWidgetState.FAILED -> localized(english, "同步失败", "Sync failed")
             CloudSyncWidgetState.CONFIGURATION_REQUIRED ->
                 localized(english, "请检查同步设置", "Check sync settings")
@@ -247,8 +284,27 @@ class CloudSyncWidgetRenderer @Inject constructor(
             0xFFFFFFFF.toInt()
         }
 
+    /** (uploaded, downloaded, conflicts) across the last finished run, or null when none. */
+    private fun lastRunCounts(): Triple<Int, Int, Int>? {
+        val runs = cloudSyncService.status.value.lastRuns
+        if (runs.isEmpty()) return null
+        var uploaded = 0
+        var downloaded = 0
+        var conflicts = 0
+        var any = false
+        runs.forEach { run ->
+            run.result?.let { result ->
+                uploaded += result.uploadedCount
+                downloaded += result.downloadedCount
+                conflicts += result.conflictCount
+                any = true
+            }
+        }
+        return if (any) Triple(uploaded, downloaded, conflicts) else null
+    }
+
     private fun localized(english: Boolean, chinese: String, englishText: String): String =
-        if (english) englishText else chinese
+        translate(chinese, englishText, if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
 
     private fun CloudSyncWidgetState.isBusy(): Boolean =
         this == CloudSyncWidgetState.QUEUED || this == CloudSyncWidgetState.RUNNING
@@ -356,8 +412,31 @@ fun requestIndependentCloudWidgetUpdates(context: Context) {
 @AndroidEntryPoint
 class CloudSyncWidgetActionReceiver : BroadcastReceiver() {
     @Inject lateinit var renderer: CloudSyncWidgetRenderer
+    @Inject lateinit var cloudSyncService: AppCloudSyncService
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ACTION_SYNC_UNDO) {
+            val pendingResult = goAsync()
+            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                try {
+                    runBoundedWidgetBroadcast(WidgetBroadcastTarget.CLOUD_SYNC_ACTION) {
+                        val restored = runCatching { cloudSyncService.undoLastSync() }
+                            .getOrDefault(0)
+                        renderer.update(
+                            CloudSyncRunMode.NORMAL,
+                            if (restored > 0) {
+                                CloudSyncWidgetState.SUCCEEDED
+                            } else {
+                                CloudSyncWidgetState.FAILED
+                            },
+                        )
+                    }
+                } finally {
+                    pendingResult.finish()
+                }
+            }
+            return
+        }
         val mode = when (intent.action) {
             ACTION_SYNC_NOW -> CloudSyncRunMode.NORMAL
             ACTION_FORCE_UPLOAD -> CloudSyncRunMode.FORCE_UPLOAD
@@ -384,6 +463,7 @@ class CloudSyncWidgetActionReceiver : BroadcastReceiver() {
 
     companion object {
         const val ACTION_SYNC_NOW = "com.deskcubby.app.action.CLOUD_SYNC_NOW"
+        const val ACTION_SYNC_UNDO = "com.deskcubby.app.action.CLOUD_SYNC_UNDO"
         const val ACTION_FORCE_UPLOAD = "com.deskcubby.app.action.CLOUD_FORCE_UPLOAD"
         const val ACTION_FORCE_DOWNLOAD = "com.deskcubby.app.action.CLOUD_FORCE_DOWNLOAD"
     }

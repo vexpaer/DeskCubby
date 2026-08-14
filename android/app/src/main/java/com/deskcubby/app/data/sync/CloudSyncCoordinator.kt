@@ -33,6 +33,7 @@ class CloudSyncCoordinator(
         DefaultCloudSyncRemoteStoreFactory(),
     private val stateStore: CloudSyncStateStore =
         FileCloudSyncStateStore(context.applicationContext),
+    private val cloudSyncUndoStore: CloudSyncUndoStore? = null,
 ) {
     private val mutex = Mutex()
 
@@ -85,6 +86,7 @@ class CloudSyncCoordinator(
             usageBridge = usageBridge,
             readerProgressBridge = readerProgressBridge,
             agentChatBridge = agentChatBridge,
+            cloudSyncUndoStore = cloudSyncUndoStore,
         ),
         remoteStoreFactory = remoteStoreFactory,
         stateStore = stateStore,

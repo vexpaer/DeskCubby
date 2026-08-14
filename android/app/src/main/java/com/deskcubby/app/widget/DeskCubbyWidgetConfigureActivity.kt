@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.deskcubby.app.MainActivity
 import com.deskcubby.app.data.model.AppLanguage
+import com.deskcubby.app.ui.theme.translate
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.NavItemId
@@ -164,10 +165,10 @@ private fun WidgetConfigurationChooser(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (english) "Choose a card" else "选择小卡片") },
+                title = { Text(translate("选择小卡片", "Choose a card", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) },
                 navigationIcon = {
                     TextButton(onClick = onCancel) {
-                        Text(if (english) "Cancel" else "取消")
+                        Text(translate("取消", "Cancel", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))
                     }
                 },
             )
@@ -182,15 +183,11 @@ private fun WidgetConfigurationChooser(
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(
-                            if (english) {
-                                "Create a reusable card in DeskCubby before adding this widget."
-                            } else {
-                                "请先在 DeskCubby 中创建可复用的小卡片，再添加到桌面。"
-                            },
+                            translate("请先在 DeskCubby 中创建可复用的小卡片，再添加到桌面。", "Create a reusable card in DeskCubby before adding this widget.", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
                             style = MaterialTheme.typography.bodyLarge,
                         )
                         Button(onClick = onOpenDesigner, modifier = Modifier.fillMaxWidth()) {
-                            Text(if (english) "Open card designer" else "打开小卡片设计页")
+                            Text(translate("打开小卡片设计页", "Open card designer", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))
                         }
                     }
                 }
@@ -212,7 +209,7 @@ private fun WidgetConfigurationChooser(
                 }
                 item {
                     TextButton(onClick = onOpenDesigner, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (english) "Manage cards in DeskCubby" else "在 DeskCubby 中管理")
+                        Text(translate("在 DeskCubby 中管理", "Manage cards in DeskCubby", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))
                     }
                 }
             }

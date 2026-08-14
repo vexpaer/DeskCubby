@@ -138,6 +138,11 @@ class SettingsViewModel @Inject constructor(
 ) : ViewModel() {
     private val _ready = MutableStateFlow(false)
     val ready: StateFlow<Boolean> = _ready.asStateFlow()
+    val languageSelected: StateFlow<Boolean> = repository.languageSelected.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        false,
+    )
 
     private var legacyAiKeyMigrationAttempted = false
     val settings: StateFlow<AppSettings> = repository.settings.map { current ->
@@ -317,6 +322,12 @@ class SettingsViewModel @Inject constructor(
     fun setVisualStyle(value: VisualStyle) = launch { repository.setVisualStyle(value) }
     fun setDarkMode(value: DarkMode) = launch { repository.setDarkMode(value) }
     fun setAppLanguage(value: AppLanguage) = launch { repository.setAppLanguage(value) }
+
+    /** First-launch picker: applies the language and records the device-local "chosen" flag. */
+    fun chooseFirstLaunchLanguage(value: AppLanguage) = viewModelScope.launch {
+        repository.setAppLanguage(value)
+        repository.markLanguageSelected()
+    }
     fun setUserName(value: String) = launch { repository.setUserName(value) }
     fun setHomeGreetingSettings(
         userName: String,

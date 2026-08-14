@@ -9,6 +9,8 @@ internal enum class WidgetBroadcastTarget {
     PIN_BINDING,
     CLOUD_WIDGET_RENDER,
     CLOUD_SYNC_ACTION,
+    GAME_ACTION,
+    GAME_TICK,
 }
 
 /** Keep goAsync work below Android's roughly ten-second broadcast execution window. */
@@ -20,6 +22,8 @@ internal object WidgetBroadcastTimeoutPolicy {
         WidgetBroadcastTarget.PIN_BINDING,
         WidgetBroadcastTarget.CLOUD_WIDGET_RENDER,
         WidgetBroadcastTarget.CLOUD_SYNC_ACTION,
+        WidgetBroadcastTarget.GAME_ACTION,
+        WidgetBroadcastTarget.GAME_TICK,
         -> 8_500L
     }
 }
