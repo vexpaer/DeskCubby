@@ -20,19 +20,28 @@ class CloudSyncWidgetManifestTest {
 
     @Test
     fun launcherWidgetsAreExportedAndHaveProviderMetadata() {
-        listOf(
-            DeskCubbyWidgetProvider::class.java to R.xml.desktop_widget_info,
-            CloudSyncNowWidgetProvider::class.java to R.xml.cloud_sync_now_widget_info,
-            CloudSyncForceWidgetProvider::class.java to R.xml.cloud_sync_force_widget_info,
-        ).forEach { (providerClass, expectedMetadata) ->
-            val info = receiverInfo(providerClass)
-            assertTrue(providerClass.simpleName, info.enabled)
-            assertTrue(providerClass.simpleName, info.exported)
-            assertEquals(
-                expectedMetadata,
-                info.metaData.getInt("android.appwidget.provider"),
-            )
-        }
+        val providerClass = DeskCubbyWidgetProvider::class.java
+        val info = receiverInfo(providerClass)
+        assertTrue(info.enabled)
+        assertTrue(info.exported)
+        assertEquals(
+            R.xml.desktop_widget_info,
+            info.metaData.getInt("android.appwidget.provider"),
+        )
+    }
+
+    @Test
+    fun standaloneCloudSyncWidgetProvidersWereRemoved() {
+        // 0.16.1 removed the standalone "Sync now" / "Force upload/download" launcher widgets;
+        // sync actions now live inside the app-module panel and the home screen.
+        assertFalse(
+            "CloudSyncNowWidgetProvider must no longer be registered",
+            isReceiverRegistered(CloudSyncNowWidgetProvider::class.java),
+        )
+        assertFalse(
+            "CloudSyncForceWidgetProvider must no longer be registered",
+            isReceiverRegistered(CloudSyncForceWidgetProvider::class.java),
+        )
     }
 
     @Test
@@ -74,6 +83,24 @@ class CloudSyncWidgetManifestTest {
         }
         parser.close()
         return count
+    }
+
+    private fun isReceiverRegistered(receiverClass: Class<*>): Boolean {
+        val component = ComponentName(context, receiverClass)
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getReceiverInfo(
+                    component,
+                    PackageManager.ComponentInfoFlags.of(PackageManager.GET_META_DATA.toLong()),
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getReceiverInfo(component, PackageManager.GET_META_DATA)
+            }
+            true
+        } catch (_: android.content.pm.PackageManager.NameNotFoundException) {
+            false
+        }
     }
 
     private fun receiverInfo(receiverClass: Class<*>): android.content.pm.ActivityInfo {

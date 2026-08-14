@@ -110,6 +110,6 @@ class DesktopWidgetInstanceStoreTest {
             ),
         )
 
-        assertEquals("cloud_sync_now", store.snapshot(71)?.homeModuleId)
+        assertEquals("cloud_sync", store.snapshot(71)?.homeModuleId)
     }
 }
