@@ -7264,7 +7264,7 @@ private fun NavConfigRow(
 ) {
     var iconMenu by remember { mutableStateOf(false) }
     val icons = listOf(
-        "home", "book", "poetry", "language", "bolt", "settings", "calendar",
+        "home", "desk", "book", "poetry", "language", "bolt", "settings", "calendar",
         "event", "rss", "ai", "apps", "star", "write", "sparkle", "day",
         "lock", "reader", "game", "usage", "steps", "statistics", "widgets",
     )

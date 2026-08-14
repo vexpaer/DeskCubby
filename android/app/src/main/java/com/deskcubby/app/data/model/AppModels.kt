@@ -483,6 +483,7 @@ enum class NavItemId(
     val defaultShowInMore: Boolean = false,
 ) {
     HOME("home", "首页", "Home", "home", "今日概览与快捷记录", "Overview and quick capture"),
+    DESK("desk", "桌面", "Desk", "desk", "把今天留下的痕迹摊开在你的数字桌面上", "Your personal desk for today's traces", defaultVisible = false, defaultShowInMore = true),
     DIARY("diary", "日记", "Diary", "book", "浏览、编辑日记与吃历", "Diaries and meal calendar"),
     NOTES(
         "notes",

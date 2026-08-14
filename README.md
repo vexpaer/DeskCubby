@@ -39,6 +39,7 @@ DeskCubby is a **local-first** journal and personal knowledge base for Android a
 
 | | |
 | --- | --- |
+| **Desk** | Your personal digital desk — today's diary, ideas, photos, events and traces laid out spatially as an editorial page instead of a list. It reuses your real data and routes every tap into the existing editor and pages. |
 | **Markdown journals** | Daily diaries with templates, a meal calendar, photo records and writing statistics — stored as plain `.md` files you can open anywhere. |
 | **Note library** | Obsidian-compatible Markdown notes organized in your own folders, with previews, links and media. |
 | **TXT / PDF reader** | Import books, resume exactly where you stopped, search the full text and jump via the table of contents; PDF pinch-zoom renders beyond 100%, supports single-finger free 2D panning, stays centered after shrinking and saves your zoom. Missing provider thumbnails safely fall back to a bounded first-page cover, whose displayed text can be edited or hidden. |

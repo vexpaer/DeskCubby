@@ -43,6 +43,7 @@ import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Create
+import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Event
@@ -113,6 +114,8 @@ import com.deskcubby.app.ui.date.DateRecordScreen
 import com.deskcubby.app.ui.date.DateRecordViewModel
 import com.deskcubby.app.ui.home.HomeScreen
 import com.deskcubby.app.ui.home.HomeViewModel
+import com.deskcubby.app.ui.desk.DeskScreen
+import com.deskcubby.app.ui.desk.DeskViewModel
 import com.deskcubby.app.ui.more.MoreHubScreen
 import com.deskcubby.app.ui.notes.NoteEditorScreen
 import com.deskcubby.app.ui.notes.NotesScreen
@@ -361,6 +364,24 @@ fun DeskCubbyRoot(
                             },
                             onOpenStatistics = {
                                 navController.navigate(NavItemId.STATISTICS.route)
+                            },
+                        )
+                    }
+                    composable(NavItemId.DESK.route) {
+                        val deskViewModel: DeskViewModel = hiltViewModel()
+                        DeskScreen(
+                            padding = padding,
+                            viewModel = deskViewModel,
+                            onOpenDiary = { uri -> diaryViewModel.open(uri); navController.navigate(Routes.EDITOR) },
+                            onOpenTodayDiary = { diaryViewModel.enterToday { navController.navigate(Routes.EDITOR) } },
+                            onOpenIdea = { navController.navigate(NavItemId.THOUGHT.route) },
+                            onOpenPhoto = { item ->
+                                item.diaryUri?.let { diaryViewModel.open(it); navController.navigate(Routes.EDITOR) }
+                            },
+                            onOpenEvent = { navController.navigate(NavItemId.DATE.route) },
+                            onOpenTraces = { navController.navigate(NavItemId.THOUGHT.route) },
+                            onOpenAi = { prompt ->
+                                navController.navigate(NavItemId.AI_CHAT.route)
                             },
                         )
                     }
@@ -1086,6 +1107,7 @@ private fun String.isDefaultLabelFor(id: NavItemId): Boolean =
 
 fun iconFor(key: String): ImageVector = when (key) {
     "home" -> Icons.Outlined.Home
+    "desk" -> Icons.Outlined.Dashboard
     "book" -> Icons.Outlined.Book
     "notes" -> Icons.Outlined.Description
     "language" -> Icons.Outlined.Language
