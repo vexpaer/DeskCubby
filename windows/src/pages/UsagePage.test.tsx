@@ -128,7 +128,7 @@ describe("UsagePage", () => {
     expect(
       await screen.findByRole("heading", { name: "无法读取手机统计" }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Android v29/)).toBeInTheDocument();
+    expect(screen.getByText(/Android v33/)).toBeInTheDocument();
     expect(screen.queryByText("private source path")).not.toBeInTheDocument();
 
     invokeMock.mockResolvedValueOnce(null as never);

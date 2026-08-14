@@ -85,6 +85,7 @@ const TEXT_BOOK = {
   pdfPageIndex: 0,
   totalPages: 2,
   readingMillis: "60000",
+  textPageOffsetPercent: 0,
 } as const;
 
 const PDF_BOOK = {
@@ -97,6 +98,7 @@ const PDF_BOOK = {
   textParagraphIndex: 0,
   textPageIndex: 0,
   pdfPageIndex: 4,
+  textPageOffsetPercent: 0,
   totalPages: 12,
   readingMillis: "0",
 } as const;
@@ -214,6 +216,7 @@ describe("ReaderPage", () => {
           bookId: TEXT_BOOK.id,
           pageIndex: 1,
           paragraphIndex: 2,
+          pageOffsetPercent: 0,
         },
       });
     });

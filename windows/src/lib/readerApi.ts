@@ -58,6 +58,7 @@ export interface ReaderBookV3 {
   pdfPageIndex: number;
   totalPages: number;
   readingMillis: string;
+  textPageOffsetPercent: number;
 }
 
 export interface ReaderLibraryV3 {
@@ -102,6 +103,7 @@ export interface ReaderProgressRequestV3 {
   bookId: string;
   pageIndex: number;
   paragraphIndex?: number;
+  pageOffsetPercent?: number;
 }
 
 export const readerApi = {

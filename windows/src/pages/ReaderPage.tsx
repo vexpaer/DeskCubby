@@ -22,7 +22,6 @@ import {
 } from "lucide-react";
 import {
   type CSSProperties,
-  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -56,6 +55,9 @@ import {
 import { useAppStore } from "../store/appStore";
 import "../styles/reader.css";
 import ReaderPdfViewer, { type ReaderPdfSearchMatch } from "./readerPdfViewer";
+import TextScrollView, {
+  type ReaderTextScrollPosition,
+} from "./readerTextScroll";
 
 const DEFAULT_READER_PREFERENCES: ReaderPreferencesV3 = {
   background: "paper",
@@ -276,71 +278,6 @@ function ReaderBookCard({
   );
 }
 
-function HighlightedPage({
-  document,
-  pageIndex,
-  matches,
-  currentMatchIndex,
-  paragraphSpacing,
-}: {
-  document: ReaderTextDocumentV3;
-  pageIndex: number;
-  matches: ReaderTextMatch[];
-  currentMatchIndex: number;
-  paragraphSpacing: number;
-}) {
-  const text = document.pages[pageIndex]?.text ?? "";
-  const pageMatches = matches
-    .map((match, index) => ({ ...match, resultIndex: index }))
-    .filter((match) => match.pageIndex === pageIndex);
-  const paragraphs: Array<{ text: string; offset: number }> = [];
-  let offset = 0;
-  for (const paragraph of text.split("\n\n")) {
-    paragraphs.push({ text: paragraph, offset });
-    offset += paragraph.length + 2;
-  }
-
-  function highlightedParagraph(paragraph: { text: string; offset: number }): ReactNode[] {
-    const start = paragraph.offset;
-    const end = start + paragraph.text.length;
-    const contained = pageMatches.filter(
-      (match) => match.startIndex >= start && match.endIndex <= end,
-    );
-    if (!contained.length) return [paragraph.text];
-    const content: ReactNode[] = [];
-    let cursor = start;
-    for (const match of contained) {
-      if (match.startIndex > cursor) {
-        content.push(text.slice(cursor, match.startIndex));
-      }
-      content.push(
-        <mark
-          className={match.resultIndex === currentMatchIndex ? "is-current" : undefined}
-          key={`${match.startIndex}-${match.endIndex}`}
-        >
-          {text.slice(match.startIndex, match.endIndex)}
-        </mark>,
-      );
-      cursor = match.endIndex;
-    }
-    if (cursor < end) content.push(text.slice(cursor, end));
-    return content;
-  }
-
-  return (
-    <article className="reader-text-page" aria-label={`${pageIndex + 1}`}>
-      {paragraphs.map((paragraph, index) => (
-        <p
-          key={`${paragraph.offset}-${index}`}
-          style={{ marginBlockEnd: `${paragraphSpacing}px` }}
-        >
-          {highlightedParagraph(paragraph)}
-        </p>
-      ))}
-    </article>
-  );
-}
-
 function ReaderSettings({
   language,
   draft,
@@ -372,7 +309,7 @@ function ReaderSettings({
       <div className="panel-header reader-settings-header">
         <div>
           <h2 id="reader-settings-title">{copy("阅读设置", "Reader settings")}</h2>
-          <p>{copy("阅读设置仅保存在这台电脑；无路径、无书名的阅读进度可进入 v29 备份，并可通过已启用的阅读进度对象同步。", "Reader settings stay on this PC. Path-free, title-free progress can enter v29 backups and sync through the enabled reader-progress object.")}</p>
+          <p>{copy("阅读设置仅保存在这台电脑；无路径、无书名的阅读进度可进入 v33 备份，并可通过已启用的阅读进度对象同步。", "Reader settings stay on this PC. Path-free, title-free progress can enter v33 backups and sync through the enabled reader-progress object.")}</p>
         </div>
         <div className="row">
           <button className="button-ghost" type="button" disabled={busy} onClick={onReset}>
@@ -620,6 +557,8 @@ export default function ReaderPage() {
   const [pdfSearching, setPdfSearching] = useState(false);
   const [pdfRotation, setPdfRotation] = useState(0);
   const [focusMode, setFocusMode] = useState(false);
+  const [textJump, setTextJump] = useState({ token: 0, pageIndex: 0 });
+  const [textPosition, setTextPosition] = useState<ReaderTextScrollPosition | null>(null);
   const progressSequence = useRef(0);
 
   const settingsDirty = useMemo(
@@ -702,7 +641,9 @@ export default function ReaderPage() {
     const closingPage = Math.max(0, Math.floor(pageIndex));
     const paragraphIndex =
       closingDocument.kind === "txt"
-        ? closingDocument.pages[closingPage]?.firstParagraphIndex ?? 0
+        ? textPosition?.paragraphIndex ??
+          closingDocument.pages[closingPage]?.firstParagraphIndex ??
+          0
         : undefined;
     setBusy("close");
     setError("");
@@ -742,22 +683,23 @@ export default function ReaderPage() {
   const progressBookId = activeDocument?.book.id ?? null;
   const progressKind = activeDocument?.kind ?? null;
   const progressParagraphIndex =
-    activeDocument?.kind === "txt"
-      ? activeDocument.pages[pageIndex]?.firstParagraphIndex ?? 0
-      : undefined;
+    activeDocument?.kind === "txt" ? textPosition?.paragraphIndex : undefined;
 
   useEffect(() => {
     if (!progressBookId || !progressKind) return;
     const sequence = ++progressSequence.current;
     const timeout = window.setTimeout(() => {
-      const page = Math.max(0, Math.floor(pageIndex));
+      const page = textPosition?.pageIndex ?? Math.max(0, Math.floor(pageIndex));
       void readerApi
         .saveProgress({
           bookId: progressBookId,
           pageIndex: page,
           ...(progressParagraphIndex === undefined
             ? {}
-            : { paragraphIndex: progressParagraphIndex }),
+            : {
+                paragraphIndex: progressParagraphIndex,
+                ...(textPosition === null ? {} : { pageOffsetPercent: textPosition.pageOffsetPercent }),
+              }),
         })
         .then((book) => {
           if (sequence !== progressSequence.current) return;
@@ -773,7 +715,7 @@ export default function ReaderPage() {
         });
     }, 250);
     return () => window.clearTimeout(timeout);
-  }, [language, pageIndex, progressBookId, progressKind, progressParagraphIndex]);
+  }, [language, pageIndex, textPosition, progressBookId, progressKind, progressParagraphIndex]);
 
   useEffect(() => {
     const bookId = activeDocument?.book.id;
@@ -823,12 +765,23 @@ export default function ReaderPage() {
     setSearchMatchIndex(0);
   }, [activeDocument?.book.id, searchQuery]);
 
+  const jumpToTextPage = useCallback((pageIndex: number) => {
+    const pages = activeDocument?.kind === "txt" ? activeDocument.pages.length : 0;
+    const target = Math.min(Math.max(pageIndex, 0), Math.max(pages - 1, 0));
+    setPageIndex(target);
+    setTextJump((previous) => ({ token: previous.token + 1, pageIndex: target }));
+  }, [activeDocument]);
+
   function moveSearchResult(direction: -1 | 1) {
     const matches = activeDocument?.kind === "pdf" ? pdfSearchMatches : textMatches;
     if (!matches.length) return;
     const next = (searchMatchIndex + direction + matches.length) % matches.length;
     setSearchMatchIndex(next);
-    setPageIndex(matches[next].pageIndex);
+    if (activeDocument?.kind === "txt") {
+      jumpToTextPage(matches[next].pageIndex);
+    } else {
+      setPageIndex(matches[next].pageIndex);
+    }
   }
 
   async function copyCurrentPage() {
@@ -862,7 +815,9 @@ export default function ReaderPage() {
       const currentPage = pageIndex;
       const currentParagraph =
         currentDocument?.kind === "txt"
-          ? currentDocument.pages[currentPage]?.firstParagraphIndex ?? 0
+          ? textPosition?.paragraphIndex ??
+            currentDocument.pages[currentPage]?.firstParagraphIndex ??
+            0
           : undefined;
       const next = await readerApi.savePreferences(settingsDraft);
       setLibrary(next);
@@ -971,21 +926,25 @@ export default function ReaderPage() {
       }
       if (event.key === "ArrowLeft" || event.key === "PageUp") {
         event.preventDefault();
-        setPageIndex((page) => Math.max(page - 1, 0));
+        if (activeDocument.kind === "txt") jumpToTextPage(pageIndex - 1);
+        else setPageIndex((page) => Math.max(page - 1, 0));
       } else if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") {
         event.preventDefault();
-        setPageIndex((page) => Math.min(page + 1, lastPageIndex));
+        if (activeDocument.kind === "txt") jumpToTextPage(pageIndex + 1);
+        else setPageIndex((page) => Math.min(page + 1, lastPageIndex));
       } else if (event.key === "Home") {
         event.preventDefault();
-        setPageIndex(0);
+        if (activeDocument.kind === "txt") jumpToTextPage(0);
+        else setPageIndex(0);
       } else if (event.key === "End") {
         event.preventDefault();
-        setPageIndex(lastPageIndex);
+        if (activeDocument.kind === "txt") jumpToTextPage(lastPageIndex);
+        else setPageIndex(lastPageIndex);
       }
     };
     globalThis.addEventListener("keydown", onKeyDown);
     return () => globalThis.removeEventListener("keydown", onKeyDown);
-  }, [activeDocument, focusMode, lastPageIndex, searchOpen, settingsOpen, tocOpen]);
+  }, [activeDocument, focusMode, jumpToTextPage, lastPageIndex, pageIndex, searchOpen, settingsOpen, tocOpen]);
 
   const activePreferences = activeDocument?.preferences ?? DEFAULT_READER_PREFERENCES;
   const activePalette = readerPalette(activePreferences);
@@ -1047,7 +1006,7 @@ export default function ReaderPage() {
       description={
         activeDocument
           ? undefined
-          : copy("显式打开本机 TXT/PDF；书架路径、阅读设置和时长保持本机私有，无路径、无书名的进度可进入 v29 备份及可选云同步。", "Explicitly open local TXT/PDF files. Library paths, settings, and reading time remain private; path-free, title-free progress can enter v29 backups and optional cloud sync.")
+          : copy("显式打开本机 TXT/PDF；书架路径、阅读设置和时长保持本机私有，无路径、无书名的进度可进入 v33 备份及可选云同步。", "Explicitly open local TXT/PDF files. Library paths, settings, and reading time remain private; path-free, title-free progress can enter v33 backups and optional cloud sync.")
       }
       actions={
         activeDocument ? undefined : (
@@ -1149,7 +1108,7 @@ export default function ReaderPage() {
                   <ol>
                     {activeDocument.chapters.map((chapter, index) => (
                       <li key={`${chapter.pageIndex}-${chapter.paragraphIndex}-${index}`}>
-                        <button className={chapter.pageIndex === pageIndex ? "is-current" : undefined} type="button" onClick={() => setPageIndex(chapter.pageIndex)}>
+                        <button className={chapter.pageIndex === pageIndex ? "is-current" : undefined} type="button" onClick={() => jumpToTextPage(chapter.pageIndex)}>
                           <span>{chapter.title}</span><small>{chapter.pageIndex + 1}</small>
                         </button>
                       </li>
@@ -1169,15 +1128,15 @@ export default function ReaderPage() {
                 </div>
 
                 <div className="reader-toolbar-pager">
-                  <button className="icon-button" type="button" disabled={pageIndex <= 0} onClick={() => setPageIndex((page) => Math.max(page - 1, 0))} aria-label={copy("上一页", "Previous page")} title={`${copy("上一页", "Previous page")} · ← / PageUp`}><ChevronLeft aria-hidden="true" size={19} /></button>
+                  <button className="icon-button" type="button" disabled={pageIndex <= 0} onClick={() => (activeDocument.kind === "txt" ? jumpToTextPage(pageIndex - 1) : setPageIndex((page) => Math.max(page - 1, 0)))} aria-label={copy("上一页", "Previous page")} title={`${copy("上一页", "Previous page")} · ← / PageUp`}><ChevronLeft aria-hidden="true" size={19} /></button>
                   {activeDocument.kind === "txt" ? (
                     <>
                       <label className="reader-progress-range">
                         <span className="sr-only">{copy("阅读进度", "Reading progress")}</span>
-                        <input type="range" min="1" max={Math.max(currentTextPageCount, 1)} value={pageIndex + 1} onChange={(event) => setPageIndex(Number(event.target.value) - 1)} />
+                        <input type="range" min="1" max={Math.max(currentTextPageCount, 1)} value={pageIndex + 1} onChange={(event) => jumpToTextPage(Number(event.target.value) - 1)} />
                       </label>
                       <label className="reader-page-input">
-                        <input aria-label={copy("页码", "Page number")} type="number" min="1" max={Math.max(currentTextPageCount, 1)} value={pageIndex + 1} onChange={(event) => setPageIndex(Math.min(Math.max(Number(event.target.value || 1) - 1, 0), Math.max(currentTextPageCount - 1, 0)))} />
+                        <input aria-label={copy("页码", "Page number")} type="number" min="1" max={Math.max(currentTextPageCount, 1)} value={pageIndex + 1} onChange={(event) => jumpToTextPage(Math.min(Math.max(Number(event.target.value || 1) - 1, 0), Math.max(currentTextPageCount - 1, 0)))} />
                         <span>/ {currentTextPageCount} · {progressPercent}%</span>
                       </label>
                     </>
@@ -1187,7 +1146,7 @@ export default function ReaderPage() {
                       <span>/ {pdfPageCount ?? "…"}</span>
                     </label>
                   )}
-                  <button className="icon-button" type="button" disabled={pageIndex >= lastPageIndex} onClick={() => setPageIndex((page) => Math.min(page + 1, lastPageIndex))} aria-label={copy("下一页", "Next page")} title={`${copy("下一页", "Next page")} · → / PageDown`}><ChevronRight aria-hidden="true" size={19} /></button>
+                  <button className="icon-button" type="button" disabled={pageIndex >= lastPageIndex} onClick={() => (activeDocument.kind === "txt" ? jumpToTextPage(pageIndex + 1) : setPageIndex((page) => Math.min(page + 1, lastPageIndex)))} aria-label={copy("下一页", "Next page")} title={`${copy("下一页", "Next page")} · → / PageDown`}><ChevronRight aria-hidden="true" size={19} /></button>
                 </div>
 
                 <div className="reader-toolbar-trailing">
@@ -1209,8 +1168,34 @@ export default function ReaderPage() {
               </div>
 
               {activeDocument.kind === "txt" ? (
-                <div className={`reader-text-surface background-${activeDocument.preferences.background}`}>
-                  <HighlightedPage document={activeDocument} pageIndex={pageIndex} matches={textMatches} currentMatchIndex={searchMatchIndex} paragraphSpacing={activeDocument.preferences.paragraphSpacingPx} />
+                <div className={"reader-text-surface background-" + activeDocument.preferences.background}>
+                  <TextScrollView
+                    document={activeDocument}
+                    matches={textMatches}
+                    currentMatchIndex={searchMatchIndex}
+                    metrics={{
+                      fontSizePx: activeDocument.preferences.fontSizePx,
+                      lineHeight: activeDocument.preferences.lineHeightMultiplier,
+                      contentWidthPx: activeDocument.preferences.contentWidthPx,
+                      paragraphSpacingPx: activeDocument.preferences.paragraphSpacingPx,
+                      pagePaddingPx: activeDocument.preferences.pagePaddingPx,
+                    }}
+                    initialPageIndex={activeDocument.book.textPageIndex}
+                    initialParagraphIndex={activeDocument.book.textParagraphIndex}
+                    jumpToken={textJump.token}
+                    jumpPageIndex={textJump.pageIndex}
+                    onPositionChanged={(position) => {
+                      setTextPosition(position);
+                      setPageIndex(position.pageIndex);
+                    }}
+                    onInitialRestored={() => {
+                      setTextPosition({
+                        pageIndex: activeDocument.book.textPageIndex,
+                        paragraphIndex: activeDocument.book.textParagraphIndex,
+                        pageOffsetPercent: activeDocument.book.textPageOffsetPercent,
+                      });
+                    }}
+                  />
                 </div>
               ) : pdfBaseUrl ? (
                 <div className="reader-pdf-surface">

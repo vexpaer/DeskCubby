@@ -311,8 +311,8 @@ export default function HealthPage() {
           <h2>{copy("数据边界", "Data boundary")}</h2>
           <p>
             {copy(
-  "Android v29 按隐私设计不包含健康历史。这里仅读取你明确选择的 schema v1–v3 文件，不申请 Windows 权限，也不会把缺失值伪造成 0。",
-  "Android v29 intentionally excludes health history. This view only reads a schema v1–v3 file you explicitly choose, requests no Windows permission, and never turns missing values into zero.",
+  "Android v33 按隐私设计不包含健康历史。这里仅读取你明确选择的 schema v1–v3 文件，不申请 Windows 权限，也不会把缺失值伪造成 0。",
+  "Android v33 intentionally excludes health history. This view only reads a schema v1–v3 file you explicitly choose, requests no Windows permission, and never turns missing values into zero.",
             )}
           </p>
         </div>

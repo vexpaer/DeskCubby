@@ -1,6 +1,6 @@
 [package]
 name = "deskcubby-windows"
-version = "0.7.0"
+version = "0.8.0"
 description = "DeskCubby for Windows"
 authors = ["DeskCubby contributors"]
 edition = "2024"

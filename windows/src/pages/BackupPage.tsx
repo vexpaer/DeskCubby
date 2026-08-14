@@ -284,7 +284,7 @@ export default function BackupPage() {
     <main className="page-shell backup-page" aria-labelledby="backup-title">
       <header className="page-header">
         <div>
-          <p className="eyebrow">{tr("Android v29 双向兼容", "Bidirectional Android v29 compatibility")}</p>
+          <p className="eyebrow">{tr("Android v33 双向兼容", "Bidirectional Android v33 compatibility")}</p>
           <h1 id="backup-title">{tr("设置与备份", "Settings & backup")}</h1>
         </div>
       </header>
@@ -313,8 +313,8 @@ export default function BackupPage() {
             <h2>{tr("导入 Android 备份", "Import Android backup")}</h2>
             <p>
               {tr(
-                "支持 Android v1–v29 JSON，最大 64 MiB；旧格式会安全升级为 v29。应用会先严格校验并展示统计，不会直接覆盖。",
-                "Accepts Android v1–v29 JSON up to 64 MiB and safely upgrades older formats to v29. It is validated and previewed before anything changes.",
+                "支持 Android v1–v33 JSON，最大 64 MiB；旧格式会安全升级为 v33。应用会先严格校验并展示统计，不会直接覆盖。",
+                "Accepts Android v1–v33 JSON up to 64 MiB and safely upgrades older formats to v33. It is validated and previewed before anything changes.",
               )}
             </p>
           </div>

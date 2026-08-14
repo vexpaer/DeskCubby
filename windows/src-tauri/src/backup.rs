@@ -19,7 +19,7 @@ use crate::{
 };
 use uuid::Uuid;
 
-pub const FORMAT_VERSION: i32 = 29;
+pub const FORMAT_VERSION: i32 = 33;
 pub const MAX_JSON_BYTES: usize = 64 * 1024 * 1024;
 
 // Recovery points currently encode the encrypted compatibility shadow as a
@@ -271,7 +271,7 @@ pub fn parse_v18(json_text: &str) -> Result<ValidatedBackup, BackupError> {
     }
     let source_format_version = required_i32(root_object, "version")?;
     if !(1..=FORMAT_VERSION).contains(&source_format_version) {
-        return Err(invalid("Windows requires an Android v1-v29 backup"));
+        return Err(invalid("Windows requires an Android v1-v33 backup"));
     }
     let exported_at = required_i64(root_object, "exportedAt")?;
     require_nonnegative(exported_at, "exportedAt")?;
@@ -426,8 +426,11 @@ fn upgrade_legacy_backup_to_v29(
 /// `cloud_sync_now` successor on every decode, and materializes the five v29
 /// desktop-widget appearance fields (`showName`, `backgroundOpacityPercent`,
 /// `showIcon`, `textAlignment`, `textScalePercent`) for backups older than
-/// v29. Windows applies the same upgrades to the compatibility shadow so a
-/// re-exported document stays readable by the Android 0.13.0 decoder.
+/// v29. Android 0.16.1 (v33) folds the standalone `cloud_sync_now` /
+/// `cloud_sync_force` modules back into the combined `cloud_sync` app module,
+/// adds the `usageRangeDays` field (v32) and the `APP_MODULE` content type
+/// (v33). Windows applies the same upgrades to the compatibility shadow so a
+/// re-exported document stays readable by the current Android decoder.
 fn upgrade_desktop_widget_configs(
     root: &mut Map<String, Value>,
     version: i32,
@@ -447,10 +450,15 @@ fn upgrade_desktop_widget_configs(
         let object = item
             .as_object_mut()
             .ok_or_else(|| invalid(format!("desktopWidgetConfigs[{index}] must be an object")))?;
-        if object.get("homeModuleId").and_then(Value::as_str) == Some("cloud_sync") {
+        // v33 normalization: standalone cloud modules fold into the combined app module.
+        if let Some(module) = object.get("homeModuleId").and_then(Value::as_str) {
+            let normalized = match module {
+                "cloud_sync_now" | "cloud_sync_force" => "cloud_sync",
+                other => other,
+            };
             object.insert(
                 "homeModuleId".to_owned(),
-                Value::String("cloud_sync_now".to_owned()),
+                Value::String(normalized.to_owned()),
             );
         }
         if version < 29 {
@@ -466,9 +474,57 @@ fn upgrade_desktop_widget_configs(
                 }
             }
         }
+        if version < 32 && !object.contains_key("usageRangeDays") {
+            object.insert("usageRangeDays".to_owned(), Value::from(7));
+        }
+        if version < 33 {
+            // v33 content-type normalization mirrors Android's
+            // normalizeDesktopWidgetConfigs: app-module ids force APP_MODULE,
+            // anything else falls back to HOME_MODULE.
+            let module = object
+                .get("homeModuleId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let is_app_module = APP_MODULE_IDS.contains(&module);
+            let current_type = object.get("contentType").and_then(Value::as_str);
+            let content_type = if current_type == Some("APP_MODULE") {
+                if is_app_module {
+                    "APP_MODULE"
+                } else {
+                    "HOME_MODULE"
+                }
+            } else if is_app_module {
+                "APP_MODULE"
+            } else {
+                "HOME_MODULE"
+            };
+            object.insert(
+                "contentType".to_owned(),
+                Value::String(content_type.to_owned()),
+            );
+        }
     }
     Ok(())
 }
+
+/// Desktop "app module" ids that run directly on the home screen; they map to
+/// the APP_MODULE content type since Android 0.16.1 (v33).
+const APP_MODULE_IDS: [&str; 14] = [
+    "game_2048",
+    "game_2048_5",
+    "game_2048_6",
+    "game_snake",
+    "game_tetris",
+    "game_minesweeper",
+    "game_spider",
+    "game_go",
+    "music_visualizer",
+    "reader",
+    "usage_overview",
+    "usage_chart",
+    "usage_apps",
+    "cloud_sync",
+];
 
 fn validate_legacy_required_shape(
     root: &Map<String, Value>,
@@ -664,6 +720,16 @@ fn legacy_setting_introductions() -> &'static [(i32, &'static [&'static str])] {
         (26, &["notesTreeUri", "markdownHeadingSizesSp"]),
         (27, &["homeGameShortcuts"]),
         (28, &["customTheme"]),
+        (30, &["agentEnabledSources", "agentPermissionMode"]),
+        (
+            31,
+            &[
+                "aiPageFontSizeSp",
+                "aiReplyBoxWidthDp",
+                "agentPrompt",
+                "morePageColumns",
+            ],
+        ),
     ]
 }
 
@@ -726,6 +792,27 @@ fn migrate_legacy_settings(
                 .cloned()
                 .ok_or_else(|| invalid("Internal meal icon default is invalid"))?;
             icons.insert(2, default_tea);
+        }
+    }
+    if version < 30 {
+        if let Some(configs) = settings.get_mut("aiConfigs").and_then(Value::as_array_mut) {
+            for config in configs {
+                let object = config
+                    .as_object_mut()
+                    .ok_or_else(|| invalid("aiConfigs item must be an object"))?;
+                object.insert("includeToolCalling".to_owned(), Value::Bool(false));
+            }
+        }
+    }
+    if version < 31 {
+        if let Some(items) = settings.get_mut("navItems").and_then(Value::as_array_mut) {
+            for item in items {
+                let object = item
+                    .as_object_mut()
+                    .ok_or_else(|| invalid("navItems item must be an object"))?;
+                object.insert("moreButtonColorArgb".to_owned(), Value::Null);
+                object.insert("moreCardColorArgb".to_owned(), Value::Null);
+            }
         }
     }
     migrate_legacy_home_modules(settings, version)?;
@@ -2774,6 +2861,16 @@ fn validate_full_v28_settings(
     require_string_limit(settings, "aiSystemPrompt", 20_000)?;
     require_number_range(settings, "aiTemperature", 0.0, 2.0)?;
     validate_ai_configs(required_array(settings, "aiConfigs")?)?;
+    validate_agent_enabled_sources(required_array(settings, "agentEnabledSources")?)?;
+    require_enum(
+        settings,
+        "agentPermissionMode",
+        &["REQUIRE_APPROVAL", "FULL_AUTO"],
+    )?;
+    require_number_range(settings, "aiPageFontSizeSp", 12.0, 28.0)?;
+    require_number_range(settings, "aiReplyBoxWidthDp", 280.0, 1200.0)?;
+    require_string_limit(settings, "agentPrompt", 20_000)?;
+    required_coerced_i32(settings, "morePageColumns", 1, 3)?;
     validate_nullable_string(settings, "aiChatConfigId", 80)?;
     validate_nullable_string(settings, "calorieTextConfigId", 80)?;
     validate_nullable_string(settings, "calorieImageConfigId", 80)?;
@@ -2951,7 +3048,7 @@ fn validate_home_game_shortcuts(items: &[Value]) -> Result<(), BackupError> {
 }
 
 fn validate_desktop_widget_configs(items: &[Value]) -> Result<(), BackupError> {
-    const HOME_MODULE_IDS: [&str; 21] = [
+    const HOME_MODULE_IDS: [&str; 33] = [
         "calendar",
         "weather",
         "poem",
@@ -2971,8 +3068,21 @@ fn validate_desktop_widget_configs(items: &[Value]) -> Result<(), BackupError> {
         "notes",
         "game_shortcuts",
         "record_overview",
-        "cloud_sync_now",
-        "cloud_sync_force",
+        // App modules (Android 0.16.x): playable directly on the home screen.
+        "game_2048",
+        "game_2048_5",
+        "game_2048_6",
+        "game_snake",
+        "game_tetris",
+        "game_minesweeper",
+        "game_spider",
+        "game_go",
+        "music_visualizer",
+        "reader",
+        "usage_overview",
+        "usage_chart",
+        "usage_apps",
+        "cloud_sync",
     ];
     if items.len() > MAX_DESKTOP_WIDGET_CONFIGS {
         return Err(invalid("Too many desktop widget configurations"));
@@ -3031,12 +3141,29 @@ fn validate_desktop_widget_configs(items: &[Value]) -> Result<(), BackupError> {
             }
         }
         let content_type = required_string(item, "contentType")?;
-        require_enum(item, "contentType", &["HOME_MODULE", "APP_SHORTCUT"])?;
+        require_enum(
+            item,
+            "contentType",
+            &["HOME_MODULE", "APP_MODULE", "APP_SHORTCUT"],
+        )?;
         let home_module = required_string(item, "homeModuleId")?;
         if !HOME_MODULE_IDS.contains(&home_module) {
             return Err(invalid(format!(
                 "desktopWidgetConfigs[{index}].homeModuleId is invalid"
             )));
+        }
+        if content_type == "APP_MODULE" && !APP_MODULE_IDS.contains(&home_module) {
+            return Err(invalid(format!(
+                "desktopWidgetConfigs[{index}].homeModuleId does not match APP_MODULE"
+            )));
+        }
+        if let Some(range_days) = item.get("usageRangeDays") {
+            let range = value_i32(range_days, "desktopWidgetConfigs usageRangeDays")?;
+            if !matches!(range, 3 | 7 | 30) {
+                return Err(invalid(format!(
+                    "desktopWidgetConfigs[{index}].usageRangeDays is invalid"
+                )));
+            }
         }
         let package = validate_nullable_string(item, "appPackageName", 255)?;
         let label = validate_nullable_string_value(item, "appLabel")?;
@@ -3357,6 +3484,34 @@ fn validate_rss_subscriptions(items: &[Value]) -> Result<(), BackupError> {
     Ok(())
 }
 
+fn validate_agent_enabled_sources(items: &[Value]) -> Result<(), BackupError> {
+    const WIRE_VALUES: [&str; 8] = [
+        "diary",
+        "thoughts",
+        "date_records",
+        "daily_events",
+        "notes",
+        "poems",
+        "usage",
+        "statistics",
+    ];
+    if items.len() > WIRE_VALUES.len() {
+        return Err(invalid("agentEnabledSources contains too many items"));
+    }
+    let mut seen = HashSet::with_capacity(items.len());
+    for (index, value) in items.iter().enumerate() {
+        let source = value
+            .as_str()
+            .ok_or_else(|| invalid(format!("agentEnabledSources[{index}] must be a string")))?;
+        if !WIRE_VALUES.contains(&source) || !seen.insert(source) {
+            return Err(invalid(format!(
+                "agentEnabledSources[{index}] is invalid or duplicated"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_ai_configs(items: &[Value]) -> Result<(), BackupError> {
     if items.len() > 20 {
         return Err(invalid("Too many AI configurations"));
@@ -3370,6 +3525,7 @@ fn validate_ai_configs(items: &[Value]) -> Result<(), BackupError> {
         require_string_limit(item, "model", 512)?;
         required_bool(item, "enabled")?;
         required_bool(item, "allowInsecureHttp")?;
+        required_bool(item, "includeToolCalling")?;
         // Android converts the finite value to Float and clamps it during
         // decode. The Windows v1 client does not manage this field, so the
         // compatibility shadow keeps the original token.
@@ -3404,6 +3560,16 @@ fn validate_nav_items(items: &[Value]) -> Result<(), BackupError> {
             return Err(invalid(format!(
                 "navItems[{index}].moreDescription is too long"
             )));
+        }
+        if let Some(color) = item.get("moreButtonColorArgb") {
+            if !color.is_null() {
+                value_i32(color, &format!("navItems[{index}].moreButtonColorArgb"))?;
+            }
+        }
+        if let Some(color) = item.get("moreCardColorArgb") {
+            if !color.is_null() {
+                value_i32(color, &format!("navItems[{index}].moreCardColorArgb"))?;
+            }
         }
     }
     Ok(())
@@ -3542,6 +3708,12 @@ fn default_root(settings: &ManagedSettings, exported_at: i64) -> Value {
         "aiAllowInsecureHttp": false,
         "aiConfigs": [],
         "aiChatConfigId": null,
+        "agentEnabledSources": [],
+        "agentPermissionMode": "REQUIRE_APPROVAL",
+        "aiPageFontSizeSp": 16.0,
+        "aiReplyBoxWidthDp": 680.0,
+        "agentPrompt": "回答简洁、准确、友好，使用与用户当前使用的语言。Be concise, accurate, and friendly; reply in the user's language.",
+        "morePageColumns": 2,
         "calorieEstimationEnabled": false,
         "calorieTextConfigId": null,
         "calorieImageConfigId": null,
@@ -3582,7 +3754,8 @@ fn default_root(settings: &ManagedSettings, exported_at: i64) -> Value {
             "contentType": "HOME_MODULE",
             "homeModuleId": "today",
             "appPackageName": null,
-            "appLabel": null
+            "appLabel": null,
+            "usageRangeDays": 7
         }]
     });
     if let Some(object) = settings_value.as_object_mut() {
@@ -3730,7 +3903,9 @@ fn default_nav_items() -> Vec<Value> {
                     "iconKey": icon,
                     "visible": visible,
                     "showInMore": show_in_more,
-                        "moreDescription": more_description
+                        "moreDescription": more_description,
+                    "moreButtonColorArgb": null,
+                    "moreCardColorArgb": null
                 })
             },
         )
@@ -4419,6 +4594,7 @@ mod tests {
             "model": "model",
             "enabled": true,
             "allowInsecureHttp": false,
+            "includeToolCalling": false,
             "temperature": 0.7,
             "systemPrompt": "",
             "apiKey": "ai-key-must-round-trip"
@@ -4580,9 +4756,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_and_previews_v29() {
+    fn parses_and_previews_latest() {
         let backup = parse_v18(&valid_json()).expect("parse");
-        assert_eq!(backup.preview().format_version, 29);
+        assert_eq!(backup.preview().format_version, FORMAT_VERSION);
         assert_eq!(backup.preview().thought_count, 0);
         assert_eq!(backup.preview().reader_progress_count, 0);
     }
@@ -4625,7 +4801,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_widget_configs_gain_v29_defaults_and_cloud_sync_is_rewritten() {
+    fn v28_widget_configs_gain_latest_defaults_and_cloud_modules_normalize() {
         let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
         root["version"] = Value::from(28);
         let mut legacy = widget_item("legacy-widget");
@@ -4636,31 +4812,42 @@ mod tests {
             "showIcon",
             "textAlignment",
             "textScalePercent",
+            "usageRangeDays",
+            "contentType",
         ] {
             legacy_object.remove(field);
         }
         legacy_object.insert(
             "homeModuleId".to_owned(),
-            Value::String("cloud_sync".to_owned()),
+            Value::String("cloud_sync_now".to_owned()),
         );
-        root["settings"]["desktopWidgetConfigs"] = json!([legacy, widget_item("second")]);
+        let mut app = widget_item("app-widget");
+        app["homeModuleId"] = Value::String("game_2048".to_owned());
+        app["contentType"] = Value::String("HOME_MODULE".to_owned());
+        root["settings"]["desktopWidgetConfigs"] = json!([legacy, app, widget_item("second")]);
         let source = serde_json::to_string_pretty(&root).expect("source");
 
         let parsed = parse_v18(&source).expect("v28 widget upgrade");
-        assert_eq!(parsed.root["version"], 29);
+        assert_eq!(parsed.root["version"], FORMAT_VERSION);
         let widgets = parsed.root["settings"]["desktopWidgetConfigs"]
             .as_array()
             .expect("widgets");
-        assert_eq!(widgets.len(), 2);
+        assert_eq!(widgets.len(), 3);
         for widget in widgets {
             assert_eq!(widget["showName"], true);
             assert_eq!(widget["backgroundOpacityPercent"], 100);
             assert_eq!(widget["showIcon"], true);
             assert_eq!(widget["textAlignment"], "START");
             assert_eq!(widget["textScalePercent"], 100);
+            assert_eq!(widget["usageRangeDays"], 7);
         }
-        assert_eq!(widgets[0]["homeModuleId"], "cloud_sync_now");
-        assert_eq!(widgets[1]["homeModuleId"], "today");
+        // v33 normalization: standalone cloud modules fold into the combined
+        // app module, and app-module ids force the APP_MODULE content type.
+        assert_eq!(widgets[0]["homeModuleId"], "cloud_sync");
+        assert_eq!(widgets[0]["contentType"], "APP_MODULE");
+        assert_eq!(widgets[1]["homeModuleId"], "game_2048");
+        assert_eq!(widgets[1]["contentType"], "APP_MODULE");
+        assert_eq!(widgets[2]["homeModuleId"], "today");
 
         let directory = tempfile::tempdir().expect("temp dir");
         let database = Database::open(directory.path().join("deskcubby.db")).expect("database");
@@ -4668,19 +4855,21 @@ mod tests {
         let exported =
             export_v18_merged(&database, Some(source.as_bytes()), 45).expect("merged export");
         let output: Value = serde_json::from_str(&exported).expect("output");
-        assert_eq!(output["version"], 29);
+        assert_eq!(output["version"], FORMAT_VERSION);
         assert_eq!(
             output["settings"]["desktopWidgetConfigs"][0]["homeModuleId"],
-            "cloud_sync_now"
+            "cloud_sync"
         );
-        parse_v18(&exported).expect("Android-readable v29 output");
+        parse_v18(&exported).expect("Android-readable v33 output");
     }
 
     #[test]
-    fn v29_widget_configs_with_new_home_modules_round_trip() {
+    fn v29_widget_configs_with_app_modules_round_trip() {
         let mut root: Value = serde_json::from_str(&valid_json()).expect("fixture");
-        let mut force = widget_item("sync-force");
-        force["homeModuleId"] = Value::String("cloud_sync_force".to_owned());
+        root["version"] = Value::from(29);
+        let mut combined = widget_item("sync-combined");
+        combined["homeModuleId"] = Value::String("cloud_sync_force".to_owned());
+        combined["contentType"] = Value::String("APP_MODULE".to_owned());
         let mut notes = widget_item("notes-widget");
         notes["homeModuleId"] = Value::String("notes".to_owned());
         notes["textAlignment"] = Value::String("CENTER".to_owned());
@@ -4688,16 +4877,19 @@ mod tests {
         notes["textScalePercent"] = json!(125);
         notes["showName"] = Value::Bool(false);
         notes["showIcon"] = Value::Bool(false);
-        root["settings"]["desktopWidgetConfigs"] = json!([force, notes]);
+        root["settings"]["desktopWidgetConfigs"] = json!([combined, notes]);
         let source = serde_json::to_string_pretty(&root).expect("source");
 
         let parsed = parse_v18(&source).expect("v29 parse");
-        assert_eq!(parsed.root["version"], 29);
+        assert_eq!(parsed.root["version"], FORMAT_VERSION);
         let widgets = parsed.root["settings"]["desktopWidgetConfigs"]
             .as_array()
             .expect("widgets");
-        assert_eq!(widgets[0]["homeModuleId"], "cloud_sync_force");
+        // v33 normalization folds the standalone force module into cloud_sync.
+        assert_eq!(widgets[0]["homeModuleId"], "cloud_sync");
+        assert_eq!(widgets[0]["contentType"], "APP_MODULE");
         assert_eq!(widgets[1]["homeModuleId"], "notes");
+        assert_eq!(widgets[1]["contentType"], "HOME_MODULE");
         assert_eq!(widgets[1]["textAlignment"], "CENTER");
         assert_eq!(widgets[1]["backgroundOpacityPercent"], 37);
         assert_eq!(widgets[1]["textScalePercent"], 125);
@@ -4722,7 +4914,7 @@ mod tests {
             output["settings"]["desktopWidgetConfigs"][1]["textScalePercent"],
             125
         );
-        parse_v18(&exported).expect("Android-readable v29 output");
+        parse_v18(&exported).expect("Android-readable v33 output");
     }
 
     #[test]
@@ -4804,9 +4996,9 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let database = Database::open(directory.path().join("deskcubby.db")).expect("database");
         import_v18_transaction(&database, &parsed, Some(b"encrypted-shadow")).expect("import");
-        let output = export_v18_merged(&database, Some(source.as_bytes()), 29).expect("export");
+        let output = export_v18_merged(&database, Some(source.as_bytes()), 33).expect("export");
         let output: Value = serde_json::from_str(&output).expect("output");
-        assert_eq!(output["version"], 29);
+        assert_eq!(output["version"], FORMAT_VERSION);
         assert_eq!(output["settings"]["visualStyle"], "CUSTOM");
         assert_eq!(
             output["settings"]["customTheme"]["futureThemeToken"],
@@ -4999,7 +5191,7 @@ mod tests {
     }
 
     #[test]
-    fn android_v27_golden_upgrades_to_v29_and_survives_windows_edit_and_export() {
+    fn android_v27_golden_upgrades_to_latest_and_survives_windows_edit_and_export() {
         let source = include_str!("../test-data/android-v27-golden.json");
         let parsed = parse_v18(source).expect("parse Android golden");
         assert_eq!(parsed.thoughts.len(), 1);
@@ -5072,10 +5264,10 @@ mod tests {
             output["thoughts"][0]["futureThoughtField"],
             golden["thoughts"][0]["futureThoughtField"]
         );
-        assert_eq!(output["version"], 29);
+        assert_eq!(output["version"], FORMAT_VERSION);
         assert!(output["settings"]["customTheme"].is_object());
         assert_eq!(output["readerProgress"], json!([]));
-        parse_v18(&exported).expect("Android-readable v29 output");
+        parse_v18(&exported).expect("Android-readable v33 output");
     }
 
     #[test]
@@ -5246,11 +5438,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v18_is_upgraded_to_v29_without_losing_unknown_fields_or_ai_keys() {
+    fn legacy_v18_is_upgraded_to_latest_without_losing_unknown_fields_or_ai_keys() {
         let source = include_str!("../test-data/android-v18-golden.json");
         let parsed = parse_v18(source).expect("parse Android v18 golden");
         assert_eq!(parsed.preview().format_version, 18);
-        assert_eq!(parsed.root["version"], 29);
+        assert_eq!(parsed.root["version"], FORMAT_VERSION);
         assert_eq!(
             parsed.root["settings"]["cloudSyncConfigs"][0]["userAgent"],
             "DeskCubby-Sync/1"
@@ -5273,10 +5465,10 @@ mod tests {
 
         let prepared = prepare_v18_import_for_shadow(source).expect("prepare legacy import");
         assert!(!prepared.merge_reader_progress);
-        assert_eq!(prepared.backup.preview().format_version, 29);
+        assert_eq!(prepared.backup.preview().format_version, FORMAT_VERSION);
         let canonical: Value =
-            serde_json::from_slice(&prepared.canonical_bytes).expect("canonical v29");
-        assert_eq!(canonical["version"], 29);
+            serde_json::from_slice(&prepared.canonical_bytes).expect("canonical v33");
+        assert_eq!(canonical["version"], FORMAT_VERSION);
         parse_v18(std::str::from_utf8(&prepared.canonical_bytes).expect("UTF-8"))
             .expect("canonical output is Android-readable");
     }
@@ -5321,7 +5513,7 @@ mod tests {
         root["version"] = Value::from(0);
         assert!(parse_v18(&root.to_string()).is_err());
 
-        root["version"] = Value::from(30);
+        root["version"] = Value::from(FORMAT_VERSION + 1);
         assert!(parse_v18(&root.to_string()).is_err());
 
         root["version"] = Value::from(FORMAT_VERSION);
@@ -5355,6 +5547,7 @@ mod tests {
             "model": "model",
             "enabled": true,
             "allowInsecureHttp": false,
+            "includeToolCalling": false,
             "temperature": 0.7,
             "systemPrompt": "",
             "apiKey": "secret-that-must-round-trip"
@@ -5580,6 +5773,7 @@ mod tests {
             "model": "model",
             "enabled": true,
             "allowInsecureHttp": false,
+            "includeToolCalling": false,
             "temperature": 0.7,
             "systemPrompt": "",
             "apiKey": "key"

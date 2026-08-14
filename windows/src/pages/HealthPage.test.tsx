@@ -81,7 +81,7 @@ describe("HealthPage", () => {
     });
     expect(screen.queryByText("开启统计")).not.toBeInTheDocument();
     expect(screen.queryByText("申请权限")).not.toBeInTheDocument();
-    expect(screen.getByText(/v29 按隐私设计不包含健康历史/)).toBeInTheDocument();
+    expect(screen.getByText(/v33 按隐私设计不包含健康历史/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "选择健康文件" }));
     expect(invokeMock).toHaveBeenCalledWith("choose_health_statistics_source", {

@@ -932,7 +932,7 @@ export default function GamesPage() {
 
   if (!active) {
     return (
-      <PageFrame title={tr(language, "小游戏", "Mini games")} description={tr(language, "七种既有玩法可随 Android v29 往返；围棋存档、战绩与全部游玩时长只保存在这台电脑。", "The seven existing variants can round-trip through Android v29; Go saves and records, plus all play time, stay only on this PC.")}>
+      <PageFrame title={tr(language, "小游戏", "Mini games")} description={tr(language, "七种既有玩法可随 Android v33 往返；围棋存档、战绩与全部游玩时长只保存在这台电脑。", "The seven existing variants can round-trip through Android v33; Go saves and records, plus all play time, stay only on this PC.")}>
         {error ? <p className="form-error" role="alert">{error}</p> : null}
         <GameCatalog snapshot={snapshot} language={language} onLaunch={launch} />
       </PageFrame>

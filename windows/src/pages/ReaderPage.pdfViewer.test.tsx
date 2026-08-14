@@ -97,6 +97,7 @@ const PDF_BOOK = {
   pdfPageIndex: 4,
   totalPages: 12,
   readingMillis: "0",
+  textPageOffsetPercent: 0,
 } as const;
 
 const EMPTY_LIBRARY: ReaderLibraryV3 = {
@@ -165,6 +166,10 @@ describe("ReaderPage React-PDF integration", () => {
       renderAnnotationLayer: true,
       renderForms: true,
     }));
+    // rotate=0 would override each page's own /Rotate attribute and render
+    // rotated pages upside down or sideways; the unrotated viewer must leave
+    // the rotate prop undefined so react-pdf falls back to page.rotate.
+    expect(pageProps.rotate).toBeUndefined();
 
     await user.click(screen.getAllByRole("link", { name: "PDF annotation link" })[0]);
     expect(invokeMock).toHaveBeenCalledWith("open_external_link", {

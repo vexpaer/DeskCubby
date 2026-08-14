@@ -238,7 +238,9 @@ export default function ReaderPdfViewer({
     setOutlineCount(null);
     callbacksRef.current.onPageCountChanged?.(pdf.numPages);
     void pdf.getPage(1).then((page) => {
-      const viewport = page.getViewport({ scale: 1, rotation: 0 });
+      // Default rotation keeps the page's own /Rotate attribute, so the aspect
+      // ratio matches what the Page renderer will actually display.
+      const viewport = page.getViewport({ scale: 1 });
       if (viewport.width > 0 && viewport.height > 0) {
         setPageRatio(viewport.height / viewport.width);
       }
@@ -309,7 +311,11 @@ export default function ReaderPdfViewer({
       <Page
         pageNumber={index + 1}
         width={pageWidth}
-        rotate={rotation}
+        // rotate={0} would override each page's own /Rotate attribute, which
+        // made PDFs with rotated pages (e.g. scans with alternating /Rotate
+        // values) render "one page right, the next upside down". Only pass a
+        // rotation when the user actually rotated the view.
+        rotate={rotation % 360 === 0 ? undefined : rotation}
         renderTextLayer
         renderAnnotationLayer
         renderForms

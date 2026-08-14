@@ -192,8 +192,8 @@ export default function AiSettingsPage() {
       eyebrow={t("设置 → 子页面设置 → AI", "Settings → Subpage settings → AI")}
       title={t("AI 设置", "AI settings")}
       description={t(
-  "配置与 Android v29 使用相同字段。API Key 按产品约定明文保存、完整显示并进入 v29 备份，但不会写入日志、错误或请求预览。",
-  "Configurations use the Android v29 fields. By product design, API keys are stored in plaintext, shown in full and included in v29 backup, but never written to logs, errors or request previews.",
+  "配置与 Android v33 使用相同字段。API Key 按产品约定明文保存、完整显示并进入 v33 备份，但不会写入日志、错误或请求预览。",
+  "Configurations use the Android v33 fields. By product design, API keys are stored in plaintext, shown in full and included in v33 backup, but never written to logs, errors or request previews.",
       )}
       actions={
         <>

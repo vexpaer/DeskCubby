@@ -27,7 +27,7 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 pub(crate) const READER_DTO_VERSION: u32 = 3;
-const READER_STATE_SCHEMA_VERSION: u32 = 4;
+const READER_STATE_SCHEMA_VERSION: u32 = 5;
 const READER_DIRECTORY_NAME: &str = "reader";
 const READER_STATE_FILE_NAME: &str = "reader-state-v1.json";
 const READER_STATE_PENDING_FILE_NAME: &str = "reader-state-v1.json.pending";
@@ -248,6 +248,8 @@ struct StoredReaderBook {
     pdf_page_index: usize,
     reading_millis: u64,
     #[serde(default)]
+    text_page_offset_percent: u8,
+    #[serde(default)]
     fingerprint: Option<String>,
     #[serde(default)]
     total_pages: usize,
@@ -379,6 +381,7 @@ pub(crate) struct ReaderBookDto {
     pdf_page_index: usize,
     total_pages: usize,
     reading_millis: String,
+    text_page_offset_percent: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -449,6 +452,8 @@ pub(crate) struct ReaderProgressRequest {
     page_index: usize,
     #[serde(default)]
     paragraph_index: Option<usize>,
+    #[serde(default)]
+    page_offset_percent: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -606,6 +611,7 @@ pub(crate) fn choose_reader_book<R: Runtime>(
             text_page_index: 0,
             pdf_page_index: 0,
             reading_millis: 0,
+            text_page_offset_percent: 0,
             fingerprint: None,
             total_pages: 0,
             progress_updated_at: 0,
@@ -720,6 +726,16 @@ pub(crate) fn save_reader_progress(
             let canonical_changed = book.text_paragraph_index != paragraph;
             book.text_page_index = request.page_index;
             book.text_paragraph_index = paragraph;
+            // Android Reader schema v7 keeps a device-private 0/5/…/95 percent
+            // offset inside the logical page. Windows mirrors the field so the
+            // formats stay aligned even though the exact paragraph index is the
+            // authoritative position.
+            if let Some(offset) = request.page_offset_percent {
+                if offset > 95 || offset % 5 != 0 {
+                    return Err(ReaderError::InvalidInput.dto());
+                }
+                book.text_page_offset_percent = offset;
+            }
             if canonical_changed {
                 book.progress_updated_at = next_reader_progress_timestamp(book.progress_updated_at);
             }
@@ -832,6 +848,7 @@ fn book_dto(book: &StoredReaderBook) -> ReaderBookDto {
         pdf_page_index: book.pdf_page_index,
         total_pages: book.total_pages,
         reading_millis: book.reading_millis.to_string(),
+        text_page_offset_percent: book.text_page_offset_percent,
     }
 }
 
@@ -2440,6 +2457,7 @@ mod tests {
                 text_page_index: 0,
                 pdf_page_index: 0,
                 reading_millis: 30_000,
+                text_page_offset_percent: 0,
                 fingerprint: None,
                 total_pages: 0,
                 progress_updated_at: 0,
@@ -2533,6 +2551,7 @@ mod tests {
             text_page_index: 0,
             pdf_page_index: 0,
             reading_millis: 0,
+            text_page_offset_percent: 0,
             fingerprint: None,
             total_pages: 0,
             progress_updated_at: 0,
@@ -2614,7 +2633,7 @@ mod tests {
         fs::write(&target, serde_json::to_vec(&legacy).unwrap()).unwrap();
 
         let migrated = load_reader_state(root.path()).unwrap();
-        assert_eq!(migrated.schema_version, 4);
+        assert_eq!(migrated.schema_version, READER_STATE_SCHEMA_VERSION);
         assert_eq!(migrated.books[0].text_paragraph_index, 7);
         assert_eq!(migrated.books[0].text_page_index, 3);
         assert_eq!(migrated.books[0].fingerprint, None);
@@ -2645,7 +2664,7 @@ mod tests {
         fs::write(&target, serde_json::to_vec(&legacy).unwrap()).unwrap();
 
         let migrated = load_reader_state(root.path()).unwrap();
-        assert_eq!(migrated.schema_version, 4);
+        assert_eq!(migrated.schema_version, READER_STATE_SCHEMA_VERSION);
         assert_eq!(migrated.preferences.font_size_px, 23.0);
         assert_eq!(migrated.preferences.pdf_zoom_percent, 140);
         assert_eq!(migrated.preferences.custom_foreground_argb, None);
@@ -2698,7 +2717,7 @@ mod tests {
         fs::write(&target, serde_json::to_vec(&legacy).unwrap()).unwrap();
 
         let migrated = load_reader_state(root.path()).unwrap();
-        assert_eq!(migrated.schema_version, 4);
+        assert_eq!(migrated.schema_version, READER_STATE_SCHEMA_VERSION);
         assert_eq!(migrated.preferences.page_padding_px, 36);
         assert_eq!(migrated.preferences.pdf_page_gap_px, 18);
         assert_eq!(
@@ -2800,6 +2819,7 @@ mod tests {
             text_page_index: 0,
             pdf_page_index: 3,
             reading_millis: 0,
+            text_page_offset_percent: 0,
             fingerprint: Some(fingerprint.clone()),
             total_pages: 100,
             progress_updated_at: 10,
