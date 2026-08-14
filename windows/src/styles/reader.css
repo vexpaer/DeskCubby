@@ -580,7 +580,7 @@
   min-width: 0;
   min-height: 0;
   place-items: start center;
-  overflow: auto;
+  overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
   border-radius: var(--radius-lg);
   padding: var(--reader-page-padding, 36px);
@@ -589,9 +589,15 @@
   box-shadow: inset 0 1px 5px rgb(0 0 0 / 7%);
 }
 
-.reader-text-page {
+/* Infinite-scroll TXT body: one continuous paragraph flow. Logical pages are
+   only windowing units, so there is no visible page boundary anymore. */
+.reader-text-scroll {
   width: min(100%, var(--reader-content-width, 60rem));
-  min-height: 100%;
+  height: 100%;
+  margin-inline: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   font-family: var(--reader-font-family, ui-serif, Georgia, serif);
   font-size: var(--reader-font-size, 19px);
   line-height: var(--reader-line-height, 1.6);
@@ -602,21 +608,21 @@
   user-select: text;
 }
 
-.reader-text-page p {
+.reader-text-scroll p {
   margin-block-start: 0;
   color: inherit;
   text-indent: var(--reader-first-line-indent, 0);
   white-space: pre-wrap;
 }
 
-.reader-text-page mark {
+.reader-text-scroll mark {
   border-radius: 0.2em;
   padding-inline: 0.05em;
   background: color-mix(in srgb, var(--secondary) 38%, transparent);
   color: inherit;
 }
 
-.reader-text-page mark.is-current {
+.reader-text-scroll mark.is-current {
   outline: 2px solid var(--primary);
   background: color-mix(in srgb, var(--primary) 38%, transparent);
 }
