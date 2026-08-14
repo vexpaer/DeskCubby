@@ -7,6 +7,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -111,6 +112,94 @@ internal fun readerPdfMaxHorizontalOffset(
     contentWidthPx = contentWidthPx,
     requestedHorizontalOffsetPx = 0f,
 ).maxHorizontalOffset
+
+/**
+ * Applies a pointer pan to the clipped PDF viewport.
+ *
+ * Pointer movement and content scroll use opposite signs: dragging a page to the right reveals
+ * its left side, so the stored offset decreases. Keeping this as a pure function makes the
+ * gesture direction and both horizontal boundaries independently testable.
+ */
+internal fun readerPdfHorizontalOffsetAfterPan(
+    currentOffsetPx: Float,
+    maxOffsetPx: Float,
+    pointerPanXPx: Float,
+): Float {
+    if (!currentOffsetPx.isFinite() || !maxOffsetPx.isFinite() || !pointerPanXPx.isFinite()) {
+        return 0f
+    }
+    return (currentOffsetPx - pointerPanXPx).coerceIn(0f, maxOffsetPx.coerceAtLeast(0f))
+}
+
+internal data class ReaderPdfPanUpdate(
+    val horizontalOffsetPx: Float,
+    val verticalScrollDeltaPx: Float,
+)
+
+/** Converts one raw pointer delta into simultaneous document movement on both axes. */
+internal fun readerPdfPanUpdate(
+    currentHorizontalOffsetPx: Float,
+    maxHorizontalOffsetPx: Float,
+    pointerPanXPx: Float,
+    pointerPanYPx: Float,
+): ReaderPdfPanUpdate = ReaderPdfPanUpdate(
+    horizontalOffsetPx = readerPdfHorizontalOffsetAfterPan(
+        currentOffsetPx = currentHorizontalOffsetPx,
+        maxOffsetPx = maxHorizontalOffsetPx,
+        pointerPanXPx = pointerPanXPx,
+    ),
+    verticalScrollDeltaPx = if (pointerPanYPx.isFinite()) -pointerPanYPx else 0f,
+)
+
+/** Returns the actual page width used by the reader for a saved zoom percentage. */
+internal fun readerPdfContentWidthPx(
+    viewportWidthPx: Int,
+    minimumPageWidthPx: Int,
+    zoomPercent: Int,
+): Int {
+    require(viewportWidthPx > 0)
+    require(minimumPageWidthPx > 0)
+    return (viewportWidthPx * zoomPercent.coerceAtLeast(1) / 100f)
+        .roundToInt()
+        .coerceAtLeast(minimumPageWidthPx)
+}
+
+/**
+ * Repositions a page after zoom so the document point under [anchorViewportXPx] stays there.
+ * Narrow pages have no pan and are always centered; stale offsets can therefore never make a
+ * zoomed-out page stick to the left edge.
+ */
+internal fun readerPdfHorizontalOffsetAfterZoom(
+    viewportWidthPx: Int,
+    oldContentWidthPx: Int,
+    newContentWidthPx: Int,
+    oldOffsetPx: Float,
+    anchorViewportXPx: Float,
+): Float {
+    require(viewportWidthPx > 0)
+    require(oldContentWidthPx > 0)
+    require(newContentWidthPx > 0)
+    val viewport = viewportWidthPx.toFloat()
+    val oldWidth = oldContentWidthPx.toFloat()
+    val newWidth = newContentWidthPx.toFloat()
+    val anchor = anchorViewportXPx
+        .takeIf(Float::isFinite)
+        ?.coerceIn(0f, viewport)
+        ?: viewport / 2f
+    val safeOldOffset = oldOffsetPx
+        .takeIf(Float::isFinite)
+        ?.coerceIn(0f, (oldWidth - viewport).coerceAtLeast(0f))
+        ?: 0f
+    val oldLeft = if (oldWidth <= viewport) {
+        (viewport - oldWidth) / 2f
+    } else {
+        -safeOldOffset
+    }
+    val documentFraction = ((anchor - oldLeft) / oldWidth).coerceIn(0f, 1f)
+    if (newWidth <= viewport || abs(newWidth - viewport) < 0.5f) return 0f
+    return (documentFraction * newWidth - anchor)
+        .coerceIn(0f, newWidth - viewport)
+}
 
 internal interface ReaderPdfAcquisitionGuard {
     val isAbandoned: Boolean

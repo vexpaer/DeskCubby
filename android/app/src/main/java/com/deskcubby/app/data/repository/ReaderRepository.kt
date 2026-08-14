@@ -17,6 +17,8 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.system.Os
 import android.util.Size
+import com.deskcubby.app.codePointLength
+import com.deskcubby.app.takeCodePoints
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileInputStream
@@ -86,6 +88,8 @@ data class ReaderBook(
     val pdfPageIndex: Int = 0,
     /** Persisted SAF image URI. Never convert this value into a filesystem path. */
     val coverUri: String? = null,
+    /** Null follows [title]; an empty override deliberately hides text drawn on the cover. */
+    val coverTextOverride: String? = null,
     /** Full-file SHA-256 used to match the same book imported through another provider/device. */
     val fingerprint: String? = null,
     /** Logical TXT page count or physical PDF page count; zero means not measured yet. */
@@ -400,9 +404,10 @@ class ReaderRepository @Inject constructor(
 
     /**
      * Returns one strictly bounded shelf bitmap. A custom SAF URI wins. For a PDF, an existing
-     * verified cache is reused; otherwise Android 10+ may ask the document provider for a bounded
-     * thumbnail. We deliberately do not open [PdfRenderer] here: entering a two-column shelf must
-     * never parse and render several arbitrary PDFs inside the application process.
+     * verified cache is reused; otherwise Android 10+ may provide a bounded thumbnail. Providers
+     * often omit that capability even for valid PDFs, so a strictly bounded first-page render is
+     * the final fallback. [coverMutex] serializes generation and the verified cache makes it a
+     * one-time cost rather than reparsing every visible book on each shelf composition.
      */
     suspend fun loadCover(book: ReaderBook, widthPx: Int): Bitmap? = withContext(Dispatchers.IO) {
         val targetSize = readerCoverTargetSize(widthPx)
@@ -419,15 +424,27 @@ class ReaderRepository @Inject constructor(
                 return@withLock normalizeCoverBitmap(cached, targetSize)
             }
 
-            val generated = loadProviderPdfThumbnail(book) ?: return@withLock null
+            val generated = loadProviderPdfThumbnail(book) ?: try {
+                renderPdfPage(book, pageIndex = 0, targetWidthPx = AUTO_COVER_WIDTH_PX)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: OutOfMemoryError) {
+                null
+            } catch (_: Exception) {
+                null
+            } ?: return@withLock null
+            val cacheSized = normalizeCoverBitmap(
+                generated,
+                readerCoverTargetSize(AUTO_COVER_WIDTH_PX),
+            ) ?: return@withLock null
             try {
-                writeVerifiedCoverCache(cacheFile, generated)
+                writeVerifiedCoverCache(cacheFile, cacheSized)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 // A cache failure must not discard a thumbnail that is already safe to display.
             }
-            normalizeCoverBitmap(generated, targetSize)
+            normalizeCoverBitmap(cacheSized, targetSize)
         }
     }
 
@@ -465,6 +482,23 @@ class ReaderRepository @Inject constructor(
                 throw error
             }
             existing.coverUri?.let { old -> releaseIfUnused(Uri.parse(old), updated) }
+        }
+    }
+
+    /** Updates only the optional text drawn over a shelf cover; it never renames the source. */
+    suspend fun setCoverTextOverride(bookId: String, value: String?) = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            prepareForMutationLocked()
+            val existing = _state.value.books.firstOrNull { it.id == bookId } ?: return@withContext
+            val normalized = normalizeReaderCoverTextOverride(value)
+            if (normalized == existing.coverTextOverride) return@withContext
+            val updated = _state.value.copy(
+                books = _state.value.books.map { book ->
+                    if (book.id == bookId) book.copy(coverTextOverride = normalized) else book
+                },
+            )
+            writeVerified(updated)
+            _state.value = updated
         }
     }
 
@@ -1312,6 +1346,19 @@ internal data class ReaderCoverDimensions(
     val height: Int,
 )
 
+const val MAX_READER_COVER_TEXT_CODE_POINTS = 120
+
+internal fun normalizeReaderCoverTextOverride(value: String?): String? = value?.let { raw ->
+    raw
+        .replace("\r\n", "\n")
+        .replace('\r', '\n')
+        .filter { character -> character == '\n' || !character.isISOControl() }
+        .trim()
+        .takeCodePoints(MAX_READER_COVER_TEXT_CODE_POINTS)
+}
+
+internal fun ReaderBook.coverDisplayText(): String = coverTextOverride ?: title
+
 internal fun readerCoverTargetSize(widthPx: Int): ReaderCoverDimensions {
     val width = widthPx.coerceIn(READER_COVER_MIN_WIDTH_PX, READER_COVER_MAX_WIDTH_PX)
     return ReaderCoverDimensions(
@@ -1737,7 +1784,7 @@ internal fun decodeReaderText(bytes: ByteArray): String {
 }
 
 internal object ReaderStateCodec {
-    private const val SCHEMA_VERSION = 7
+    private const val SCHEMA_VERSION = 8
     private const val MAX_BOOKS = 500
     private val idPattern = Regex("[A-Za-z0-9._:-]{1,256}")
 
@@ -1781,6 +1828,10 @@ internal object ReaderStateCodec {
                             .put("textPageIndex", book.textPageIndex)
                             .put("pdfPageIndex", book.pdfPageIndex)
                             .put("coverUri", book.coverUri ?: JSONObject.NULL)
+                            .put(
+                                "coverTextOverride",
+                                book.coverTextOverride ?: JSONObject.NULL,
+                            )
                             .put("fingerprint", book.fingerprint ?: JSONObject.NULL)
                             .put("totalPages", book.totalPages)
                             .put("progressUpdatedAt", book.progressUpdatedAt)
@@ -1898,6 +1949,16 @@ internal object ReaderStateCodec {
                 } else {
                     null
                 }
+                val coverTextOverride = if (schemaVersion >= 8 &&
+                    item.has("coverTextOverride") && !item.isNull("coverTextOverride")
+                ) {
+                    item.getString("coverTextOverride").also { raw ->
+                        require(raw.codePointLength() <= MAX_READER_COVER_TEXT_CODE_POINTS)
+                        require(raw == normalizeReaderCoverTextOverride(raw))
+                    }
+                } else {
+                    null
+                }
                 val fingerprint = if (schemaVersion >= 5 &&
                     item.has("fingerprint") && !item.isNull("fingerprint")
                 ) {
@@ -1924,6 +1985,7 @@ internal object ReaderStateCodec {
                         },
                         pdfPageIndex = item.optInt("pdfPageIndex", 0).coerceAtLeast(0),
                         coverUri = coverUri,
+                        coverTextOverride = coverTextOverride,
                         fingerprint = fingerprint,
                         totalPages = if (schemaVersion >= 5) {
                             item.optInt("totalPages", 0).coerceIn(

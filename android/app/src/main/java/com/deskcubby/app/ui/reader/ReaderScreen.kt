@@ -20,11 +20,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -102,7 +98,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -149,6 +144,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.deskcubby.app.takeCodePoints
+import com.deskcubby.app.data.repository.MAX_READER_COVER_TEXT_CODE_POINTS
 import com.deskcubby.app.data.repository.ReaderBackground
 import com.deskcubby.app.data.repository.ReaderBook
 import com.deskcubby.app.data.repository.ReaderBookType
@@ -160,6 +157,7 @@ import com.deskcubby.app.data.repository.ReaderTextPage
 import com.deskcubby.app.data.repository.ReaderOrientation
 import com.deskcubby.app.data.repository.ReaderPreferences
 import com.deskcubby.app.data.repository.ReaderStorageIssue
+import com.deskcubby.app.data.repository.coverDisplayText
 import com.deskcubby.app.data.repository.MAX_READER_CHAPTER_TITLE_CHARS
 import com.deskcubby.app.data.repository.MAX_READER_SEARCH_QUERY_CHARS
 import com.deskcubby.app.data.repository.MIN_READER_CHAPTER_HEADING_CHARS
@@ -231,6 +229,7 @@ fun ReaderScreen(
             onRemove = viewModel::remove,
             onUpdatePreferences = viewModel::updatePreferences,
             onSetCustomCover = viewModel::setCustomCover,
+            onSetCoverTextOverride = viewModel::setCoverTextOverride,
             loadCover = viewModel::loadCover,
             snackbar = snackbar,
         )
@@ -267,6 +266,7 @@ private fun ReaderLibrary(
     onRemove: (String) -> Unit,
     onUpdatePreferences: (ReaderPreferences) -> Unit,
     onSetCustomCover: (String, android.net.Uri?) -> Unit,
+    onSetCoverTextOverride: (String, String?) -> Unit,
     loadCover: suspend (ReaderBook, Int) -> Bitmap?,
     snackbar: SnackbarHostState,
 ) {
@@ -450,47 +450,96 @@ private fun ReaderLibrary(
     }
 
     coverBook?.let { book ->
+        val defaultCoverText = book.title.takeCodePoints(MAX_READER_COVER_TEXT_CODE_POINTS)
+        var coverTextDraft by rememberSaveable(
+            book.id,
+            book.coverTextOverride,
+            book.title,
+        ) {
+            mutableStateOf(
+                (book.coverTextOverride ?: defaultCoverText)
+                    .takeCodePoints(MAX_READER_COVER_TEXT_CODE_POINTS),
+            )
+        }
         AlertDialog(
             onDismissRequest = { coverBook = null },
             title = { Text(tr("修改封面", "Change cover")) },
             text = {
-                Text(
-                    if (book.type == ReaderBookType.PDF) {
-                        tr(
-                            "默认优先使用系统文档服务提供的安全缩略图；也可以选择一张图片覆盖。",
-                            "A safe thumbnail from the system document service is preferred by default, or you can override it with an image.",
-                        )
-                    } else {
-                        tr(
-                            "可以选择一张图片作为 TXT 书籍封面。",
-                            "Choose an image to use as this TXT book's cover.",
-                        )
-                    },
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        if (book.type == ReaderBookType.PDF) {
+                            tr(
+                                "PDF 默认使用文档缩略图，缺失时安全渲染第一页；也可以选择图片覆盖。",
+                                "PDFs use a document thumbnail or a safely rendered first page; you can also override it with an image.",
+                            )
+                        } else {
+                            tr(
+                                "可以选择一张图片作为 TXT 书籍封面。",
+                                "Choose an image to use as this TXT book's cover.",
+                            )
+                        },
+                    )
+                    OutlinedTextField(
+                        value = coverTextDraft,
+                        onValueChange = {
+                            coverTextDraft =
+                                it.takeCodePoints(MAX_READER_COVER_TEXT_CODE_POINTS)
+                        },
+                        label = { Text(tr("封面文字", "Cover text")) },
+                        supportingText = {
+                            Text(
+                                tr(
+                                    "留空可隐藏；“恢复书名”会重新跟随文件书名。",
+                                    "Leave blank to hide it; Reset to title follows the file title again.",
+                                ),
+                            )
+                        },
+                        minLines = 2,
+                        maxLines = 4,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(onClick = { coverLauncher.launch(arrayOf("image/*")) }) {
+                            Text(tr("选择图片", "Choose image"))
+                        }
+                        if (book.coverUri != null) {
+                            TextButton(onClick = {
+                                onSetCustomCover(book.id, null)
+                                coverBook = null
+                            }) {
+                                Text(
+                                    if (book.type == ReaderBookType.PDF) {
+                                        tr("恢复自动封面", "Use automatic cover")
+                                    } else {
+                                        tr("移除图片", "Remove image")
+                                    },
+                                )
+                            }
+                        }
+                        if (book.coverTextOverride != null) {
+                            TextButton(onClick = {
+                                onSetCoverTextOverride(book.id, null)
+                                coverBook = null
+                            }) {
+                                Text(tr("恢复书名", "Reset to title"))
+                            }
+                        }
+                    }
+                }
             },
             confirmButton = {
-                TextButton(onClick = { coverLauncher.launch(arrayOf("image/*")) }) {
-                    Text(tr("选择图片", "Choose image"))
+                TextButton(onClick = {
+                    onSetCoverTextOverride(
+                        book.id,
+                        coverTextDraft.takeUnless { it == defaultCoverText },
+                    )
+                    coverBook = null
+                }) {
+                    Text(tr("保存文字", "Save text"))
                 }
             },
             dismissButton = {
-                Row {
-                    if (book.coverUri != null) {
-                        TextButton(onClick = {
-                            onSetCustomCover(book.id, null)
-                            coverBook = null
-                        }) {
-                            Text(
-                                if (book.type == ReaderBookType.PDF) {
-                                    tr("恢复自动封面", "Use automatic cover")
-                                } else {
-                                    tr("移除封面", "Remove cover")
-                                },
-                            )
-                        }
-                    }
-                    TextButton(onClick = { coverBook = null }) { Text(tr("取消", "Cancel")) }
-                }
+                TextButton(onClick = { coverBook = null }) { Text(tr("取消", "Cancel")) }
             },
         )
     }
@@ -967,6 +1016,7 @@ private fun ReaderCover(
     loadCover: suspend (ReaderBook, Int) -> Bitmap?,
     modifier: Modifier = Modifier,
 ) {
+    val coverText = book.coverDisplayText()
     var measuredWidthPx by remember(book.id) { mutableIntStateOf(0) }
     val bitmap by produceState<Bitmap?>(
         initialValue = null,
@@ -993,37 +1043,82 @@ private fun ReaderCover(
         color = MaterialTheme.colorScheme.surfaceVariant,
     ) {
         if (bitmap != null) {
-            Image(
-                bitmap = bitmap!!.asImageBitmap(),
-                contentDescription = tr("《${book.title}》封面", "Cover for ${book.title}"),
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
+            Box(Modifier.fillMaxSize()) {
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = tr("《${book.title}》封面", "Cover for ${book.title}"),
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+                if (coverText.isNotEmpty()) {
+                    ReaderCoverTextOverlay(
+                        text = coverText,
+                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                    )
+                }
+            }
         } else if (book.type == ReaderBookType.TXT) {
             Box(
                 modifier = Modifier.fillMaxSize().padding(18.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = book.title,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center,
-                    maxLines = 6,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (coverText.isNotEmpty()) {
+                    Text(
+                        text = coverText,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 6,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.MenuBook,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
             }
         } else {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxSize()) {
                 Icon(
                     Icons.Outlined.PictureAsPdf,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(28.dp),
+                    modifier = Modifier.size(28.dp).align(Alignment.Center),
                 )
+                if (coverText.isNotEmpty()) {
+                    ReaderCoverTextOverlay(
+                        text = coverText,
+                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun ReaderCoverTextOverlay(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -1521,6 +1616,7 @@ private fun PdfReader(
                 requestedPage = requestedPage,
                 onRequestedPageConsumed = onRequestedPageConsumed,
                 onCurrentPositionChanged = reportCurrentPosition,
+                onZoomPercentChanged = onPdfZoomPercentChanged,
                 viewModel = viewModel,
             )
         }
@@ -1547,6 +1643,7 @@ private fun LegacyContinuousPdfReader(
     requestedPage: Int?,
     onRequestedPageConsumed: () -> Unit,
     onCurrentPositionChanged: (ReaderPagePosition) -> Unit,
+    onZoomPercentChanged: (Int) -> Unit,
     viewModel: ReaderViewModel,
 ) {
     val restoredPosition = remember(book.id) {
@@ -1577,75 +1674,24 @@ private fun LegacyContinuousPdfReader(
             .distinctUntilChanged()
             .collect(onCurrentPositionChanged)
     }
-    // Same free 2D pan as the enhanced view: the horizontal component of every drag is forwarded
-    // here while the vertical component keeps going through the LazyColumn scrollable.
-    var horizontalOffsetPx by remember(book.id) { mutableFloatStateOf(0f) }
-    var maxHorizontalPx by remember(book.id) { mutableIntStateOf(0) }
-    val twoDimensionalPan = remember(book.id) {
-        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
-            override fun onPreScroll(
-                available: Offset,
-                source: androidx.compose.ui.input.nestedscroll.NestedScrollSource,
-            ): Offset {
-                if (available.x == 0f || maxHorizontalPx <= 0) return Offset.Zero
-                val previous = horizontalOffsetPx
-                horizontalOffsetPx = (previous - available.x)
-                    .coerceIn(0f, maxHorizontalPx.toFloat())
-                return Offset(previous - horizontalOffsetPx, 0f)
-            }
-
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                if (available.x == 0f || maxHorizontalPx <= 0) return Velocity.Zero
-                val start = horizontalOffsetPx
-                val end = (start - available.x * 0.12f)
-                    .coerceIn(0f, maxHorizontalPx.toFloat())
-                if (kotlin.math.abs(end - start) < 1f) return Velocity.Zero
-                val animatable = androidx.compose.animation.core.Animatable(start)
-                animatable.animateTo(end, animationSpec = androidx.compose.animation.core.tween(220)) {
-                    horizontalOffsetPx = value
-                }
-                return Velocity(available.x, 0f)
-            }
-        }
-    }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val density = LocalDensity.current
-        val pageViewportWidth = (maxWidth - 24.dp).coerceAtLeast(1.dp)
-        val pageWidth = (pageViewportWidth * zoomPercent / 100f).coerceAtLeast(160.dp)
-        val targetWidthPx = with(density) { pageWidth.roundToPx() }
-        val pageViewportWidthPx = with(density) { pageViewportWidth.roundToPx() }
-        val calculatedMaxHorizontalPx = readerPdfMaxHorizontalOffset(
-            viewportWidthPx = pageViewportWidthPx,
-            contentWidthPx = targetWidthPx,
+    ReaderPdfContinuousViewport(
+        viewportKey = book.id,
+        listState = listState,
+        pageCount = pageCount,
+        requestedZoomPercent = zoomPercent,
+        onZoomPercentChanged = onZoomPercentChanged,
+        modifier = Modifier.fillMaxSize(),
+    ) { page, pageWidth, targetWidthPx, horizontalOffsetPx ->
+        LegacyPdfPage(
+            book = book,
+            page = page,
+            displayWidth = pageWidth,
+            targetWidthPx = targetWidthPx,
+            horizontalOffsetPx = horizontalOffsetPx,
+            background = background,
+            foreground = foreground,
+            viewModel = viewModel,
         )
-        LaunchedEffect(book.id, calculatedMaxHorizontalPx) {
-            maxHorizontalPx = calculatedMaxHorizontalPx
-            horizontalOffsetPx = horizontalOffsetPx.coerceIn(
-                0f,
-                calculatedMaxHorizontalPx.toFloat(),
-            )
-        }
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .nestedScroll(twoDimensionalPan),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(pageCount, key = { it }) { page ->
-                LegacyPdfPage(
-                    book = book,
-                    page = page,
-                    displayWidth = pageWidth,
-                    targetWidthPx = targetWidthPx,
-                    horizontalOffsetPx = horizontalOffsetPx,
-                    background = background,
-                    foreground = foreground,
-                    viewModel = viewModel,
-                )
-            }
-        }
     }
 }
 
@@ -1754,11 +1800,30 @@ private fun LegacyPdfPage(
     foreground: Color,
     viewModel: ReaderViewModel,
 ) {
+    var lastImageWidthPx by remember(book.id, page) { mutableIntStateOf(0) }
+    var lastImageHeightPx by remember(book.id, page) { mutableIntStateOf(0) }
     val rendered by produceState<Result<Bitmap>?>(null, book.id, page, targetWidthPx) {
         value = runCatching { viewModel.renderPdfPage(book, page, targetWidthPx) }
     }
     val bitmap = rendered?.getOrNull()
+    LaunchedEffect(bitmap) {
+        if (bitmap != null) {
+            lastImageWidthPx = bitmap.width
+            lastImageHeightPx = bitmap.height
+        }
+    }
     when {
+        rendered == null && lastImageWidthPx > 0 && lastImageHeightPx > 0 ->
+            ReaderPdfPageViewport(
+                displayWidth = displayWidth,
+                imageWidthPx = lastImageWidthPx,
+                imageHeightPx = lastImageHeightPx,
+                horizontalOffsetPx = horizontalOffsetPx,
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            }
         rendered == null -> Box(
             Modifier
                 .fillMaxWidth()

@@ -41,10 +41,10 @@ DeskCubby is a **local-first** journal and personal knowledge base for Android a
 | --- | --- |
 | **Markdown journals** | Daily diaries with templates, a meal calendar, photo records and writing statistics — stored as plain `.md` files you can open anywhere. |
 | **Note library** | Obsidian-compatible Markdown notes organized in your own folders, with previews, links and media. |
-| **TXT / PDF reader** | Import books, resume exactly where you stopped, search the full text and jump via the table of contents; PDF pinch-zoom renders beyond 100%, supports free 2D panning, stays centered after shrinking and saves your zoom. |
+| **TXT / PDF reader** | Import books, resume exactly where you stopped, search the full text and jump via the table of contents; PDF pinch-zoom renders beyond 100%, supports single-finger free 2D panning, stays centered after shrinking and saves your zoom. Missing provider thumbnails safely fall back to a bounded first-page cover, whose displayed text can be edited or hidden. |
 | **AI Agent** | Chat with any OpenAI-compatible model. The Agent searches and reads *your* records through native tool calling, asks before every change, and keeps an undoable review. |
 | **Capture kit** | Quick thoughts, important dates, daily records, poems, RSS feeds, a password-protected vault and eight mini-games. |
-| **Home-screen widgets** | Android cards with full-bleed, text-free music visuals; three background-free screen-time charts over 7/30/90 days; centered meal emoji; quick-thought drafts; in-card mini-games; reader progress; and cloud sync with persistent upload/download/conflict totals plus one-tap undo — your layout, your colors. |
+| **Home-screen widgets** | Android cards with full-bleed, text-free music visuals; three background-free screen-time charts over 7/30/90 days; centered meal emoji; quick-thought drafts; save-safe four-direction 2048; reader progress; and cloud sync with persistent upload/download/conflict totals plus one-tap undo — your layout, your colors. |
 | **Make it yours** | Three visual styles (Material, Liquid Glass, Organic Future), light/dark mode, custom themes and a five-language UI (Simplified/Traditional Chinese, English, Korean, Japanese) chosen on first launch. |
 | **Private by design** | No account, no telemetry, no mandatory cloud. Files stay in your folders; sync is always opt-in. |
 

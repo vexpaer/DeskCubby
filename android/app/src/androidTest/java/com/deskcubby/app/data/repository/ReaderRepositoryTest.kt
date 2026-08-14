@@ -2,14 +2,20 @@ package com.deskcubby.app.data.repository
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.pdf.PdfDocument
+import androidx.core.content.FileProvider
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
+import java.io.FileOutputStream
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -53,7 +59,7 @@ class ReaderRepositoryTest {
             )
             assertTrue(stored.isFile)
             assertTrue(stored.length() in 1..ReaderRepository.MAX_STATE_BYTES.toLong())
-            assertEquals(7, JSONObject(stored.readText(Charsets.UTF_8)).getInt("schemaVersion"))
+            assertEquals(8, JSONObject(stored.readText(Charsets.UTF_8)).getInt("schemaVersion"))
 
             val reloaded = ReaderRepository(isolatedContext)
             assertEquals(ReaderPreferences(), reloaded.state.value.preferences)
@@ -76,6 +82,7 @@ class ReaderRepositoryTest {
                     type = ReaderBookType.TXT,
                     addedAt = 1L,
                     lastOpenedAt = 2L,
+                    coverTextOverride = "Private cover title",
                     fingerprint = "a".repeat(64),
                     progressUpdatedAt = 10L,
                     pageOffsetPercent = 65,
@@ -141,6 +148,133 @@ class ReaderRepositoryTest {
 
         assertEquals(0, decoded.books.single().pageOffsetPercent)
         assertEquals(0, decoded.progressLedger.single().pageOffsetPercent)
+    }
+
+    @Test
+    fun schemaSevenReaderStateDefaultsCoverTextToTheBookTitle() {
+        val current = ReaderLibraryState(
+            books = listOf(
+                ReaderBook(
+                    id = "legacy-cover-text",
+                    uri = "content://library/legacy-cover-text.pdf",
+                    title = "Original title",
+                    type = ReaderBookType.PDF,
+                    addedAt = 1L,
+                    lastOpenedAt = 2L,
+                    coverTextOverride = "Custom cover text",
+                ),
+            ),
+        )
+        val legacy = JSONObject(ReaderStateCodec.encode(current)).apply {
+            put("schemaVersion", 7)
+            getJSONArray("books").getJSONObject(0).remove("coverTextOverride")
+        }
+
+        val decoded = ReaderStateCodec.decode(legacy.toString()).books.single()
+
+        assertEquals(null, decoded.coverTextOverride)
+        assertEquals("Original title", decoded.coverDisplayText())
+    }
+
+    @Test
+    fun coverTextOverrideIsAtomicallyPersistedAndCanBeHiddenOrReset() = runBlocking {
+        val application = ApplicationProvider.getApplicationContext<Context>()
+        val isolatedFiles = File(application.cacheDir, "reader-cover-text-${UUID.randomUUID()}")
+        val isolatedContext = object : ContextWrapper(application) {
+            override fun getFilesDir(): File = isolatedFiles
+        }
+        val initial = ReaderLibraryState(
+            books = listOf(
+                ReaderBook(
+                    id = "cover-text-book",
+                    uri = "content://library/cover-text.pdf",
+                    title = "Original title",
+                    type = ReaderBookType.PDF,
+                    addedAt = 1L,
+                    lastOpenedAt = 2L,
+                ),
+            ),
+        )
+        val stateDirectory = File(isolatedFiles, ReaderRepository.DIRECTORY_NAME).apply { mkdirs() }
+        File(stateDirectory, ReaderRepository.STATE_FILE_NAME)
+            .writeText(ReaderStateCodec.encode(initial), Charsets.UTF_8)
+        try {
+            val repository = ReaderRepository(isolatedContext)
+            repository.initialize()
+            repository.setCoverTextOverride("cover-text-book", "  Custom\r\ncover  ")
+            assertEquals("Custom\ncover", repository.state.value.books.single().coverDisplayText())
+
+            val reloaded = ReaderRepository(isolatedContext)
+            reloaded.initialize()
+            assertEquals("Custom\ncover", reloaded.state.value.books.single().coverTextOverride)
+
+            reloaded.setCoverTextOverride("cover-text-book", "   ")
+            assertEquals("", reloaded.state.value.books.single().coverDisplayText())
+            reloaded.setCoverTextOverride("cover-text-book", null)
+            assertEquals("Original title", reloaded.state.value.books.single().coverDisplayText())
+        } finally {
+            isolatedFiles.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun pdfCoverFallsBackToBoundedFirstPageWhenProviderHasNoThumbnail() = runBlocking {
+        val application = ApplicationProvider.getApplicationContext<Context>()
+        val sourceDirectory = File(application.cacheDir, "meal-camera").apply { mkdirs() }
+        val sourceFile = File(sourceDirectory, "reader-cover-${UUID.randomUUID()}.pdf")
+        val fingerprint = UUID.randomUUID().toString().replace("-", "").repeat(2)
+        val cacheFile = File(
+            File(application.cacheDir, ReaderRepository.COVER_DIRECTORY_NAME),
+            "$fingerprint.png",
+        )
+        var cover: android.graphics.Bitmap? = null
+        try {
+            val document = PdfDocument()
+            try {
+                val page = document.startPage(
+                    PdfDocument.PageInfo.Builder(612, 792, 1).create(),
+                )
+                page.canvas.drawColor(Color.WHITE)
+                page.canvas.drawRect(
+                    80f,
+                    100f,
+                    532f,
+                    692f,
+                    Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(55, 95, 145) },
+                )
+                document.finishPage(page)
+                FileOutputStream(sourceFile).use(document::writeTo)
+            } finally {
+                document.close()
+            }
+            val uri = FileProvider.getUriForFile(
+                application,
+                "${application.packageName}.fileprovider",
+                sourceFile,
+            )
+            val repository = ReaderRepository(application)
+            cover = repository.loadCover(
+                ReaderBook(
+                    id = "cover-fallback-${UUID.randomUUID()}",
+                    uri = uri.toString(),
+                    title = "Fallback cover",
+                    type = ReaderBookType.PDF,
+                    addedAt = 1L,
+                    lastOpenedAt = 1L,
+                    fingerprint = fingerprint,
+                    totalPages = 1,
+                ),
+                widthPx = 320,
+            )
+
+            assertNotNull(cover)
+            assertEquals(ReaderCoverDimensions(320, 458), ReaderCoverDimensions(cover!!.width, cover!!.height))
+            assertTrue(cacheFile.isFile)
+        } finally {
+            cover?.takeUnless { it.isRecycled }?.recycle()
+            sourceFile.delete()
+            cacheFile.delete()
+        }
     }
 
     @Test
@@ -443,6 +577,7 @@ class ReaderRepositoryTest {
                     lastOpenedAt = 22L,
                     pdfPageIndex = 70,
                     coverUri = "content://covers/keep.png",
+                    coverTextOverride = "Keep this cover text",
                     fingerprint = fingerprint,
                     totalPages = 100,
                     progressUpdatedAt = 2_000L,
@@ -464,6 +599,7 @@ class ReaderRepositoryTest {
             assertEquals("content://library/rollback.pdf", book.uri)
             assertEquals("Do not replace", book.title)
             assertEquals("content://covers/keep.png", book.coverUri)
+            assertEquals("Keep this cover text", book.coverTextOverride)
             assertEquals(ReaderBackground.NIGHT, restored.preferences.background)
             assertEquals(12, book.pdfPageIndex)
             assertEquals(1_000L, book.progressUpdatedAt)

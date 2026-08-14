@@ -97,6 +97,50 @@ class ReaderPdfPolicyTest {
     }
 
     @Test
+    fun singleFingerDiagonalPanMovesBothAxesInTheSameUpdate() {
+        assertEquals(
+            ReaderPdfPanUpdate(
+                horizontalOffsetPx = 380f,
+                verticalScrollDeltaPx = 55f,
+            ),
+            readerPdfPanUpdate(
+                currentHorizontalOffsetPx = 300f,
+                maxHorizontalOffsetPx = 800f,
+                pointerPanXPx = -80f,
+                pointerPanYPx = -55f,
+            ),
+        )
+    }
+
+    @Test
+    fun singleFingerPanClampsOneAxisWithoutDiscardingTheOther() {
+        assertEquals(
+            ReaderPdfPanUpdate(
+                horizontalOffsetPx = 800f,
+                verticalScrollDeltaPx = 120f,
+            ),
+            readerPdfPanUpdate(
+                currentHorizontalOffsetPx = 790f,
+                maxHorizontalOffsetPx = 800f,
+                pointerPanXPx = -90f,
+                pointerPanYPx = -120f,
+            ),
+        )
+    }
+
+    @Test
+    fun zoomKeepsCentroidDocumentPointAndRecentersBelowViewportWidth() {
+        assertEquals(600f, readerPdfHorizontalOffsetAfterZoom(1_200, 1_200, 2_400, 0f, 600f))
+        assertEquals(0f, readerPdfHorizontalOffsetAfterZoom(1_200, 2_400, 600, 600f, 600f))
+    }
+
+    @Test
+    fun contentWidthHonorsZoomAndMinimumPageWidth() {
+        assertEquals(2_400, readerPdfContentWidthPx(1_200, 320, 200))
+        assertEquals(320, readerPdfContentWidthPx(480, 320, 50))
+    }
+
+    @Test
     fun resourceOwnerReleasesExactlyOnceWhenFollowingCloseFails() {
         val resource = Any()
         val released = mutableListOf<Any>()

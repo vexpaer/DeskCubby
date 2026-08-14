@@ -37,4 +37,16 @@ class ReaderCoverPolicyTest {
         assertTrue(decodedWidth <= 1_024L)
         assertTrue(decodedWidth * decodedHeight <= 1_500_000L)
     }
+
+    @Test
+    fun coverTextOverrideIsBoundedAndPreservesIntentionalBlank() {
+        assertEquals(null, normalizeReaderCoverTextOverride(null))
+        assertEquals("", normalizeReaderCoverTextOverride("   \r\n"))
+        assertEquals(
+            "Line 1\nLine 2",
+            normalizeReaderCoverTextOverride(" Line 1\u0000\r\nLine 2 "),
+        )
+        val normalized = normalizeReaderCoverTextOverride("📕".repeat(140)).orEmpty()
+        assertEquals(MAX_READER_COVER_TEXT_CODE_POINTS, normalized.codePointCount(0, normalized.length))
+    }
 }

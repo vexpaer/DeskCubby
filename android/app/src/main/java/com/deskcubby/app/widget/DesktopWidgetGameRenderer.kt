@@ -44,6 +44,19 @@ fun desktopGameIdForModule(moduleId: String): String? = when (moduleId) {
     else -> null
 }
 
+/**
+ * Desktop 2048 deliberately has no reset action. In addition to removing the hit target, reject
+ * NEW here so an old launcher RemoteViews/PendingIntent cannot overwrite a long-running save
+ * after the application is upgraded.
+ */
+internal fun widget2048Direction(action: WidgetGameAction?): Game2048.Direction? = when (action) {
+    WidgetGameAction.UP -> Game2048.Direction.UP
+    WidgetGameAction.DOWN -> Game2048.Direction.DOWN
+    WidgetGameAction.LEFT -> Game2048.Direction.LEFT
+    WidgetGameAction.RIGHT -> Game2048.Direction.RIGHT
+    else -> null
+}
+
 @Singleton
 class DesktopWidgetGameRenderer @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -88,29 +101,18 @@ class DesktopWidgetGameRenderer @Inject constructor(
 
     private suspend fun render2048(canvas: Canvas, action: WidgetGameAction?, size: Int) {
         val saveKey = if (size == 4) "2048" else "2048_$size"
-        var game = gamePersistence.loadSave(saveKey)?.let(Game2048::fromJson) ?: Game2048(size)
-        if (action == WidgetGameAction.NEW) {
-            game = Game2048(size)
-        } else if (action != null) {
-            val direction = when (action) {
-                WidgetGameAction.UP -> Game2048.Direction.UP
-                WidgetGameAction.DOWN -> Game2048.Direction.DOWN
-                WidgetGameAction.LEFT -> Game2048.Direction.LEFT
-                WidgetGameAction.RIGHT -> Game2048.Direction.RIGHT
-                else -> null
+        val game = gamePersistence.loadSave(saveKey)?.let(Game2048::fromJson) ?: Game2048(size)
+        widget2048Direction(action)?.let { direction ->
+            val result = game.moveWithResult(direction)
+            if (result != null) {
+                gamePersistence.recordStatistics(
+                    saveKey,
+                    mapOf(GameStatisticMetric.EFFECTIVE_MOVES to 1L),
+                    mapOf(GameStatisticMetric.HIGHEST_TILE to result.statisticsDelta.highestTile.toLong()),
+                )
             }
-            direction?.let { d ->
-                val result = game.moveWithResult(d)
-                if (result != null) {
-                    gamePersistence.recordStatistics(
-                        saveKey,
-                        mapOf(GameStatisticMetric.EFFECTIVE_MOVES to 1L),
-                        mapOf(GameStatisticMetric.HIGHEST_TILE to result.statisticsDelta.highestTile.toLong()),
-                    )
-                }
-            }
+            gamePersistence.saveProgress(saveKey, game.toJson(), game.score)
         }
-        if (action != null) gamePersistence.saveProgress(saveKey, game.toJson(), game.score)
         draw2048(canvas, game)
     }
 
@@ -599,14 +601,6 @@ class DesktopWidgetGameRenderer @Inject constructor(
                 bindInvisibleGameAction(views, R.id.widget_apps_2048_hit_down, translate("向下", "Down", settings.appLanguage), appWidgetId, gameId, WidgetGameAction.DOWN)
                 bindInvisibleGameAction(views, R.id.widget_apps_2048_hit_left, translate("向左", "Left", settings.appLanguage), appWidgetId, gameId, WidgetGameAction.LEFT)
                 bindInvisibleGameAction(views, R.id.widget_apps_2048_hit_right, translate("向右", "Right", settings.appLanguage), appWidgetId, gameId, WidgetGameAction.RIGHT)
-                bindInvisibleGameAction(
-                    views,
-                    R.id.widget_apps_2048_hit_new,
-                    translate("新游戏", "New", settings.appLanguage),
-                    appWidgetId,
-                    gameId,
-                    WidgetGameAction.NEW,
-                )
             }
             "snake" -> {
                 views.setViewVisibility(R.id.widget_apps_dpad, View.VISIBLE)

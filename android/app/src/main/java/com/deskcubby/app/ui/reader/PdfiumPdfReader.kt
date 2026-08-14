@@ -4,30 +4,12 @@ import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.gestures.calculateZoom
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.runtime.withFrameNanos
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.unit.Velocity
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -35,7 +17,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -46,24 +27,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.deskcubby.app.data.repository.MAX_READER_CHAPTERS
-import com.deskcubby.app.data.repository.MAX_READER_PDF_ZOOM_PERCENT
 import com.deskcubby.app.data.repository.MAX_READER_SEARCH_QUERY_CHARS
 import com.deskcubby.app.data.repository.MAX_READER_SEARCH_RESULTS
-import com.deskcubby.app.data.repository.MIN_READER_PDF_ZOOM_PERCENT
 import com.deskcubby.app.data.repository.ReaderChapter
 import com.deskcubby.app.data.repository.ReaderPreferences
 import com.deskcubby.app.data.repository.collapseReaderChapterDuplicates
@@ -85,7 +59,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
-import kotlin.math.roundToInt
 
 private class PdfiumDocumentSession(
     val document: PdfDocument,
@@ -128,15 +101,6 @@ private data class PdfiumRenderedPage(
  * After the zoom commits and the page re-renders, the reader scrolls both axes so this same
  * content point lands back under [targetX]/[targetY].
  */
-private data class PdfZoomAnchor(
-    val pageIndex: Int,
-    val contentX: Float,
-    val contentY: Float,
-    val targetX: Float,
-    val targetY: Float,
-    val scale: Float,
-)
-
 private val pdfiumWorkerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 private val pdfiumOpenMutex = Mutex()
 
@@ -261,78 +225,17 @@ private fun PdfiumDocumentView(
     }
     val safeInitialPage = restoredPosition.pageIndex
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = safeInitialPage)
-    var gestureZoom by remember(session) { mutableFloatStateOf(1f) }
-    // Live pinch transform: the content follows the fingers through a matrix scale around the
-    // pinch centroid without re-rendering. When the gesture ends the final scale is committed to
-    // gestureZoom, which re-renders pages at the new resolution, and the transform resets.
-    var gestureScale by remember(session) { mutableFloatStateOf(1f) }
-    var gestureTransformOrigin by remember(session) { mutableStateOf(TransformOrigin.Center) }
-    // The same transform origin kept as plain floats: the anchor math inside the pointer block
-    // reads these (the TransformOrigin component accessors are not resolvable there).
-    var gestureTransformOriginX by remember(session) { mutableFloatStateOf(0.5f) }
-    var gestureTransformOriginY by remember(session) { mutableFloatStateOf(0.5f) }
-    // While the transient matrix is live, the pinch keeps the content under the centroid pinned
-    // on screen. Committing the zoom re-renders the pages at the new width, so the same content
-    // point must be scrolled back under the centroid afterwards, otherwise the reloaded pages
-    // appear at a different size/position than what the user saw when the fingers lifted.
-    var pendingZoomAnchor by remember(session) { mutableStateOf<PdfZoomAnchor?>(null) }
-    var renderedPages by remember(session) { mutableStateOf<Set<Int>>(emptySet()) }
     var firstContentLoaded by remember(session) { mutableStateOf(false) }
     var searchMatches by remember(session) { mutableStateOf<List<Int>>(emptyList()) }
     var initialPositionRestored by rememberSaveable { mutableStateOf(false) }
     val currentOnPositionChanged by rememberUpdatedState(onCurrentPositionChanged)
     val currentOnEnhancedReaderUnavailable by rememberUpdatedState(onEnhancedReaderUnavailable)
-    // Free 2D pan: instead of classifying a drag as purely horizontal or vertical, every drag
-    // moves both axes at once. The vertical axis keeps going through the LazyColumn scrollable;
-    // the horizontal axis is forwarded here in the pre-scroll phase so diagonal/circular drags
-    // follow the finger on both axes simultaneously.
-    var horizontalOffsetPx by remember(session) { mutableFloatStateOf(0f) }
-    var maxHorizontalPx by remember(session) { mutableIntStateOf(0) }
-    val twoDimensionalPan = remember(session) {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (available.x == 0f || maxHorizontalPx <= 0) return Offset.Zero
-                val previous = horizontalOffsetPx
-                horizontalOffsetPx = (previous - available.x)
-                    .coerceIn(0f, maxHorizontalPx.toFloat())
-                return Offset(previous - horizontalOffsetPx, 0f)
-            }
-
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                if (available.x == 0f || maxHorizontalPx <= 0) return Velocity.Zero
-                val start = horizontalOffsetPx
-                val end = (start - available.x * 0.12f)
-                    .coerceIn(0f, maxHorizontalPx.toFloat())
-                if (kotlin.math.abs(end - start) < 1f) return Velocity.Zero
-                val animatable = Animatable(start)
-                animatable.animateTo(end, animationSpec = tween(220)) {
-                    horizontalOffsetPx = value
-                }
-                return Velocity(available.x, 0f)
-            }
-        }
-    }
-
     LaunchedEffect(session, listState) {
         if (!initialPositionRestored) {
             listState.restoreReaderPagePosition(restoredPosition, session.pageCount)
             initialPositionRestored = true
         }
     }
-    // After a pinch commits, wait until the anchor page has re-rendered at the new width, then
-    // scroll both axes so the content that was under the centroid when the fingers lifted stays
-    // under that same screen point. This keeps the reloaded PDF matching the pre-reload matrix.
-    LaunchedEffect(session, pendingZoomAnchor, renderedPages) {
-        val anchor = pendingZoomAnchor ?: return@LaunchedEffect
-        if (anchor.pageIndex !in renderedPages) return@LaunchedEffect
-        withFrameNanos { }
-        horizontalOffsetPx = (anchor.contentX - anchor.targetX)
-            .coerceIn(0f, maxHorizontalPx.coerceAtLeast(1).toFloat())
-        val itemOffset = (anchor.targetY - anchor.contentY * anchor.scale).roundToInt()
-        listState.scrollToItem(anchor.pageIndex, itemOffset)
-        pendingZoomAnchor = null
-    }
-    LaunchedEffect(preferences.pdfZoomPercent) { gestureZoom = 1f }
     LaunchedEffect(requestedPage) {
         requestedPage?.let { page ->
             listState.scrollToItem(page.coerceIn(0, session.pageCount - 1))
@@ -436,155 +339,32 @@ private fun PdfiumDocumentView(
         }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val density = LocalDensity.current
-        val effectiveZoomPercent = (preferences.pdfZoomPercent * gestureZoom)
-            .roundToInt()
-            .coerceIn(MIN_READER_PDF_ZOOM_PERCENT, MAX_READER_PDF_ZOOM_PERCENT)
-        val pageViewportWidth = (maxWidth - 24.dp).coerceAtLeast(1.dp)
-        val pageWidth = (pageViewportWidth * effectiveZoomPercent / 100f)
-            .coerceAtLeast(160.dp)
-        val targetWidthPx = with(density) { pageWidth.roundToPx() }
-        val pageViewportWidthPx = with(density) { pageViewportWidth.roundToPx() }
-        val calculatedMaxHorizontalPx = readerPdfMaxHorizontalOffset(
-            viewportWidthPx = pageViewportWidthPx,
-            contentWidthPx = targetWidthPx,
-        )
-        LaunchedEffect(session, calculatedMaxHorizontalPx) {
-            maxHorizontalPx = calculatedMaxHorizontalPx
-            horizontalOffsetPx = horizontalOffsetPx.coerceIn(
-                0f,
-                calculatedMaxHorizontalPx.toFloat(),
-            )
-        }
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .nestedScroll(twoDimensionalPan)
-                .graphicsLayer {
-                    scaleX = gestureScale
-                    scaleY = gestureScale
-                    transformOrigin = gestureTransformOrigin
+    ReaderPdfContinuousViewport(
+        viewportKey = session,
+        listState = listState,
+        pageCount = session.pageCount,
+        requestedZoomPercent = preferences.pdfZoomPercent,
+        onZoomPercentChanged = onZoomPercentChanged,
+        modifier = Modifier.fillMaxSize(),
+    ) { pageIndex, pageWidth, targetWidthPx, horizontalOffsetPx ->
+        PdfiumPage(
+            session = session,
+            pageIndex = pageIndex,
+            displayWidth = pageWidth,
+            targetWidthPx = targetWidthPx,
+            horizontalOffsetPx = horizontalOffsetPx,
+            background = background,
+            foreground = foreground,
+            enforceRenderTimeout = pageIndex == safeInitialPage,
+            onRendered = {
+                if (!firstContentLoaded) firstContentLoaded = true
+            },
+            onInitialRenderFailed = {
+                if (pageIndex == safeInitialPage) {
+                    currentOnEnhancedReaderUnavailable()
                 }
-                .pointerInput(preferences.pdfZoomPercent) {
-                    awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
-                        var zoomChanged = false
-                        var lastCentroid = Offset.Zero
-                        var lastAnchorPage = -1
-                        do {
-                            val event = awaitPointerEvent()
-                            val pressed = event.changes.filter { it.pressed }
-                            if (pressed.size >= 2) {
-                                val zoomChange = event.calculateZoom()
-                                if (zoomChange.isFinite() && zoomChange > 0f) {
-                                    val currentEffectiveZoom =
-                                        preferences.pdfZoomPercent * gestureZoom
-                                    val minimum = MIN_READER_PDF_ZOOM_PERCENT /
-                                        currentEffectiveZoom
-                                    val maximum = MAX_READER_PDF_ZOOM_PERCENT /
-                                        currentEffectiveZoom
-                                    gestureScale = (gestureScale * zoomChange)
-                                        .coerceIn(minimum, maximum)
-                                    val centroid = pressed.fold(Offset.Zero) { acc, change ->
-                                        acc + change.position
-                                    } / pressed.size.toFloat()
-                                    gestureTransformOriginX =
-                                        (centroid.x / size.width).coerceIn(0f, 1f)
-                                    gestureTransformOriginY =
-                                        (centroid.y / size.height).coerceIn(0f, 1f)
-                                    gestureTransformOrigin = TransformOrigin(
-                                        gestureTransformOriginX,
-                                        gestureTransformOriginY,
-                                    )
-                                    lastCentroid = centroid
-                                    lastAnchorPage = listState.layoutInfo
-                                        .visibleItemsInfo
-                                        .firstOrNull { item ->
-                                            centroid.y >= item.offset &&
-                                                centroid.y < item.offset + item.size
-                                        }
-                                        ?.index
-                                        ?: lastAnchorPage
-                                    zoomChanged = true
-                                }
-                                event.changes.forEach { it.consume() }
-                            }
-                        } while (event.changes.any { it.pressed })
-                        if (zoomChanged) {
-                            // Commit the final scale: pages re-render at the new width, then the
-                            // transient matrix resets so the rendered content matches the scale.
-                            gestureZoom = (gestureZoom * gestureScale).coerceIn(
-                                MIN_READER_PDF_ZOOM_PERCENT /
-                                    preferences.pdfZoomPercent.toFloat(),
-                                MAX_READER_PDF_ZOOM_PERCENT /
-                                    preferences.pdfZoomPercent.toFloat(),
-                            )
-                            // Persist the committed percentage so a later reload keeps the zoom.
-                            if (gestureScale != 1f) {
-                                onZoomPercentChanged(
-                                    (preferences.pdfZoomPercent * gestureZoom)
-                                        .roundToInt()
-                                        .coerceIn(
-                                            MIN_READER_PDF_ZOOM_PERCENT,
-                                            MAX_READER_PDF_ZOOM_PERCENT,
-                                        ),
-                                )
-                            }
-                            val anchorPage = lastAnchorPage
-                            if (anchorPage >= 0 && gestureScale != 1f) {
-                                val item = listState.layoutInfo.visibleItemsInfo
-                                    .firstOrNull { it.index == anchorPage }
-                                if (item != null) {
-                                    val originX = gestureTransformOriginX * size.width
-                                    val originY = gestureTransformOriginY * item.size
-                                    val unzoomedX = originX +
-                                        (lastCentroid.x - originX) / gestureScale
-                                    val unzoomedY = originY +
-                                        (lastCentroid.y - originY) / gestureScale
-                                    pendingZoomAnchor = PdfZoomAnchor(
-                                        pageIndex = anchorPage,
-                                        contentX = unzoomedX - horizontalOffsetPx,
-                                        contentY = unzoomedY - item.offset,
-                                        targetX = lastCentroid.x,
-                                        targetY = lastCentroid.y,
-                                        scale = gestureScale,
-                                    )
-                                }
-                            }
-                        }
-                        gestureScale = 1f
-                        gestureTransformOriginX = 0.5f
-                        gestureTransformOriginY = 0.5f
-                        gestureTransformOrigin = TransformOrigin.Center
-                    }
-                },
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(session.pageCount, key = { it }) { pageIndex ->
-                PdfiumPage(
-                    session = session,
-                    pageIndex = pageIndex,
-                    displayWidth = pageWidth,
-                    targetWidthPx = targetWidthPx,
-                    horizontalOffsetPx = horizontalOffsetPx,
-                    background = background,
-                    foreground = foreground,
-                    enforceRenderTimeout = pageIndex == safeInitialPage,
-                    onRendered = {
-                        renderedPages = renderedPages + pageIndex
-                        if (!firstContentLoaded) firstContentLoaded = true
-                    },
-                    onInitialRenderFailed = {
-                        if (pageIndex == safeInitialPage) {
-                            currentOnEnhancedReaderUnavailable()
-                        }
-                    },
-                )
-            }
-        }
+            },
+        )
     }
 }
 
@@ -601,6 +381,8 @@ private fun PdfiumPage(
     onRendered: () -> Unit,
     onInitialRenderFailed: () -> Unit,
 ) {
+    var lastImageWidthPx by remember(session, pageIndex) { mutableIntStateOf(0) }
+    var lastImageHeightPx by remember(session, pageIndex) { mutableIntStateOf(0) }
     val rendered by key(session, pageIndex, targetWidthPx) {
         produceState<Result<PdfiumRenderedPage>?>(null, session, pageIndex, targetWidthPx) {
             val acquisition = ReaderPdfDetachedResource(
@@ -626,11 +408,26 @@ private fun PdfiumPage(
     val bitmap = rendered?.getOrNull()?.bitmap
     LaunchedEffect(rendered) {
         when {
-            bitmap != null -> onRendered()
+            bitmap != null -> {
+                lastImageWidthPx = bitmap.width
+                lastImageHeightPx = bitmap.height
+                onRendered()
+            }
             rendered?.isFailure == true -> onInitialRenderFailed()
         }
     }
     when {
+        rendered == null && lastImageWidthPx > 0 && lastImageHeightPx > 0 ->
+            ReaderPdfPageViewport(
+                displayWidth = displayWidth,
+                imageWidthPx = lastImageWidthPx,
+                imageHeightPx = lastImageHeightPx,
+                horizontalOffsetPx = horizontalOffsetPx,
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            }
         rendered == null -> Box(
             Modifier
                 .fillMaxWidth()

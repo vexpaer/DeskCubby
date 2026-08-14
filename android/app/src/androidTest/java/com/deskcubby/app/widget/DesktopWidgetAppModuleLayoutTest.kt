@@ -39,10 +39,17 @@ class DesktopWidgetAppModuleLayoutTest {
         listOf(
             R.id.widget_apps_2048_hit_up,
             R.id.widget_apps_2048_hit_left,
-            R.id.widget_apps_2048_hit_new,
             R.id.widget_apps_2048_hit_right,
             R.id.widget_apps_2048_hit_down,
         ).forEach { assertNotNull("missing 2048 hit zone " + it, root.findViewById<View>(it)) }
+        assertEquals(
+            0,
+            context.resources.getIdentifier(
+                "widget_apps_2048_hit_new",
+                "id",
+                context.packageName,
+            ),
+        )
         // D-pad buttons used by 2048 / snake / tetris.
         listOf(
             R.id.widget_apps_btn_up,

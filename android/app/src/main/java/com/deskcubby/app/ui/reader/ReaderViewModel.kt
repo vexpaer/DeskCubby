@@ -149,6 +149,16 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
+    fun setCoverTextOverride(bookId: String, value: String?) = viewModelScope.launch {
+        try {
+            repository.setCoverTextOverride(bookId, value)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            _message.value = ReaderMessage.SETTINGS_FAILED
+        }
+    }
+
     suspend fun loadCover(book: ReaderBook, widthPx: Int): Bitmap? =
         repository.loadCover(book, widthPx)
 
