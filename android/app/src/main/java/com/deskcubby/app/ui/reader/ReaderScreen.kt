@@ -25,7 +25,6 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -169,10 +168,8 @@ import com.deskcubby.app.data.repository.isValidReaderChapterRegex
 import com.deskcubby.app.data.repository.findReaderTextMatches
 import com.deskcubby.app.data.statistics.EngagementKind
 import com.deskcubby.app.ui.components.AppEmptyState
-import com.deskcubby.app.ui.components.LocalLayoutMode
 import com.deskcubby.app.ui.components.ColorPickerDialog
 import com.deskcubby.app.ui.components.PageTutorialTarget
-import com.deskcubby.app.data.model.LayoutMode
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.tr
 import java.util.Locale
@@ -1439,9 +1436,9 @@ private fun ReaderChapterDrawer(
     onJump: () -> Unit,
 ) {
     val currentChapter = chapters.lastOrNull { it.pageIndex <= currentPage }
-    val layoutMode = LocalLayoutMode.current
-    val railInset = if (layoutMode != LayoutMode.COMPACT) 84.dp else 0.dp
-    Box(Modifier.offset(x = railInset)) {
+    // The root workspace Row already places this screen immediately to the right of the rail.
+    // Keep the drawer in these local content coordinates: closed it hides left of the content
+    // pane, and open its sheet starts flush against the rail without an extra 84 dp gap.
     ModalDrawerSheet(
         drawerContainerColor = background,
         drawerContentColor = foreground,
@@ -1520,8 +1517,6 @@ private fun ReaderChapterDrawer(
             }
         }
     }
-    }
-
 }
 
 @Composable

@@ -47,7 +47,7 @@ DeskCubby is a **local-first** journal and personal knowledge base for Android a
 | **Capture kit** | Quick thoughts, important dates, daily records, poems, RSS feeds, a password-protected vault and eight mini-games. |
 | **Home-screen widgets** | Android cards with full-bleed, text-free music visuals; three background-free screen-time charts over 7/30/90 days; centered meal emoji; quick-thought drafts; save-safe four-direction 2048; reader progress; and cloud sync with persistent upload/download/conflict totals plus one-tap undo — your layout, your colors. |
 | **Make it yours** | Three visual styles (Material, Liquid Glass, Organic Future), light/dark mode, custom themes and a five-language UI (Simplified/Traditional Chinese, English, Korean, Japanese) chosen on first launch. |
-| **Workspace on tablets** | Adaptive landscape layout for Pads and big screens: a left navigation rail, master–detail panes, and a context panel for diary, AI, and ideas — your phone stays a single-pane flow, your tablet becomes a digital desk. |
+| **Workspace on tablets** | Adaptive landscape layout for Pads and big screens: a fixed left navigation rail, master–detail panes, and a context panel for diary, AI, and ideas. Reader contents and thought categories open flush beside the rail, while closed drawers stay entirely out of its way. |
 | **Private by design** | No account, no telemetry, no mandatory cloud. Files stay in your folders; sync is always opt-in. |
 
 ## Install & use

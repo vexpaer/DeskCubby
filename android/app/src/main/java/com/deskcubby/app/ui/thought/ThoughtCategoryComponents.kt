@@ -11,7 +11,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -62,8 +61,6 @@ import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.ThoughtRepository
 import com.deskcubby.app.ui.components.ColorPickerDialog
-import com.deskcubby.app.ui.components.LocalLayoutMode
-import com.deskcubby.app.data.model.LayoutMode
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.tr
@@ -105,9 +102,9 @@ internal fun ThoughtCategoryDrawer(
     onAdd: () -> Unit,
     onEdit: (ThoughtCategoryEntity) -> Unit,
 ) {
-    val layoutMode = LocalLayoutMode.current
-    val railInset = if (layoutMode != LayoutMode.COMPACT) 84.dp else 0.dp
-    Box(Modifier.offset(x = railInset)) {
+    // Navigation.kt already measures this screen in the content column to the right of the rail.
+    // Anchoring the sheet to this local origin keeps the closed drawer behind the content edge
+    // and makes the open drawer meet the rail directly, with neither overlap nor a spacer.
     ModalDrawerSheet(modifier = Modifier.padding(bottom = bottomPadding)) {
         Column(Modifier.fillMaxHeight().padding(vertical = 12.dp)) {
             Text(
@@ -157,7 +154,6 @@ internal fun ThoughtCategoryDrawer(
                 }
             }
         }
-    }
     }
 }
 

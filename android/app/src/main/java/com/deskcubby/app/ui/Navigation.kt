@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -345,7 +346,10 @@ fun DeskCubbyRoot(
                         onOpenSettings = { navigateMain(NavItemId.SETTINGS.route) },
                     )
                 }
-                Box(Modifier.weight(1f).fillMaxSize()) {
+                // Drawer sheets animate into negative local X while closed. Clip the content
+                // column so that hidden/dragging pixels can never paint over the sibling rail.
+                // The open sheet still begins at this column's x=0, flush with the rail.
+                Box(Modifier.weight(1f).fillMaxSize().clipToBounds()) {
                 NavHost(
                     navController = navController,
                     startDestination = initialStartDestination,
