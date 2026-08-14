@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,13 +38,15 @@ internal fun DeskAiOverlay(
     val titleText = tr("想做些什么？", "What are you thinking?")
     val summarizePrompt = tr("总结一下我今天的状态", "Summarize how my day went")
     val startText = tr("直接开始", "Just start typing")
+    val backdropInteractionSource = remember { MutableInteractionSource() }
+    val panelInteractionSource = remember { MutableInteractionSource() }
 
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.35f))
             .clickable(
-                interactionSource = MutableInteractionSource(),
+                interactionSource = backdropInteractionSource,
                 indication = null,
             ) { onDismiss() },
         contentAlignment = Alignment.Center,
@@ -54,7 +57,7 @@ internal fun DeskAiOverlay(
                 .clip(RoundedCornerShape(6.dp))
                 .background(scheme.surface)
                 .clickable(
-                    interactionSource = MutableInteractionSource(),
+                    interactionSource = panelInteractionSource,
                     indication = null,
                 ) { /* swallow clicks inside */ }
                 .padding(28.dp),

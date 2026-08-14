@@ -38,6 +38,7 @@
 
 - 修复 0.18.0–0.18.3 延续的横屏抽屉坐标错误。根 `Row` 已把 rail 与内容分栏，阅读「目录」和小巧思「分类」抽屉本来就在内容区坐标内；0.18.2/0.18.3 再加 84dp padding/offset 会让展开面板与 rail 之间出现空隙，却无法从根本上保证收起面板不侵入 rail。
 - 删除两处重复 rail 偏移，让 `ModalNavigationDrawer` 直接锚定内容区左边缘；同时给 rail 右侧内容列加 `clipToBounds()`，阻止收起/拖动动画的负向像素越界绘制到 sibling rail。收起时屏幕顺序为 rail → 内容；展开时为 rail → 子目录 → 内容，中间没有额外间距。竖屏 COMPACT 行为不变。
+- 修复桌面 AI 浮层两处 `MutableInteractionSource` 未通过 `remember` 保持的问题，消除 Compose `RememberInComposition` Lint error；0.18.4 发布前 Debug Lint 已无 error。
 - Android 应用升至 0.18.4（versionCode 41）；应用 JSON 备份保持 v33、Room 保持 v13、Reader 保持 schema v8。
 
 ## Android 0.18.3
