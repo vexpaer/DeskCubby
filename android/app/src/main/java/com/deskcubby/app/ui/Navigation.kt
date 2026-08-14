@@ -2,6 +2,7 @@
 
 package com.deskcubby.app.ui
 
+import android.app.Activity
 import android.animation.ValueAnimator
 import android.Manifest
 import android.content.Context
@@ -23,6 +24,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -64,6 +67,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -92,6 +96,8 @@ import com.deskcubby.app.data.model.HOME_GAME_SHORTCUT_IDS
 import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.LayoutMode
+import com.deskcubby.app.data.model.OrientationPreference
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.MusicVisualizerStyle
 import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
@@ -99,6 +105,10 @@ import com.deskcubby.app.ui.blog.BlogScreen
 import com.deskcubby.app.ui.blog.BlogViewModel
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.AppBackground
+import com.deskcubby.app.ui.components.DeskCubbyNavigationRail
+import com.deskcubby.app.ui.components.LocalLayoutMode
+import com.deskcubby.app.ui.components.rememberWindowInfo
+import com.deskcubby.app.ui.components.resolveLayoutMode
 import com.deskcubby.app.ui.components.PageTutorialOverlay
 import com.deskcubby.app.ui.components.PageTutorialTarget
 import com.deskcubby.app.ui.components.MusicVisualizerLayer
@@ -197,6 +207,14 @@ fun DeskCubbyRoot(
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val ready by settingsViewModel.ready.collectAsStateWithLifecycle()
     val cloudSyncStatus by settingsViewModel.cloudSyncStatus.collectAsStateWithLifecycle()
+
+    // Device-local orientation lock: AUTO follows the sensor, PORTRAIT/LANDSCAPE pin the
+    // activity. This controls rotation only; LayoutMode below decides UI structure from
+    // the resulting window geometry. It reads the same context used by the Reader orientation
+    // effect and is cleared when this composable (and its reader) leaves composition.
+    val orientationActivity = LocalContext.current.findActivityCompat()
+    OrientationPreferenceEffect(orientationActivity, settings.orientationPreference)
+
     DeskCubbyTheme(settings) {
         AppBackground(settings) {
         if (!ready) {
@@ -236,6 +254,9 @@ fun DeskCubbyRoot(
         val standardMotionMillis = if (rootVisuals.customized) rootVisuals.transitionMillis else 700
         val backStack by navController.currentBackStackEntryAsState()
         val route = backStack?.destination?.route
+        val windowInfo = rememberWindowInfo()
+        val layoutMode = resolveLayoutMode(windowInfo)
+        val workspaceMode = layoutMode != LayoutMode.COMPACT
         val visibleTabs = settings.navItems.filter { it.visible || it.id == NavItemId.SETTINGS }
         val bottomSelectedRoute = route.takeIf { currentRoute ->
             visibleTabs.any { it.id.route == currentRoute }
@@ -244,11 +265,17 @@ fun DeskCubbyRoot(
                 item.id.route == route && item.showInMore
             }
         }
-        val showBottomBar = route in NavItemId.entries.map { it.route } &&
+        // Bottom bar stays for COMPACT (portrait phone). In wider modes the rail replaces it
+        // and both are never shown at the same time.
+        val showBottomBar = !workspaceMode &&
+            route in NavItemId.entries.map { it.route } &&
             !(route == NavItemId.SETTINGS.route && settingsSubpageOpen) &&
             !(route == NavItemId.READER.route && readerOpen) &&
             !(route == NavItemId.GAMES.route && gameOpen) &&
             !WindowInsets.isImeVisible
+        // The rail is always visible in workspace modes on top-level destinations.
+        val showWorkspaceRail = workspaceMode &&
+            route in NavItemId.entries.map { it.route }
         val navigateMain: (String) -> Unit = { destination ->
             navController.navigate(destination) {
                 // Keep only the graph itself, so no tab can restore another tab's nested page.
@@ -280,6 +307,7 @@ fun DeskCubbyRoot(
             }
         }
 
+        CompositionLocalProvider(LocalLayoutMode provides layoutMode) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = Color.Transparent,
@@ -301,10 +329,21 @@ fun DeskCubbyRoot(
             },
         ) { padding ->
             Box(Modifier.fillMaxSize()) {
+                if (showWorkspaceRail) {
+                    DeskCubbyNavigationRail(
+                        items = visibleTabs,
+                        selectedRoute = bottomSelectedRoute,
+                        onSelected = { item -> navigateMain(item.id.route) },
+                        onOpenSettings = { navigateMain(NavItemId.SETTINGS.route) },
+                        modifier = Modifier.align(Alignment.CenterStart),
+                    )
+                }
                 NavHost(
                     navController = navController,
                     startDestination = initialStartDestination,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(if (showWorkspaceRail) Modifier.padding(start = 84.dp) else Modifier),
                     enterTransition = {
                         when {
                             organicMotionEnabled -> fadeIn(tween(organicEnterMillis)) +
@@ -726,6 +765,7 @@ fun DeskCubbyRoot(
                 }
             }
         }
+        }
 
         val tutorialTarget = childTutorialTarget ?: routeTutorialTarget(route, settings)
         if (
@@ -1131,4 +1171,26 @@ fun iconFor(key: String): ImageVector = when (key) {
     "statistics" -> Icons.Outlined.BarChart
     "widgets" -> Icons.Outlined.Widgets
     else -> Icons.AutoMirrored.Outlined.MenuBook
+}
+
+@Composable
+private fun OrientationPreferenceEffect(activity: Activity?, preference: OrientationPreference) {
+    DisposableEffect(activity, preference) {
+        val previous = activity?.requestedOrientation
+        activity?.requestedOrientation = when (preference) {
+            OrientationPreference.PORTRAIT -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            OrientationPreference.LANDSCAPE -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            OrientationPreference.AUTO -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+        onDispose {
+            activity?.requestedOrientation =
+                previous ?: android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+}
+
+private tailrec fun android.content.Context.findActivityCompat(): Activity? = when (this) {
+    is Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivityCompat()
+    else -> null
 }

@@ -33,6 +33,7 @@ import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.MealPhotoFilterSettings
 import com.deskcubby.app.data.model.MealPhotosPerRow
 import com.deskcubby.app.data.model.PoetryTextAlignment
+import com.deskcubby.app.data.model.OrientationPreference
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
@@ -337,6 +338,9 @@ class SettingsViewModel @Inject constructor(
     fun setVisualStyle(value: VisualStyle) = launch { repository.setVisualStyle(value) }
     fun setDarkMode(value: DarkMode) = launch { repository.setDarkMode(value) }
     fun setAppLanguage(value: AppLanguage) = launch { repository.setAppLanguage(value) }
+
+    fun setOrientationPreference(value: OrientationPreference) =
+        launch { repository.setOrientationPreference(value) }
 
     /** First-launch picker: applies the language and records the device-local "chosen" flag. */
     fun chooseFirstLaunchLanguage(value: AppLanguage) = viewModelScope.launch {

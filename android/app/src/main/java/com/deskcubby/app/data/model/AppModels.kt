@@ -183,6 +183,25 @@ private fun blendThemeArgb(first: Int, second: Int, fraction: Double): Int {
 
 enum class DarkMode { SYSTEM, LIGHT, DARK }
 
+/**
+ * Device-local screen orientation preference.
+ *
+ * Controls only how the activity rotates (rotation behavior). It is intentionally
+ * separate from [LayoutMode], which decides the UI structure from actual window
+ * geometry. It is a device-local preference and must never enter cloud sync,
+ * Obsidian sync, JSON backups, or user-settings restore:
+ * a phone may stay portrait while a tablet stays landscape.
+ */
+enum class OrientationPreference { AUTO, PORTRAIT, LANDSCAPE }
+
+/**
+ * The UI structure tier derived from actual window size, not from the bare
+ * orientation flag: a portrait tablet can still be wide enough for two panes and
+ * a landscape phone may not fit a full three-column workspace. Orientation decides
+ * rotation; LayoutMode decides structure.
+ */
+enum class LayoutMode { COMPACT, MEDIUM, EXPANDED }
+
 enum class BrowserTheme { SYSTEM, LIGHT, DARK }
 
 enum class AppLanguage { CHINESE, TRADITIONAL_CHINESE, ENGLISH, KOREAN, JAPANESE }
@@ -715,6 +734,12 @@ data class AppSettings(
     val customTheme: CustomThemeSettings = CustomThemeSettings(),
     val darkMode: DarkMode = DarkMode.SYSTEM,
     val appLanguage: AppLanguage = AppLanguage.CHINESE,
+    /**
+     * Device-local screen orientation: controls rotation only, never UI structure.
+     * Intentionally excluded from JSON backups, cloud sync, Obsidian sync and user-settings
+     * restore so one device's orientation choice never rewrites another device.
+     */
+    val orientationPreference: OrientationPreference = OrientationPreference.AUTO,
     val userName: String = "",
     val homeGreetings: List<HomeGreetingTemplate> = DEFAULT_HOME_GREETINGS,
     val themeColorArgb: Int = DEFAULT_THEME_COLOR_ARGB,

@@ -180,6 +180,7 @@ import com.deskcubby.app.data.model.MIN_AI_REPLY_BOX_WIDTH_DP
 import com.deskcubby.app.data.model.MIN_MORE_PAGE_COLUMNS
 import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
 import com.deskcubby.app.data.model.DarkMode
+import com.deskcubby.app.data.model.OrientationPreference
 import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_ANIMATION_SCALE
 import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_BORDER_WIDTH_DP
 import com.deskcubby.app.data.model.MAX_CUSTOM_THEME_CORNER_RADIUS_DP
@@ -622,6 +623,7 @@ fun SettingsScreen(
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
                 onPersistBackground = viewModel::persistAppBackground,
+                onOrientationChange = viewModel::setOrientationPreference,
                 onSave = { visualStyle, customTheme, darkMode, language, themeColor, secondaryColors,
                         fontScale, compactMode, backgroundUri, backgroundOpacity,
                         backgroundBlur, onDone ->
@@ -2805,6 +2807,7 @@ private fun AppearanceSettingsPage(
     contentPadding: PaddingValues,
     saveCoordinator: SettingsSaveCoordinator,
     onPersistBackground: (Uri, (Boolean) -> Unit) -> Unit,
+    onOrientationChange: (OrientationPreference) -> Unit,
     onSave: (
         VisualStyle,
         CustomThemeSettings,
@@ -3232,6 +3235,33 @@ private fun AppearanceSettingsPage(
                         }
                     }
                 }
+            }
+        }
+        item {
+            SettingsSection(tr("屏幕方向", "Screen orientation")) {
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    OrientationPreference.entries.forEachIndexed { index, mode ->
+                        SegmentedButton(
+                            selected = settings.orientationPreference == mode,
+                            onClick = { onOrientationChange(mode) },
+                            shape = SegmentedButtonDefaults.itemShape(index, OrientationPreference.entries.size),
+                        ) {
+                            Text(
+                                when (mode) {
+                                    OrientationPreference.AUTO -> tr("自动", "Automatic")
+                                    OrientationPreference.PORTRAIT -> tr("竖屏", "Portrait")
+                                    OrientationPreference.LANDSCAPE -> tr("横屏", "Landscape")
+                                },
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    tr("仅应用于此设备", "Applies only to this device."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         item {

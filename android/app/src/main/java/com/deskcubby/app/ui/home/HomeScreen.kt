@@ -89,11 +89,13 @@ import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.DailyEventTemplate
+import com.deskcubby.app.data.model.LayoutMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.DailyPoem
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncManualScheduler
 import com.deskcubby.app.data.sync.CloudSyncRunMode
+import com.deskcubby.app.ui.components.LocalLayoutMode
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalCompactMode
 import com.deskcubby.app.ui.daily.DailyEventRecorder
@@ -333,7 +335,47 @@ fun HomeScreen(
         },
     ) { inner ->
         val compact = LocalCompactMode.current
-        LazyColumn(
+        val layoutMode = LocalLayoutMode.current
+        if (layoutMode == LayoutMode.EXPANDED) {
+            HomeWorkspaceContent(
+                padding = inner,
+                settings = settings,
+                diaries = diaries,
+                thoughts = thoughts,
+                thoughtCategories = thoughtCategories,
+                dateRecords = dateRecords,
+                poem = poem,
+                onOpenDiary = onOpenDiary,
+                onOpenThoughts = onOpenThoughts,
+                onOpenDateRecords = onOpenDateRecords,
+                onOpenWebsite = onOpenWebsite,
+                onQuickThought = viewModel::addThought,
+                poemRefreshing = poemRefreshing,
+                onRefreshPoem = { viewModel.refreshPoem(settings.appLanguage) },
+                onSavePoem = { viewModel.savePoem(poem, settings.appLanguage) },
+                mealUploadInProgress = mealInteractionBusy,
+                onChooseMealPhoto = chooseMealPhoto,
+                onCaptureMealPhoto = captureMealPhoto,
+                dailyRecordInProgress = dailyRecordInProgress,
+                onAddDailyRecord = { templateId, entry, onDone ->
+                    viewModel.addDailyRecordToToday(templateId, entry, settings, onDone)
+                },
+                onOpenDailyRecords = onOpenDailyRecords,
+                onOpenNotes = onOpenNotes,
+                onOpenGame = onOpenGame,
+                onOpenStatistics = onOpenStatistics,
+                cloudSyncStatus = cloudSyncStatus,
+                cloudSyncActionState = cloudSyncActionState,
+                cloudSyncUndoAvailable = cloudSyncUndoAvailable,
+                onRunCloudSync = { mode ->
+                    val accepted = CloudSyncManualScheduler.enqueue(context, mode)
+                    viewModel.recordCloudSyncEnqueue(mode, accepted)
+                    accepted
+                },
+                onUndoCloudSync = { viewModel.undoLastCloudSync() },
+            )
+        } else {
+            LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner),
             contentPadding = PaddingValues(if (compact) 10.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(
@@ -386,6 +428,7 @@ fun HomeScreen(
                 )
             }
             item { Spacer(Modifier.height(20.dp)) }
+        }
         }
     }
 }
@@ -1233,3 +1276,110 @@ private fun streakDays(diaries: List<DiaryIndexEntity>, today: LocalDate): Int {
 
 private const val CAMERA_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L
 private const val HOME_DAILY_EVENT_LIMIT = 4
+@Composable
+private fun HomeWorkspaceContent(
+    padding: PaddingValues,
+    settings: AppSettings,
+    diaries: List<DiaryIndexEntity>,
+    thoughts: List<FlashThoughtEntity>,
+    thoughtCategories: List<ThoughtCategoryEntity>,
+    dateRecords: List<DateRecordEntity>,
+    poem: DailyPoem,
+    onOpenDiary: (String) -> Unit,
+    onOpenThoughts: () -> Unit,
+    onOpenDateRecords: () -> Unit,
+    onOpenWebsite: () -> Unit,
+    onQuickThought: (String, Long?, (Boolean) -> Unit) -> Unit,
+    poemRefreshing: Boolean,
+    onRefreshPoem: () -> Unit,
+    onSavePoem: () -> Unit,
+    mealUploadInProgress: Boolean,
+    onChooseMealPhoto: (MealQuickAction) -> Unit,
+    onCaptureMealPhoto: (MealQuickAction) -> Unit,
+    dailyRecordInProgress: Set<String>,
+    onAddDailyRecord: (String, String, (Boolean) -> Unit) -> Unit,
+    onOpenDailyRecords: () -> Unit,
+    onOpenNotes: () -> Unit,
+    onOpenGame: (String) -> Unit,
+    onOpenStatistics: () -> Unit,
+    cloudSyncStatus: AppCloudSyncStatus,
+    cloudSyncActionState: HomeCloudSyncActionState,
+    cloudSyncUndoAvailable: Boolean,
+    onRunCloudSync: (CloudSyncRunMode) -> Boolean,
+    onUndoCloudSync: () -> Unit,
+) {
+    // Landscape "Workspace" re-composition of the same home widgets: a primary (today/diary)
+    // reading column plus a secondary (ideas/events/stats) column, instead of one tall list.
+    val configured = settings.homeWidgets
+    val primaryIds = listOf(
+        "today", "record_overview", "recent_diary", "meal_photos",
+        "quick_input", "daily_records", "calendar",
+    ).filter { it in configured }.ifEmpty { listOf("today") }
+    val secondaryIds = listOf(
+        "poem", "streak", "total_words", "recent_thought", "year_progress",
+        "date_records", "month_diaries", "notes", "cloud_sync_now", "cloud_sync_force",
+        "random_diary", "website", "game_shortcuts",
+    ).filter { it in configured }
+
+    val render: @Composable (String) -> Unit = { id ->
+        HomeWidget(
+            id = id,
+            settings = settings,
+            diaries = diaries,
+            thoughts = thoughts,
+            thoughtCategories = thoughtCategories,
+            dateRecords = dateRecords,
+            poem = poem,
+            onOpenDiary = onOpenDiary,
+            onOpenThoughts = onOpenThoughts,
+            onOpenDateRecords = onOpenDateRecords,
+            onOpenWebsite = onOpenWebsite,
+            onQuickThought = onQuickThought,
+            poemRefreshing = poemRefreshing,
+            onRefreshPoem = onRefreshPoem,
+            onSavePoem = onSavePoem,
+            mealUploadInProgress = mealUploadInProgress,
+            onChooseMealPhoto = onChooseMealPhoto,
+            onCaptureMealPhoto = onCaptureMealPhoto,
+            dailyRecordInProgress = dailyRecordInProgress,
+            onAddDailyRecord = onAddDailyRecord,
+            onOpenDailyRecords = onOpenDailyRecords,
+            onOpenNotes = onOpenNotes,
+            onOpenGame = onOpenGame,
+            onOpenStatistics = onOpenStatistics,
+            cloudSyncStatus = cloudSyncStatus,
+            cloudSyncActionState = cloudSyncActionState,
+            cloudSyncUndoAvailable = cloudSyncUndoAvailable,
+            onRunCloudSync = onRunCloudSync,
+            onUndoCloudSync = onUndoCloudSync,
+        )
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(0.6f)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            for (id in primaryIds) render(id)
+        }
+        Spacer(Modifier.width(16.dp))
+        Column(
+            modifier = Modifier
+                .weight(0.4f)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            for (id in secondaryIds) render(id)
+        }
+    }
+}
+

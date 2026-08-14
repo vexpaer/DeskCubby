@@ -143,10 +143,13 @@ import com.deskcubby.app.data.repository.MealCalendarDay
 import com.deskcubby.app.data.repository.MAX_MEAL_ENERGY_KJ
 import com.deskcubby.app.data.repository.MAX_MEAL_NOTE_CHARS
 import com.deskcubby.app.ui.components.AppEmptyState
+import com.deskcubby.app.ui.components.ContextPanel
+import com.deskcubby.app.ui.components.LocalLayoutMode
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.components.MarkdownPreview
 import com.deskcubby.app.ui.components.MarkdownResolvedMedia
+import com.deskcubby.app.data.model.LayoutMode
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
 import com.deskcubby.app.ui.components.OrganicSplitActionRowSize
 import com.deskcubby.app.ui.components.ZoomableImageDialog
@@ -1614,6 +1617,34 @@ fun DiaryEditorScreen(
             }
         },
     ) { inner ->
+        val layoutMode = LocalLayoutMode.current
+        if (layoutMode == LayoutMode.EXPANDED) {
+            DiaryEditorWorkspace(
+                innerPadding = inner,
+                state = state,
+                settings = settings,
+                editorValue = editorValue,
+                onValueChange = { value -> editorValue = value; viewModel.onContentChanged(value.text) },
+                onMoveMediaLine = viewModel::moveSourceLine,
+                resolveMedia = suspend@{ targets ->
+                    buildMap {
+                        viewModel.resolveDiaryPreviewMedia(targets).forEach { (target, media) ->
+                            media.uri?.let { uri ->
+                                put(
+                                    target,
+                                    MarkdownResolvedMedia(
+                                        model = uri,
+                                        locationName = media.locationName,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                },
+                onEditCaption = { markdown, caption -> captionTarget = markdown to caption },
+                onDeleteMedia = { target -> mediaDeleteTarget = target },
+            )
+        } else {
         Box(Modifier.fillMaxSize().padding(inner)) {
             when {
                 state.loading -> AppLoadingIndicator(Modifier.align(Alignment.Center))
@@ -1649,6 +1680,7 @@ fun DiaryEditorScreen(
                 )
             }
             if (state.saving) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+        }
         }
     }
 
@@ -2002,3 +2034,99 @@ private fun TextInputDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) } },
     )
 }
+
+/**
+ * Landscape "Workspace" desktop layout for the diary editor: the source/preview reading column
+ * is capped to a comfortable width and centered, while a right-hand Context Panel shows the
+ * current document metadata (date/name, word count, media count). Portrait keeps the existing
+ * full-width editor untouched.
+ */
+@Composable
+private fun DiaryEditorWorkspace(
+    innerPadding: PaddingValues,
+    state: EditorState,
+    settings: AppSettings,
+    editorValue: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    onMoveMediaLine: (fromIndex: Int, toIndex: Int) -> Unit,
+    resolveMedia: suspend (targets: Collection<String>) -> Map<String, MarkdownResolvedMedia>,
+    onEditCaption: (markdown: String, caption: String) -> Unit,
+    onDeleteMedia: (target: String) -> Unit,
+) {
+    val wordCount = remember(state.content) {
+        state.content.split(Regex("""\s+""")).count { it.isNotBlank() }
+    }
+    val mediaCount = remember(state.content) {
+        Regex("""!\[[^\]]*]\([^)]+\)""").findAll(state.content).count()
+    }
+    val title = state.document?.name ?: tr("未命名日记", "Untitled diary")
+
+    Row(Modifier.fillMaxSize().padding(innerPadding)) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxSize()
+                .padding(horizontal = 24.dp, vertical = 8.dp),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .widthIn(max = 820.dp),
+            ) {
+                when {
+                    state.loading -> AppLoadingIndicator(Modifier.align(Alignment.Center))
+                    state.preview -> MarkdownPreview(
+                        content = state.content,
+                        headingSizesSp = settings.markdownHeadingSizesSp,
+                        maxWidthDp = settings.imageMaxWidthDp,
+                        maxHeightDp = settings.imageMaxHeightDp,
+                        mediaScopeKey = settings.mediaTreeUri,
+                        resolveMediaBatch = resolveMedia,
+                        onEditCaption = onEditCaption,
+                        onDeleteMedia = onDeleteMedia,
+                    )
+                    else -> MarkdownSourceEditor(
+                        value = editorValue,
+                        onValueChange = onValueChange,
+                        onMoveMediaLine = onMoveMediaLine,
+                        onDeleteMedia = onDeleteMedia,
+                    )
+                }
+                if (state.saving) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+                }
+            }
+        }
+        ContextPanel(
+            content = {
+                Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+                    Text(tr("日记", "Diary"), style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(12.dp))
+                    InspectionRow(tr("日期", "Date"), title)
+                    InspectionRow(tr("字数", "Words"), wordCount.toString())
+                    InspectionRow(tr("图片", "Photos"), mediaCount.toString())
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        tr("正文阅读宽度已在宽屏下限制，避免行过长。", "Reading width is capped on wide screens."),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            modifier = Modifier.fillMaxHeight(),
+        )
+    }
+}
+
+@Composable
+private fun InspectionRow(label: String, value: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+

@@ -87,6 +87,7 @@ import com.deskcubby.app.data.model.MIN_POETRY_LINE_SPACING
 import com.deskcubby.app.data.model.MIN_THEME_SECONDARY_COLOR_COUNT
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.model.OrientationPreference
 import com.deskcubby.app.data.model.MusicVisualizerStyle
 import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.PoetryTextAlignment
@@ -123,6 +124,8 @@ class SettingsRepository @Inject constructor(
         val customTheme = stringPreferencesKey("custom_theme_v1")
         val darkMode = stringPreferencesKey("dark_mode")
         val appLanguage = stringPreferencesKey("app_language")
+        // Device-local rotation preference; never backed up and never restored/re-synced.
+        val orientationPreference = stringPreferencesKey("orientation_preference")
         // Device-local flag: the first-launch language chooser is shown once and never backed up.
         val languageSelected = booleanPreferencesKey("language_selected")
         val userName = stringPreferencesKey("user_name")
@@ -275,6 +278,8 @@ class SettingsRepository @Inject constructor(
             customTheme = decodeCustomTheme(prefs[Keys.customTheme], defaults.customTheme),
             darkMode = prefs[Keys.darkMode].enumValueOr(defaults.darkMode),
             appLanguage = prefs[Keys.appLanguage].enumValueOr(defaults.appLanguage),
+            orientationPreference = prefs[Keys.orientationPreference]
+                .enumValueOr(defaults.orientationPreference),
             userName = normalizeUserName(prefs[Keys.userName] ?: defaults.userName),
             homeGreetings = decodeHomeGreetings(
                 prefs[Keys.homeGreetings],
@@ -509,6 +514,10 @@ class SettingsRepository @Inject constructor(
     suspend fun setVisualStyle(value: VisualStyle) = set(Keys.visualStyle, value.name)
     suspend fun setDarkMode(value: DarkMode) = set(Keys.darkMode, value.name)
     suspend fun setAppLanguage(value: AppLanguage) = set(Keys.appLanguage, value.name)
+
+    /** Device-local rotation preference. Writes only this device's DataStore; never synced. */
+    suspend fun setOrientationPreference(value: OrientationPreference) =
+        set(Keys.orientationPreference, value.name)
 
     /** True once the user has picked a language on first launch (device-local, never backed up). */
     val languageSelected: Flow<Boolean> = context.settingsDataStore.data

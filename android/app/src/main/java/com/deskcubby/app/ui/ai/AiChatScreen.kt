@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -95,6 +96,7 @@ import com.deskcubby.app.agent.AgentExecutionUpdate
 import com.deskcubby.app.agent.AgentRunUsage
 import com.deskcubby.app.data.model.AgentDataSource
 import com.deskcubby.app.data.model.AgentPermissionMode
+import com.deskcubby.app.data.model.LayoutMode
 import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.repository.AiAttachmentKind
 import com.deskcubby.app.data.repository.AiChatAttachment
@@ -102,6 +104,8 @@ import com.deskcubby.app.data.repository.AiChatMessage
 import com.deskcubby.app.data.repository.AiChatRole
 import com.deskcubby.app.data.repository.AiConversation
 import com.deskcubby.app.ui.components.AppEmptyState
+import com.deskcubby.app.ui.components.ContextPanel
+import com.deskcubby.app.ui.components.LocalLayoutMode
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.MarkdownText
 import com.deskcubby.app.ui.theme.tr
@@ -223,7 +227,9 @@ fun AiChatScreen(
             )
         },
     ) { inner ->
-        Column(Modifier.fillMaxSize().padding(inner)) {
+        val layoutMode = LocalLayoutMode.current
+        Box(Modifier.fillMaxSize().padding(inner)) {
+        Column(Modifier.fillMaxSize()) {
             ModelSelector(
                 configs = textConfigs,
                 selectedId = settings.aiChatConfigId,
@@ -286,6 +292,18 @@ fun AiChatScreen(
                     }
                 }
             }
+        }
+        if (layoutMode == LayoutMode.EXPANDED) {
+            AiContextPanel(
+                enabledSources = settings.agentEnabledSources,
+                permissionMode = settings.agentPermissionMode,
+                executionUpdates = state.executionUpdates,
+                running = state.isSending,
+                onOpenReview = onOpenReview,
+                onOpenContext = viewModel::showContextManager,
+                modifier = Modifier.align(Alignment.CenterEnd),
+            )
+        }
         }
     }
 
@@ -938,6 +956,99 @@ private fun ConfigurationNotice(onOpenSettings: () -> Unit) {
         }
     }
 }
+
+@Composable
+private fun AiContextPanel(
+    enabledSources: Set<AgentDataSource>,
+    permissionMode: AgentPermissionMode,
+    executionUpdates: List<AgentExecutionUpdate>,
+    running: Boolean,
+    onOpenReview: () -> Unit,
+    onOpenContext: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ContextPanel(
+        modifier = modifier.fillMaxHeight(),
+        content = {
+            Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+                Text(tr("上下文", "Context"), style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(12.dp))
+                enabledSources.forEach { source ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("✓", color = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(8.dp))
+                        Text(agentDataSourceLabel(source), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = onOpenContext, modifier = Modifier.fillMaxWidth()) {
+                    Text(tr("管理数据源", "Manage sources"))
+                }
+
+                HorizontalDivider(Modifier.padding(vertical = 12.dp))
+                Text(tr("Agent 活动", "Agent activity"), style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(8.dp))
+                if (executionUpdates.isEmpty() && !running) {
+                    Text(
+                        tr("暂无活动", "No activity"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    executionUpdates.takeLast(6).forEach { update ->
+                        Text(
+                            update.toolName + " · " + agentExecutionStatusLabel(update.status),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    tr("审批模式", "Approval") + " · " + agentPermissionModeLabel(permissionMode),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onOpenReview, modifier = Modifier.fillMaxWidth()) {
+                    Text(tr("打开 Review", "Open Review"))
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+        },
+    )
+}
+
+@Composable
+private fun agentDataSourceLabel(source: AgentDataSource): String = when (source) {
+    AgentDataSource.DIARY -> tr("日记", "Diary")
+    AgentDataSource.THOUGHTS -> tr("小巧思", "Thoughts")
+    AgentDataSource.DATE_RECORDS -> tr("日期记录", "Date records")
+    AgentDataSource.DAILY_EVENTS -> tr("日常事件", "Daily events")
+    AgentDataSource.NOTES -> tr("笔记", "Notes")
+    AgentDataSource.POEMS -> tr("诗词", "Poems")
+    AgentDataSource.USAGE -> tr("使用时间", "Screen time")
+    AgentDataSource.STATISTICS -> tr("统计", "Statistics")
+}
+
+@Composable
+private fun agentPermissionModeLabel(mode: AgentPermissionMode): String = when (mode) {
+    AgentPermissionMode.REQUIRE_APPROVAL -> tr("需要批准", "Requires approval")
+    AgentPermissionMode.FULL_AUTO -> tr("全自动", "Fully automatic")
+}
+
+@Composable
+private fun agentExecutionStatusLabel(status: AgentExecutionStatus): String = when (status) {
+    AgentExecutionStatus.PREPARING -> tr("准备中", "Preparing")
+    AgentExecutionStatus.RUNNING -> tr("执行中", "Running")
+    AgentExecutionStatus.WAITING_APPROVAL -> tr("待批准", "Needs approval")
+    AgentExecutionStatus.APPROVED -> tr("已批准", "Approved")
+    AgentExecutionStatus.REJECTED -> tr("已拒绝", "Rejected")
+    AgentExecutionStatus.SUCCEEDED -> tr("成功", "Done")
+    AgentExecutionStatus.FAILED -> tr("失败", "Failed")
+    AgentExecutionStatus.CANCELED -> tr("已取消", "Canceled")
+}
+
 
 @Composable
 private fun CapabilityNotice(onOpenSettings: () -> Unit) {
