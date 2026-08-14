@@ -61,6 +61,8 @@ import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.ThoughtRepository
 import com.deskcubby.app.ui.components.ColorPickerDialog
+import com.deskcubby.app.ui.components.LocalLayoutMode
+import com.deskcubby.app.data.model.LayoutMode
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.tr
@@ -102,7 +104,9 @@ internal fun ThoughtCategoryDrawer(
     onAdd: () -> Unit,
     onEdit: (ThoughtCategoryEntity) -> Unit,
 ) {
-    ModalDrawerSheet(modifier = Modifier.padding(bottom = bottomPadding)) {
+    val layoutMode = LocalLayoutMode.current
+    val railInset = if (layoutMode != LayoutMode.COMPACT) 84.dp else 0.dp
+    ModalDrawerSheet(modifier = Modifier.padding(start = railInset, bottom = bottomPadding)) {
         Column(Modifier.fillMaxHeight().padding(vertical = 12.dp)) {
             Text(
                 tr("小巧思分类", "Thought categories"),

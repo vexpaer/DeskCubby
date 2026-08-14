@@ -168,8 +168,10 @@ import com.deskcubby.app.data.repository.isValidReaderChapterRegex
 import com.deskcubby.app.data.repository.findReaderTextMatches
 import com.deskcubby.app.data.statistics.EngagementKind
 import com.deskcubby.app.ui.components.AppEmptyState
+import com.deskcubby.app.ui.components.LocalLayoutMode
 import com.deskcubby.app.ui.components.ColorPickerDialog
 import com.deskcubby.app.ui.components.PageTutorialTarget
+import com.deskcubby.app.data.model.LayoutMode
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.tr
 import java.util.Locale
@@ -1436,7 +1438,10 @@ private fun ReaderChapterDrawer(
     onJump: () -> Unit,
 ) {
     val currentChapter = chapters.lastOrNull { it.pageIndex <= currentPage }
+    val layoutMode = LocalLayoutMode.current
+    val railInset = if (layoutMode != LayoutMode.COMPACT) 84.dp else 0.dp
     ModalDrawerSheet(
+        modifier = Modifier.padding(start = railInset),
         drawerContainerColor = background,
         drawerContentColor = foreground,
     ) {
