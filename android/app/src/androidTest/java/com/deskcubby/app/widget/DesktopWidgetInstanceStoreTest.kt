@@ -4,7 +4,9 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.deskcubby.app.data.model.DesktopWidgetConfig
+import com.deskcubby.app.data.model.DesktopWidgetCornerStyle
 import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -45,6 +47,9 @@ class DesktopWidgetInstanceStoreTest {
             showIcon = false,
             textAlignment = DesktopWidgetTextAlignment.END,
             textScalePercent = 125,
+            cornerStyle = DesktopWidgetCornerStyle.SQUARE,
+            surfaceScalePercent = 84,
+            appIconScalePercent = 132,
         )
 
         store.bind(41, first)
@@ -111,6 +116,26 @@ class DesktopWidgetInstanceStoreTest {
         )
 
         assertEquals("cloud_sync", store.snapshot(71)?.homeModuleId)
+    }
+
+    @Test
+    fun schemaTwoSnapshotDefaultsNewAppearanceFields() {
+        val legacy = DesktopWidgetConfig(id = "legacy-v2", name = "Legacy v2")
+        val json = JSONObject(DesktopWidgetInstanceSnapshotCodec.encode(legacy))
+            .put("schemaVersion", 2)
+        json.remove("cornerStyle")
+        json.remove("surfaceScalePercent")
+        json.remove("appIconScalePercent")
+
+        context.getSharedPreferences("desktop_widget_instances", Context.MODE_PRIVATE)
+            .edit()
+            .putString("widget_80", json.toString())
+            .commit()
+
+        val decoded = store.snapshot(80)
+        assertEquals(DesktopWidgetCornerStyle.ROUNDED, decoded?.cornerStyle)
+        assertEquals(100, decoded?.surfaceScalePercent)
+        assertEquals(100, decoded?.appIconScalePercent)
     }
 
     @Test

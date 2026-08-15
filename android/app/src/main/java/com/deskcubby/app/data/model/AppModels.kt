@@ -224,6 +224,8 @@ enum class DesktopWidgetContentType { HOME_MODULE, APP_MODULE, APP_SHORTCUT }
 
 enum class DesktopWidgetTextAlignment { START, CENTER, END }
 
+enum class DesktopWidgetCornerStyle { ROUNDED, SQUARE }
+
 val HOME_GAME_SHORTCUT_IDS: List<String> = listOf(
     "2048",
     "2048_5",
@@ -321,6 +323,10 @@ const val MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT: Int = 0
 const val MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT: Int = 100
 const val MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT: Int = 75
 const val MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT: Int = 150
+const val MIN_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT: Int = 70
+const val MAX_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT: Int = 100
+const val MIN_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT: Int = 50
+const val MAX_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT: Int = 150
 
 /** A reusable design that can be bound to one or more launcher App Widget instances. */
 data class DesktopWidgetConfig(
@@ -336,6 +342,11 @@ data class DesktopWidgetConfig(
     val showIcon: Boolean = true,
     val textAlignment: DesktopWidgetTextAlignment = DesktopWidgetTextAlignment.START,
     val textScalePercent: Int = 100,
+    val cornerStyle: DesktopWidgetCornerStyle = DesktopWidgetCornerStyle.ROUNDED,
+    /** Uniform visual scale inside the launcher-owned widget bounds. */
+    val surfaceScalePercent: Int = 100,
+    /** App-shortcut icon scale relative to the fixed 48 dp baseline. */
+    val appIconScalePercent: Int = 100,
     val contentType: DesktopWidgetContentType = DesktopWidgetContentType.HOME_MODULE,
     val homeModuleId: String = "today",
     val appPackageName: String? = null,

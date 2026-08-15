@@ -5,13 +5,18 @@ import android.content.Context
 import com.deskcubby.app.data.model.normalizeDesktopWidgetHomeModuleId
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DesktopWidgetCornerStyle
 import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_USAGE_RANGES
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_CELLS
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_CELLS
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -101,7 +106,7 @@ class DesktopWidgetInstanceStore @Inject constructor(
 }
 
 internal object DesktopWidgetInstanceSnapshotCodec {
-    private const val SCHEMA_VERSION = 2
+    private const val SCHEMA_VERSION = 3
 
     fun encode(config: DesktopWidgetConfig): String = JSONObject()
         .put("schemaVersion", SCHEMA_VERSION)
@@ -117,6 +122,9 @@ internal object DesktopWidgetInstanceSnapshotCodec {
         .put("showIcon", config.showIcon)
         .put("textAlignment", config.textAlignment.name)
         .put("textScalePercent", config.textScalePercent)
+        .put("cornerStyle", config.cornerStyle.name)
+        .put("surfaceScalePercent", config.surfaceScalePercent)
+        .put("appIconScalePercent", config.appIconScalePercent)
         .put("contentType", config.contentType.name)
         .put("homeModuleId", config.homeModuleId)
         .put("usageRangeDays", config.usageRangeDays)
@@ -159,6 +167,17 @@ internal object DesktopWidgetInstanceSnapshotCodec {
             textScalePercent = json.optInt("textScalePercent", 100).coerceIn(
                 MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT,
                 MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT,
+            ),
+            cornerStyle = runCatching {
+                enumValueOf<DesktopWidgetCornerStyle>(json.optString("cornerStyle"))
+            }.getOrDefault(DesktopWidgetCornerStyle.ROUNDED),
+            surfaceScalePercent = json.optInt("surfaceScalePercent", 100).coerceIn(
+                MIN_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT,
+                MAX_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT,
+            ),
+            appIconScalePercent = json.optInt("appIconScalePercent", 100).coerceIn(
+                MIN_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT,
+                MAX_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT,
             ),
             contentType = contentType,
             homeModuleId = homeModuleId,

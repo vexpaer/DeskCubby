@@ -56,16 +56,21 @@ import com.deskcubby.app.data.model.normalizeDesktopWidgetHomeModuleId
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_USAGE_RANGES
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DesktopWidgetCornerStyle
 import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.Game2048AnimationSpeed
 import com.deskcubby.app.data.model.LauncherIcon
 import com.deskcubby.app.data.model.MAX_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
 import com.deskcubby.app.data.model.MAX_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MIN_THOUGHT_EDITOR_MAX_HEIGHT_DP
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
 import com.deskcubby.app.data.model.MIN_VAULT_ROW_HEIGHT_DP
 import com.deskcubby.app.data.model.MealPhotosPerRow
@@ -1413,6 +1418,10 @@ class SettingsRepository @Inject constructor(
                             textAlignment = item.optString("textAlignment")
                                 .enumValueOr(DesktopWidgetTextAlignment.START),
                             textScalePercent = item.optInt("textScalePercent", 100),
+                            cornerStyle = item.optString("cornerStyle")
+                                .enumValueOr(DesktopWidgetCornerStyle.ROUNDED),
+                            surfaceScalePercent = item.optInt("surfaceScalePercent", 100),
+                            appIconScalePercent = item.optInt("appIconScalePercent", 100),
                             contentType = item.optString("contentType")
                                 .enumValueOr(DesktopWidgetContentType.HOME_MODULE),
                             homeModuleId = item.optString("homeModuleId", "today"),
@@ -1458,6 +1467,9 @@ class SettingsRepository @Inject constructor(
                         .put("showIcon", item.showIcon)
                         .put("textAlignment", item.textAlignment.name)
                         .put("textScalePercent", item.textScalePercent)
+                        .put("cornerStyle", item.cornerStyle.name)
+                        .put("surfaceScalePercent", item.surfaceScalePercent)
+                        .put("appIconScalePercent", item.appIconScalePercent)
                         .put("contentType", item.contentType.name)
                         .put("homeModuleId", item.homeModuleId)
                         .put("usageRangeDays", item.usageRangeDays)
@@ -2060,6 +2072,14 @@ internal fun normalizeDesktopWidgetConfigs(
             textScalePercent = item.textScalePercent.coerceIn(
                 MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT,
                 MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT,
+            ),
+            surfaceScalePercent = item.surfaceScalePercent.coerceIn(
+                MIN_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT,
+                MAX_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT,
+            ),
+            appIconScalePercent = item.appIconScalePercent.coerceIn(
+                MIN_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT,
+                MAX_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT,
             ),
             backgroundImageUri = item.backgroundImageUri
                 ?.trim()

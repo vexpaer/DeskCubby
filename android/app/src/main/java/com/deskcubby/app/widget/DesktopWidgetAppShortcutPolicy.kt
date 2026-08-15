@@ -10,14 +10,18 @@ internal fun shouldShowDesktopAppIcon(
     availableWidthDp: Int,
     availableHeightDp: Int,
     iconLoaded: Boolean,
+    iconSizeDp: Int = DESKTOP_APP_ICON_SIZE_DP,
 ): Boolean = requested &&
     iconLoaded &&
-    availableWidthDp >= DESKTOP_APP_ICON_SIZE_DP &&
-    availableHeightDp >= DESKTOP_APP_ICON_SIZE_DP
+    availableWidthDp >= iconSizeDp &&
+    availableHeightDp >= iconSizeDp
 
 /** Rasterize at the device-density equivalent of 48 dp, bounded against hostile densities. */
-internal fun desktopAppIconBitmapEdgePx(density: Float): Int =
-    (DESKTOP_APP_ICON_SIZE_DP * density.takeIf { it.isFinite() && it > 0f }.orDefaultDensity())
+internal fun desktopAppIconSizeDp(scalePercent: Int): Int =
+    (DESKTOP_APP_ICON_SIZE_DP * scalePercent.coerceIn(50, 150) / 100f).roundToInt()
+
+internal fun desktopAppIconBitmapEdgePx(density: Float, scalePercent: Int = 100): Int =
+    (desktopAppIconSizeDp(scalePercent) * density.takeIf { it.isFinite() && it > 0f }.orDefaultDensity())
         .roundToInt()
         .coerceIn(MIN_APP_ICON_BITMAP_EDGE_PX, MAX_APP_ICON_BITMAP_EDGE_PX)
 

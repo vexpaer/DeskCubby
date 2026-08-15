@@ -3,8 +3,14 @@
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#263238"
+    android:background="@android:color/transparent"
     android:padding="0dp">
+
+    <FrameLayout
+        android:id="@+id/widget_surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#263238">
 
     <ImageView
         android:id="@+id/widget_background_image"
@@ -371,5 +377,6 @@
             android:textSize="12sp"
             android:textStyle="bold"
             android:visibility="gone" />
+    </FrameLayout>
     </FrameLayout>
 </FrameLayout>

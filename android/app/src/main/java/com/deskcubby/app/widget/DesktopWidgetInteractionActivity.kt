@@ -577,6 +577,8 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                     }
                 }
                 requestWidgetRefresh()
+                progressDialog?.dismiss()
+                progressDialog = null
                 Toast.makeText(
                     this@DesktopWidgetInteractionActivity,
                     translate("${category.chineseLabel}图片已加入今日日记", "${category.englishLabel} photo added", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),

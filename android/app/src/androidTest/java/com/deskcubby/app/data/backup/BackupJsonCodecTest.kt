@@ -24,6 +24,7 @@ import com.deskcubby.app.data.model.CustomThemeSettings
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DesktopWidgetCornerStyle
 import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
 import com.deskcubby.app.data.model.DEFAULT_MARKDOWN_HEADING_SIZES_SP
 import com.deskcubby.app.data.model.HomeGreetingTemplate
@@ -303,6 +304,9 @@ class BackupJsonCodecTest {
                         showIcon = false,
                         textAlignment = DesktopWidgetTextAlignment.CENTER,
                         textScalePercent = 125,
+                        cornerStyle = DesktopWidgetCornerStyle.SQUARE,
+                        surfaceScalePercent = 82,
+                        appIconScalePercent = 135,
                         contentType = DesktopWidgetContentType.APP_SHORTCUT,
                         appPackageName = "com.example.maps",
                         appLabel = "Maps",
@@ -762,6 +766,44 @@ class BackupJsonCodecTest {
         assertEquals(true, decoded.showIcon)
         assertEquals(DesktopWidgetTextAlignment.START, decoded.textAlignment)
         assertEquals(100, decoded.textScalePercent)
+    }
+
+    @Test
+    fun versionThirtyThreeDefaultsNewDesktopWidgetScaleAndCornerFields() {
+        val root = JSONObject(
+            BackupJsonCodec.encode(
+                AppBackup(
+                    exportedAt = 33,
+                    settings = AppSettings(
+                        desktopWidgetConfigs = listOf(
+                            DesktopWidgetConfig(
+                                id = "legacy-v33",
+                                name = "Legacy v33",
+                                cornerStyle = DesktopWidgetCornerStyle.SQUARE,
+                                surfaceScalePercent = 75,
+                                appIconScalePercent = 140,
+                            ),
+                        ),
+                    ),
+                    thoughts = emptyList(),
+                    favorites = emptyList(),
+                ),
+            ),
+        )
+        root.put("version", 33)
+        val card = root.getJSONObject("settings")
+            .getJSONArray("desktopWidgetConfigs")
+            .getJSONObject(0)
+        card.remove("cornerStyle")
+        card.remove("surfaceScalePercent")
+        card.remove("appIconScalePercent")
+
+        val decoded = BackupJsonCodec.decode(root.toString())
+            .settings.desktopWidgetConfigs.single()
+
+        assertEquals(DesktopWidgetCornerStyle.ROUNDED, decoded.cornerStyle)
+        assertEquals(100, decoded.surfaceScalePercent)
+        assertEquals(100, decoded.appIconScalePercent)
     }
 
     @Test

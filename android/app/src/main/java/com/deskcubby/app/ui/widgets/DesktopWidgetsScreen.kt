@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -88,13 +89,18 @@ import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_USAGE_RANGES
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DesktopWidgetCornerStyle
 import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_CELLS
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_CELLS
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT
 import com.deskcubby.app.ui.components.ColorPickerDialog
 import com.deskcubby.app.ui.theme.translate
 import com.deskcubby.app.ui.theme.tr
@@ -529,25 +535,81 @@ private fun WidgetCardEditor(
         item {
             EditorSection(tr("外观", "Appearance")) {
                 WidgetPreview(draft, english)
+                Text(tr("边角样式", "Corner style"))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    DesktopWidgetCornerStyle.entries.forEach { style ->
+                        FilterChip(
+                            modifier = Modifier.weight(1f),
+                            selected = draft.cornerStyle == style,
+                            onClick = { onChange(draft.copy(cornerStyle = style)) },
+                            label = {
+                                Text(
+                                    if (style == DesktopWidgetCornerStyle.ROUNDED) {
+                                        tr("圆角", "Rounded")
+                                    } else {
+                                        tr("直角", "Square")
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                        )
+                    }
+                }
+                Text(
+                    tr("卡片边长：${draft.surfaceScalePercent}%", "Card edge scale: ${draft.surfaceScalePercent}%"),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Slider(
+                    value = draft.surfaceScalePercent.toFloat(),
+                    onValueChange = {
+                        val value = (it / 5f).roundToInt() * 5
+                        onChange(draft.copy(surfaceScalePercent = value))
+                    },
+                    valueRange = MIN_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT.toFloat()..
+                        MAX_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT.toFloat(),
+                    steps = 5,
+                )
                 WidgetToggle(
                     label = tr("显示卡片名称", "Show card name"),
                     checked = draft.showName,
                     onCheckedChange = { onChange(draft.copy(showName = it)) },
                 )
                 WidgetToggle(
-                    label = tr("空间足够时显示图标", "Show icon when space allows"),
+                    label = tr("显示图标", "Show icon"),
                     checked = draft.showIcon,
                     onCheckedChange = { onChange(draft.copy(showIcon = it)) },
                 )
+                if (draft.contentType == DesktopWidgetContentType.APP_SHORTCUT) {
+                    Text(
+                        tr("应用图标大小：${draft.appIconScalePercent}%", "App icon size: ${draft.appIconScalePercent}%"),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Slider(
+                        value = draft.appIconScalePercent.toFloat(),
+                        onValueChange = {
+                            val value = (it / 5f).roundToInt() * 5
+                            onChange(draft.copy(appIconScalePercent = value))
+                        },
+                        valueRange = MIN_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT.toFloat()..
+                            MAX_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT.toFloat(),
+                        steps = 19,
+                    )
+                }
                 OutlinedButton(onClick = onPickBackgroundColor, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Outlined.ColorLens, null, tint = Color(draft.backgroundColorArgb))
                     Spacer(Modifier.width(8.dp))
-                    Text(tr("背景颜色", "Background color"))
+                    Text(tr("背景颜色", "Background color"), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 OutlinedButton(onClick = onPickTextColor, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Outlined.ColorLens, null, tint = Color(draft.textColorArgb))
                     Spacer(Modifier.width(8.dp))
-                    Text(tr("文字颜色", "Text color"))
+                    Text(tr("文字颜色", "Text color"), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 OutlinedButton(onClick = onPickBackground, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Outlined.AddPhotoAlternate, null)
@@ -556,13 +618,21 @@ private fun WidgetCardEditor(
                         if (draft.backgroundImageUri == null) {
                             tr("选择背景图片", "Choose background image")
                         } else tr("更换背景图片", "Replace background image"),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 if (draft.backgroundImageUri != null) {
                     TextButton(
                         onClick = { onChange(draft.copy(backgroundImageUri = null)) },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text(tr("移除背景图片", "Remove background image")) }
+                    ) {
+                        Text(
+                            tr("移除背景图片", "Remove background image"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 Text(
                     tr("背景透明度：${draft.backgroundOpacityPercent}%", "Background opacity: ${draft.backgroundOpacityPercent}%"),
@@ -578,9 +648,9 @@ private fun WidgetCardEditor(
                     steps = 19,
                 )
                 Text(tr("文字对齐", "Text alignment"))
-                FlowRow(
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     DesktopWidgetTextAlignment.entries.forEach { alignment ->
                         val label = when (alignment) {
@@ -589,9 +659,12 @@ private fun WidgetCardEditor(
                             DesktopWidgetTextAlignment.END -> tr("右侧", "End")
                         }
                         FilterChip(
+                            modifier = Modifier.weight(1f),
                             selected = draft.textAlignment == alignment,
                             onClick = { onChange(draft.copy(textAlignment = alignment)) },
-                            label = { Text(label) },
+                            label = {
+                                Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            },
                         )
                     }
                 }
@@ -619,11 +692,18 @@ private fun WidgetPreview(config: DesktopWidgetConfig, english: Boolean) {
     val previewHeight = (132f * config.heightCells / config.widthCells)
         .coerceIn(78f, 230f)
         .dp
+    val previewInset = (16f * (100 - config.surfaceScalePercent) / 30f).dp
+    val previewShape = if (config.cornerStyle == DesktopWidgetCornerStyle.ROUNDED) {
+        RoundedCornerShape(22.dp)
+    } else {
+        RoundedCornerShape(0.dp)
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(previewHeight)
-            .clip(RoundedCornerShape(22.dp))
+            .padding(previewInset)
+            .clip(previewShape)
             .background(
                 Color(config.backgroundColorArgb).copy(
                     alpha = config.backgroundOpacityPercent / 100f,
@@ -686,10 +766,15 @@ private fun WidgetToggle(
     onCheckedChange: (Boolean) -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, modifier = Modifier.weight(1f))
+        Text(
+            label,
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

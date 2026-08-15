@@ -30,20 +30,26 @@ import com.deskcubby.app.data.model.CustomThemePalette
 import com.deskcubby.app.data.model.CustomThemeSettings
 import com.deskcubby.app.data.model.DEFAULT_CLOUD_SYNC_USER_AGENT
 import com.deskcubby.app.data.model.DEFAULT_DESKTOP_WIDGET_CONFIGS
+import com.deskcubby.app.data.model.DESKTOP_WIDGET_APP_MODULE_IDS
 import com.deskcubby.app.data.model.DESKTOP_WIDGET_HOME_MODULE_IDS
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DesktopWidgetCornerStyle
 import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
 import com.deskcubby.app.data.model.HomeGreetingTemplate
 import com.deskcubby.app.data.model.Game2048AnimationSpeed
 import com.deskcubby.app.data.model.LauncherIcon
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
+import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT
 import com.deskcubby.app.data.model.MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
 import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.MusicVisualizerStyle
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_BACKGROUND_OPACITY_PERCENT
+import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT
 import com.deskcubby.app.data.model.MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT
 import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.data.model.PoetryTextAlignment
@@ -559,6 +565,9 @@ object BackupJsonCodec {
                     .put("showIcon", item.showIcon)
                     .put("textAlignment", item.textAlignment.name)
                     .put("textScalePercent", item.textScalePercent)
+                    .put("cornerStyle", item.cornerStyle.name)
+                    .put("surfaceScalePercent", item.surfaceScalePercent)
+                    .put("appIconScalePercent", item.appIconScalePercent)
                     .put("contentType", item.contentType.name)
                     .put("homeModuleId", item.homeModuleId)
                     .putNullable("appPackageName", item.appPackageName)
@@ -612,13 +621,21 @@ object BackupJsonCodec {
                     } else {
                         100
                     },
+                    cornerStyle = item.optString(
+                        "cornerStyle",
+                        DesktopWidgetCornerStyle.ROUNDED.name,
+                    ).let { raw ->
+                        DesktopWidgetCornerStyle.entries.firstOrNull { it.name == raw }
+                            ?: throw IllegalArgumentException("desktopWidgetConfigs[$index].cornerStyle is invalid")
+                    },
+                    surfaceScalePercent = item.optInt("surfaceScalePercent", 100),
+                    appIconScalePercent = item.optInt("appIconScalePercent", 100),
                     contentType = item.requiredEnum("contentType"),
                     homeModuleId = item.requiredString("homeModuleId").let { homeModuleId ->
-                        when {
-                            homeModuleId == "cloud_sync_now" ||
-                                homeModuleId == "cloud_sync_force" -> "cloud_sync"
-                            version <= 29 && homeModuleId == "cloud_sync" -> "cloud_sync"
-                            else -> homeModuleId
+                        if (version <= 29 && homeModuleId == "cloud_sync") {
+                            "cloud_sync_now"
+                        } else {
+                            homeModuleId
                         }
                     },
                     appPackageName = item.requiredNullableString("appPackageName"),
@@ -664,12 +681,26 @@ object BackupJsonCodec {
             config.textScalePercent in
                 MIN_DESKTOP_WIDGET_TEXT_SCALE_PERCENT..MAX_DESKTOP_WIDGET_TEXT_SCALE_PERCENT,
         ) { "$field.textScalePercent is out of range" }
+        require(
+            config.surfaceScalePercent in
+                MIN_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT..MAX_DESKTOP_WIDGET_SURFACE_SCALE_PERCENT,
+        ) { "$field.surfaceScalePercent is out of range" }
+        require(
+            config.appIconScalePercent in
+                MIN_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT..MAX_DESKTOP_WIDGET_APP_ICON_SCALE_PERCENT,
+        ) { "$field.appIconScalePercent is out of range" }
         config.backgroundImageUri?.let { uri ->
             require(uri.length <= MAX_URL_CHARS && uri.startsWith("content://")) {
                 "$field.backgroundImageUri is invalid"
             }
         }
-        require(config.homeModuleId in DESKTOP_WIDGET_HOME_MODULE_IDS) {
+        val validModuleIds = when (config.contentType) {
+            DesktopWidgetContentType.HOME_MODULE,
+            DesktopWidgetContentType.APP_SHORTCUT,
+            -> DESKTOP_WIDGET_HOME_MODULE_IDS
+            DesktopWidgetContentType.APP_MODULE -> DESKTOP_WIDGET_APP_MODULE_IDS
+        } + listOf("cloud_sync_now", "cloud_sync_force")
+        require(config.homeModuleId in validModuleIds) {
             "$field.homeModuleId is invalid"
         }
         config.appLabel?.let {

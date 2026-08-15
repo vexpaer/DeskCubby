@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.os.Build
 import android.net.Uri
 import android.util.TypedValue
 import android.view.Gravity
@@ -25,6 +26,7 @@ import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.DesktopWidgetConfig
 import com.deskcubby.app.data.model.DesktopWidgetContentType
+import com.deskcubby.app.data.model.DesktopWidgetCornerStyle
 import com.deskcubby.app.data.model.DesktopWidgetTextAlignment
 import com.deskcubby.app.data.model.MealCategory
 import com.deskcubby.app.data.model.NavItemId
@@ -179,7 +181,7 @@ class DesktopWidgetRenderer @Inject constructor(
     ): RemoteViews {
         val views = RemoteViews(context.packageName, R.layout.desktop_widget)
         if (config == null) {
-            views.setInt(R.id.widget_root, "setBackgroundColor", 0xFF263238.toInt())
+            views.setInt(R.id.widget_surface, "setBackgroundColor", 0xFF263238.toInt())
             views.setTextColor(R.id.widget_title, 0xFFFFFFFF.toInt())
             views.setTextColor(R.id.widget_value, 0xFFFFFFFF.toInt())
             views.setTextColor(R.id.widget_detail, 0xFFFFFFFF.toInt())
@@ -214,7 +216,7 @@ class DesktopWidgetRenderer @Inject constructor(
         }
         val backgroundAlpha = config.backgroundOpacityPercent * 255 / 100
         views.setInt(
-            R.id.widget_root,
+            R.id.widget_surface,
             "setBackgroundColor",
             config.backgroundColorArgb.withAlpha(backgroundAlpha),
         )
@@ -243,12 +245,14 @@ class DesktopWidgetRenderer @Inject constructor(
 
         val options = runCatching { manager.getAppWidgetOptions(appWidgetId) }
             .getOrDefault(android.os.Bundle.EMPTY)
-        val actualWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)
-            .takeIf { it > 0 }
-            ?: (config.widthCells * APPROX_CELL_DP)
-        val actualHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT)
-            .takeIf { it > 0 }
-            ?: (config.heightCells * APPROX_CELL_DP)
+        val bounds = desktopWidgetBoundsDp(
+            minWidthDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH),
+            minHeightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT),
+            config = config,
+        )
+        val actualWidth = bounds.width
+        val actualHeight = bounds.height
+        applyWidgetSurfaceAppearance(views, R.id.widget_surface, config, actualWidth, actualHeight)
         val compact = actualWidth < COMPACT_WIDTH_DP || actualHeight < COMPACT_HEIGHT_DP
         views.setViewVisibility(
             R.id.widget_detail,
@@ -308,7 +312,10 @@ class DesktopWidgetRenderer @Inject constructor(
                         runCatching { packageManager.getActivityIcon(component) }.getOrNull()
                     }
                         ?: packageManager.getApplicationIcon(packageName)
-                    val edge = desktopAppIconBitmapEdgePx(context.resources.displayMetrics.density)
+                    val edge = desktopAppIconBitmapEdgePx(
+                        density = context.resources.displayMetrics.density,
+                        scalePercent = config.appIconScalePercent,
+                    )
                     drawable.toBitmap(edge, edge, Bitmap.Config.ARGB_8888)
                 }.getOrNull()
             }
@@ -371,21 +378,25 @@ class DesktopWidgetRenderer @Inject constructor(
         } else {
             appPanelRenderer.render(appWidgetId, moduleId, settings, config)
         } ?: RemoteViews(context.packageName, R.layout.desktop_widget_apps)
+        val options = runCatching {
+            AppWidgetManager.getInstance(context).getAppWidgetOptions(appWidgetId)
+        }.getOrDefault(android.os.Bundle.EMPTY)
+        val bounds = desktopWidgetBoundsDp(
+            minWidthDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH),
+            minHeightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT),
+            config = config,
+        )
+        applyWidgetSurfaceAppearance(views, R.id.widget_surface, config, bounds.width, bounds.height)
         val backgroundAlpha = config.backgroundOpacityPercent * 255 / 100
         views.setInt(
-            R.id.widget_apps_root,
+            R.id.widget_surface,
             "setBackgroundColor",
             config.backgroundColorArgb.withAlpha(backgroundAlpha),
         )
         views.setTextColor(R.id.widget_apps_title, config.textColorArgb)
         if (config.backgroundImageUri != null && gameId == null) {
-            val options = runCatching {
-                AppWidgetManager.getInstance(context).getAppWidgetOptions(appWidgetId)
-            }.getOrDefault(android.os.Bundle.EMPTY)
-            val widthDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)
-                .takeIf { it > 0 } ?: (config.widthCells * APPROX_CELL_DP)
-            val heightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT)
-                .takeIf { it > 0 } ?: (config.heightCells * APPROX_CELL_DP)
+            val widthDp = bounds.width
+            val heightDp = bounds.height
             config.backgroundImageUri?.let { raw ->
                 loadBackgroundBitmap(raw, widthDp, heightDp)?.let { bitmap ->
                     views.setImageViewBitmap(R.id.widget_apps_background_image, bitmap)
@@ -409,6 +420,36 @@ class DesktopWidgetRenderer @Inject constructor(
         return views
     }
 
+    private fun applyWidgetSurfaceAppearance(
+        views: RemoteViews,
+        rootId: Int,
+        config: DesktopWidgetConfig,
+        widthDp: Int,
+        heightDp: Int,
+    ) {
+        val insets = desktopWidgetSurfaceInsetsDp(widthDp, heightDp, config.surfaceScalePercent)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            listOf(RemoteViews.MARGIN_LEFT, RemoteViews.MARGIN_RIGHT).forEach { margin ->
+                views.setViewLayoutMargin(
+                    rootId,
+                    margin,
+                    insets.horizontal.toFloat(),
+                    TypedValue.COMPLEX_UNIT_DIP,
+                )
+            }
+            listOf(RemoteViews.MARGIN_TOP, RemoteViews.MARGIN_BOTTOM).forEach { margin ->
+                views.setViewLayoutMargin(
+                    rootId,
+                    margin,
+                    insets.vertical.toFloat(),
+                    TypedValue.COMPLEX_UNIT_DIP,
+                )
+            }
+            val radiusDp = if (config.cornerStyle == DesktopWidgetCornerStyle.ROUNDED) 22f else 0f
+            views.setViewOutlinePreferredRadius(rootId, radiusDp, TypedValue.COMPLEX_UNIT_DIP)
+        }
+    }
+
     private fun configureAppShortcutContent(
         views: RemoteViews,
         config: DesktopWidgetConfig,
@@ -421,17 +462,36 @@ class DesktopWidgetRenderer @Inject constructor(
     ) {
         views.setViewVisibility(R.id.widget_foreground, View.GONE)
         views.setViewVisibility(R.id.widget_app_shortcut_content, View.VISIBLE)
+        val surfaceInsets = desktopWidgetSurfaceInsetsDp(
+            actualWidthDp,
+            actualHeightDp,
+            config.surfaceScalePercent,
+        )
+        val iconSizeDp = desktopAppIconSizeDp(config.appIconScalePercent)
         val showLauncherIcon = shouldShowDesktopAppIcon(
             requested = config.showIcon,
-            availableWidthDp = actualWidthDp,
-            availableHeightDp = actualHeightDp,
+            availableWidthDp = (actualWidthDp - surfaceInsets.horizontal * 2).coerceAtLeast(0),
+            availableHeightDp = (actualHeightDp - surfaceInsets.vertical * 2).coerceAtLeast(0),
             iconLoaded = icon != null,
+            iconSizeDp = iconSizeDp,
         )
         views.setViewVisibility(
             R.id.widget_app_shortcut_icon,
             if (showLauncherIcon) View.VISIBLE else View.GONE,
         )
         if (showLauncherIcon && icon != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                views.setViewLayoutWidth(
+                    R.id.widget_app_shortcut_icon,
+                    iconSizeDp.toFloat(),
+                    TypedValue.COMPLEX_UNIT_DIP,
+                )
+                views.setViewLayoutHeight(
+                    R.id.widget_app_shortcut_icon,
+                    iconSizeDp.toFloat(),
+                    TypedValue.COMPLEX_UNIT_DIP,
+                )
+            }
             views.setImageViewBitmap(R.id.widget_app_shortcut_icon, icon)
             views.setContentDescription(R.id.widget_app_shortcut_icon, text.value)
         }

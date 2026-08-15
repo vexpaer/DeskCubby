@@ -625,6 +625,8 @@ class SettingsRepositoryTest {
                     textColorArgb = 0x00445566,
                     backgroundOpacityPercent = 999,
                     textScalePercent = 1,
+                    surfaceScalePercent = 15,
+                    appIconScalePercent = 999,
                     backgroundImageUri = " file:///private/image.jpg ",
                     homeModuleId = "not-a-module",
                     appLabel = " App\rName ",
@@ -641,6 +643,8 @@ class SettingsRepositoryTest {
         assertEquals(0xFF445566.toInt(), normalized.textColorArgb)
         assertEquals(100, normalized.backgroundOpacityPercent)
         assertEquals(75, normalized.textScalePercent)
+        assertEquals(70, normalized.surfaceScalePercent)
+        assertEquals(150, normalized.appIconScalePercent)
         assertEquals(null, normalized.backgroundImageUri)
         assertEquals("today", normalized.homeModuleId)
         assertEquals("App Name", normalized.appLabel)
