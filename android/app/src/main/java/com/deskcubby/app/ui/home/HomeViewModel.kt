@@ -175,51 +175,55 @@ class HomeViewModel @Inject constructor(
                 }
             }
             try {
-                mealUploadMutex.withLock {
+                val media = try {
+                    mealUploadMutex.withLock {
+                        runMealPhotoDurableWrite(
+                            onBusyChanged = { _mealUploadInProgress.value = it },
+                        ) {
+                            diaryFileRepository.appendImageToToday(uri, category, settings)
+                        }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    _message.value = error.message ?: if (settings.appLanguage == AppLanguage.ENGLISH) {
+                        "Could not add the photo"
+                    } else {
+                        "图片添加失败"
+                    }
+                    return@launch
+                }
+
+                // The interaction is complete once the image and Markdown are durable. Release the
+                // camera source and re-enable the meal buttons before optional AI/index follow-up.
+                releaseSource()
+                _message.value = if (settings.appLanguage == AppLanguage.ENGLISH) {
+                    "$category photo added to today's diary"
+                } else {
+                    "$category 图片已加入今日日记"
+                }
+                if (settings.calorieEstimationEnabled) {
                     try {
-                        _mealUploadInProgress.value = true
-                        val media = diaryFileRepository.appendImageToToday(uri, category, settings)
-                        // The camera source can be removed as soon as both durable writes finish;
-                        // a later index scan must not keep the temporary photo alive.
-                        releaseSource()
-                        _message.value = if (settings.appLanguage == AppLanguage.ENGLISH) {
-                            "$category photo added to today's diary"
-                        } else {
-                            "$category 图片已加入今日日记"
-                        }
-                        if (settings.calorieEstimationEnabled) {
-                            try {
-                                val estimate = calorieRepository.estimate(media.documentUri, settings)
-                                diaryFileRepository.setMealPhotoEstimate(
-                                    media.fileName,
-                                    estimate,
-                                    settings,
-                                )
-                                _message.value = "${_message.value} · ${estimate.energyKj}kJ"
-                            } catch (error: Exception) {
-                                _message.value = "${_message.value} · 热量估算失败：${error.message.orEmpty()}"
-                            }
-                        }
-                        // The image and Markdown are already durable at this point. Index refresh
-                        // is best-effort so a scan failure never encourages a duplicate retry.
-                        try {
-                            diaryFileRepository.scan(settings)
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (_: Exception) {
-                            // The next normal scan will refresh the index.
-                        }
+                        val estimate = calorieRepository.estimate(media.documentUri, settings)
+                        diaryFileRepository.setMealPhotoEstimate(
+                            media.fileName,
+                            estimate,
+                            settings,
+                        )
+                        _message.value = "${_message.value} · ${estimate.energyKj}kJ"
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Exception) {
-                        _message.value = error.message ?: if (settings.appLanguage == AppLanguage.ENGLISH) {
-                            "Could not add the photo"
-                        } else {
-                            "图片添加失败"
-                        }
-                    } finally {
-                        _mealUploadInProgress.value = false
+                        _message.value = "${_message.value} · 热量估算失败：${error.message.orEmpty()}"
                     }
+                }
+                // Index refresh is best-effort background follow-up and must not keep the upload UI busy.
+                try {
+                    diaryFileRepository.scan(settings)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // The next normal scan will refresh the index.
                 }
             } finally {
                 releaseSource()
@@ -311,6 +315,18 @@ class HomeViewModel @Inject constructor(
             _cloudSyncActionState.value,
             status,
         )
+    }
+}
+
+internal suspend fun <T> runMealPhotoDurableWrite(
+    onBusyChanged: (Boolean) -> Unit,
+    write: suspend () -> T,
+): T {
+    onBusyChanged(true)
+    return try {
+        write()
+    } finally {
+        onBusyChanged(false)
     }
 }
 
