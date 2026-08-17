@@ -224,6 +224,13 @@ fun DeskCubbyRoot(
             }
             return@AppBackground
         }
+        // First launch: before the navigation graph, ask for the UI language once. The device-
+        // local flag keeps this from ever showing again and is not backed up.
+        val languageSelected by settingsViewModel.languageSelected.collectAsStateWithLifecycle()
+        if (!languageSelected) {
+            FirstLaunchLanguageScreen(onChoose = settingsViewModel::chooseFirstLaunchLanguage)
+            return@AppBackground
+        }
         val navController = rememberNavController()
         val aliasContext = LocalContext.current
         LaunchedEffect(settings.useChineseLauncherName, settings.launcherIcon) {
