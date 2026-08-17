@@ -98,3 +98,7 @@ data class RemoteRecordManifest(
 ) {
     val entriesById: Map<String, RemoteRecordManifestEntry> = entries.associateBy { it.id }
 }
+
+/** Shared message for the fail-fast guard emitted before any record content is processed. */
+internal fun missingRecordAdaptersMessage(missing: Set<CloudSyncContent>): String =
+    "记录同步适配器缺失：" + missing.joinToString("、") { it.name }

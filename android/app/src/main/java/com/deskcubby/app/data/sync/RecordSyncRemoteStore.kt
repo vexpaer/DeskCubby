@@ -7,29 +7,31 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
 
-data class RemoteRecordPayload(
-    val key: String,
-    val version: String,
-    val size: Long,
-    val sha256: String,
-)
-
 /**
  * Record sync transport on top of the existing WebDAV/S3 object stores.
  *
  * One small manifest object per content type carries id/revision/hash/tombstone metadata, so a
  * normal sync only downloads payloads for records whose manifest entry actually changed.
+ *
+ * The underlying object store is a single manifest-backed repository whose listing re-reads and
+ * re-decodes the whole shared sync manifest on every call. This transport therefore loads the
+ * per-content object inventory exactly once per content type per run and reuses it for every
+ * payload operation, instead of issuing a separate remote listing per record.
  */
 class RecordSyncRemoteStore(
     private val remote: CloudSyncRemoteStore,
     private val limits: CloudSyncLimits,
 ) {
+    /** Per-content object inventory: object key -> remote object (payloads plus the manifest object). */
+    private val inventories = HashMap<CloudSyncContent, Map<String, RemoteSyncObject>>()
+
+    /**
+     * Loads the record manifest for [content], warming the per-content inventory so subsequent
+     * payload reads/writes in the same run never re-list the remote.
+     */
     suspend fun loadManifest(content: CloudSyncContent): RemoteRecordManifest? {
-        val prefix = manifestPrefix(content)
-        val candidates = remote.list(setOf(prefix))
-        if (candidates.isEmpty()) return null
-        val target = candidates.singleOrNull { it.key == manifestKey(content) }
-            ?: throw CloudSyncException("记录同步清单路径无效。")
+        val inventory = inventory(content)
+        val target = inventory[manifestKey(content)] ?: return null
         requireObjectWithinLimit(target)
         val bytes = remote.read(target, limits.maxObjectBytes)
         require(bytes.size.toLong() == target.size && sha256(bytes) == target.sha256) {
@@ -52,18 +54,8 @@ class RecordSyncRemoteStore(
             lastModifiedMillis = System.currentTimeMillis(),
             expectedRemoteVersion = expectedRemoteVersion,
         )
+        inventories[content] = inventories.getValue(content) + (manifestKey(content) to written)
         return RecordManifestCodec.decode(bytes, content).copy(version = written.version)
-    }
-
-    suspend fun payloadObject(
-        content: CloudSyncContent,
-        id: String,
-    ): RemoteRecordPayload? {
-        val key = payloadKey(content, id)
-        val candidate = remote.list(setOf(key)).singleOrNull { it.key == key }
-            ?: return null
-        requireObjectWithinLimit(candidate)
-        return RemoteRecordPayload(key, candidate.version, candidate.size, candidate.sha256)
     }
 
     suspend fun readPayload(
@@ -77,13 +69,16 @@ class RecordSyncRemoteStore(
             "云端记录 payload 与清单不一致，请重新同步。"
         }
         val bytes = remote.read(
+            // Keep the inventory's real object identity: the production manifest-backed store
+            // validates the version token against the storage name and content hash. Fabricating
+            // either value would fail that check on real WebDAV/S3 stores.
             RemoteSyncObject(
                 key = objectInfo.key,
                 size = objectInfo.size,
                 lastModifiedMillis = 0L,
                 sha256 = objectInfo.sha256,
                 version = objectInfo.version,
-                storageName = "records/$id",
+                storageName = objectInfo.storageName,
             ),
             limits.maxObjectBytes,
         )
@@ -91,27 +86,51 @@ class RecordSyncRemoteStore(
         return bytes
     }
 
+    /**
+     * Publishes [bytes] for [id]. [remoteEntry] is the remote manifest entry observed in this
+     * run: when it already proves the payload matches, the write is skipped entirely, and when
+     * the entry is absent the payload key is known not to exist, so the write is a plain create
+     * and never needs an extra remote listing.
+     */
     suspend fun writePayload(
         content: CloudSyncContent,
         id: String,
         bytes: ByteArray,
         expectedSha256: String,
+        remoteEntry: RemoteRecordManifestEntry? = null,
     ) {
         require(bytes.size.toLong() <= limits.maxObjectBytes) { "记录超过单文件同步上限。" }
         require(sha256(bytes) == expectedSha256) { "记录 payload 校验失败。" }
-        val existing = payloadObject(content, id)
-        val expectedVersion = if (existing?.sha256 == expectedSha256) {
+        val key = payloadKey(content, id)
+        if (remoteEntry != null && !remoteEntry.deleted && remoteEntry.payloadSha256 == expectedSha256) {
             return
-        } else {
-            existing?.version
         }
-        remote.write(
-            key = payloadKey(content, id),
+        val existing = payloadObject(content, id)
+        if (existing?.sha256 == expectedSha256) return
+        val written = remote.write(
+            key = key,
             bytes = bytes,
             contentSha256 = expectedSha256,
             lastModifiedMillis = System.currentTimeMillis(),
-            expectedRemoteVersion = expectedVersion,
+            expectedRemoteVersion = existing?.version,
         )
+        inventories[content] = inventories.getValue(content) + (key to written)
+    }
+
+    private suspend fun payloadObject(content: CloudSyncContent, id: String): RemoteSyncObject? =
+        inventory(content)[payloadKey(content, id)]
+
+    /** Loads the object inventory for [content] once and caches it for the rest of the run. */
+    private suspend fun inventory(content: CloudSyncContent): Map<String, RemoteSyncObject> {
+        inventories[content]?.let { return it }
+        val loaded = remote.list(
+            setOf(
+                content.remoteDirectory + "/",
+                "sync-meta/" + content.remoteDirectory + "/",
+            ),
+        ).associateBy(RemoteSyncObject::key)
+        inventories[content] = loaded
+        return loaded
     }
 
     private fun requireObjectWithinLimit(objectInfo: RemoteSyncObject) {
@@ -120,16 +139,14 @@ class RecordSyncRemoteStore(
         }
     }
 
-    private fun manifestPrefix(content: CloudSyncContent): String =
-        "sync-meta/${content.remoteDirectory}/manifest.json"
-
-    private fun manifestKey(content: CloudSyncContent): String = manifestPrefix(content)
+    private fun manifestKey(content: CloudSyncContent): String =
+        "sync-meta/" + content.remoteDirectory + "/manifest.json"
 
     private fun payloadKey(content: CloudSyncContent, id: String): String {
-        requireValidSyncKey("records/${content.remoteDirectory.substringAfter('/')}/$id")
+        requireValidSyncKey("records/" + content.remoteDirectory.substringAfter('/') + "/" + id)
         val safe = Base64.getUrlEncoder().withoutPadding()
             .encodeToString(id.toByteArray(StandardCharsets.UTF_8))
-        return "${content.remoteDirectory}/${safe}.json"
+        return content.remoteDirectory + "/" + safe + ".json"
     }
 
     private companion object {
@@ -184,7 +201,9 @@ internal object RecordManifestCodec {
             for (index in 0 until records.length()) {
                 val item = records.getJSONObject(index)
                 val id = item.getString("id")
-                requireValidSyncKey("records/${expectedContent.remoteDirectory.substringAfter('/')}/$id")
+                requireValidSyncKey(
+                    "records/" + expectedContent.remoteDirectory.substringAfter('/') + "/" + id,
+                )
                 add(
                     RemoteRecordManifestEntry(
                         id = id,

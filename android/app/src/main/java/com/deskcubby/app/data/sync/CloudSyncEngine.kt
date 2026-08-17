@@ -121,6 +121,10 @@ class CloudSyncEngine(
             val engine = recordSyncEngine ?: throw CloudSyncConfigurationException(
                 "记录同步尚未连接到应用数据服务。",
             )
+            val missing = engine.missingAdapters(recordContents)
+            if (missing.isNotEmpty()) {
+                throw CloudSyncConfigurationException(missingRecordAdaptersMessage(missing))
+            }
             engine.syncContents(
                 config = config,
                 validated = validated,

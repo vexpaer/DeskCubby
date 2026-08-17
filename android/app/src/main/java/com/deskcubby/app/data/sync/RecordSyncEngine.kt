@@ -10,6 +10,10 @@ class RecordSyncEngine(
     private val adapters: Map<CloudSyncContent, RecordSyncAdapter>,
     private val recordStateStore: RecordSyncStateStore,
 ) {
+    /** Content types in [contents] that have no registered adapter; used for a fail-fast guard. */
+    fun missingAdapters(contents: Set<CloudSyncContent>): Set<CloudSyncContent> =
+        contents.filterNot { it in adapters }.toSet()
+
     internal suspend fun syncContents(
         config: CloudSyncConfig,
         validated: ValidatedCloudSyncConfig,
@@ -20,12 +24,15 @@ class RecordSyncEngine(
         onProgress: (CloudSyncProgress) -> Unit,
     ): List<CloudSyncItemReport> {
         if (contents.isEmpty()) return emptyList()
+        val missing = contents.filterNot { it in adapters }.toSet()
+        if (missing.isNotEmpty()) {
+            throw CloudSyncConfigurationException(missingRecordAdaptersMessage(missing))
+        }
         val ordered = contents.sortedBy { it.name }
         val reports = ArrayList<CloudSyncItemReport>()
         val transport = RecordSyncRemoteStore(remoteStore, limits)
         ordered.forEachIndexed { index, content ->
-            val adapter = adapters[content]
-                ?: throw CloudSyncConfigurationException("记录同步适配器缺失：${content.name}")
+            val adapter = adapters.getValue(content)
             reports += syncContent(config, validated, adapter, transport, limits, mode)
             onProgress(
                 CloudSyncProgress(
@@ -81,7 +88,13 @@ class RecordSyncEngine(
         }
 
         suspend fun upload(id: String, record: SyncRecord) {
-            transport.writePayload(content, id, record.payload, record.payloadSha256)
+            transport.writePayload(
+                content,
+                id,
+                record.payload,
+                record.payloadSha256,
+                remoteEntries[id],
+            )
             nextEntries[id] = record.toManifestEntry()
             updatedStateEntries[id] = record.toStateEntry(localRefById[id]?.localKey)
         }
