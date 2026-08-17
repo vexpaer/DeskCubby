@@ -27,6 +27,9 @@ import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
 import com.deskcubby.app.data.model.normalizeHomeGameShortcutIds
 import com.deskcubby.app.data.preferences.SettingsRepository
+import com.deskcubby.app.data.sync.AgentChatSyncRepository
+import com.deskcubby.app.data.sync.AgentChatSyncCodec
+import com.deskcubby.app.data.sync.sha256
 import com.deskcubby.app.data.repository.ReaderProgressRecord
 import com.deskcubby.app.data.repository.ReaderRepository
 import com.deskcubby.app.data.repository.VaultEncryptedBackup
@@ -44,10 +47,7 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -65,16 +65,13 @@ data class AppBackupContent(
     val gameStatistics: List<GameStatisticEntity> = emptyList(),
     val usageDevices: List<UsageDeviceRecord> = emptyList(),
     val readerProgress: List<ReaderProgressRecord> = emptyList(),
+    val agentChats: ByteArray = byteArrayOf(),
 )
 
 class AppBackupException(
     message: String,
     cause: Throwable? = null,
 ) : IOException(message, cause)
-
-internal class AutomaticBackupConfigurationChangedException : IOException(
-    "自动保存已取消：保存文件夹设置已更改。",
-)
 
 @Singleton
 class AppBackupRepository @Inject constructor(
@@ -92,92 +89,30 @@ class AppBackupRepository @Inject constructor(
     private val vaultRepository: VaultRepository,
     private val usageDeviceRepository: UsageDeviceRepository,
     private val readerRepository: ReaderRepository,
+    private val agentChatSyncRepository: AgentChatSyncRepository,
 ) {
     private val operationMutex = Mutex()
-
-    fun observeContent(): Flow<AppBackupContent> {
-        val poetryContent = combine(
-            poetryCategoryDao.observeAllForBackup(),
-            savedPoemDao.observeAllForBackup(),
-        ) { categories, poems ->
-            categories to poems
-        }
-        val databaseContent = combine(
-            thoughtDao.observeAllForBackup(),
-            categoryDao.observeAllForBackup(),
-            browserDao.observeFavorites(),
-            dateRecordDao.observeAllForBackup(),
-            poetryContent,
-        ) { thoughts, categories, favorites, dateRecords, poetry ->
-            BackupDatabaseContent(
-                thoughts = thoughts,
-                categories = categories,
-                favorites = favorites,
-                dateRecords = dateRecords,
-                poetryCategories = poetry.first,
-                poems = poetry.second,
-            )
-        }
-        val extraContent = combine(
-            gameStateDao.observeAllForBackup(),
-            gameStatisticDao.observeAll(),
-            vaultRepository.contentState,
-            usageDeviceRepository.records,
-        ) { gameStates, gameStatistics, _, usageDevices ->
-            BackupExtraContent(gameStates, gameStatistics, usageDevices)
-        }
-        return combine(
-            settingsRepository.settings,
-            databaseContent,
-            extraContent,
-        ) { settings, content, extras ->
-            AppBackupContent(
-                settings = settings,
-                thoughts = content.thoughts,
-                categories = content.categories,
-                favorites = content.favorites,
-                dateRecords = content.dateRecords,
-                poetryCategories = content.poetryCategories,
-                poems = content.poems,
-                gameStates = extras.gameStates,
-                gameStatistics = extras.gameStatistics,
-                usageDevices = extras.usageDevices,
-                // Reader progress deliberately is not observed here: page turns must not cause
-                // an automatic JSON rewrite. Every actual save re-reads it in loadCurrentContent.
-                readerProgress = emptyList(),
-            )
-        }.flowOn(Dispatchers.IO)
-    }
 
     suspend fun currentContent(): AppBackupContent = operationMutex.withLock {
         withContext(Dispatchers.IO) { loadCurrentContent() }
     }
 
     /** Produces the same validated JSON snapshot used by preview, manual and automatic backups. */
-    suspend fun currentBackupJson(): String = operationMutex.withLock {
-        withContext(Dispatchers.IO) {
-            BackupJsonCodec.encode(loadCurrentContent().toBackup())
-        }
-    }
-
-    /** Produces the same validated UTF-8 snapshot used by cloud synchronization. */
-    suspend fun encodeCurrentBackupForSync(): ByteArray =
-        currentBackupJson().toByteArray(Charsets.UTF_8)
-
-    /** Imports a user-confirmed JSON file previously staged by cloud sync. */
-    suspend fun importStagedBackupJson(raw: String): BackupSummary = operationMutex.withLock {
-        withContext(Dispatchers.IO) {
-            restoreBackup(decodeDocument(raw, "导入云端 JSON"))
-        }
-    }
-
     suspend fun exportTo(uri: Uri): BackupSummary = operationMutex.withLock {
         withContext(Dispatchers.IO) {
             val content = loadCurrentContent()
             val backup = content.toBackup()
             val json = BackupJsonCodec.encode(backup)
-            writeAndVerifyBackup(uri, json, "导出")
+            val target = resolveNonOverwritingExportTarget(uri)
+            writeAndVerifyBackup(target, json, "导出")
             backup.toSummary()
+        }
+    }
+
+    /** Parses and validates a manual backup without changing any local data. */
+    suspend fun inspectFrom(uri: Uri): BackupSummary = operationMutex.withLock {
+        withContext(Dispatchers.IO) {
+            decodeDocument(readDocument(uri, "备份预览"), "备份预览").toSummary()
         }
     }
 
@@ -189,69 +124,65 @@ class AppBackupRepository @Inject constructor(
         }
     }
 
-    suspend fun inspectAutomatic(treeUri: String): BackupSummary? =
-        inspectAutomatic(parseTreeUri(treeUri, "读取自动备份"))
-
-    suspend fun inspectAutomatic(treeUri: Uri): BackupSummary? = operationMutex.withLock {
-        withContext(Dispatchers.IO) {
-            val root = resolveTree(treeUri, "读取自动备份", requireWrite = true)
-            readAutomaticBackup(root)?.toSummary()
+    /**
+     * Never silently overwrites an existing user file. If the SAF picker returned an existing
+     * name, a sibling DC-YYYY-MM-DD-2.json / -3.json is created instead.
+     */
+    private fun resolveNonOverwritingExportTarget(requested: Uri): Uri {
+        val document = try {
+            DocumentFile.fromSingleUri(context, requested)
+        } catch (_: Exception) {
+            null
         }
-    }
+        if (document?.exists() != true) return requested
 
-    suspend fun importAutomatic(treeUri: String): BackupSummary =
-        importAutomatic(parseTreeUri(treeUri, "导入自动备份"))
-
-    suspend fun importAutomatic(treeUri: Uri): BackupSummary = operationMutex.withLock {
-        withContext(Dispatchers.IO) {
-            val root = resolveTree(treeUri, "导入自动备份", requireWrite = false)
-            val backup = readAutomaticBackup(root)
-                ?: throw AppBackupException(
-                    "导入自动备份失败：所选文件夹中没有 $BACKUP_FILE_NAME 或旧版备份。",
-                )
-            restoreBackup(backup)
-        }
-    }
-
-    suspend fun writeAutomatic(
-        treeUri: String,
-        content: AppBackupContent,
-    ): BackupSummary = writeAutomatic(parseTreeUri(treeUri, "自动保存"), content)
-
-    suspend fun writeAutomatic(
-        treeUri: Uri,
-        content: AppBackupContent,
-    ): BackupSummary = operationMutex.withLock {
-        withContext(Dispatchers.IO) {
-            val root = resolveTree(treeUri, "自动保存", requireWrite = true)
-            // [content] is the debounce trigger. Re-read every store here so Vault metadata and
-            // usage-device files are captured from the same current save attempt.
-            @Suppress("UNUSED_VARIABLE")
-            val trigger = content
-            writeAutomaticToRoot(root, loadCurrentContent())
-        }
-    }
-
-    suspend fun writeCurrentAutomatic(treeUri: String): BackupSummary = writeCurrentAutomatic(
-        treeUri = parseTreeUri(treeUri, "自动保存"),
-        expectedTreeUri = treeUri,
-    )
-
-    suspend fun writeCurrentAutomatic(treeUri: Uri): BackupSummary =
-        writeCurrentAutomatic(treeUri, expectedTreeUri = treeUri.toString())
-
-    private suspend fun writeCurrentAutomatic(
-        treeUri: Uri,
-        expectedTreeUri: String,
-    ): BackupSummary = operationMutex.withLock {
-        withContext(Dispatchers.IO) {
-            val content = loadCurrentContent()
-            if (content.settings.backupTreeUri != expectedTreeUri) {
-                throw AutomaticBackupConfigurationChangedException()
+        val name = document.name ?: return requested
+        val parent = document.parentFile ?: return requested
+        val base = name.removeSuffix(".json")
+        val mime = document.type?.takeIf(String::isNotBlank) ?: BACKUP_MIME_TYPE
+        var sequence = 2
+        while (sequence <= 10_000) {
+            val candidate = "$base-$sequence.json"
+            val sibling = try {
+                parent.findFile(candidate)
+            } catch (_: Exception) {
+                null
             }
-            val root = resolveTree(treeUri, "自动保存", requireWrite = true)
-            writeAutomaticToRoot(root, content)
+            if (sibling == null) {
+                val created = try {
+                    parent.createFile(mime, candidate)
+                } catch (_: Exception) {
+                    null
+                } ?: throw AppBackupException(
+                    "导出失败：无法创建不重名的 $candidate。",
+                )
+                if (created.name == candidate || created.renameTo(candidate)) {
+                    return created.uri
+                }
+                runCatching { created.delete() }
+            }
+            sequence += 1
         }
+        throw AppBackupException("导出失败：同名文件过多，请选择其他位置。")
+    }
+
+    private fun writeAndVerifyBackup(
+        document: DocumentFile,
+        json: String,
+        action: String,
+    ) = writeAndVerifyBackup(document.uri, json, action)
+
+    private fun writeAndVerifyBackup(
+        uri: Uri,
+        json: String,
+        action: String,
+    ) {
+        writeDocument(uri, json, action)
+        val verifiedRaw = readDocument(uri, "$action 校验")
+        if (verifiedRaw != json) {
+            throw AppBackupException("${action}失败：写入后内容不完整，请检查存储空间。")
+        }
+        decodeDocument(verifiedRaw, "$action 校验")
     }
 
     private suspend fun restoreBackup(backup: AppBackup): BackupSummary {
@@ -267,10 +198,13 @@ class AppBackupRepository @Inject constructor(
         }
         val previousSettings = previous.settings
 
+        val portableImported = backup.settings.sanitizedForManualBackup()
+        val previousAgentChats = previous.agentChats
+        var agentChatsMayNeedRollback = false
         val restoredSettings = mergeAndroidOnlyGameShortcut(
             imported = mergeBackupCloudSyncSettings(
                 imported = mergeLegacyBackupAiApiKeys(
-                    imported = backup.settings,
+                    imported = portableImported,
                     current = previousSettings,
                     formatVersion = backup.formatVersion,
                 ),
@@ -286,7 +220,7 @@ class AppBackupRepository @Inject constructor(
         )
         var databaseMayNeedRollback = false
         try {
-            settingsRepository.restoreFromBackup(restoredSettings)
+            settingsRepository.restoreFromBackup(restoredSettings, preserveDeviceState = false)
             // Restore the fallible private stores before replacing the transactional core data.
             // This leaves the Room transaction as the final commit point, so a later failure
             // cannot roll a freshly recorded game-statistics increment back to an old snapshot.
@@ -296,6 +230,10 @@ class AppBackupRepository @Inject constructor(
             }
             if (backup.formatVersion >= 28) {
                 readerRepository.importProgressRecords(backup.readerProgress)
+            }
+            if (backup.formatVersion >= 34 && backup.agentChats.isNotEmpty()) {
+                agentChatSyncRepository.replaceFromBackupSnapshot(backup.agentChats)
+                agentChatsMayNeedRollback = true
             }
             database.withTransaction {
                 // Game actions can save both their board and statistics while the import
@@ -339,6 +277,8 @@ class AppBackupRepository @Inject constructor(
                 restoreV20Private = backup.formatVersion >= 20,
                 restoreReaderProgress = backup.formatVersion >= 28,
                 restoreDatabase = databaseMayNeedRollback,
+                restoreAgentChats = agentChatsMayNeedRollback,
+                previousAgentChats = previousAgentChats,
             )
             throw error
         } catch (error: Exception) {
@@ -348,6 +288,8 @@ class AppBackupRepository @Inject constructor(
                 restoreV20Private = backup.formatVersion >= 20,
                 restoreReaderProgress = backup.formatVersion >= 28,
                 restoreDatabase = databaseMayNeedRollback,
+                restoreAgentChats = agentChatsMayNeedRollback,
+                previousAgentChats = previousAgentChats,
             )
             val message = if (error.suppressed.isNotEmpty()) {
                 "导入失败：原数据回滚未完全成功，请保留当前备份文件。"
@@ -394,6 +336,8 @@ class AppBackupRepository @Inject constructor(
         restoreV20Private: Boolean,
         restoreReaderProgress: Boolean,
         restoreDatabase: Boolean,
+        restoreAgentChats: Boolean,
+        previousAgentChats: ByteArray,
     ) {
         withContext(NonCancellable + Dispatchers.IO) {
             runCatching {
@@ -428,265 +372,11 @@ class AppBackupRepository @Inject constructor(
                     readerRepository.replaceProgressRecordsForRollback(previous.readerProgress)
                 }.exceptionOrNull()?.let(originalError::addSuppressed)
             }
-        }
-    }
-
-    private fun writeAutomaticToRoot(
-        root: DocumentFile,
-        content: AppBackupContent,
-    ): BackupSummary {
-        val backup = content.toBackup()
-        val json = BackupJsonCodec.encode(backup)
-
-        val main = findAutomaticFile(root, BACKUP_FILE_NAME)
-        val legacyMain = findAutomaticFile(root, LEGACY_BACKUP_FILE_NAME)
-        val existingPending = findAutomaticFile(root, PENDING_FILE_NAME)
-        val legacyPending = findAutomaticFile(root, LEGACY_PENDING_FILE_NAME)
-        val existingPrevious = findAutomaticFile(root, PREVIOUS_FILE_NAME)
-        val legacyPrevious = findAutomaticFile(root, LEGACY_PREVIOUS_FILE_NAME)
-
-        val currentMain = (main ?: legacyMain)?.let {
-            readCompatibleBackupForRotation(it, "自动保存读取主文件")
-        }
-        existingPending?.let { readCompatibleBackupForRotation(it, "自动保存读取待完成文件") }
-        legacyPending?.let { readCompatibleBackupForRotation(it, "自动保存读取旧版待完成文件") }
-        existingPrevious?.let { readCompatibleBackupForRotation(it, "自动保存读取上一版本") }
-        legacyPrevious?.let { readCompatibleBackupForRotation(it, "自动保存读取旧版上一版本") }
-
-        val pending = existingPending ?: getOrCreateAutomaticFile(root, PENDING_FILE_NAME)
-        writeAndVerifyBackup(pending, json, "自动保存临时文件")
-
-        if (currentMain != null) {
-            val previous = existingPrevious ?: getOrCreateAutomaticFile(root, PREVIOUS_FILE_NAME)
-            writeAndVerifyBackup(previous, currentMain, "自动保存上一版本")
-        }
-
-        val target = main ?: getOrCreateAutomaticFile(root, BACKUP_FILE_NAME)
-        writeAndVerifyBackup(target, json, "自动保存主文件")
-        deletePendingFile(pending)
-        return backup.toSummary()
-    }
-
-    private fun writeAndVerifyBackup(
-        document: DocumentFile,
-        json: String,
-        action: String,
-    ) = writeAndVerifyBackup(document.uri, json, action)
-
-    private fun writeAndVerifyBackup(
-        uri: Uri,
-        json: String,
-        action: String,
-    ) {
-        writeDocument(uri, json, action)
-        val verifiedRaw = readDocument(uri, "$action 校验")
-        if (verifiedRaw != json) {
-            throw AppBackupException("${action}失败：写入后内容不完整，请检查存储空间。")
-        }
-        decodeDocument(verifiedRaw, "$action 校验")
-    }
-
-    private fun readCompatibleBackupForRotation(
-        document: DocumentFile,
-        action: String,
-    ): String? {
-        val raw = readDocument(document.uri, action)
-        return try {
-            BackupJsonCodec.decode(raw)
-            raw
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            if (isUnsupportedBackupVersion(error)) {
-                throw AppBackupException(
-                    "自动保存失败：$action 发现来自更新版本的备份，当前应用不能覆盖它。",
-                    error,
-                )
+            if (restoreAgentChats && previousAgentChats.isNotEmpty()) {
+                runCatching {
+                    agentChatSyncRepository.replaceFromBackupSnapshot(previousAgentChats)
+                }.exceptionOrNull()?.let(originalError::addSuppressed)
             }
-            null
-        }
-    }
-
-    private fun readAutomaticBackup(root: DocumentFile): AppBackup? {
-        val candidates = listOf(
-            // A verified pending file means the pending -> main rotation started but may not
-            // have finished. Prefer it without comparing wall-clock timestamps, which can move
-            // backwards after a manual/NTP clock correction.
-            AutomaticBackupCandidate(PENDING_FILE_NAME, "读取待完成自动备份", priority = 6),
-            AutomaticBackupCandidate(BACKUP_FILE_NAME, "读取自动备份", priority = 5),
-            AutomaticBackupCandidate(PREVIOUS_FILE_NAME, "读取上一版本备份", priority = 4),
-            AutomaticBackupCandidate(
-                LEGACY_PENDING_FILE_NAME,
-                "读取旧版待完成自动备份",
-                priority = 3,
-            ),
-            AutomaticBackupCandidate(
-                LEGACY_BACKUP_FILE_NAME,
-                "读取旧版自动备份",
-                priority = 2,
-            ),
-            AutomaticBackupCandidate(
-                LEGACY_PREVIOUS_FILE_NAME,
-                "读取旧版上一版本备份",
-                priority = 1,
-            ),
-        ).mapNotNull { candidate ->
-            findAutomaticFile(root, candidate.name)?.let { candidate to it }
-        }
-        if (candidates.isEmpty()) return null
-
-        val failures = mutableListOf<Throwable>()
-        val valid = buildList {
-            candidates.forEach { (candidate, document) ->
-                try {
-                    add(
-                        DecodedAutomaticBackup(
-                            backup = decodeDocument(
-                                readDocument(document.uri, candidate.action),
-                                candidate.action,
-                            ),
-                            priority = candidate.priority,
-                        ),
-                    )
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    if (isUnsupportedBackupVersion(error)) throw error
-                    failures += error
-                }
-            }
-        }
-        valid.maxByOrNull(DecodedAutomaticBackup::priority)?.let { return it.backup }
-
-        val cause = failures.lastOrNull()
-            ?: AppBackupException("读取自动备份失败：没有可用的备份文件。")
-        failures.dropLast(1).forEach(cause::addSuppressed)
-        throw AppBackupException(
-            "读取自动备份失败：主文件、待完成文件和上一版本均不可用。",
-            cause,
-        )
-    }
-
-    private data class AutomaticBackupCandidate(
-        val name: String,
-        val action: String,
-        val priority: Int,
-    )
-
-    private data class DecodedAutomaticBackup(
-        val backup: AppBackup,
-        val priority: Int,
-    )
-
-    private fun resolveTree(
-        treeUri: Uri,
-        action: String,
-        requireWrite: Boolean,
-    ): DocumentFile {
-        val isSafTreeUri = try {
-            treeUri.scheme == "content" && DocumentsContract.isTreeUri(treeUri)
-        } catch (error: Exception) {
-            throw AppBackupException("${action}失败：文件夹地址无效，请重新选择。", error)
-        }
-        if (!isSafTreeUri) {
-            throw AppBackupException("${action}失败：请选择有效的系统文件夹。")
-        }
-
-        val root = try {
-            DocumentFile.fromTreeUri(context, treeUri)
-        } catch (error: Exception) {
-            throw AppBackupException("${action}失败：无法识别所选文件夹，请重新选择。", error)
-        } ?: throw AppBackupException("${action}失败：无法访问所选文件夹，请重新选择。")
-
-        val accessible = try {
-            root.exists() && root.isDirectory && root.canRead() && (!requireWrite || root.canWrite())
-        } catch (error: Exception) {
-            throw AppBackupException("${action}失败：无法读取所选文件夹信息，请重新选择。", error)
-        }
-        if (!accessible) {
-            val permission = if (requireWrite) "读写" else "读取"
-            throw AppBackupException("${action}失败：所选文件夹不存在或没有$permission 权限，请重新选择。")
-        }
-        return root
-    }
-
-    private fun findAutomaticFile(root: DocumentFile, name: String): DocumentFile? {
-        val document = try {
-            root.findFile(name)
-        } catch (error: Exception) {
-            throw AppBackupException("访问自动备份失败：无法查找 $name。", error)
-        } ?: return null
-        if (!document.isFile) {
-            throw AppBackupException("访问自动备份失败：保存文件夹中存在同名文件夹“$name”。")
-        }
-        return document
-    }
-
-    private fun getOrCreateAutomaticFile(root: DocumentFile, name: String): DocumentFile =
-        findAutomaticFile(root, name) ?: try {
-            val created = root.createFile(BACKUP_MIME_TYPE, name)
-                ?: throw AppBackupException("自动保存失败：无法在所选文件夹创建 $name。")
-            ensureFixedFileName(created, name)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: AppBackupException) {
-            throw error
-        } catch (error: Exception) {
-            throw AppBackupException("自动保存失败：无法创建 $name。", error)
-        }
-
-    private fun ensureFixedFileName(document: DocumentFile, expectedName: String): DocumentFile {
-        val initialName = try {
-            document.name
-        } catch (error: Exception) {
-            throw AppBackupException("自动保存失败：无法确认新文件 $expectedName 的名称。", error)
-        }
-        if (initialName == expectedName) return document
-
-        val renamed = try {
-            document.renameTo(expectedName)
-        } catch (error: Exception) {
-            false
-        }
-        val finalName = if (renamed) {
-            try {
-                document.name
-            } catch (_: Exception) {
-                null
-            }
-        } else {
-            null
-        }
-        if (finalName == expectedName) return document
-
-        try {
-            document.delete()
-        } catch (_: Exception) {
-            // Best-effort cleanup before returning the original naming failure.
-        }
-        throw AppBackupException(
-            "自动保存失败：存储提供方将 $expectedName 改名为 ${initialName ?: "未知名称"}。",
-        )
-    }
-
-    private fun deletePendingFile(pending: DocumentFile) {
-        // Some writable SAF providers do not advertise delete support. A verified pending
-        // file is harmless and remains a valid recovery candidate for the next save/import.
-        try {
-            pending.delete()
-        } catch (_: Exception) {
-            // The verified main file is already durable; keep pending as a recovery copy.
-        }
-    }
-
-    private fun parseTreeUri(raw: String, action: String): Uri {
-        if (raw.isBlank()) {
-            throw AppBackupException("${action}失败：尚未选择应用内容保存文件夹。")
-        }
-        return try {
-            Uri.parse(raw)
-        } catch (error: Exception) {
-            throw AppBackupException("${action}失败：保存文件夹地址无效，请重新选择。", error)
         }
     }
 
@@ -746,6 +436,9 @@ class AppBackupRepository @Inject constructor(
         } else {
             emptyList()
         }
+        val agentChats = agentChatSyncRepository.snapshot(
+            AgentChatSyncRepository.MAX_JSON_BYTES.toLong(),
+        ).bytes
         return AppBackupContent(
             settings = settings,
             thoughts = databaseContent.thoughts,
@@ -759,6 +452,7 @@ class AppBackupRepository @Inject constructor(
             gameStatistics = databaseContent.gameStatistics,
             usageDevices = usageDevices,
             readerProgress = readerProgress,
+            agentChats = agentChats,
         )
     }
 
@@ -836,6 +530,7 @@ class AppBackupRepository @Inject constructor(
             gameStatistics = projected.gameStatistics,
             usageDevices = projected.usageDevices,
             readerProgress = projected.readerProgress,
+            agentChats = projected.agentChats,
         )
     }
 
@@ -853,6 +548,11 @@ class AppBackupRepository @Inject constructor(
         usageDeviceCount = usageDevices.size,
         usageDayCount = usageDevices.sumOf { it.history.days.size },
         readerProgressCount = readerProgress.size,
+        agentConversationCount = if (agentChats.isNotEmpty()) {
+            runCatching { AgentChatSyncCodec.decode(agentChats).conversations.size }.getOrDefault(0)
+        } else {
+            0
+        },
     )
 
     private data class BackupDatabaseContent(
@@ -873,12 +573,6 @@ class AppBackupRepository @Inject constructor(
     )
 
     private companion object {
-        const val BACKUP_FILE_NAME = "dc.json"
-        const val PENDING_FILE_NAME = "dc.pending.json"
-        const val PREVIOUS_FILE_NAME = "dc.previous.json"
-        const val LEGACY_BACKUP_FILE_NAME = "DeskCubby.json"
-        const val LEGACY_PENDING_FILE_NAME = "DeskCubby.pending.json"
-        const val LEGACY_PREVIOUS_FILE_NAME = "DeskCubby.previous.json"
         const val BACKUP_MIME_TYPE = "application/json"
         const val MAX_IMPORT_BYTES = BackupJsonCodec.MAX_JSON_BYTES
     }
@@ -890,13 +584,40 @@ class AppBackupRepository @Inject constructor(
  * projection until a future backup version can advertise them safely.
  */
 internal fun AppBackupContent.projectForV28Export(): AppBackupContent = copy(
-    settings = settings.copy(
+    settings = settings.sanitizedForManualBackup().copy(
         homeGameShortcuts = settings.homeGameShortcuts.filterNot {
             it == ANDROID_ONLY_GAME_ID
         },
     ),
     gameStates = gameStates.filterNot { it.gameId == ANDROID_ONLY_GAME_ID },
     gameStatistics = gameStatistics.filterNot { it.gameId == ANDROID_ONLY_GAME_ID },
+)
+
+/**
+ * Manual backups are portable structured data, not device images. Every SAF URI, local grant,
+ * usage/health authorization preference and AI/cloud secret is removed before encoding.
+ */
+internal fun AppSettings.sanitizedForManualBackup(): AppSettings = copy(
+    backgroundImageUri = null,
+    backupTreeUri = null,
+    diaryTreeUri = null,
+    mediaTreeUri = null,
+    notesTreeUri = null,
+    poetryFontUri = null,
+    usageTrackingEnabled = false,
+    stepTrackingEnabled = false,
+    cloudSyncEnabled = false,
+    aiConfigs = aiConfigs.map { it.copy(apiKey = "") },
+    cloudSyncConfigs = cloudSyncConfigs.map { config ->
+        config.copy(
+            enabled = false,
+            webDavPassword = "",
+            s3AccessKey = "",
+            s3SecretKey = "",
+            s3SessionToken = "",
+        )
+    },
+    desktopWidgetConfigs = desktopWidgetConfigs.map { it.copy(backgroundImageUri = null) },
 )
 
 private const val ANDROID_ONLY_GAME_ID = "go"

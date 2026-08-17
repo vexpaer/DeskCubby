@@ -182,6 +182,9 @@ interface ThoughtCategoryDao {
     @Insert
     suspend fun insert(item: ThoughtCategoryEntity): Long
 
+    @Upsert
+    suspend fun upsertForSync(item: ThoughtCategoryEntity)
+
     @Transaction
     suspend fun insertIfNameAvailable(item: ThoughtCategoryEntity): Long? {
         if (findIdByName(item.name) != null) return null
@@ -499,6 +502,9 @@ interface PoetryCategoryDao {
     @Insert
     suspend fun insert(item: PoetryCategoryEntity): Long
 
+    @Upsert
+    suspend fun upsertForSync(item: PoetryCategoryEntity)
+
     @Transaction
     suspend fun insertIfNameAvailable(item: PoetryCategoryEntity): Long? {
         if (findIdByName(item.name) != null) return null
@@ -595,6 +601,9 @@ interface AiChatDao {
     suspend fun getMessagesWithAttachments(
         conversationId: Long,
     ): List<AiMessageWithAttachments>
+
+    @Query("DELETE FROM ai_conversations")
+    suspend fun clearAllConversationsForSync()
 
     @Insert
     suspend fun insertConversation(conversation: AiConversationEntity): Long
@@ -774,6 +783,9 @@ interface AgentDao {
 
     @Query("SELECT * FROM agent_mutations WHERE id = :id LIMIT 1")
     suspend fun getMutation(id: Long): AgentMutationEntity?
+
+    @Query("DELETE FROM agent_runs")
+    suspend fun clearAllRunsForSync()
 
     @Insert
     suspend fun insertRun(run: AgentRunEntity)
@@ -1046,6 +1058,9 @@ interface GameStatisticDao {
 
     @Upsert
     suspend fun upsertAll(items: List<GameStatisticEntity>)
+
+    @Query("DELETE FROM game_statistics WHERE gameId = :gameId AND metricKey = :metricKey")
+    suspend fun delete(gameId: String, metricKey: String): Int
 
     @Query("DELETE FROM game_statistics")
     suspend fun clearAllForBackup()

@@ -10,113 +10,27 @@ import com.deskcubby.app.data.repository.DiaryFileRepository
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-data class CloudSyncJsonSnapshot(
-    val bytes: ByteArray,
-    val lastModifiedMillis: Long,
-    val localId: String = "current-backup",
-) {
-    override fun toString(): String =
-        "CloudSyncJsonSnapshot(bytes=<redacted:${bytes.size}>, lastModifiedMillis=$lastModifiedMillis)"
-}
-
-data class StagedCloudSyncJson(
-    val localId: String,
-    val lastModifiedMillis: Long,
-)
-
-data class CloudSyncUsageSnapshot(
-    val key: String,
-    val bytes: ByteArray,
-    val lastModifiedMillis: Long,
-    val localId: String,
-) {
-    override fun toString(): String =
-        "CloudSyncUsageSnapshot(key=$key, bytes=<redacted:${bytes.size}>)"
-}
-
-data class CloudSyncReaderProgressSnapshot(
-    val bytes: ByteArray,
-    val lastModifiedMillis: Long,
-    val localId: String = "reader-progress",
-) {
-    override fun toString(): String =
-        "CloudSyncReaderProgressSnapshot(bytes=<redacted:${bytes.size}>)"
-}
-
-data class CloudSyncAgentChatSnapshot(
-    val bytes: ByteArray,
-    val lastModifiedMillis: Long,
-    val localId: String = "agent-chats",
-) {
-    override fun toString(): String =
-        "CloudSyncAgentChatSnapshot(bytes=<redacted:${bytes.size}>, lastModifiedMillis=$lastModifiedMillis)"
-}
-
-/**
- * JSON downloads are validated and staged for explicit user restore. They are never imported into
- * Room/DataStore merely because a background sync ran.
- */
-interface CloudSyncJsonBridge {
-    suspend fun snapshot(maxBytes: Long): CloudSyncJsonSnapshot
-
-    suspend fun stageIncoming(
-        bytes: ByteArray,
-        sha256: String,
-        sourceConfigId: String,
-    ): StagedCloudSyncJson
-}
-
-/** Per-device usage objects are encrypted only by transport and merge automatically by date. */
-interface CloudSyncUsageBridge {
-    suspend fun snapshots(maxBytes: Long): List<CloudSyncUsageSnapshot>
-
-    suspend fun mergeIncoming(
-        key: String,
-        bytes: ByteArray,
-        sha256: String,
-    ): CloudSyncUsageSnapshot
-}
-
-/** URI-free reader progress is merged automatically by book fingerprint and update time. */
-interface CloudSyncReaderProgressBridge {
-    suspend fun snapshot(maxBytes: Long): CloudSyncReaderProgressSnapshot
-
-    suspend fun mergeIncoming(
-        bytes: ByteArray,
-        sha256: String,
-        maxBytes: Long,
-    ): CloudSyncReaderProgressSnapshot
-}
-
-/** URI-free Agent conversations use record-level merge; Review undo payloads are never synced. */
-interface CloudSyncAgentChatBridge {
-    suspend fun snapshot(maxBytes: Long): CloudSyncAgentChatSnapshot
-
-    suspend fun mergeIncoming(
-        bytes: ByteArray,
-        sha256: String,
-        maxBytes: Long,
-    ): CloudSyncAgentChatSnapshot
-}
-
 class DiaryCloudSyncLocalStore(
     private val diaryRepository: DiaryFileRepository,
     private val settingsProvider: suspend () -> AppSettings,
-    private val configId: String,
-    private val jsonBridge: CloudSyncJsonBridge? = null,
-    private val usageBridge: CloudSyncUsageBridge? = null,
-    private val readerProgressBridge: CloudSyncReaderProgressBridge? = null,
-    private val agentChatBridge: CloudSyncAgentChatBridge? = null,
     private val cloudSyncUndoStore: CloudSyncUndoStore? = null,
 ) : CloudSyncLocalStore {
+    /** Legacy test/constructor compatibility; JSON bridges are intentionally ignored. */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(
+        diaryRepository: DiaryFileRepository,
+        settingsProvider: suspend () -> AppSettings,
+        configId: String = "",
+        jsonBridge: CloudSyncJsonBridge? = null,
+        usageBridge: CloudSyncUsageBridge? = null,
+        readerProgressBridge: CloudSyncReaderProgressBridge? = null,
+        agentChatBridge: CloudSyncAgentChatBridge? = null,
+        cloudSyncUndoStore: CloudSyncUndoStore? = null,
+    ) : this(diaryRepository, settingsProvider, cloudSyncUndoStore)
     private val mutex = Mutex()
     // Key -> scanned file, kept so the undo store can snapshot the exact local bytes that a
     // downloaded diary file is about to replace.
     private var lastListedDiaryFiles: Map<String, DiaryCloudSyncFile> = emptyMap()
-    private var jsonSnapshot: CloudSyncJsonSnapshot? = null
-    private var usageSnapshots: Map<String, CloudSyncUsageSnapshot> = emptyMap()
-    private var readerProgressSnapshot: CloudSyncReaderProgressSnapshot? = null
-    private var agentChatSnapshot: CloudSyncAgentChatSnapshot? = null
 
     override suspend fun list(
         selectedContents: Set<CloudSyncContent>,
@@ -135,78 +49,6 @@ class DiaryCloudSyncLocalStore(
         )
         lastListedDiaryFiles = files.associateBy { file -> file.toLocalObject().key }
         val result = files.map { it.toLocalObject() }.toMutableList()
-        if (CloudSyncContent.JSON_BACKUP in selectedContents) {
-            val bridge = jsonBridge ?: throw CloudSyncConfigurationException(
-                "JSON 同步尚未连接到应用备份服务。",
-            )
-            val snapshot = bridge.snapshot(limits.maxObjectBytes)
-            if (snapshot.bytes.size.toLong() > limits.maxObjectBytes) {
-                throw CloudSyncLimitException("JSON 备份超过单文件同步上限。")
-            }
-            jsonSnapshot = snapshot
-            result += LocalSyncObject(
-                key = JSON_SYNC_KEY,
-                content = CloudSyncContent.JSON_BACKUP,
-                size = snapshot.bytes.size.toLong(),
-                lastModifiedMillis = snapshot.lastModifiedMillis.coerceAtLeast(0L),
-                sha256 = sha256(snapshot.bytes),
-                localId = snapshot.localId,
-            )
-        } else {
-            jsonSnapshot = null
-        }
-        if (CloudSyncContent.USAGE_STATISTICS in selectedContents) {
-            val bridge = usageBridge ?: throw CloudSyncConfigurationException(
-                "使用时间同步尚未连接到设备历史服务。",
-            )
-            val snapshots = bridge.snapshots(limits.maxObjectBytes)
-            usageSnapshots = snapshots.associateBy(CloudSyncUsageSnapshot::key)
-            result += snapshots.map { snapshot ->
-                LocalSyncObject(
-                    key = snapshot.key,
-                    content = CloudSyncContent.USAGE_STATISTICS,
-                    size = snapshot.bytes.size.toLong(),
-                    lastModifiedMillis = snapshot.lastModifiedMillis.coerceAtLeast(0L),
-                    sha256 = sha256(snapshot.bytes),
-                    localId = snapshot.localId,
-                )
-            }
-        } else {
-            usageSnapshots = emptyMap()
-        }
-        if (CloudSyncContent.READING_PROGRESS in selectedContents) {
-            val bridge = readerProgressBridge ?: throw CloudSyncConfigurationException(
-                "阅读进度同步尚未连接到阅读服务。",
-            )
-            val snapshot = bridge.snapshot(limits.maxObjectBytes)
-            if (
-                snapshot.bytes.isEmpty() ||
-                snapshot.bytes.size > ReaderProgressJsonCodec.MAX_JSON_BYTES ||
-                snapshot.bytes.size.toLong() > limits.maxObjectBytes
-            ) {
-                throw CloudSyncLimitException("阅读进度超过单文件同步上限。")
-            }
-            readerProgressSnapshot = snapshot
-            result += snapshot.toLocalObject()
-        } else {
-            readerProgressSnapshot = null
-        }
-        if (CloudSyncContent.AGENT_CHATS in selectedContents) {
-            val bridge = agentChatBridge ?: throw CloudSyncConfigurationException(
-                "Agent 会话同步尚未连接到会话服务。",
-            )
-            val snapshot = bridge.snapshot(limits.maxObjectBytes)
-            if (snapshot.bytes.isEmpty() ||
-                snapshot.bytes.size > AgentChatSyncRepository.MAX_JSON_BYTES ||
-                snapshot.bytes.size.toLong() > limits.maxObjectBytes
-            ) {
-                throw CloudSyncLimitException("Agent 会话超过单文件同步上限。")
-            }
-            agentChatSnapshot = snapshot
-            result += snapshot.toLocalObject()
-        } else {
-            agentChatSnapshot = null
-        }
         if (result.size > limits.maxObjects) {
             throw CloudSyncLimitException("同步文件数量超过上限。")
         }
@@ -217,53 +59,8 @@ class DiaryCloudSyncLocalStore(
         objectInfo: LocalSyncObject,
         maxBytes: Long,
     ): ByteArray = mutex.withLock {
-        if (objectInfo.content == CloudSyncContent.JSON_BACKUP) {
-            val snapshot = jsonSnapshot
-                ?: throw CloudSyncConflictException("JSON 备份快照已失效，请重新同步。")
-            if (snapshot.localId != objectInfo.localId ||
-                snapshot.bytes.size.toLong() != objectInfo.size ||
-                sha256(snapshot.bytes) != objectInfo.sha256
-            ) {
-                throw CloudSyncConflictException("JSON 备份在同步读取期间发生变化。")
-            }
-            return@withLock snapshot.bytes.copyOf()
-        }
-        if (objectInfo.content == CloudSyncContent.USAGE_STATISTICS) {
-            val snapshot = usageSnapshots[objectInfo.key]
-                ?: throw CloudSyncConflictException("使用时间快照已失效，请重新同步。")
-            if (
-                snapshot.localId != objectInfo.localId ||
-                snapshot.bytes.size.toLong() != objectInfo.size ||
-                sha256(snapshot.bytes) != objectInfo.sha256
-            ) {
-                throw CloudSyncConflictException("使用时间在同步读取期间发生变化。")
-            }
-            return@withLock snapshot.bytes.copyOf()
-        }
-        if (objectInfo.content == CloudSyncContent.READING_PROGRESS) {
-            val snapshot = readerProgressSnapshot
-                ?: throw CloudSyncConflictException("阅读进度快照已失效，请重新同步。")
-            if (
-                snapshot.localId != objectInfo.localId ||
-                snapshot.bytes.size.toLong() != objectInfo.size ||
-                sha256(snapshot.bytes) != objectInfo.sha256
-            ) {
-                throw CloudSyncConflictException("阅读进度在同步读取期间发生变化。")
-            }
-            return@withLock snapshot.bytes.copyOf()
-        }
-        if (objectInfo.content == CloudSyncContent.AGENT_CHATS) {
-            val snapshot = agentChatSnapshot
-                ?: throw CloudSyncConflictException("Agent 会话快照已失效，请重新同步。")
-            if (snapshot.localId != objectInfo.localId ||
-                snapshot.bytes.size.toLong() != objectInfo.size ||
-                sha256(snapshot.bytes) != objectInfo.sha256
-            ) {
-                throw CloudSyncConflictException("Agent 会话在同步读取期间发生变化。")
-            }
-            return@withLock snapshot.bytes.copyOf()
-        }
         diaryRepository.readForCloudSync(
+
             file = objectInfo.toDiaryFile(),
             maxObjectBytes = maxBytes,
         )
@@ -281,96 +78,6 @@ class DiaryCloudSyncLocalStore(
         if (bytes.size.toLong() > limits.maxObjectBytes || sha256(bytes) != contentSha256) {
             throw CloudSyncConflictException("远端文件校验失败，未写入本地。")
         }
-        if (key == READING_PROGRESS_SYNC_KEY) {
-            val bridge = readerProgressBridge ?: throw CloudSyncConfigurationException(
-                "阅读进度同步尚未连接到阅读服务。",
-            )
-            // ReaderRepository performs record-level LWW against its current durable state. This
-            // deliberately merges even when the whole-object scan hash is stale, so a newly saved
-            // local page can never be replaced by an older remote snapshot.
-            val merged = bridge.mergeIncoming(
-                bytes = bytes,
-                sha256 = contentSha256,
-                maxBytes = limits.maxObjectBytes,
-            )
-            if (
-                merged.bytes.isEmpty() ||
-                merged.bytes.size > ReaderProgressJsonCodec.MAX_JSON_BYTES ||
-                merged.bytes.size.toLong() > limits.maxObjectBytes
-            ) {
-                throw CloudSyncLimitException("合并后的阅读进度超过单文件同步上限。")
-            }
-            readerProgressSnapshot = merged
-            return@withLock LocalWriteResult.Applied(merged.toLocalObject())
-        }
-        if (key == AGENT_CHAT_SYNC_KEY) {
-            val bridge = agentChatBridge ?: throw CloudSyncConfigurationException(
-                "Agent 会话同步尚未连接到会话服务。",
-            )
-            val merged = bridge.mergeIncoming(
-                bytes = bytes,
-                sha256 = contentSha256,
-                maxBytes = limits.maxObjectBytes,
-            )
-            if (merged.bytes.isEmpty() ||
-                merged.bytes.size > AgentChatSyncRepository.MAX_JSON_BYTES ||
-                merged.bytes.size.toLong() > limits.maxObjectBytes
-            ) {
-                throw CloudSyncLimitException("合并后的 Agent 会话超过单文件同步上限。")
-            }
-            agentChatSnapshot = merged
-            return@withLock LocalWriteResult.Applied(merged.toLocalObject())
-        }
-        if (key.startsWith(USAGE_SYNC_PREFIX)) {
-            val bridge = usageBridge ?: throw CloudSyncConfigurationException(
-                "使用时间同步尚未连接到设备历史服务。",
-            )
-            val merged = bridge.mergeIncoming(key, bytes, contentSha256)
-            if (merged.bytes.size.toLong() > limits.maxObjectBytes) {
-                throw CloudSyncLimitException("合并后的使用时间超过单文件同步上限。")
-            }
-            usageSnapshots = usageSnapshots + (merged.key to merged)
-            return@withLock LocalWriteResult.Applied(
-                LocalSyncObject(
-                    key = merged.key,
-                    content = CloudSyncContent.USAGE_STATISTICS,
-                    size = merged.bytes.size.toLong(),
-                    lastModifiedMillis = merged.lastModifiedMillis.coerceAtLeast(0L),
-                    sha256 = sha256(merged.bytes),
-                    localId = merged.localId,
-                ),
-            )
-        }
-        if (key == JSON_SYNC_KEY || key == LEGACY_JSON_SYNC_KEY) {
-            val bridge = jsonBridge ?: throw CloudSyncConfigurationException(
-                "JSON 同步尚未连接到应用备份服务。",
-            )
-            val current = jsonSnapshot ?: bridge.snapshot(limits.maxObjectBytes).also {
-                jsonSnapshot = it
-            }
-            val currentObject = LocalSyncObject(
-                key = JSON_SYNC_KEY,
-                content = CloudSyncContent.JSON_BACKUP,
-                size = current.bytes.size.toLong(),
-                lastModifiedMillis = current.lastModifiedMillis,
-                sha256 = sha256(current.bytes),
-                localId = current.localId,
-            )
-            val staged = bridge.stageIncoming(bytes, contentSha256, configId)
-            val copyKey = "json/dc.remote-conflict-${contentSha256.take(8)}.json"
-            return@withLock LocalWriteResult.ConflictCopy(
-                existing = currentObject,
-                copy = LocalSyncObject(
-                    key = copyKey,
-                    content = CloudSyncContent.JSON_BACKUP,
-                    size = bytes.size.toLong(),
-                    lastModifiedMillis = staged.lastModifiedMillis,
-                    sha256 = contentSha256,
-                    localId = staged.localId,
-                ),
-            )
-        }
-
         val (content, area, fileName) = parseDiaryOrMediaKey(key)
         // One-shot undo snapshot: remember the exact local bytes a downloaded diary file is about
         // to replace (and files the run creates) so "撤回一次" can restore them afterwards.
@@ -456,14 +163,7 @@ class DiaryCloudSyncLocalStore(
         val area = when (content) {
             CloudSyncContent.DIARIES -> DiaryCloudSyncArea.DIARY
             CloudSyncContent.MEDIA -> DiaryCloudSyncArea.MEDIA
-            CloudSyncContent.JSON_BACKUP ->
-                throw CloudSyncException("JSON 备份不能作为日记文件读取。")
-            CloudSyncContent.USAGE_STATISTICS ->
-                throw CloudSyncException("使用时间不能作为日记文件读取。")
-            CloudSyncContent.READING_PROGRESS ->
-                throw CloudSyncException("阅读进度不能作为日记文件读取。")
-            CloudSyncContent.AGENT_CHATS ->
-                throw CloudSyncException("Agent 会话不能作为日记文件读取。")
+            else -> throw CloudSyncException("该内容不能作为日记/媒体文件读取。")
         }
         return DiaryCloudSyncFile(
             area = area,
@@ -498,32 +198,7 @@ class DiaryCloudSyncLocalStore(
     }
 
     private companion object {
-        const val JSON_SYNC_KEY = "json/dc.json"
-        const val LEGACY_JSON_SYNC_KEY = "json/DeskCubby.json"
-        const val USAGE_SYNC_PREFIX = "usage/v1/"
-        const val READING_PROGRESS_SYNC_KEY = "reading/v1/progress.json"
-        const val AGENT_CHAT_SYNC_KEY = "agent/v1/chats.json"
-        const val EMPTY_SHA256 =
+        val EMPTY_SHA256 =
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
-
-    private fun CloudSyncReaderProgressSnapshot.toLocalObject(): LocalSyncObject =
-        LocalSyncObject(
-            key = READING_PROGRESS_SYNC_KEY,
-            content = CloudSyncContent.READING_PROGRESS,
-            size = bytes.size.toLong(),
-            lastModifiedMillis = lastModifiedMillis.coerceAtLeast(0L),
-            sha256 = sha256(bytes),
-            localId = localId,
-        )
-
-    private fun CloudSyncAgentChatSnapshot.toLocalObject(): LocalSyncObject =
-        LocalSyncObject(
-            key = AGENT_CHAT_SYNC_KEY,
-            content = CloudSyncContent.AGENT_CHATS,
-            size = bytes.size.toLong(),
-            lastModifiedMillis = lastModifiedMillis.coerceAtLeast(0L),
-            sha256 = sha256(bytes),
-            localId = localId,
-        )
 }

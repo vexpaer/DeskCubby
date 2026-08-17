@@ -652,6 +652,176 @@ class NotesRepository @Inject constructor(
         return null
     }
 
+    data class NoteCloudSyncFile(
+        val name: String,
+        val uri: String,
+        val size: Long,
+        val lastModifiedMillis: Long,
+        val sha256: String,
+    )
+
+    sealed interface NoteCloudSyncWriteResult {
+        data class Applied(val file: NoteCloudSyncFile) : NoteCloudSyncWriteResult
+        data class ConflictCopy(
+            val existing: NoteCloudSyncFile?,
+            val copy: NoteCloudSyncFile,
+        ) : NoteCloudSyncWriteResult
+    }
+
+    /** Flat, bounded file-sync snapshot of direct Markdown notes in the selected root. */
+    suspend fun snapshotForCloudSync(
+        rootUri: String,
+        maxObjectBytes: Long,
+        maxObjects: Int,
+    ): List<NoteCloudSyncFile> = withContext(Dispatchers.IO) {
+        val root = tree(rootUri)
+        val result = mutableListOf<NoteCloudSyncFile>()
+        root.listFiles()
+            .asSequence()
+            .filter(DocumentFile::isFile)
+            .filter { it.name?.endsWith(".md", ignoreCase = true) == true }
+            .sortedBy { it.name.orEmpty().lowercase(Locale.ROOT) }
+            .forEach { file ->
+                if (result.size >= maxObjects) error("同步文件数量超过上限")
+                result += snapshotNoteCloudFile(file, maxObjectBytes)
+            }
+        result
+    }
+
+    suspend fun readForCloudSync(
+        file: NoteCloudSyncFile,
+        maxObjectBytes: Long,
+    ): ByteArray = withContext(Dispatchers.IO) {
+        val bytes = readBytesBounded(Uri.parse(file.uri), maxObjectBytes)
+        check(bytes.size.toLong() == file.size && bytes.sha256Hex() == file.sha256) {
+            "笔记在同步读取期间发生变化"
+        }
+        bytes
+    }
+
+    suspend fun writeFromCloudSync(
+        rootUri: String,
+        name: String,
+        bytes: ByteArray,
+        expectedSha256: String,
+        expectedLocalSha256: String?,
+        maxObjectBytes: Long,
+    ): NoteCloudSyncWriteResult = writeMutex.withLock {
+        withContext(Dispatchers.IO) {
+            require(bytes.size.toLong() <= maxObjectBytes && bytes.sha256Hex() == expectedSha256) {
+                "远端笔记校验失败"
+            }
+            val root = tree(rootUri)
+            val target = root.listFiles().firstOrNull {
+                it.isFile && it.name == name
+            }
+            val current = target?.let { snapshotNoteCloudFile(it, maxObjectBytes) }
+            if (current?.sha256 != expectedLocalSha256) {
+                val copy = writeNoteConflictCopy(root, name, bytes, expectedSha256, maxObjectBytes)
+                return@withContext NoteCloudSyncWriteResult.ConflictCopy(current, copy)
+            }
+            if (target == null) {
+                val created = root.createFile("text/markdown", name) ?: error("无法创建同步笔记")
+                try {
+                    writeBytes(Uri.parse(created.uri.toString()), bytes)
+                    val snapshot = snapshotNoteCloudFile(created, maxObjectBytes)
+                    check(snapshot.sha256 == expectedSha256) { "笔记写入后校验失败" }
+                    return@withContext NoteCloudSyncWriteResult.Applied(snapshot)
+                } catch (error: Exception) {
+                    withContext(NonCancellable + Dispatchers.IO) { runCatching { created.delete() } }
+                    throw error
+                }
+            }
+            val pendingName = uniqueSiblingName(root, ".${name}.sync-pending")
+            val pending = root.createFile("text/markdown", pendingName) ?: error("无法创建同步临时文件")
+            try {
+                writeBytes(Uri.parse(pending.uri.toString()), bytes)
+                val currentAgain = snapshotNoteCloudFile(target, maxObjectBytes)
+                if (currentAgain.sha256 != expectedLocalSha256) {
+                    val copy = writeNoteConflictCopy(root, name, bytes, expectedSha256, maxObjectBytes)
+                    return@withContext NoteCloudSyncWriteResult.ConflictCopy(currentAgain, copy)
+                }
+                writeBytes(Uri.parse(target.uri.toString()), bytes)
+                val snapshot = snapshotNoteCloudFile(target, maxObjectBytes)
+                check(snapshot.sha256 == expectedSha256) { "笔记覆盖后校验失败" }
+                NoteCloudSyncWriteResult.Applied(snapshot)
+            } finally {
+                runCatching { pending.delete() }
+            }
+        }
+    }
+
+    private suspend fun snapshotNoteCloudFile(
+        document: DocumentFile,
+        maxObjectBytes: Long,
+    ): NoteCloudSyncFile {
+        val name = document.name ?: error("笔记名称无效")
+        val bytes = readBytesBounded(document.uri, maxObjectBytes)
+        return NoteCloudSyncFile(
+            name = name,
+            uri = document.uri.toString(),
+            size = bytes.size.toLong(),
+            lastModifiedMillis = document.lastModified().coerceAtLeast(0L),
+            sha256 = bytes.sha256Hex(),
+        )
+    }
+
+    private suspend fun writeNoteConflictCopy(
+        root: DocumentFile,
+        originalName: String,
+        bytes: ByteArray,
+        expectedSha256: String,
+        maxObjectBytes: Long,
+    ): NoteCloudSyncFile {
+        val preferred = originalName.removeSuffix(".md") +
+            ".remote-conflict-${expectedSha256.take(8)}.md"
+        root.listFiles().firstOrNull { it.isFile && it.name == preferred }?.let { existing ->
+            val snapshot = snapshotNoteCloudFile(existing, maxObjectBytes)
+            if (snapshot.sha256 == expectedSha256) return snapshot
+        }
+        val name = uniqueSiblingName(root, preferred)
+        val created = root.createFile("text/markdown", name) ?: error("无法创建笔记冲突副本")
+        try {
+            writeBytes(Uri.parse(created.uri.toString()), bytes)
+            val snapshot = snapshotNoteCloudFile(created, maxObjectBytes)
+            check(snapshot.sha256 == expectedSha256) { "笔记冲突副本校验失败" }
+            return snapshot
+        } catch (error: Exception) {
+            runCatching { created.delete() }
+            throw error
+        }
+    }
+
+    private fun readBytesBounded(uri: Uri, maxObjectBytes: Long): ByteArray {
+        val output = ByteArrayOutputStream()
+        resolver.openInputStream(uri)?.use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var total = 0
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                total += count
+                require(total.toLong() <= maxObjectBytes) { "同步文件超过单文件上限" }
+                output.write(buffer, 0, count)
+            }
+        } ?: error("无法读取笔记文件")
+        return output.toByteArray()
+    }
+
+    private fun writeBytes(uri: Uri, bytes: ByteArray) {
+        val output = resolver.openOutputStream(uri, "rwt")
+            ?: resolver.openOutputStream(uri, "wt")
+            ?: error("无法写入笔记文件")
+        output.use { stream ->
+            stream.write(bytes)
+            stream.flush()
+        }
+    }
+
+    private fun ByteArray.sha256Hex(): String = MessageDigest.getInstance("SHA-256")
+        .digest(this)
+        .joinToString(separator = "") { "%02x".format(Locale.ROOT, it) }
+
     private companion object {
         const val MAX_NOTE_NAME_CHARS = 240
         const val MAX_NOTE_BYTES = 4 * 1024 * 1024

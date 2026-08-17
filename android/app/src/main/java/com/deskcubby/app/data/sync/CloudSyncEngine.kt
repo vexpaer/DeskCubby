@@ -62,6 +62,7 @@ class CloudSyncEngine(
     private val localStore: CloudSyncLocalStore,
     private val remoteStoreFactory: CloudSyncRemoteStoreFactory,
     private val stateStore: CloudSyncStateStore,
+    private val recordSyncEngine: RecordSyncEngine? = null,
 ) {
     private val runMutex = Mutex()
 
@@ -94,8 +95,65 @@ class CloudSyncEngine(
         val config = validated.source
         val budget = TransferBudget(limits.maxTransferredBytes)
         val remoteStore = remoteStoreFactory.create(config, limits, budget)
-        val localObjects = localStore.list(config.selectedContents, limits)
-        val prefixes = config.selectedContents.map { "${it.remoteDirectory}/" }.toSet()
+        val fileContents = config.selectedContents.filterTo(linkedSetOf()) {
+            it.kind == com.deskcubby.app.data.model.CloudSyncContentKind.FILE
+        }
+        val recordContents = config.selectedContents.filterTo(linkedSetOf()) {
+            it.kind == com.deskcubby.app.data.model.CloudSyncContentKind.RECORD
+        }
+        val fileReports = if (fileContents.isEmpty()) {
+            emptyList()
+        } else {
+            syncFiles(
+                config = config,
+                validated = validated,
+                fileContents = fileContents,
+                remoteStore = remoteStore,
+                limits = limits,
+                budget = budget,
+                mode = mode,
+                onProgress = onProgress,
+            )
+        }
+        val recordReports = if (recordContents.isEmpty()) {
+            emptyList()
+        } else {
+            val engine = recordSyncEngine ?: throw CloudSyncConfigurationException(
+                "记录同步尚未连接到应用数据服务。",
+            )
+            engine.syncContents(
+                config = config,
+                validated = validated,
+                contents = recordContents,
+                limits = limits,
+                remoteStore = remoteStore,
+                mode = mode,
+            ) { progress ->
+                onProgress(progress)
+            }
+        }
+        val reports = fileReports + recordReports
+        return CloudSyncRunResult(
+            configId = config.id,
+            startedAtMillis = startedAt,
+            finishedAtMillis = System.currentTimeMillis(),
+            reports = reports,
+            transferredBytes = budget.used,
+        )
+    }
+
+    private suspend fun syncFiles(
+        config: CloudSyncConfig,
+        validated: ValidatedCloudSyncConfig,
+        fileContents: Set<CloudSyncContent>,
+        remoteStore: CloudSyncRemoteStore,
+        limits: CloudSyncLimits,
+        budget: TransferBudget,
+        mode: CloudSyncRunMode,
+        onProgress: (CloudSyncProgress) -> Unit,
+    ): List<CloudSyncItemReport> {
+        val localObjects = localStore.list(fileContents, limits)
+        val prefixes = fileContents.map { "${it.remoteDirectory}/" }.toSet()
         val remoteObjects = remoteStore.list(prefixes)
         validateInventory(localObjects, remoteObjects, prefixes, limits)
 
@@ -104,7 +162,8 @@ class CloudSyncEngine(
         val allKeys = (localByKey.keys + remoteByKey.keys).sorted()
         val oldState = stateStore.load(config.id)
             ?.takeIf { it.scopeFingerprint == validated.scopeFingerprint }
-        val updatedBases = oldState?.hashesByKey.orEmpty().toMutableMap()
+        val oldHashes = oldState?.hashesByKey.orEmpty()
+        val updatedBases = oldHashes.toMutableMap()
         updatedBases.keys.removeAll { key ->
             prefixes.any(key::startsWith) && key !in allKeys
         }
@@ -113,12 +172,11 @@ class CloudSyncEngine(
         allKeys.forEachIndexed { index, key ->
             val local = localByKey[key]
             val remote = remoteByKey[key]
-            val baseHash = oldState?.hashesByKey?.get(key)
             val report = reconcileOne(
                 config = config,
                 local = local,
                 remote = remote,
-                baseHash = baseHash,
+                baseHash = oldHashes[key],
                 remoteStore = remoteStore,
                 limits = limits,
                 mode = mode,
@@ -133,9 +191,15 @@ class CloudSyncEngine(
                     else -> local?.sha256 ?: remote?.sha256
                 } ?: error("Successful sync item has no hash")
 
-                CloudSyncItemOutcome.CONFLICT_COPY_SAVED,
-                CloudSyncItemOutcome.REMOTE_CHANGE_SKIPPED,
-                -> Unit
+                CloudSyncItemOutcome.CONFLICT_COPY_SAVED -> {
+                    // The canonical remote object is now the established base. The local edit is
+                    // preserved as a conflict copy and will be uploaded on the next run, which
+                    // makes the result deterministic and prevents the same conflict from
+                    // repeating forever.
+                    updatedBases[key] = checkNotNull(remote).sha256
+                }
+
+                CloudSyncItemOutcome.REMOTE_CHANGE_SKIPPED -> Unit
             }
             onProgress(
                 CloudSyncProgress(
@@ -153,13 +217,7 @@ class CloudSyncEngine(
                 hashesByKey = updatedBases,
             ),
         )
-        return CloudSyncRunResult(
-            configId = config.id,
-            startedAtMillis = startedAt,
-            finishedAtMillis = System.currentTimeMillis(),
-            reports = reports,
-            transferredBytes = budget.used,
-        )
+        return reports
     }
 
     private suspend fun reconcileOne(
@@ -246,8 +304,30 @@ class CloudSyncEngine(
             }
         }
 
-        val localChanged = baseHash == null || local.sha256 != baseHash
-        val remoteChanged = baseHash == null || remote.sha256 != baseHash
+        if (baseHash == null) {
+            // First time this object is seen by this device. local==remote already returned
+            // UNCHANGED above; different bytes are a safe bootstrap: prefer the existing cloud
+            // object and keep the local bytes as a deterministic conflict/backup copy.
+            val bytes = readRemote(remoteStore, remote, limits)
+            return when (
+                localStore.writeRemote(
+                    key = key,
+                    bytes = bytes,
+                    contentSha256 = remote.sha256,
+                    lastModifiedMillis = remote.lastModifiedMillis,
+                    expectedLocalSha256 = null,
+                    limits = limits,
+                )
+            ) {
+                is LocalWriteResult.Applied ->
+                    CloudSyncItemReport(key, CloudSyncItemOutcome.DOWNLOADED)
+                is LocalWriteResult.ConflictCopy ->
+                    CloudSyncItemReport(key, CloudSyncItemOutcome.CONFLICT_COPY_SAVED)
+            }
+        }
+
+        val localChanged = local.sha256 != baseHash
+        val remoteChanged = remote.sha256 != baseHash
         if (localChanged && !remoteChanged) {
             val bytes = readLocal(local, limits)
             remoteStore.write(

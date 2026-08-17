@@ -28,10 +28,14 @@ data class CloudSyncConfig(
     val allowInsecureHttp: Boolean = false,
     val selectedContents: Set<CloudSyncContent> = setOf(
         CloudSyncContent.DIARIES,
+        CloudSyncContent.NOTES,
         CloudSyncContent.MEDIA,
-        CloudSyncContent.JSON_BACKUP,
-        CloudSyncContent.USAGE_STATISTICS,
+        CloudSyncContent.THOUGHTS,
+        CloudSyncContent.DATE_RECORDS,
+        CloudSyncContent.POEMS,
+        CloudSyncContent.FAVORITES,
         CloudSyncContent.READING_PROGRESS,
+        CloudSyncContent.READER_PREFERENCES,
         CloudSyncContent.AGENT_CHATS,
     ),
     val direction: CloudSyncDirection = CloudSyncDirection.TWO_WAY,
@@ -79,13 +83,32 @@ enum class CloudSyncServiceType {
 
 enum class CloudSyncContent(
     val remoteDirectory: String,
+    val kind: CloudSyncContentKind = CloudSyncContentKind.RECORD,
 ) {
-    DIARIES("diaries"),
-    MEDIA("media"),
-    JSON_BACKUP("json"),
-    USAGE_STATISTICS("usage/v1"),
-    READING_PROGRESS("reading/v1"),
-    AGENT_CHATS("agent/v1"),
+    DIARIES("diaries", CloudSyncContentKind.FILE),
+    NOTES("notes", CloudSyncContentKind.FILE),
+    MEDIA("media", CloudSyncContentKind.FILE),
+
+    THOUGHTS("records/thoughts", CloudSyncContentKind.RECORD),
+    THOUGHT_CATEGORIES("records/thought-categories", CloudSyncContentKind.RECORD),
+    DATE_RECORDS("records/date-records", CloudSyncContentKind.RECORD),
+    POEMS("records/poems", CloudSyncContentKind.RECORD),
+    POETRY_CATEGORIES("records/poetry-categories", CloudSyncContentKind.RECORD),
+    FAVORITES("records/favorites", CloudSyncContentKind.RECORD),
+    RSS_SUBSCRIPTIONS("records/rss-subscriptions", CloudSyncContentKind.RECORD),
+    GAME_STATES("records/game-states", CloudSyncContentKind.RECORD),
+    GAME_STATISTICS("records/game-statistics", CloudSyncContentKind.RECORD),
+    USAGE_STATISTICS("records/usage", CloudSyncContentKind.RECORD),
+    READING_PROGRESS("records/reader-progress", CloudSyncContentKind.RECORD),
+    READER_PREFERENCES("records/reader-preferences", CloudSyncContentKind.RECORD),
+    AGENT_CHATS("records/agent-chats", CloudSyncContentKind.RECORD),
+    VAULT("records/vault", CloudSyncContentKind.RECORD),
+    GLOBAL_SETTINGS("records/global-settings", CloudSyncContentKind.RECORD),
+}
+
+enum class CloudSyncContentKind {
+    FILE,
+    RECORD,
 }
 
 enum class CloudSyncDirection {

@@ -136,6 +136,8 @@ data class AppBackup(
     val gameStatistics: List<GameStatisticEntity> = emptyList(),
     val usageDevices: List<UsageDeviceRecord> = emptyList(),
     val readerProgress: List<ReaderProgressRecord> = emptyList(),
+    /** URI-free Agent conversation/run payload; present since backup v34. */
+    val agentChats: ByteArray = byteArrayOf(),
 )
 
 data class BackupSummary(
@@ -152,10 +154,11 @@ data class BackupSummary(
     val usageDeviceCount: Int = 0,
     val usageDayCount: Int = 0,
     val readerProgressCount: Int = 0,
+    val agentConversationCount: Int = 0,
 )
 
 object BackupJsonCodec {
-    const val FORMAT_VERSION: Int = 33
+    const val FORMAT_VERSION: Int = 34
 
     private const val FORMAT_NAME = "DeskCubby"
     const val MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -198,6 +201,8 @@ object BackupJsonCodec {
     private const val MAX_GAME_STATISTICS = 64
     private const val MAX_GAME_ID_CHARS = 64
     private const val MAX_GAME_SAVE_CHARS = 16 * 1024 * 1024
+    private const val MAX_AGENT_CHAT_BYTES = 64 * 1024 * 1024
+    private const val MAX_AGENT_CHAT_BASE64_CHARS = ((MAX_AGENT_CHAT_BYTES + 2L) / 3L * 4L).toInt()
     private const val MAX_READER_PROGRESS_RECORDS = 500
     private const val MAX_READER_TEXT_PAGES = 50_000
     private const val MAX_READER_TEXT_PARAGRAPHS = 250_000
@@ -255,6 +260,10 @@ object BackupJsonCodec {
             .put("gameStatistics", encodeGameStatistics(backup.gameStatistics))
             .put("usageDevices", encodeUsageDevices(backup.usageDevices))
             .put("readerProgress", encodeReaderProgress(backup.readerProgress))
+            .put(
+                "agentChats",
+                Base64.getEncoder().encodeToString(backup.agentChats),
+            )
         return root.toString(2).also { encoded ->
             requireWithinSizeLimit(encoded)
             // Keep files produced from locally corrupted state just as strict as imported files.
@@ -350,6 +359,11 @@ object BackupJsonCodec {
         } else {
             emptyList()
         }
+        val agentChats = if (version >= 34) {
+            decodeAgentChats(root.requiredString("agentChats"))
+        } else {
+            byteArrayOf()
+        }
         return AppBackup(
             formatVersion = version,
             exportedAt = exportedAt,
@@ -365,6 +379,7 @@ object BackupJsonCodec {
             gameStatistics = gameStatistics,
             usageDevices = usageDevices,
             readerProgress = readerProgress,
+            agentChats = agentChats,
         ).also {
             validatePoetryCategoryReferences(it.poems, it.poetryCategories)
         }
@@ -379,7 +394,7 @@ object BackupJsonCodec {
         .put("themeSecondaryColorsArgb", settings.themeSecondaryColorsArgb.toJsonIntArray())
         .put("fontScale", settings.fontScale)
         .put("compactMode", settings.compactMode)
-        .putNullable("backgroundImageUri", settings.backgroundImageUri)
+        .putNullable("backgroundImageUri", null)
         .put("backgroundImageOpacity", settings.backgroundImageOpacity)
         .put("backgroundImageBlurDp", settings.backgroundImageBlurDp)
         .put("tutorialModeEnabled", settings.tutorialModeEnabled)
@@ -388,9 +403,9 @@ object BackupJsonCodec {
         // Credentials are device-local. Imports must be explicitly re-enabled after review.
         .put("cloudSyncEnabled", false)
         .put("cloudSyncConfigs", encodeCloudSyncConfigs(settings.cloudSyncConfigs))
-        .putNullable("diaryTreeUri", settings.diaryTreeUri)
-        .putNullable("mediaTreeUri", settings.mediaTreeUri)
-        .putNullable("notesTreeUri", settings.notesTreeUri)
+        .putNullable("diaryTreeUri", null)
+        .putNullable("mediaTreeUri", null)
+        .putNullable("notesTreeUri", null)
         .put("fileNamePattern", settings.fileNamePattern)
         .put("markdownTemplate", settings.markdownTemplate)
         .put("imageNamePattern", settings.imageNamePattern)
@@ -418,7 +433,7 @@ object BackupJsonCodec {
         .put("thoughtHighlightColorArgb", settings.thoughtHighlightColorArgb)
         .put("thoughtEditorMaxHeightDp", settings.thoughtEditorMaxHeightDp)
         .put("vaultRowHeightDp", settings.vaultRowHeightDp)
-        .putNullable("poetryFontUri", settings.poetryFontUri)
+        .putNullable("poetryFontUri", null)
         .put("poetryFontSizeSp", settings.poetryFontSizeSp)
         .put("poetryLineSpacing", settings.poetryLineSpacing)
         .put("poetryTextAlignment", settings.poetryTextAlignment.name)
@@ -477,7 +492,7 @@ object BackupJsonCodec {
             .put("id", item.id).put("name", item.name).put("type", item.type.name)
             .put("endpointUrl", item.endpointUrl).put("model", item.model).put("enabled", item.enabled)
             .put("allowInsecureHttp", item.allowInsecureHttp).put("temperature", item.temperature)
-            .put("systemPrompt", item.systemPrompt).put("apiKey", item.apiKey)
+            .put("systemPrompt", item.systemPrompt).put("apiKey", "")
             .put("supportsToolCalling", item.supportsToolCalling)) } })
         .putNullable("aiChatConfigId", settings.aiChatConfigId)
         .put(
@@ -559,7 +574,7 @@ object BackupJsonCodec {
                     .put("heightCells", item.heightCells)
                     .put("backgroundColorArgb", item.backgroundColorArgb)
                     .put("textColorArgb", item.textColorArgb)
-                    .putNullable("backgroundImageUri", item.backgroundImageUri)
+                    .putNullable("backgroundImageUri", null)
                     .put("showName", item.showName)
                     .put("backgroundOpacityPercent", item.backgroundOpacityPercent)
                     .put("showIcon", item.showIcon)
@@ -771,6 +786,11 @@ object BackupJsonCodec {
                     require(raw is String) {
                         "cloudSyncConfigs[$index].selectedContents[$contentIndex] must be a string"
                     }
+                    if (raw == "JSON_BACKUP") {
+                        // Removed from runtime sync. Old backup files keep their metadata but the
+                        // content is never re-added to a live sync configuration.
+                        continue
+                    }
                     val content = enumValues<CloudSyncContent>().firstOrNull { it.name == raw }
                         ?: throw IllegalArgumentException(
                             "Invalid CloudSyncContent value: $raw",
@@ -780,7 +800,7 @@ object BackupJsonCodec {
                     }
                 }
             }
-            val decoded = CloudSyncConfig(
+            var decoded = CloudSyncConfig(
                 id = item.requiredString("id"),
                 name = item.requiredString("name"),
                 enabled = item.requiredBoolean("enabled"),
@@ -800,6 +820,9 @@ object BackupJsonCodec {
                 selectedContents = contents,
                 direction = item.requiredEnum("direction"),
             )
+            if (contents.isEmpty()) {
+                decoded = decoded.copy(enabled = false)
+            }
             require(ids.add(decoded.id)) {
                 "Duplicate cloud sync configuration: ${decoded.id}"
             }
@@ -811,7 +834,9 @@ object BackupJsonCodec {
     private fun validateCloudSyncConfigMetadata(config: CloudSyncConfig, field: String) {
         require(config.id.isNotBlank() && config.id.length <= 128) { "$field.id is invalid" }
         require(config.name.isNotBlank() && config.name.length <= 200) { "$field.name is invalid" }
-        require(config.selectedContents.isNotEmpty()) { "$field.selectedContents must not be empty" }
+        require(config.selectedContents.isNotEmpty() || !config.enabled) {
+            "$field.selectedContents must not be empty for an enabled configuration"
+        }
         require(config.endpointUrl.length <= MAX_URL_CHARS) { "$field.endpointUrl is too long" }
         val endpoint = runCatching { URI(config.endpointUrl) }.getOrElse {
             throw IllegalArgumentException("$field.endpointUrl is invalid", it)
@@ -844,6 +869,17 @@ object BackupJsonCodec {
                 "$field.s3Region is invalid"
             }
         }
+    }
+
+    private fun decodeAgentChats(raw: String): ByteArray {
+        require(raw.length <= MAX_AGENT_CHAT_BASE64_CHARS) { "Agent chats backup is too large" }
+        val bytes = runCatching { Base64.getDecoder().decode(raw) }.getOrElse {
+            throw IllegalArgumentException("agentChats is not valid base64", it)
+        }
+        require(raw.isBlank() || bytes.isNotEmpty() && bytes.size <= MAX_AGENT_CHAT_BYTES) {
+            "Agent chats backup size is invalid"
+        }
+        return bytes
     }
 
     private fun encodeHomeGreetings(items: List<HomeGreetingTemplate>): JSONArray {

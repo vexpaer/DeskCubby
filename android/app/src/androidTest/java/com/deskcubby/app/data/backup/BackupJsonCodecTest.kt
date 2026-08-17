@@ -350,7 +350,10 @@ class BackupJsonCodecTest {
         assertEquals(gameStatistics, decoded.gameStatistics)
         assertEquals(usageDevices, decoded.usageDevices)
         assertEquals(readerProgress, decoded.readerProgress)
-        assertEquals(source.settings.desktopWidgetConfigs, decoded.settings.desktopWidgetConfigs)
+        assertEquals(
+            source.settings.desktopWidgetConfigs.map { it.copy(backgroundImageUri = null) },
+            decoded.settings.desktopWidgetConfigs,
+        )
         assertEquals(true, decoded.settings.musicVisualizerEnabled)
         assertEquals(MusicVisualizerStyle.CURVE, decoded.settings.musicVisualizerStyle)
         assertEquals(
@@ -360,11 +363,11 @@ class BackupJsonCodecTest {
         assertEquals(180, decoded.settings.musicVisualizerMinFrequencyHz)
         assertEquals(9_500, decoded.settings.musicVisualizerMaxFrequencyHz)
         assertEquals(Game2048AnimationSpeed.FAST, decoded.settings.game2048AnimationSpeed)
-        assertEquals("content://images/app-background", decoded.settings.backgroundImageUri)
+        assertNull(decoded.settings.backgroundImageUri)
         assertEquals(0.7f, decoded.settings.backgroundImageOpacity)
         assertEquals(18f, decoded.settings.backgroundImageBlurDp)
         assertFalse(decoded.settings.tutorialModeEnabled)
-        assertEquals("content://notes/tree/vault", decoded.settings.notesTreeUri)
+        assertNull(decoded.settings.notesTreeUri)
         assertEquals(
             listOf(36f, 31f, 27f, 23f, 20f, 18f),
             decoded.settings.markdownHeadingSizesSp,
@@ -1130,7 +1133,7 @@ class BackupJsonCodecTest {
             ),
         )
 
-        assertEquals(settings.copy(backupTreeUri = null), decoded.settings)
+        assertEquals(settings.sanitizedForManualBackup().copy(backupTreeUri = null), decoded.settings)
         assertNull(decoded.settings.backupTreeUri)
         assertEquals(listOf(thought), decoded.thoughts)
         assertEquals(listOf(category), decoded.categories)
@@ -1440,7 +1443,7 @@ class BackupJsonCodecTest {
             s3SecretKey = "s3-secret-key-marker",
             s3SessionToken = "s3-session-token-marker",
             s3PathStyle = false,
-            selectedContents = setOf(CloudSyncContent.JSON_BACKUP),
+            selectedContents = setOf(CloudSyncContent.NOTES),
             direction = CloudSyncDirection.UPLOAD_ONLY,
         )
         val navItems = AppSettings().navItems.map { item ->

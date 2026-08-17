@@ -22,11 +22,23 @@ enum class SyncDirection {
 
 enum class SyncContent {
     DIARIES,
+    NOTES,
     MEDIA,
-    JSON_BACKUP,
+    THOUGHTS,
+    THOUGHT_CATEGORIES,
+    DATE_RECORDS,
+    POEMS,
+    POETRY_CATEGORIES,
+    FAVORITES,
+    RSS_SUBSCRIPTIONS,
+    GAME_STATES,
+    GAME_STATISTICS,
     USAGE_STATISTICS,
     READING_PROGRESS,
+    READER_PREFERENCES,
     AGENT_CHATS,
+    VAULT,
+    GLOBAL_SETTINGS,
 }
 
 data class SyncConfiguration(
@@ -45,7 +57,6 @@ data class SyncStatus(
     val totalObjects: Int,
     val transferredBytes: Long,
     val lastFinishedAtMillis: Long?,
-    val pendingJsonCount: Int,
 )
 
 data class SyncRun(

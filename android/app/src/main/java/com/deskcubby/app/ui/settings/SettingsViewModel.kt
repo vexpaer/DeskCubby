@@ -12,8 +12,6 @@ import com.deskcubby.app.data.backup.AppBackupException
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.deskcubby.app.data.backup.AppBackupRepository
-import com.deskcubby.app.data.backup.AutoBackupCoordinator
-import com.deskcubby.app.data.backup.AutoBackupStatus
 import com.deskcubby.app.data.backup.BackupSummary
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
@@ -53,7 +51,6 @@ import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncSecretStore
 import com.deskcubby.app.data.sync.CloudSyncUndoStore
 import com.deskcubby.app.data.sync.CloudSyncRunMode
-import com.deskcubby.app.data.sync.PendingCloudSyncJson
 import com.deskcubby.app.data.sync.formatCloudSyncError
 import com.deskcubby.app.data.sync.validateForSync
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -85,17 +82,12 @@ data class BackupOperationState(
     val busy: Boolean = false,
     val message: String? = null,
     val error: String? = null,
-    val folderConflict: BackupFolderConflict? = null,
 )
 
-data class BackupFolderConflict(
-    val treeUri: String,
-    val summary: BackupSummary,
-)
-
-data class BackupJsonPreviewState(
+data class BackupImportPreviewState(
     val busy: Boolean = false,
-    val json: String? = null,
+    val uri: String? = null,
+    val summary: BackupSummary? = null,
     val error: String? = null,
 )
 
@@ -131,7 +123,6 @@ internal fun updateActionUnavailableFailure(action: String?): UpdateDownloadFail
 class SettingsViewModel @Inject constructor(
     private val repository: SettingsRepository,
     private val backupRepository: AppBackupRepository,
-    private val autoBackupCoordinator: AutoBackupCoordinator,
     private val legacyAiKeyMigrationStore: LegacyAiKeyMigrationStore,
     private val cloudSyncService: AppCloudSyncService,
     private val cloudSyncSecretStore: CloudSyncSecretStore,
@@ -162,9 +153,8 @@ class SettingsViewModel @Inject constructor(
 
     private val _backupOperation = MutableStateFlow(BackupOperationState())
     val backupOperation: StateFlow<BackupOperationState> = _backupOperation.asStateFlow()
-    private val _backupJsonPreview = MutableStateFlow(BackupJsonPreviewState())
-    val backupJsonPreview: StateFlow<BackupJsonPreviewState> = _backupJsonPreview.asStateFlow()
-    val autoBackupStatus: StateFlow<AutoBackupStatus> = autoBackupCoordinator.status
+    private val _backupImportPreview = MutableStateFlow(BackupImportPreviewState())
+    val backupImportPreview: StateFlow<BackupImportPreviewState> = _backupImportPreview.asStateFlow()
     val cloudSyncStatus: StateFlow<AppCloudSyncStatus> = cloudSyncService.status
     private val _cloudSyncUndoAvailable = MutableStateFlow(cloudSyncUndoStore.hasUndo())
     val cloudSyncUndoAvailable: StateFlow<Boolean> = _cloudSyncUndoAvailable.asStateFlow()
@@ -601,9 +591,6 @@ class SettingsViewModel @Inject constructor(
         cloudSyncSecretStore.hasCredentials(config)
     fun cloudSyncConfigForEdit(config: CloudSyncConfig): CloudSyncConfig =
         runCatching { cloudSyncSecretStore.hydrate(config) }.getOrDefault(config)
-    fun pendingCloudSyncJson(): List<PendingCloudSyncJson> =
-        cloudSyncService.pendingIncomingJson()
-
     fun saveCloudSyncConfig(
         config: CloudSyncConfig,
         clearExistingCredentials: Boolean = false,
@@ -733,6 +720,10 @@ class SettingsViewModel @Inject constructor(
                         CloudSyncContent.MEDIA !in config.selectedContents ||
                             current.mediaTreeUri != null,
                     ) { "同步媒体前请先选择媒体目录" }
+                    require(
+                        CloudSyncContent.NOTES !in config.selectedContents ||
+                            current.notesTreeUri != null,
+                    ) { "同步笔记前请先选择笔记目录" }
                     cloudSyncSecretStore.hydrate(config).validateForSync()
                 }
             }
@@ -776,18 +767,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun restoreIncomingCloudJson(fileName: String, onDone: (Boolean) -> Unit = {}) =
-        viewModelScope.launch {
-            try {
-                cloudSyncService.restoreIncomingJson(fileName)
-                onDone(true)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                _settingsError.value = error.message ?: "无法导入云端 JSON"
-                onDone(false)
-            }
-        }
     fun setDefaultPage(value: NavItemId) = launch { repository.setDefaultPage(value) }
     fun setNavItems(value: List<NavItemConfig>) = launch { repository.setNavItems(value) }
     fun setNavigationSettings(
@@ -966,146 +945,46 @@ class SettingsViewModel @Inject constructor(
         )
     }
 
-    fun selectBackupFolder(uri: Uri) = viewModelScope.launch {
-        _backupOperation.value = BackupOperationState(busy = true)
-        try {
-            persistAndVerifyFolderPermission(uri)
-            if (settings.value.backupTreeUri == uri.toString()) {
-                _backupOperation.value = BackupOperationState(
-                    message = "此文件夹已用于自动保存 / This folder is already used for auto-save",
-                )
-                return@launch
-            }
-
-            val existing = backupRepository.inspectAutomatic(uri)
-            if (existing != null) {
-                _backupOperation.value = BackupOperationState(
-                    folderConflict = BackupFolderConflict(uri.toString(), existing),
-                )
-                return@launch
-            }
-
-            val previousTreeUri = settings.value.backupTreeUri
-            val summary = activateFolderAndSave(uri, previousTreeUri)
-            _backupOperation.value = BackupOperationState(
-                message = successMessage(
-                    actionZh = "自动保存文件夹已设置，当前数据已保存",
-                    actionEn = "Auto-save folder selected and current data saved",
-                    summary = summary,
-                ),
-            )
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            setBackupOperationError(error)
-        }
-    }
-
-    fun importExistingBackup() {
-        val conflict = _backupOperation.value.folderConflict ?: return
-        val treeUri = Uri.parse(conflict.treeUri)
-        val previousTreeUri = settings.value.backupTreeUri
-        runBackupOperation {
-            val summary = backupRepository.importAutomatic(treeUri)
+    fun previewBackupImport(uri: Uri) {
+        if (_backupImportPreview.value.busy) return
+        _backupImportPreview.value = BackupImportPreviewState(busy = true)
+        viewModelScope.launch {
             try {
-                activateFolderAndSave(treeUri, previousTreeUri)
+                _backupImportPreview.value = BackupImportPreviewState(
+                    uri = uri.toString(),
+                    summary = backupRepository.inspectFrom(uri),
+                )
             } catch (error: CancellationException) {
+                _backupImportPreview.value = BackupImportPreviewState()
                 throw error
             } catch (error: Exception) {
-                throw AppBackupException(
-                    "已有备份已导入，但无法为该文件夹开启自动保存；已恢复原自动保存设置。",
-                    error,
+                _backupImportPreview.value = BackupImportPreviewState(
+                    error = error.message?.takeIf(String::isNotBlank) ?: "无法预览备份 / Could not preview backup",
                 )
             }
-            successMessage(
-                actionZh = "已有备份已导入，并已开启自动保存",
-                actionEn = "Existing backup imported and auto-save enabled",
-                summary = summary,
-            )
         }
     }
 
-    fun overwriteExistingBackup() {
-        val conflict = _backupOperation.value.folderConflict ?: return
-        val treeUri = Uri.parse(conflict.treeUri)
-        val previousTreeUri = settings.value.backupTreeUri
-        runBackupOperation {
-            successMessage(
-                actionZh = "已有备份已被当前数据覆盖",
-                actionEn = "Existing backup replaced with current data",
-                summary = activateFolderAndSave(treeUri, previousTreeUri),
-            )
+    fun closeBackupImportPreview() {
+        if (!_backupImportPreview.value.busy) {
+            _backupImportPreview.value = BackupImportPreviewState()
         }
     }
 
-    fun cancelBackupFolderConflict() {
-        if (!_backupOperation.value.busy) _backupOperation.value = BackupOperationState()
-    }
-
-    fun disableAutoBackup() = runBackupOperation {
-        repository.setBackupTreeUri(null)
-        "已停止自动保存 / Auto-save stopped"
+    fun confirmBackupImport(uri: Uri) = runBackupOperation {
+        _backupImportPreview.value = BackupImportPreviewState()
+        successMessage(
+            actionZh = "DeskCubby 数据已导入",
+            actionEn = "DeskCubby data imported",
+            summary = backupRepository.importFrom(uri),
+        )
     }
 
     fun exportBackup(uri: Uri) = runBackupOperation {
         successMessage(
-            actionZh = "JSON 已导出",
-            actionEn = "JSON exported",
+            actionZh = "DeskCubby 数据已导出",
+            actionEn = "DeskCubby data exported",
             summary = backupRepository.exportTo(uri),
-        )
-    }
-
-    fun importBackup(uri: Uri) = runBackupOperation {
-        val shouldSyncFolder = settings.value.backupTreeUri != null
-        val summary = backupRepository.importFrom(uri)
-        if (shouldSyncFolder) {
-            try {
-                autoBackupCoordinator.saveNow()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                throw AppBackupException(
-                    "JSON 已导入，但无法同步到自动保存文件夹；请重新选择文件夹或稍后重试。",
-                    error,
-                )
-            }
-        }
-        successMessage(
-            actionZh = "JSON 已导入",
-            actionEn = "JSON imported",
-            summary = summary,
-        )
-    }
-
-    fun openBackupJsonPreview() {
-        if (_backupJsonPreview.value.busy) return
-        viewModelScope.launch {
-            _backupJsonPreview.value = BackupJsonPreviewState(busy = true)
-            try {
-                _backupJsonPreview.value = BackupJsonPreviewState(
-                    json = backupRepository.currentBackupJson(),
-                )
-            } catch (error: CancellationException) {
-                _backupJsonPreview.value = BackupJsonPreviewState()
-                throw error
-            } catch (error: Exception) {
-                _backupJsonPreview.value = BackupJsonPreviewState(
-                    error = error.message?.takeIf(String::isNotBlank)
-                        ?: "无法生成 JSON / Could not build JSON",
-                )
-            }
-        }
-    }
-
-    fun closeBackupJsonPreview() {
-        _backupJsonPreview.value = BackupJsonPreviewState()
-    }
-
-    fun saveBackupNow() = runBackupOperation {
-        successMessage(
-            actionZh = "当前数据已保存",
-            actionEn = "Current data saved",
-            summary = autoBackupCoordinator.saveNow(),
         )
     }
 
@@ -1117,38 +996,6 @@ class SettingsViewModel @Inject constructor(
             throw error
         } catch (error: Exception) {
             setBackupOperationError(error)
-        }
-    }
-
-    private fun persistAndVerifyFolderPermission(uri: Uri) {
-        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        context.contentResolver.takePersistableUriPermission(uri, flags)
-        val persisted = context.contentResolver.persistedUriPermissions.firstOrNull { it.uri == uri }
-        check(persisted?.let { it.isReadPermission && it.isWritePermission } == true) {
-            "无法保留所选文件夹的读写权限 / Could not retain read and write access to the selected folder"
-        }
-    }
-
-    private suspend fun activateFolderAndSave(uri: Uri, previousTreeUri: String?): BackupSummary {
-        return try {
-            repository.setBackupTreeUri(uri.toString())
-            autoBackupCoordinator.saveNow()
-        } catch (error: CancellationException) {
-            restoreBackupTreeUri(previousTreeUri, error)
-            throw error
-        } catch (error: Exception) {
-            restoreBackupTreeUri(previousTreeUri, error)
-            throw error
-        }
-    }
-
-    private suspend fun restoreBackupTreeUri(previousTreeUri: String?, cause: Throwable) {
-        withContext(NonCancellable) {
-            try {
-                repository.setBackupTreeUri(previousTreeUri)
-            } catch (restoreError: Exception) {
-                cause.addSuppressed(restoreError)
-            }
         }
     }
 
@@ -1165,7 +1012,8 @@ class SettingsViewModel @Inject constructor(
             "${summary.poemCount} 首诗词、${summary.vaultItemCount} 条收藏夹密文、" +
             "${summary.gameStateCount} 个游戏存档、${summary.gameStatisticCount} 项游戏统计、" +
             "${summary.usageDeviceCount} 台设备的 " +
-            "${summary.usageDayCount} 天使用时间、${summary.readerProgressCount} 本书的阅读进度；" +
+            "${summary.usageDayCount} 天使用时间、${summary.readerProgressCount} 本书的阅读进度、" +
+            "${summary.agentConversationCount} 个 Agent 对话；" +
             "$actionEn: ${summary.thoughtCount} thoughts, " +
             "${summary.categoryCount} thought categories, ${summary.favoriteCount} bookmarks, " +
             "${summary.dateRecordCount} date records, " +
@@ -1173,7 +1021,8 @@ class SettingsViewModel @Inject constructor(
             "${summary.vaultItemCount} encrypted Vault items, " +
             "${summary.gameStateCount} game saves, ${summary.gameStatisticCount} game metrics, " +
             "${summary.usageDayCount} screen-time days from ${summary.usageDeviceCount} devices, " +
-            "and reading progress for ${summary.readerProgressCount} books"
+            "and reading progress for ${summary.readerProgressCount} books, " +
+            "and ${summary.agentConversationCount} Agent conversations"
 
     private fun launch(block: suspend () -> Unit) = viewModelScope.launch {
         try {

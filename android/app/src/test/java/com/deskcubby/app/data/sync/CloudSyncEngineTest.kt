@@ -120,7 +120,7 @@ class CloudSyncEngineTest {
         assertArrayEquals(REMOTE_BYTES, local.conflictBytes.single())
         assertEquals(null, local.writeCalls.single().expectedLocalSha256)
         assertTrue(remote.writeCalls.isEmpty())
-        assertEquals(hash(BASE_BYTES), state.saved(CONFIG_ID)?.hashesByKey?.get(KEY))
+        assertEquals(hash(REMOTE_BYTES), state.saved(CONFIG_ID)?.hashesByKey?.get(KEY))
     }
 
     @Test
@@ -207,6 +207,66 @@ class CloudSyncEngineTest {
             ),
             result.reports.associate { it.key to it.outcome },
         )
+    }
+
+    @Test
+    fun firstSyncIdenticalBytesEstablishesBaseWithoutTransfers() = runBlocking {
+        val local = FakeLocalStore().apply { put(KEY, LOCAL_BYTES) }
+        val remote = FakeRemoteStore().apply { put(KEY, LOCAL_BYTES) }
+        val state = FakeStateStore()
+
+        val result = engine(local, remote, state).sync(config())
+
+        assertEquals(CloudSyncItemOutcome.UNCHANGED, result.reports.single().outcome)
+        assertTrue(local.writeCalls.isEmpty())
+        assertTrue(remote.writeCalls.isEmpty())
+        assertTrue(remote.readCalls.isEmpty())
+        assertEquals(hash(LOCAL_BYTES), state.saved(CONFIG_ID)?.hashesByKey?.get(KEY))
+    }
+
+    @Test
+    fun firstSyncDifferentBytesPrefersExistingCloudAndDoesNotRepeatConflict() = runBlocking {
+        val local = FakeLocalStore().apply { put(KEY, LOCAL_BYTES) }
+        val remote = FakeRemoteStore().apply { put(KEY, REMOTE_BYTES) }
+        val state = FakeStateStore()
+
+        val first = engine(local, remote, state).sync(config())
+        assertEquals(CloudSyncItemOutcome.CONFLICT_COPY_SAVED, first.reports.single().outcome)
+        assertArrayEquals(LOCAL_BYTES, local.bytes(KEY))
+        assertArrayEquals(REMOTE_BYTES, local.conflictBytes.single())
+
+        val second = engine(local, remote, state).sync(config())
+        assertEquals(CloudSyncItemOutcome.UPLOADED, second.reports.first { it.key == KEY }.outcome)
+    }
+
+    @Test
+    fun sameConflictIsNotRepeatedOnTheFollowingRun() = runBlocking {
+        val local = FakeLocalStore().apply { put(KEY, LOCAL_BYTES) }
+        val remote = FakeRemoteStore().apply { put(KEY, REMOTE_BYTES) }
+        val state = FakeStateStore().apply { setBase(config(), KEY to hash(BASE_BYTES)) }
+
+        assertEquals(
+            CloudSyncItemOutcome.CONFLICT_COPY_SAVED,
+            engine(local, remote, state).sync(config()).reports.single().outcome,
+        )
+        val second = engine(local, remote, state).sync(config())
+        assertEquals(CloudSyncItemOutcome.UPLOADED, second.reports.first { it.key == KEY }.outcome)
+        assertArrayEquals(LOCAL_BYTES, remote.bytes(KEY))
+    }
+
+    @Test
+    fun newDeviceJoinsExistingCloudWithDifferentLocalFileKeepsBothVersions() = runBlocking {
+        val existingRemote = FakeRemoteStore().apply { put(KEY, REMOTE_BYTES) }
+        val local = FakeLocalStore().apply { put(KEY, LOCAL_BYTES) }
+        val state = FakeStateStore()
+
+        val result = engine(local, existingRemote, state).sync(config())
+
+        assertEquals(CloudSyncItemOutcome.CONFLICT_COPY_SAVED, result.reports.single().outcome)
+        assertArrayEquals(LOCAL_BYTES, local.bytes(KEY))
+        assertArrayEquals(REMOTE_BYTES, local.conflictBytes.single())
+        assertArrayEquals(REMOTE_BYTES, existingRemote.bytes(KEY))
+        assertEquals(hash(REMOTE_BYTES), state.saved(CONFIG_ID)?.hashesByKey?.get(KEY))
     }
 
     @Test

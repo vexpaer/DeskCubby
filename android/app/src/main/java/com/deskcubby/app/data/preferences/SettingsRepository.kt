@@ -100,6 +100,7 @@ import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
+import com.deskcubby.app.data.sync.GlobalSettingsSyncCodec
 import com.deskcubby.app.data.model.normalizeMarkdownHeadingSizes
 import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.normalized
@@ -110,6 +111,7 @@ import java.io.IOException
 import java.net.URI
 import java.util.Locale
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
@@ -909,6 +911,14 @@ class SettingsRepository @Inject constructor(
         }
     }
 
+    /** Applies the GLOBAL projection of record sync without touching DEVICE or SECRET fields. */
+    suspend fun applyGlobalSettingsSync(bytes: ByteArray) {
+        restoreFromBackup(
+            value = GlobalSettingsSyncCodec.apply(settings.first(), bytes),
+            preserveDeviceState = true,
+        )
+    }
+
     suspend fun setMorePageOrder(value: List<NavItemId>) {
         context.settingsDataStore.edit { prefs ->
             val nav = decodeNav(prefs[Keys.navItems])
@@ -918,7 +928,10 @@ class SettingsRepository @Inject constructor(
         }
     }
 
-    suspend fun restoreFromBackup(value: AppSettings) {
+    suspend fun restoreFromBackup(
+        value: AppSettings,
+        preserveDeviceState: Boolean = true,
+    ) {
         val normalizedNav = normalizeNavItems(value.navItems)
         val normalizedMorePageOrder = normalizeMorePageOrder(value.morePageOrder, normalizedNav)
         val normalizedMealPhotoFilter = value.mealPhotoFilter.normalized()
@@ -952,6 +965,7 @@ class SettingsRepository @Inject constructor(
             val restoredCloudSyncConfigs = normalizedCloudSyncConfigs.map { restored ->
                 val local = currentCloudSyncConfigs.firstOrNull { it.id == restored.id }
                 if (
+                    preserveDeviceState &&
                     restored.serviceType == CloudSyncServiceType.S3_COMPATIBLE &&
                     local?.serviceType == CloudSyncServiceType.S3_COMPATIBLE &&
                     hasSameS3CredentialScope(local, restored)
@@ -1083,7 +1097,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.aiTemperature] = value.aiTemperature.takeIf(Float::isFinite)
                 ?.coerceIn(0f, 2f) ?: 0.7f
             prefs[Keys.aiAllowInsecureHttp] = value.aiAllowInsecureHttp
-            prefs[Keys.aiConfigs] = encodeAiConfigs(value.aiConfigs)
+            prefs[Keys.aiConfigs] = encodeAiConfigs(
+                if (preserveDeviceState) value.aiConfigs else value.aiConfigs.map { it.copy(apiKey = "") },
+            )
             prefs.setOrRemove(Keys.aiChatConfigId, value.aiChatConfigId)
             prefs[Keys.agentEnabledSources] = value.agentEnabledSources
                 .mapTo(linkedSetOf(), AgentDataSource::wireValue)
@@ -1315,20 +1331,22 @@ class SettingsRepository @Inject constructor(
         buildList(array.length()) {
             for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
-                val contents = item.optJSONArray("selectedContents")?.let { values ->
-                    buildSet {
-                        for (contentIndex in 0 until values.length()) {
-                            runCatching {
-                                CloudSyncContent.valueOf(values.getString(contentIndex))
-                            }.getOrNull()?.let(::add)
-                        }
+                val rawContents = item.optJSONArray("selectedContents")?.let { values ->
+                    (0 until values.length()).mapNotNull { index ->
+                        runCatching { values.getString(index) }.getOrNull()
                     }
                 }.orEmpty()
+                val legacyJsonOnly = rawContents.isNotEmpty() &&
+                    rawContents.all { it == "JSON_BACKUP" }
+                val contents = rawContents.mapNotNullTo(linkedSetOf()) { raw ->
+                    runCatching { CloudSyncContent.valueOf(raw) }.getOrNull()
+                }
                 add(
                     CloudSyncConfig(
                         id = item.optString("id"),
                         name = item.optString("name"),
-                        enabled = item.optBoolean("enabled", true),
+                        enabled = item.optBoolean("enabled", true) &&
+                            (!legacyJsonOnly || contents.isNotEmpty()),
                         serviceType = runCatching {
                             CloudSyncServiceType.valueOf(item.optString("serviceType"))
                         }.getOrDefault(CloudSyncServiceType.WEBDAV),
@@ -1868,7 +1886,7 @@ internal fun normalizeCloudSyncConfigs(items: List<CloudSyncConfig>): List<Cloud
         .filter { item ->
             item.id.isNotEmpty() &&
                 item.name.isNotEmpty() &&
-                item.selectedContents.isNotEmpty() &&
+                (item.selectedContents.isNotEmpty() || !item.enabled) &&
                 item.userAgent.isNotBlank() &&
                 item.userAgent.length <= MAX_CLOUD_SYNC_USER_AGENT_CHARS &&
                 item.userAgent.none(Char::isISOControl) &&

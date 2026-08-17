@@ -102,7 +102,7 @@ class AppBackupKeyMergeTest {
             password = "",
         ).copy(
             name = "Imported metadata",
-            selectedContents = setOf(CloudSyncContent.JSON_BACKUP),
+            selectedContents = setOf(CloudSyncContent.NOTES),
         )
 
         val merged = mergeBackupCloudSyncSettings(

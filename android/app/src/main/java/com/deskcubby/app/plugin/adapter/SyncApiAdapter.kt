@@ -35,7 +35,6 @@ class SyncApiAdapter @Inject constructor(
             totalObjects = status.progress?.totalObjects ?: 0,
             transferredBytes = status.progress?.transferredBytes ?: 0L,
             lastFinishedAtMillis = status.lastFinishedAt,
-            pendingJsonCount = status.pendingJsonCount,
         )
     }
 
@@ -66,11 +65,23 @@ private fun CloudSyncConfig.toPluginConfig(): SyncConfiguration = SyncConfigurat
     selectedContents = selectedContents.mapTo(linkedSetOf()) { content ->
         when (content) {
             AppSyncContent.DIARIES -> SyncContent.DIARIES
+            AppSyncContent.NOTES -> SyncContent.NOTES
             AppSyncContent.MEDIA -> SyncContent.MEDIA
-            AppSyncContent.JSON_BACKUP -> SyncContent.JSON_BACKUP
+            AppSyncContent.THOUGHTS -> SyncContent.THOUGHTS
+            AppSyncContent.THOUGHT_CATEGORIES -> SyncContent.THOUGHT_CATEGORIES
+            AppSyncContent.DATE_RECORDS -> SyncContent.DATE_RECORDS
+            AppSyncContent.POEMS -> SyncContent.POEMS
+            AppSyncContent.POETRY_CATEGORIES -> SyncContent.POETRY_CATEGORIES
+            AppSyncContent.FAVORITES -> SyncContent.FAVORITES
+            AppSyncContent.RSS_SUBSCRIPTIONS -> SyncContent.RSS_SUBSCRIPTIONS
+            AppSyncContent.GAME_STATES -> SyncContent.GAME_STATES
+            AppSyncContent.GAME_STATISTICS -> SyncContent.GAME_STATISTICS
             AppSyncContent.USAGE_STATISTICS -> SyncContent.USAGE_STATISTICS
             AppSyncContent.READING_PROGRESS -> SyncContent.READING_PROGRESS
+            AppSyncContent.READER_PREFERENCES -> SyncContent.READER_PREFERENCES
             AppSyncContent.AGENT_CHATS -> SyncContent.AGENT_CHATS
+            AppSyncContent.VAULT -> SyncContent.VAULT
+            AppSyncContent.GLOBAL_SETTINGS -> SyncContent.GLOBAL_SETTINGS
         }
     },
 )

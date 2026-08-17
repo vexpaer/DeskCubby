@@ -272,6 +272,73 @@ class AgentChatSyncRepository @Inject constructor(
         return permissionsToRelease
     }
 
+    /** Exact restore path used by manual backup import (cloud sync keeps its record merge). */
+    suspend fun replaceFromBackupSnapshot(bytes: ByteArray) = withContext(Dispatchers.IO) {
+        if (bytes.isEmpty() || bytes.size > MAX_JSON_BYTES) {
+            throw CloudSyncLimitException("Agent 会话备份大小无效。")
+        }
+        val payload = AgentChatSyncCodec.decode(bytes)
+        database.withTransaction {
+            val chatDao = database.aiChatDao()
+            val agentDao = database.agentDao()
+            chatDao.clearAllConversationsForSync()
+            agentDao.clearAllRunsForSync()
+            val conversationIds = linkedMapOf<String, Long>()
+            payload.conversations.sortedBy(SyncConversation::createdAt).forEach { remote ->
+                conversationIds[remote.syncId] = chatDao.insertConversation(
+                    AiConversationEntity(
+                        title = remote.title,
+                        modelConfigId = remote.modelConfigId,
+                        createdAt = remote.createdAt,
+                        updatedAt = remote.updatedAt,
+                        syncId = remote.syncId,
+                        deletedAt = remote.deletedAt,
+                    ),
+                )
+            }
+            payload.messages.sortedBy(SyncMessage::createdAt).forEach { remote ->
+                val conversationId = conversationIds[remote.conversationSyncId] ?: return@forEach
+                chatDao.insertMessage(
+                    AiMessageEntity(
+                        conversationId = conversationId,
+                        role = remote.role,
+                        content = remote.content,
+                        reasoning = remote.reasoning,
+                        imageUri = null,
+                        imageMimeType = remote.imageMimeType,
+                        imagePermissionOwned = false,
+                        createdAt = remote.createdAt,
+                        syncId = remote.syncId,
+                    ),
+                )
+            }
+            val messageIds = chatDao.getAllMessagesForSync()
+                .mapNotNull { item -> item.syncId?.let { it to item.id } }
+                .toMap()
+            payload.attachments.forEach { remote ->
+                val messageId = messageIds[remote.messageSyncId] ?: return@forEach
+                chatDao.insertAttachments(
+                    listOf(
+                        AiAttachmentEntity(
+                            messageId = messageId,
+                            uri = "",
+                            mimeType = remote.mimeType,
+                            displayName = remote.displayName,
+                            sizeBytes = remote.sizeBytes,
+                            kind = remote.kind,
+                            extractedText = remote.extractedText,
+                            permissionOwned = false,
+                            syncId = remote.syncId,
+                        ),
+                    ),
+                )
+            }
+            payload.runs.sortedBy(SyncRun::runId).forEach { remote ->
+                agentDao.insertRun(remote.toEntity(remote.conversationSyncId?.let(conversationIds::get)))
+            }
+        }
+    }
+
     private suspend fun releaseUnusedUriPermissions(uris: Set<String>) {
         val chatDao = database.aiChatDao()
         uris.forEach { value ->

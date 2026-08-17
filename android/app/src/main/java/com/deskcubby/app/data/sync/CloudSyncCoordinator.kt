@@ -3,7 +3,9 @@ package com.deskcubby.app.data.sync
 import android.content.Context
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.CloudSyncConfig
+import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.repository.DiaryFileRepository
+import com.deskcubby.app.data.repository.NotesRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -25,15 +27,20 @@ class CloudSyncCoordinator(
     context: Context,
     private val diaryRepository: DiaryFileRepository,
     private val settingsProvider: suspend () -> AppSettings,
-    private val jsonBridge: CloudSyncJsonBridge? = null,
-    private val usageBridge: CloudSyncUsageBridge? = null,
-    private val readerProgressBridge: CloudSyncReaderProgressBridge? = null,
-    private val agentChatBridge: CloudSyncAgentChatBridge? = null,
+    private val notesRepository: NotesRepository? = null,
+    private val recordSyncAdapters: Map<CloudSyncContent, RecordSyncAdapter> = emptyMap(),
     private val remoteStoreFactory: CloudSyncRemoteStoreFactory =
         DefaultCloudSyncRemoteStoreFactory(),
     private val stateStore: CloudSyncStateStore =
         FileCloudSyncStateStore(context.applicationContext),
+    private val recordStateStore: RecordSyncStateStore =
+        FileRecordSyncStateStore(context.applicationContext),
     private val cloudSyncUndoStore: CloudSyncUndoStore? = null,
+    // Legacy test-only bridge parameters. They are accepted for source compatibility and ignored.
+    private val jsonBridge: CloudSyncJsonBridge? = null,
+    private val usageBridge: CloudSyncUsageBridge? = null,
+    private val readerProgressBridge: CloudSyncReaderProgressBridge? = null,
+    private val agentChatBridge: CloudSyncAgentChatBridge? = null,
 ) {
     private val mutex = Mutex()
 
@@ -77,18 +84,31 @@ class CloudSyncCoordinator(
         }
     }
 
-    private fun newEngine(config: CloudSyncConfig): CloudSyncEngine = CloudSyncEngine(
-        localStore = DiaryCloudSyncLocalStore(
-            diaryRepository = diaryRepository,
-            settingsProvider = settingsProvider,
-            configId = config.id,
-            jsonBridge = jsonBridge,
-            usageBridge = usageBridge,
-            readerProgressBridge = readerProgressBridge,
-            agentChatBridge = agentChatBridge,
-            cloudSyncUndoStore = cloudSyncUndoStore,
-        ),
-        remoteStoreFactory = remoteStoreFactory,
-        stateStore = stateStore,
-    )
+    private fun newEngine(config: CloudSyncConfig): CloudSyncEngine {
+        val localStores = linkedMapOf<CloudSyncContent, CloudSyncLocalStore>(
+            CloudSyncContent.DIARIES to DiaryCloudSyncLocalStore(
+                diaryRepository = diaryRepository,
+                settingsProvider = settingsProvider,
+                cloudSyncUndoStore = cloudSyncUndoStore,
+            ),
+            CloudSyncContent.MEDIA to DiaryCloudSyncLocalStore(
+                diaryRepository = diaryRepository,
+                settingsProvider = settingsProvider,
+                cloudSyncUndoStore = cloudSyncUndoStore,
+            ),
+        )
+        val notes = notesRepository
+        if (notes != null) {
+            localStores[CloudSyncContent.NOTES] = NotesCloudSyncLocalStore(
+                notesRepository = notes,
+                notesTreeUriProvider = { settingsProvider().notesTreeUri },
+            )
+        }
+        return CloudSyncEngine(
+            localStore = CompositeCloudSyncLocalStore(localStores),
+            remoteStoreFactory = remoteStoreFactory,
+            stateStore = stateStore,
+            recordSyncEngine = RecordSyncEngine(recordSyncAdapters, recordStateStore),
+        )
+    }
 }

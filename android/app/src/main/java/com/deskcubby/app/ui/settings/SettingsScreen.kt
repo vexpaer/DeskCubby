@@ -156,7 +156,7 @@ import androidx.core.content.ContextCompat
 import com.deskcubby.app.BuildConfig
 import com.deskcubby.app.R
 import com.deskcubby.app.takeCodePoints
-import com.deskcubby.app.data.backup.AutoBackupStatus
+import com.deskcubby.app.data.backup.BackupSummary
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
@@ -223,7 +223,6 @@ import com.deskcubby.app.data.preferences.MAX_HOME_GREETINGS
 import com.deskcubby.app.data.preferences.MAX_HOME_GREETING_CODE_POINTS
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncRunMode
-import com.deskcubby.app.data.sync.PendingCloudSyncJson
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.ColorPickerDialog
 import com.deskcubby.app.ui.iconFor
@@ -482,8 +481,7 @@ fun SettingsScreen(
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val backupOperation by viewModel.backupOperation.collectAsStateWithLifecycle()
-    val backupJsonPreview by viewModel.backupJsonPreview.collectAsStateWithLifecycle()
-    val autoBackupStatus by viewModel.autoBackupStatus.collectAsStateWithLifecycle()
+    val backupImportPreview by viewModel.backupImportPreview.collectAsStateWithLifecycle()
     val cloudSyncStatus by viewModel.cloudSyncStatus.collectAsStateWithLifecycle()
     val cloudSyncUndoAvailable by viewModel.cloudSyncUndoAvailable.collectAsStateWithLifecycle()
     val appDataUsage by viewModel.appDataUsage.collectAsStateWithLifecycle()
@@ -692,7 +690,6 @@ fun SettingsScreen(
                 settings = settings,
                 status = cloudSyncStatus,
                 undoAvailable = cloudSyncUndoAvailable,
-                pendingJson = viewModel.pendingCloudSyncJson(),
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
                 onSaveEnabled = { enabled ->
@@ -738,9 +735,6 @@ fun SettingsScreen(
                 onUndo = viewModel::undoLastCloudSync,
                 onForceUpload = viewModel::forceUploadCloudNow,
                 onForceDownload = viewModel::forceDownloadCloudNow,
-                onRestoreIncomingJson = { fileName ->
-                    viewModel.restoreIncomingCloudJson(fileName)
-                },
             )
 
             SettingsPage.SYNC_DETAIL -> {
@@ -771,21 +765,13 @@ fun SettingsScreen(
             SettingsPage.BACKUP -> BackupSettingsPage(
                 settings = settings,
                 dataUsage = appDataUsage,
-                backupTreeUri = settings.backupTreeUri,
                 operation = backupOperation,
-                autoBackupStatus = autoBackupStatus,
+                importPreview = backupImportPreview,
                 contentPadding = inner,
-                onSelectFolder = viewModel::selectBackupFolder,
-                onImportExistingBackup = viewModel::importExistingBackup,
-                onOverwriteExistingBackup = viewModel::overwriteExistingBackup,
-                onCancelFolderConflict = viewModel::cancelBackupFolderConflict,
-                onSaveNow = viewModel::saveBackupNow,
-                onDisableAutoBackup = viewModel::disableAutoBackup,
                 onExport = viewModel::exportBackup,
-                onImport = viewModel::importBackup,
-                jsonPreview = backupJsonPreview,
-                onOpenJsonPreview = viewModel::openBackupJsonPreview,
-                onCloseJsonPreview = viewModel::closeBackupJsonPreview,
+                onImportPreview = viewModel::previewBackupImport,
+                onConfirmImport = viewModel::confirmBackupImport,
+                onCloseImportPreview = viewModel::closeBackupImportPreview,
                 onOpenCloudSync = { page = SettingsPage.SYNC },
                 onRefreshDataUsage = viewModel::refreshAppDataUsage,
             )
@@ -1152,8 +1138,8 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry(
         tr("应用数据", "App data"),
         tr(
-            "自动保存、整体 JSON、导入导出、WebDAV 与 S3",
-            "Auto-save, complete JSON, import/export, WebDAV and S3",
+            "手动备份与恢复、云同步、存储占用",
+            "Manual backup & restore, cloud sync, and storage usage",
         ),
         "backup json cloud sync webdav s3 备份 导入 导出 云端 同步",
         SettingsPage.BACKUP,
@@ -1283,13 +1269,10 @@ private fun SettingsMainPage(
         item {
             SettingsMenuItem(
                 title = tr("应用数据", "App data"),
-                description = when {
-                    settings.cloudSyncEnabled ->
-                        tr("自动备份与云端同步已配置", "Auto-backup and cloud sync are configured")
-                    settings.backupTreeUri != null ->
-                        tr("自动保存、JSON 导入导出与云端同步", "Auto-save, JSON import/export and cloud sync")
-                    else ->
-                        tr("本地 JSON 备份、整体数据与云端同步", "Local JSON backup, complete data and cloud sync")
+                description = if (settings.cloudSyncEnabled) {
+                    tr("云同步已开启；手动备份与恢复", "Cloud sync enabled; manual backup & restore")
+                } else {
+                    tr("云同步与手动备份、恢复", "Cloud sync and manual backup & restore")
                 },
                 icon = { Icon(Icons.Outlined.Backup, contentDescription = null) },
                 accentColor = settings.menuAccentColor(2),
@@ -1536,7 +1519,6 @@ private fun CloudSyncSettingsPage(
     settings: AppSettings,
     status: AppCloudSyncStatus,
     undoAvailable: Boolean,
-    pendingJson: List<PendingCloudSyncJson>,
     contentPadding: PaddingValues,
     saveCoordinator: SettingsSaveCoordinator,
     onSaveEnabled: (Boolean) -> Unit,
@@ -1548,13 +1530,11 @@ private fun CloudSyncSettingsPage(
     onUndo: () -> Unit,
     onForceUpload: () -> Unit,
     onForceDownload: () -> Unit,
-    onRestoreIncomingJson: (String) -> Unit,
 ) {
     var enabled by remember(settings.cloudSyncEnabled) {
         mutableStateOf(settings.cloudSyncEnabled)
     }
     var deleteCandidate by remember { mutableStateOf<CloudSyncConfig?>(null) }
-    var restoreCandidate by remember { mutableStateOf<PendingCloudSyncJson?>(null) }
     var forcedRunCandidate by remember { mutableStateOf<CloudSyncRunMode?>(null) }
     val enabledSourceCount = settings.cloudSyncConfigs.count(CloudSyncConfig::enabled)
     RegisterSettingsSave(
@@ -1715,8 +1695,8 @@ private fun CloudSyncSettingsPage(
                 }
                 Text(
                     tr(
-                        "强制上传以本机为准，强制下载以云端为准；强制下载仅允许一个已启用来源。两者均不传播删除且仍执行条件校验；应用 JSON 下载仍只会暂存，需手动确认导入。",
-                        "Force upload prefers local data and force download prefers remote data; force download allows only one enabled source. Neither propagates deletions, and conditional checks still apply. Downloaded app JSON is only staged until you confirm an import.",
+                        "强制上传以本机为准，强制下载以云端为准；强制下载仅允许一个已启用来源。两者均不传播删除且仍执行条件校验。",
+                        "Force upload prefers local data and force download prefers remote data; force download allows only one enabled source. Neither propagates deletions, and conditional checks still apply.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1778,35 +1758,6 @@ private fun CloudSyncSettingsPage(
                 }
             }
         }
-        if (pendingJson.isNotEmpty()) {
-            item {
-                SettingsSection(tr("待导入的云端 JSON", "Incoming cloud JSON")) {
-                    Text(
-                        tr(
-                            "远端 JSON 不会自动覆盖本机数据。确认后才会导入；成功后会移除本机暂存副本。",
-                            "Remote JSON never overwrites local data automatically. Import only after review; the local staged copy is removed after success.",
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    pendingJson.forEach { pending ->
-                        OutlinedButton(
-                            onClick = { restoreCandidate = pending },
-                            enabled = !status.running,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(tr("导入待处理备份", "Import staged backup"))
-                                Text(
-                                    formatBackupTime(pending.receivedAt),
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     deleteCandidate?.let { config ->
@@ -1831,33 +1782,6 @@ private fun CloudSyncSettingsPage(
             },
             dismissButton = {
                 TextButton(onClick = { deleteCandidate = null }) {
-                    Text(tr("取消", "Cancel"))
-                }
-            },
-        )
-    }
-    restoreCandidate?.let { pending ->
-        AlertDialog(
-            onDismissRequest = { restoreCandidate = null },
-            title = { Text(tr("导入云端 JSON？", "Import cloud JSON?")) },
-            text = {
-                Text(
-                    tr(
-                        "这会按所选备份的版本导入应用设置和结构化数据；当前格式为 v31，并兼容导入 v1–v30。导入会恢复 Agent 来源授权/权限模式/模型工具能力、自定义主题、Markdown 标题字号、主页小游戏快捷入口、背景参数、教学总开关、桌面小卡片设计和 Vault 密文/校验元数据，并合并游戏与各设备使用时间；Agent 会话/Review、日记、笔记、媒体与背景图片文件不会被替换。",
-                        "This imports app settings and structured data according to the selected backup version; the current format is v31 and v1–v30 remain accepted. It restores Agent source grants, permission mode, model tool capability, the custom theme, Markdown heading sizes, Home mini-game shortcuts, background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/verifier metadata, then merges games and per-device screen time. Agent chats/Review, diary, note, media, and background-image files are not replaced.",
-                    ),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        restoreCandidate = null
-                        onRestoreIncomingJson(pending.fileName)
-                    },
-                ) { Text(tr("确认导入", "Import")) }
-            },
-            dismissButton = {
-                TextButton(onClick = { restoreCandidate = null }) {
                     Text(tr("取消", "Cancel"))
                 }
             },
@@ -2187,16 +2111,6 @@ private fun CloudSyncConfigDetailPage(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (CloudSyncContent.JSON_BACKUP in selectedContents) {
-                    Text(
-                        tr(
-                            "v31 应用 JSON 包含 Agent 来源/权限/模型能力、自定义主题、Markdown 显示设置、主页小游戏快捷入口、全局背景参数与教学总开关、桌面小卡片设计、结构化记录、Vault 密文、小游戏存档与特色统计、多设备使用时间，以及 AI 配置中的明文 API Key；HTTPS 保护传输，但远端对象未做端到端加密。",
-                            "The v31 app JSON contains Agent source/permission/model-capability settings, the custom theme, Markdown display settings, Home mini-game shortcuts, global background parameters and the tutorial master switch, desktop-widget designs, structured records, Vault ciphertext, game saves and lifetime records, multi-device screen time, and plaintext API keys from AI configurations. HTTPS protects transport, but remote objects are not end-to-end encrypted.",
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
                 if (CloudSyncContent.USAGE_STATISTICS in selectedContents) {
                     Text(
                         tr(
@@ -2381,202 +2295,148 @@ private fun syncServiceLabel(type: CloudSyncServiceType): String = when (type) {
 @Composable
 private fun syncContentLabel(content: CloudSyncContent): String = when (content) {
     CloudSyncContent.DIARIES -> tr("日记", "Diaries")
+    CloudSyncContent.NOTES -> tr("笔记", "Notes")
     CloudSyncContent.MEDIA -> tr("媒体", "Media")
-    CloudSyncContent.JSON_BACKUP -> tr("应用 JSON", "App JSON")
-    CloudSyncContent.USAGE_STATISTICS -> tr("多设备使用时间", "Multi-device screen time")
+    CloudSyncContent.THOUGHTS -> tr("小巧思", "Thoughts")
+    CloudSyncContent.THOUGHT_CATEGORIES -> tr("小巧思分类", "Thought categories")
+    CloudSyncContent.DATE_RECORDS -> tr("日期记录", "Date records")
+    CloudSyncContent.POEMS -> tr("诗词", "Poems")
+    CloudSyncContent.POETRY_CATEGORIES -> tr("诗词分类", "Poetry categories")
+    CloudSyncContent.FAVORITES -> tr("收藏", "Favorites")
+    CloudSyncContent.RSS_SUBSCRIPTIONS -> tr("RSS 订阅", "RSS subscriptions")
+    CloudSyncContent.GAME_STATES -> tr("游戏存档", "Game saves")
+    CloudSyncContent.GAME_STATISTICS -> tr("游戏统计", "Game statistics")
+    CloudSyncContent.USAGE_STATISTICS -> tr("使用统计", "Usage statistics")
     CloudSyncContent.READING_PROGRESS -> tr("阅读进度", "Reading progress")
-    CloudSyncContent.AGENT_CHATS -> tr("Agent 会话", "Agent chats")
+    CloudSyncContent.READER_PREFERENCES -> tr("阅读偏好", "Reader preferences")
+    CloudSyncContent.AGENT_CHATS -> tr("Agent 对话", "Agent chats")
+    CloudSyncContent.VAULT -> tr("Vault", "Vault")
+    CloudSyncContent.GLOBAL_SETTINGS -> tr("通用设置", "Global settings")
 }
 
 @Composable
-private fun syncContentsLabel(contents: Set<CloudSyncContent>): String =
-    if (LocalAppLanguage.current == AppLanguage.ENGLISH) {
-        CloudSyncContent.entries
-            .filter(contents::contains)
-            .joinToString(", ") { content ->
-                when (content) {
-                    CloudSyncContent.DIARIES -> "Diaries"
-                    CloudSyncContent.MEDIA -> "Media"
-                    CloudSyncContent.JSON_BACKUP -> "App JSON"
-                    CloudSyncContent.USAGE_STATISTICS -> "Screen time"
-                    CloudSyncContent.READING_PROGRESS -> "Reading progress"
-                    CloudSyncContent.AGENT_CHATS -> "Agent chats"
-                }
+private fun syncContentsLabel(contents: Set<CloudSyncContent>): String {
+    val labels = CloudSyncContent.entries.filter(contents::contains).map { content ->
+        if (LocalAppLanguage.current == AppLanguage.ENGLISH) {
+            when (content) {
+                CloudSyncContent.DIARIES -> "Diaries"
+                CloudSyncContent.NOTES -> "Notes"
+                CloudSyncContent.MEDIA -> "Media"
+                CloudSyncContent.THOUGHTS -> "Thoughts"
+                CloudSyncContent.THOUGHT_CATEGORIES -> "Thought categories"
+                CloudSyncContent.DATE_RECORDS -> "Date records"
+                CloudSyncContent.POEMS -> "Poems"
+                CloudSyncContent.POETRY_CATEGORIES -> "Poetry categories"
+                CloudSyncContent.FAVORITES -> "Favorites"
+                CloudSyncContent.RSS_SUBSCRIPTIONS -> "RSS"
+                CloudSyncContent.GAME_STATES -> "Game saves"
+                CloudSyncContent.GAME_STATISTICS -> "Game stats"
+                CloudSyncContent.USAGE_STATISTICS -> "Usage"
+                CloudSyncContent.READING_PROGRESS -> "Reading"
+                CloudSyncContent.READER_PREFERENCES -> "Reader prefs"
+                CloudSyncContent.AGENT_CHATS -> "Agent chats"
+                CloudSyncContent.VAULT -> "Vault"
+                CloudSyncContent.GLOBAL_SETTINGS -> "Global settings"
             }
-    } else {
-        CloudSyncContent.entries
-            .filter(contents::contains)
-            .joinToString("、") { content ->
-                when (content) {
-                    CloudSyncContent.DIARIES -> "日记"
-                    CloudSyncContent.MEDIA -> "媒体"
-                    CloudSyncContent.JSON_BACKUP -> "应用 JSON"
-                    CloudSyncContent.USAGE_STATISTICS -> "使用时间"
-                    CloudSyncContent.READING_PROGRESS -> "阅读进度"
-                    CloudSyncContent.AGENT_CHATS -> "Agent 会话"
-                }
+        } else {
+            when (content) {
+                CloudSyncContent.DIARIES -> "日记"
+                CloudSyncContent.NOTES -> "笔记"
+                CloudSyncContent.MEDIA -> "媒体"
+                CloudSyncContent.THOUGHTS -> "小巧思"
+                CloudSyncContent.THOUGHT_CATEGORIES -> "小巧思分类"
+                CloudSyncContent.DATE_RECORDS -> "日期记录"
+                CloudSyncContent.POEMS -> "诗词"
+                CloudSyncContent.POETRY_CATEGORIES -> "诗词分类"
+                CloudSyncContent.FAVORITES -> "收藏"
+                CloudSyncContent.RSS_SUBSCRIPTIONS -> "RSS"
+                CloudSyncContent.GAME_STATES -> "游戏"
+                CloudSyncContent.GAME_STATISTICS -> "游戏统计"
+                CloudSyncContent.USAGE_STATISTICS -> "使用统计"
+                CloudSyncContent.READING_PROGRESS -> "阅读进度"
+                CloudSyncContent.READER_PREFERENCES -> "阅读偏好"
+                CloudSyncContent.AGENT_CHATS -> "Agent 对话"
+                CloudSyncContent.VAULT -> "Vault"
+                CloudSyncContent.GLOBAL_SETTINGS -> "通用设置"
             }
+        }
     }
+    return labels.joinToString(if (LocalAppLanguage.current == AppLanguage.ENGLISH) ", " else "、")
+}
 
 @Composable
 private fun BackupSettingsPage(
     settings: AppSettings,
     dataUsage: AppDataUsageState,
-    backupTreeUri: String?,
     operation: BackupOperationState,
-    autoBackupStatus: AutoBackupStatus,
+    importPreview: BackupImportPreviewState,
     contentPadding: PaddingValues,
-    onSelectFolder: (Uri) -> Unit,
-    onImportExistingBackup: () -> Unit,
-    onOverwriteExistingBackup: () -> Unit,
-    onCancelFolderConflict: () -> Unit,
-    onSaveNow: () -> Unit,
-    onDisableAutoBackup: () -> Unit,
     onExport: (Uri) -> Unit,
-    onImport: (Uri) -> Unit,
-    jsonPreview: BackupJsonPreviewState,
-    onOpenJsonPreview: () -> Unit,
-    onCloseJsonPreview: () -> Unit,
+    onImportPreview: (Uri) -> Unit,
+    onConfirmImport: (Uri) -> Unit,
+    onCloseImportPreview: () -> Unit,
     onOpenCloudSync: () -> Unit,
     onRefreshDataUsage: () -> Unit,
 ) {
     LaunchedEffect(Unit) { onRefreshDataUsage() }
-    var pendingImportUri by rememberSaveable { mutableStateOf<String?>(null) }
-    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri?.let(onSelectFolder)
-    }
     val exportPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json"),
     ) { uri ->
         uri?.let(onExport)
     }
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        pendingImportUri = uri?.toString()
+        uri?.let(onImportPreview)
     }
-    val busy = operation.busy || autoBackupStatus.isSaving
+    val busy = operation.busy || importPreview.busy
 
-    if (jsonPreview.busy || jsonPreview.json != null || jsonPreview.error != null) {
+    if (importPreview.busy || importPreview.summary != null || importPreview.error != null) {
         AlertDialog(
-            onDismissRequest = onCloseJsonPreview,
-            title = { Text(tr("整体 JSON", "Complete JSON")) },
+            onDismissRequest = onCloseImportPreview,
+            title = { Text(tr("导入 DeskCubby 数据", "Import DeskCubby data")) },
             text = {
                 when {
-                    jsonPreview.busy -> Row(
+                    importPreview.busy -> Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         AppLoadingIndicator(size = 20.dp, strokeWidth = 2.dp)
-                        Text(tr("正在生成完整快照…", "Building the complete snapshot…"))
+                        Text(tr("正在校验备份…", "Validating backup…"))
                     }
 
-                    jsonPreview.error != null -> Text(
-                        jsonPreview.error,
+                    importPreview.error != null -> Text(
+                        importPreview.error,
                         color = MaterialTheme.colorScheme.error,
                     )
 
                     else -> {
-                        val chunks = remember(jsonPreview.json) {
-                            jsonPreview.json.orEmpty().chunked(JSON_PREVIEW_CHUNK_CHARS)
-                        }
-                        SelectionContainer {
-                            LazyColumn(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 220.dp, max = 520.dp),
-                                verticalArrangement = Arrangement.spacedBy(0.dp),
-                            ) {
-                                itemsIndexed(chunks) { _, chunk ->
-                                    Text(
-                                        chunk,
-                                        style = MaterialTheme.typography.bodySmall.copy(
-                                            fontFamily = FontFamily.Monospace,
-                                        ),
-                                    )
-                                }
+                        val summary = importPreview.summary
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(tr("此备份将恢复：", "This backup will restore:"))
+                            if (summary != null) {
+                                Text(backupSummaryLine(summary))
+                                Text(
+                                    tr(
+                                        "导入前已通过格式、版本和完整性校验。日记、笔记、媒体和书籍原文件不会被替换；本地目录与 API Key 不会随备份恢复。",
+                                        "Format, version and integrity validation passed. Diary, note, media, and book files are not replaced; local folders and API keys are never restored from this backup.",
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
                         }
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = onCloseJsonPreview) {
-                    Text(tr("关闭", "Close"))
+                val uri = importPreview.uri?.let(Uri::parse)
+                if (uri != null && importPreview.summary != null) {
+                    TextButton(onClick = { onConfirmImport(uri) }) {
+                        Text(tr("确认恢复", "Restore"))
+                    }
                 }
-            },
-        )
-    }
-
-    operation.folderConflict?.let { conflict ->
-        AlertDialog(
-            onDismissRequest = onCancelFolderConflict,
-            title = { Text(tr("发现已有备份", "Existing backup found")) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        tr(
-                            "所选文件夹中已有 DeskCubby 备份。请选择导入它，或明确使用当前数据覆盖。",
-                            "The selected folder already contains a DeskCubby backup. Import it or explicitly replace it with current data.",
-                        ),
-                    )
-                    Text(
-                        tr("导出时间：", "Exported: ") + formatBackupTime(conflict.summary.exportedAt),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        tr(
-                            "${conflict.summary.thoughtCount} 条小巧思，${conflict.summary.categoryCount} 个小巧思分类，${conflict.summary.favoriteCount} 个浏览器收藏，${conflict.summary.dateRecordCount} 个日期记录，${conflict.summary.poetryCategoryCount} 个诗词分类，${conflict.summary.poemCount} 首诗词，${conflict.summary.vaultItemCount} 条收藏夹密文，${conflict.summary.gameStateCount} 个游戏存档，${conflict.summary.gameStatisticCount} 项游戏累计统计，${conflict.summary.usageDeviceCount} 台设备的 ${conflict.summary.usageDayCount} 天使用时间，${conflict.summary.readerProgressCount} 本书的阅读进度",
-                            "${conflict.summary.thoughtCount} thoughts, ${conflict.summary.categoryCount} thought categories, ${conflict.summary.favoriteCount} browser bookmarks, ${conflict.summary.dateRecordCount} date records, ${conflict.summary.poetryCategoryCount} poetry categories, ${conflict.summary.poemCount} poems, ${conflict.summary.vaultItemCount} encrypted Vault items, ${conflict.summary.gameStateCount} game saves, ${conflict.summary.gameStatisticCount} lifetime game metrics, ${conflict.summary.usageDayCount} screen-time days from ${conflict.summary.usageDeviceCount} devices, and reading progress for ${conflict.summary.readerProgressCount} books",
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            },
-            confirmButton = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Button(
-                        onClick = onImportExistingBackup,
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(tr("导入已有备份", "Import existing backup")) }
-                    OutlinedButton(
-                        onClick = onOverwriteExistingBackup,
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(tr("用当前数据覆盖", "Replace with current data")) }
-                    TextButton(
-                        onClick = onCancelFolderConflict,
-                        modifier = Modifier.align(Alignment.End),
-                    ) { Text(tr("取消", "Cancel")) }
-                }
-            },
-        )
-    }
-
-    pendingImportUri?.let { uri ->
-        AlertDialog(
-            onDismissRequest = { pendingImportUri = null },
-            title = { Text(tr("导入应用数据？", "Import app data?")) },
-            text = {
-                Text(
-                    tr(
-                        "导入会替换当前设置、小巧思及其分类、浏览器收藏夹、日期记录和诗词本。当前 v31（并兼容 v1–v30）还会恢复 Agent 来源授权/权限模式/模型工具能力、自定义主题、Markdown 标题字号、主页小游戏快捷入口、全局背景参数、教学总开关、桌面小卡片设计与 Vault 密文/密码校验元数据，并合并游戏与各设备使用时间；Vault 导入后保持锁定。Agent 会话/Review、日记、笔记、媒体和背景图片文件不会被修改。确定继续吗？",
-                        "Importing replaces current settings, thoughts/categories, browser bookmarks, date records, and the poetry book. Current v31 backups (with v1–v30 still accepted) also restore Agent source grants, permission mode, model tool capability, the custom theme, Markdown heading sizes, Home mini-game shortcuts, global background parameters, the tutorial master switch, desktop-widget designs, and Vault ciphertext/password-verifier metadata, then merge games and per-device screen time while leaving the Vault locked. Agent chats/Review, diary, note, media, and background-image files are unchanged. Continue?",
-                    ),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        pendingImportUri = null
-                        onImport(Uri.parse(uri))
-                    },
-                ) { Text(tr("导入并替换", "Import and replace")) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingImportUri = null }) { Text(tr("取消", "Cancel")) }
+                TextButton(onClick = onCloseImportPreview) { Text(tr("取消", "Cancel")) }
             },
         )
     }
@@ -2644,17 +2504,11 @@ private fun BackupSettingsPage(
         }
         item {
             SettingsMenuItem(
-                title = tr("云端同步", "Cloud sync"),
+                title = tr("云同步", "Cloud sync"),
                 description = if (settings.cloudSyncEnabled) {
-                    tr(
-                        "已开启；管理 WebDAV、S3、同步内容和立即同步",
-                        "Enabled; manage WebDAV, S3, content and sync now",
-                    )
+                    tr("已开启；管理服务、同步内容与立即同步", "Enabled; manage services, content and sync now")
                 } else {
-                    tr(
-                        "配置 WebDAV 或 S3 兼容服务",
-                        "Configure WebDAV or an S3-compatible service",
-                    )
+                    tr("在设备之间同步 DeskCubby 数据", "Synchronize DeskCubby data across devices")
                 },
                 icon = { Icon(Icons.Outlined.Cloud, contentDescription = null) },
                 accentColor = settings.menuAccentColor(0),
@@ -2662,98 +2516,55 @@ private fun BackupSettingsPage(
             )
         }
         item {
-            SettingsSection(tr("自动保存文件夹", "Auto-save folder")) {
+            SettingsSection(tr("备份与恢复", "Backup & restore")) {
                 Text(
                     tr(
-                        "选择一个独立文件夹后，每次应用内容发生更改都会自动保存到 dc.json。",
-                        "Choose a dedicated folder to save automatically to dc.json whenever app data changes.",
+                        "导出结构化应用数据，用于迁移或恢复。日记、笔记、媒体及书籍原文件不包含在其中。",
+                        "Export structured app data for migration or recovery. Diary, note, media, and original book files are not included.",
                     ),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                FolderButton(
-                    title = if (backupTreeUri == null) {
-                        tr("选择文件夹", "Choose folder")
-                    } else {
-                        tr("更换文件夹", "Change folder")
-                    },
-                    uri = backupTreeUri,
-                    enabled = !busy,
-                    onClick = { folderPicker.launch(backupTreeUri?.let(Uri::parse)) },
-                )
-                if (backupTreeUri != null) {
-                    Button(
-                        onClick = onSaveNow,
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Icon(Icons.Outlined.Save, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(tr("立即保存", "Save now"))
-                    }
-                    OutlinedButton(
-                        onClick = onDisableAutoBackup,
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(tr("停止自动保存", "Stop auto-save")) }
-                }
-            }
-        }
-        item {
-            SettingsSection(tr("JSON 导入与导出", "JSON import & export")) {
-                Text(
-                    tr(
-                        "可将应用内容保存为单个 JSON 文件，或从之前的备份恢复。",
-                        "Save app data as one JSON file or restore it from an earlier backup.",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text(
-                    tr(
-                        "JSON 未加密，并包含明文 AI API Key、记录内容、收藏网址和目录信息，请勿存入公开或共享目录。",
-                        "JSON is not encrypted and includes plain-text AI API keys, recorded content, bookmarked URLs and folder information. Do not store it in a public or shared folder.",
-                    ),
-                    color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Button(
-                    onClick = {
-                        exportPicker.launch(defaultBackupFileName(Clock.systemDefaultZone()))
-                    },
+                    onClick = { exportPicker.launch(defaultBackupFileName(Clock.systemDefaultZone())) },
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text(tr("导出 JSON", "Export JSON")) }
+                ) {
+                    Icon(Icons.Outlined.Backup, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("导出 DeskCubby 数据", "Export DeskCubby data"))
+                }
                 OutlinedButton(
                     onClick = { importPicker.launch(arrayOf("application/json", "text/json", "text/plain")) },
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text(tr("导入 JSON", "Import JSON")) }
-                OutlinedButton(
-                    onClick = onOpenJsonPreview,
-                    enabled = !busy && !jsonPreview.busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text(tr("查看整体 JSON", "View complete JSON")) }
+                ) {
+                    Icon(Icons.Outlined.FolderOpen, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("导入 DeskCubby 数据", "Import DeskCubby data"))
+                }
+                Text(
+                    tr(
+                        "手动备份仅在点击导出时生成 DC-YYYY-MM-DD.json；云同步使用独立的记录同步与文件同步协议，不使用这个 JSON。",
+                        "A manual backup is only created when you tap export, as DC-YYYY-MM-DD.json. Cloud sync uses separate record-sync and file-sync protocols and never uses this JSON.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         item {
             SettingsSection(tr("备份内容", "Backup contents")) {
                 Text(
                     tr(
-                        "v31 包含应用设置（含 Agent 来源授权/权限模式/模型工具能力、自定义主题、Markdown 标题字号与笔记目录引用、主页小游戏快捷入口、全局背景参数、教学总开关、音乐可视化、AI API Key、同步服务元数据、吃历滤镜与桌面小卡片设计）、小巧思及其分类、浏览器收藏、日期记录、诗词及分类、Vault 密文/盐/密码校验值、小游戏存档/最高分/特色累计统计，以及按设备区分的手机使用时间。",
-                        "v31 includes app settings (including Agent source grants, permission mode, model tool capability, the custom theme, Markdown heading sizes and the notes-folder reference, Home mini-game shortcuts, global background parameters, the tutorial master switch, music visualization, AI API keys, sync metadata, meal filters, and desktop-widget designs), thoughts/categories, browser bookmarks, date records, poems/categories, Vault ciphertext/salt/password verifier, game saves/high scores/lifetime metrics, and per-device screen time.",
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    tr(
-                        "不包含日记/笔记正文、媒体文件、阅读书架/书名/URI/封面/私有页内偏移、阅读与小游戏累计时长 JSON、Agent 会话/附件/运行/Review/Undo、全局/卡片背景图片文件、逐页教学确认、Vault 密码/派生密钥、云端凭据、健康历史、系统权限或本机随机设备 ID。跨设备导入后需重新选择目录、图片，导入书籍，填写云端凭据并重新授权。",
-                        "Diary/note content, media files, reader library/title/URI/cover/private in-page offset, reading and game-time JSON, Agent chats/attachments/runs/Review/Undo, global/widget background-image files, per-page tutorial confirmations, Vault passwords/derived keys, cloud credentials, health history, system permissions, and this device's random ID are excluded. After cross-device import, reselect folders and images, re-import books, re-enter cloud credentials, and grant permissions again.",
+                        "包含小巧思及分类、日期记录、诗词及分类、收藏、Vault 加密数据、游戏存档与统计、阅读进度、RSS 订阅，以及可跨设备迁移的设置。不包含日记/笔记/媒体/书籍原文件、缓存、权限、本地 SAF URI、云凭据或 AI API Key。",
+                        "Includes thoughts/categories, date records, poems/categories, favorites, encrypted Vault data, game saves and statistics, reading progress, RSS subscriptions, and portable settings. It excludes diary/note/media/book files, cache, permissions, local SAF URIs, cloud credentials, and AI API keys.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
         }
         item {
-            SettingsSection(tr("保存状态", "Save status")) {
+            SettingsSection(tr("操作状态", "Operation status")) {
                 if (busy) {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -2762,19 +2573,6 @@ private fun BackupSettingsPage(
                         AppLoadingIndicator(size = 20.dp, strokeWidth = 2.dp)
                         Text(tr("正在处理…", "Working…"))
                     }
-                }
-                autoBackupStatus.lastSavedAt?.let { savedAt ->
-                    Text(
-                        tr("上次自动保存：", "Last auto-save: ") + formatBackupTime(savedAt),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                autoBackupStatus.error?.takeIf(String::isNotBlank)?.let { error ->
-                    Text(
-                        tr("自动保存错误：", "Auto-save error: ") + error,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
                 }
                 operation.message?.let { message ->
                     Text(message, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
@@ -2786,19 +2584,25 @@ private fun BackupSettingsPage(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                if (!busy && autoBackupStatus.lastSavedAt == null && autoBackupStatus.error == null &&
-                    operation.message == null && operation.error == null
-                ) {
-                    Text(
-                        if (backupTreeUri == null) tr("尚未开启自动保存", "Auto-save is off")
-                        else tr("等待首次自动保存", "Waiting for the first auto-save"),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
             }
         }
     }
 }
+
+@Composable
+private fun backupSummaryLine(summary: BackupSummary): String = buildString {
+    val zh = "小巧思 ${summary.thoughtCount} 条、日期记录 ${summary.dateRecordCount} 条、" +
+        "诗词 ${summary.poemCount} 首、收藏 ${summary.favoriteCount} 条、" +
+        "Vault ${summary.vaultItemCount} 条、游戏存档 ${summary.gameStateCount} 个、" +
+        "阅读进度 ${summary.readerProgressCount} 本、Agent 对话 ${summary.agentConversationCount} 个"
+    val en = "Thoughts: ${summary.thoughtCount}, date records: ${summary.dateRecordCount}, " +
+        "poems: ${summary.poemCount}, favorites: ${summary.favoriteCount}, " +
+        "Vault items: ${summary.vaultItemCount}, game saves: ${summary.gameStateCount}, " +
+        "reading progress: ${summary.readerProgressCount} books, " +
+        "Agent conversations: ${summary.agentConversationCount}"
+    append(tr(zh, en))
+}
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -7395,12 +7199,12 @@ private fun settingsPageTutorialTarget(page: SettingsPage): PageTutorialTarget {
             "Edit the user name and bilingual greetings; {name} is replaced with the user name.",
         )
         SettingsPage.BACKUP -> tr(
-            "选择自动备份目录、手动导入导出 JSON，并查看应用数据占用。",
-            "Choose an auto-backup folder, import or export JSON, and inspect app storage use.",
+            "手动导出或恢复 DeskCubby 结构化数据，并查看应用数据占用。",
+            "Manually export or restore structured DeskCubby data and inspect app storage use.",
         )
         SettingsPage.SYNC -> tr(
-            "管理 WebDAV/S3 服务、同步内容与方向；下载的应用 JSON 必须手动确认恢复。",
-            "Manage WebDAV/S3 services, content, and direction; downloaded app JSON requires manual restore confirmation.",
+            "管理 WebDAV/S3 服务、同步内容与方向；结构化数据走记录同步，真实文件走文件同步。",
+            "Manage WebDAV/S3 services, content, and direction. Structured data uses record sync and real files use file sync.",
         )
         SettingsPage.SYNC_DETAIL -> tr(
             "填写单个云服务的非秘密元数据与凭据，保存前会执行边界校验。",

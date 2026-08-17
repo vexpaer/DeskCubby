@@ -811,16 +811,6 @@ private fun CloudSyncHomeWidget(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (!forceActions && status.pendingJsonCount > 0) {
-            Text(
-                tr(
-                    "有 ${status.pendingJsonCount} 份云端应用 JSON 待在同步设置中确认",
-                    "${status.pendingJsonCount} cloud app JSON backup(s) await confirmation in sync settings",
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.tertiary,
-            )
-        }
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),

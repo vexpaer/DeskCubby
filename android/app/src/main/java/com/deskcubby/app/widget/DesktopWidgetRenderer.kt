@@ -1190,8 +1190,7 @@ class DesktopWidgetRenderer @Inject constructor(
         } ?: localized(settings, "尚无完成记录", "No completed run yet")
         val result = status.error ?: status.message
             ?: localized(settings, "没有错误", "No error")
-        val pending = translate("待确认应用 JSON：${status.pendingJsonCount}", "Pending app JSON: ${status.pendingJsonCount}", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
-        val rows = listOf(state, lastFinished, result.safeWidgetLine(), pending)
+        val rows = listOf(state, lastFinished, result.safeWidgetLine(), "")
         views.setViewVisibility(R.id.widget_cloud_status, View.VISIBLE)
         views.setViewVisibility(R.id.widget_value, View.GONE)
         views.setViewVisibility(R.id.widget_detail, View.GONE)
