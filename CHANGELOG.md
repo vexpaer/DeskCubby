@@ -5,6 +5,7 @@
 
 | 版本 | versionCode | 应用 JSON 备份 | Room | 说明 |
 | --- | --- | --- | --- | --- |
+| [0.20.1](#android-0201) | 45 | v34 | v13 | 首次启动语言选择器真正显示；记录同步适配器注册与传输提速 |
 | [0.20.0](#android-0200) | 44 | v34 | v13 | 手动备份与云同步解耦为记录同步引擎；手动备份不再包含 API Key/URI/云凭据，新增 Agent 对话备份 |
 | [0.19.1](#android-0191) | 43 | v33 | v13 | 饮食图片落盘后立即释放拍照状态，不再等待 AI 热量估算与索引刷新 |
 | [0.19.0](#android-0190) | 42 | v33 | v13 | 桌面小组件外观一致性：圆角/直角、卡片尺度、固定应用图标大小与照片提示修复 |
@@ -36,6 +37,12 @@
 | [0.4.2](#android-042) | — | — | — | 2048 修复、健康、诗词本 |
 
 ---
+
+## Android 0.20.1
+
+- 修复首次启动语言选择页从未真正显示的问题：`FirstLaunchLanguageScreen` 以前只定义未接线，现由 `DeskCubbyRoot` 在设置加载完成后按 `language_selected=false` 门控显示；已有用户与设置页语言切换不受影响。
+- 修复记录同步的两个发布前问题：`ReaderPreferencesRecordSyncAdapter` 此前未注册进同步注册表，默认内容选择下每轮同步都会在 `READER_PREFERENCES` 中止，现已接线并在选中内容类型无适配器时先失败关闭；`RecordSyncRemoteStore` 改为每轮每个内容类型只加载一次对象清单并复用，远端清单已证明一致的载荷跳过上传，新记录以 must-not-exist 语义写入，记录下载恢复真实对象身份（存储名/版本），不再构造清单存储必然拒绝的伪造身份。
+- Android 应用升至 0.20.1（versionCode 45）；应用 JSON 备份保持 v34，Room 保持 v13，Reader 保持 schema v8。
 
 ## Android 0.20.0
 
