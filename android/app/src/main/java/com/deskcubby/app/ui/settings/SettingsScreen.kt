@@ -1248,7 +1248,6 @@ private fun SettingsMainPage(
         item {
             SettingsMenuItem(
                 title = tr("外观与语言", "Appearance & language"),
-                description = tr("界面风格、多色主题、字号、明暗模式和语言", "Style, multi-color theme, type size, dark mode and language"),
                 icon = { Icon(Icons.Outlined.Palette, contentDescription = null) },
                 accentColor = settings.menuAccentColor(0),
                 onClick = { onOpen(SettingsPage.APPEARANCE) },
@@ -1257,10 +1256,6 @@ private fun SettingsMainPage(
         item {
             SettingsMenuItem(
                 title = tr("子页面设置", "Subpage settings"),
-                description = tr(
-                    "主页、日记、浏览器、小巧思、RSS、AI 与导航页",
-                    "Home, diary, browser, thoughts, RSS, AI and the navigation page",
-                ),
                 icon = { Icon(Icons.Outlined.Tune, contentDescription = null) },
                 accentColor = settings.menuAccentColor(1),
                 onClick = { onOpen(SettingsPage.SUBPAGES) },
@@ -1269,11 +1264,6 @@ private fun SettingsMainPage(
         item {
             SettingsMenuItem(
                 title = tr("应用数据", "App data"),
-                description = if (settings.cloudSyncEnabled) {
-                    tr("云同步已开启；手动备份与恢复", "Cloud sync enabled; manual backup & restore")
-                } else {
-                    tr("云同步与手动备份、恢复", "Cloud sync and manual backup & restore")
-                },
                 icon = { Icon(Icons.Outlined.Backup, contentDescription = null) },
                 accentColor = settings.menuAccentColor(2),
                 onClick = { onOpen(SettingsPage.BACKUP) },
@@ -1282,7 +1272,6 @@ private fun SettingsMainPage(
         item {
             SettingsMenuItem(
                 title = tr("底部导航", "Bottom navigation"),
-                description = tr("显示方式、默认页、排序、名称与图标", "Display, default page, order, labels and icons"),
                 icon = { Icon(Icons.Outlined.ViewWeek, contentDescription = null) },
                 accentColor = settings.menuAccentColor(3),
                 onClick = { onOpen(SettingsPage.NAVIGATION) },
@@ -1291,7 +1280,6 @@ private fun SettingsMainPage(
         item {
             SettingsMenuItem(
                 title = tr("关于", "About"),
-                description = tr("版本、检查更新与应用显示名称", "Version, update check and app display name"),
                 icon = { Icon(Icons.Outlined.Info, contentDescription = null) },
                 accentColor = settings.menuAccentColor(4),
                 onClick = { onOpen(SettingsPage.ABOUT) },
@@ -1435,7 +1423,7 @@ private fun SubpageSettingsPage(
 @Composable
 private fun SettingsMenuItem(
     title: String,
-    description: String,
+    description: String? = null,
     icon: @Composable () -> Unit,
     accentColor: Color,
     onClick: () -> Unit,
@@ -1455,7 +1443,11 @@ private fun SettingsMenuItem(
         ) {
             ListItem(
                 headlineContent = { Text(title) },
-                supportingContent = { Text(description) },
+                supportingContent = if (description == null) {
+                    null
+                } else {
+                    { Text(description) }
+                },
                 leadingContent = icon,
                 trailingContent = {
                     Icon(Icons.Outlined.ChevronRight, contentDescription = tr("进入$title", "Open $title"))
@@ -1469,7 +1461,7 @@ private fun SettingsMenuItem(
 @Composable
 private fun OrganicSettingsMenuItem(
     title: String,
-    description: String,
+    description: String? = null,
     icon: @Composable () -> Unit,
     accentColor: Color,
     onClick: () -> Unit,
@@ -1492,12 +1484,14 @@ private fun OrganicSettingsMenuItem(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (description != null) {
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         },
         action = {
