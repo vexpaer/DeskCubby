@@ -31,8 +31,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         StepHistoryEntity::class,
         StepDayEntity::class,
         LegacyStatisticsMigrationEntity::class,
+        StructuredRecordFileEntity::class,
+        StructuredRecordOccurrenceEntity::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -52,8 +54,54 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun stepStatisticsDao(): StepStatisticsDao
     abstract fun legacyStatisticsMigrationDao(): LegacyStatisticsMigrationDao
     abstract fun aiTaskDao(): AiTaskDao
+    abstract fun structuredRecordDao(): StructuredRecordDao
 
     companion object {
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `structured_record_files` (
+                        `sourceFile` TEXT NOT NULL,
+                        `modifiedAt` INTEGER NOT NULL,
+                        `fileSize` INTEGER NOT NULL,
+                        `sha256` TEXT NOT NULL,
+                        `parsedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`sourceFile`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `structured_record_occurrences` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `journalDay` TEXT NOT NULL,
+                        `sourceFile` TEXT NOT NULL,
+                        `sourceFileModifiedAt` INTEGER NOT NULL,
+                        `fieldId` TEXT NOT NULL,
+                        `rawValue` TEXT NOT NULL,
+                        `normalizedValue` TEXT NOT NULL,
+                        `valueType` TEXT NOT NULL,
+                        `orderInFile` INTEGER NOT NULL,
+                        `parsedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_structured_record_occurrences_fieldId_journalDay` " +
+                        "ON `structured_record_occurrences` (`fieldId`, `journalDay`)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_structured_record_occurrences_sourceFile` " +
+                        "ON `structured_record_occurrences` (`sourceFile`)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_structured_record_occurrences_journalDay` " +
+                        "ON `structured_record_occurrences` (`journalDay`)",
+                )
+            }
+        }
+
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(

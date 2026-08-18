@@ -1184,3 +1184,77 @@ interface AiTaskDao {
     @Query("SELECT COUNT(*) FROM ai_task_queue WHERE state = :candidate")
     suspend fun countByState(candidate: com.deskcubby.app.data.local.AiTaskStateEntity): Int
 }
+
+/**
+ * DAO for the structured-records index. This is a derived cache only: it can always be rebuilt from
+ * Markdown + `.deskcubby`. Statistics and Agent queries read here instead of scanning Markdown.
+ */
+@Dao
+interface StructuredRecordDao {
+    @Query("SELECT * FROM structured_record_occurrences ORDER BY journalDay DESC, orderInFile ASC")
+    fun observeAll(): Flow<List<StructuredRecordOccurrenceEntity>>
+
+    @Query("SELECT * FROM structured_record_occurrences ORDER BY journalDay ASC, orderInFile ASC")
+    suspend fun getAll(): List<StructuredRecordOccurrenceEntity>
+
+    @Query(
+        "SELECT * FROM structured_record_occurrences WHERE fieldId = :fieldId " +
+            "AND journalDay >= :start AND journalDay <= :end ORDER BY journalDay ASC, orderInFile ASC",
+    )
+    suspend fun occurrencesForField(fieldId: String, start: String, end: String): List<StructuredRecordOccurrenceEntity>
+
+    @Query(
+        "SELECT * FROM structured_record_occurrences WHERE journalDay >= :start AND journalDay <= :end " +
+            "ORDER BY journalDay ASC, orderInFile ASC",
+    )
+    suspend fun occurrencesInRange(start: String, end: String): List<StructuredRecordOccurrenceEntity>
+
+    @Query("SELECT DISTINCT fieldId FROM structured_record_occurrences")
+    suspend fun allDistinctFieldIds(): List<String>
+
+    @Query("SELECT * FROM structured_record_files")
+    suspend fun allFileStates(): List<StructuredRecordFileEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertFileState(state: StructuredRecordFileEntity)
+
+    @Query("DELETE FROM structured_record_occurrences WHERE sourceFile = :sourceFile")
+    suspend fun deleteOccurrencesForFile(sourceFile: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOccurrences(items: List<StructuredRecordOccurrenceEntity>)
+
+    @Query("DELETE FROM structured_record_occurrences WHERE sourceFile NOT IN (:activeFiles)")
+    suspend fun deleteOccurrencesForMissingFiles(activeFiles: List<String>)
+
+    @Query("DELETE FROM structured_record_files WHERE sourceFile NOT IN (:activeFiles)")
+    suspend fun deleteFileStatesForMissingFiles(activeFiles: List<String>)
+
+    @Transaction
+    suspend fun replaceFileParses(
+        occurrences: List<StructuredRecordOccurrenceEntity>,
+        fileStates: List<StructuredRecordFileEntity>,
+        activeFiles: List<String>,
+    ) {
+        if (activeFiles.isEmpty()) {
+            clear()
+            return
+        }
+        insertOccurrences(occurrences)
+        fileStates.forEach { upsertFileState(it) }
+        deleteOccurrencesForMissingFiles(activeFiles)
+        deleteFileStatesForMissingFiles(activeFiles)
+    }
+
+    @Query("DELETE FROM structured_record_occurrences")
+    suspend fun clearOccurrences()
+
+    @Query("DELETE FROM structured_record_files")
+    suspend fun clearFileStates()
+
+    @Transaction
+    suspend fun clear() {
+        clearOccurrences()
+        clearFileStates()
+    }
+}

@@ -1118,13 +1118,13 @@ private fun DailyRecordsWidget(
     onSubmit: (String, String, (Boolean) -> Unit) -> Unit,
     onOpenAll: () -> Unit,
 ) {
-    WidgetCard(tr("日常记录", "Daily records"), showTitle, showBorder) {
+    WidgetCard(tr("结构化记录", "Structured records"), showTitle, showBorder) {
         if (templates.isEmpty()) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.EventNote, contentDescription = null)
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    tr("还没有日常事件", "No daily events yet"),
+                    tr("还没有结构化记录", "No structured records yet"),
                     modifier = Modifier.weight(1f),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1149,7 +1149,7 @@ private fun DailyRecordsWidget(
         TextButton(onClick = onOpenAll, modifier = Modifier.align(Alignment.End)) {
             Text(
                 if (templates.size > HOME_DAILY_EVENT_LIMIT) tr("查看全部", "View all")
-                else tr("管理日常事件", "Manage daily events"),
+                else tr("管理结构化记录", "Manage structured records"),
             )
         }
     }

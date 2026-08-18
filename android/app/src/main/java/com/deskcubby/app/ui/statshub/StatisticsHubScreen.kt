@@ -38,6 +38,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.SportsEsports
@@ -86,6 +87,7 @@ fun StatisticsHubScreen(
     viewModel: StatisticsHubViewModel,
     onOpenUsage: () -> Unit,
     onOpenHealth: () -> Unit,
+    onOpenStructuredRecords: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -94,6 +96,7 @@ fun StatisticsHubScreen(
         state = state,
         onOpenUsage = onOpenUsage,
         onOpenHealth = onOpenHealth,
+        onOpenStructuredRecords = onOpenStructuredRecords,
         modifier = modifier,
     )
 }
@@ -104,6 +107,7 @@ internal fun StatisticsHubScreen(
     state: StatisticsHubUiState,
     onOpenUsage: () -> Unit,
     onOpenHealth: () -> Unit,
+    onOpenStructuredRecords: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var pageName by rememberSaveable { mutableStateOf(StatisticsHubPage.OVERVIEW.name) }
@@ -148,6 +152,7 @@ internal fun StatisticsHubScreen(
                 onOpenDiary = { pageName = StatisticsHubPage.DIARY.name },
                 onOpenUsage = onOpenUsage,
                 onOpenHealth = onOpenHealth,
+                onOpenStructuredRecords = onOpenStructuredRecords,
                 onOpenReading = { pageName = StatisticsHubPage.READING.name },
                 onOpenGames = { pageName = StatisticsHubPage.GAMES.name },
                 onOpenAgent = { pageName = StatisticsHubPage.AGENT.name },
@@ -167,6 +172,7 @@ private fun StatisticsOverviewPage(
     onOpenDiary: () -> Unit,
     onOpenUsage: () -> Unit,
     onOpenHealth: () -> Unit,
+    onOpenStructuredRecords: () -> Unit,
     onOpenReading: () -> Unit,
     onOpenGames: () -> Unit,
     onOpenAgent: () -> Unit,
@@ -231,6 +237,20 @@ private fun StatisticsOverviewPage(
                     ),
                     chartDescription = tr("输入、输出、缓存与推理 Token", "Input, output, cached, and reasoning tokens"),
                     onClick = onOpenAgent,
+                )
+            }
+            item {
+                StatisticsHubCard(
+                    icon = Icons.Outlined.BarChart,
+                    title = tr("结构化记录", "Structured records"),
+                    primaryValue = tr("字段与指标", "Fields & metrics"),
+                    secondaryValue = tr(
+                        "强类型字段自动统计与自定义派生指标",
+                        "Typed-field auto stats and user-defined derived metrics",
+                    ),
+                    chartValues = emptyList(),
+                    chartDescription = tr("结构化记录统计", "Structured record statistics"),
+                    onClick = onOpenStructuredRecords,
                 )
             }
             item {

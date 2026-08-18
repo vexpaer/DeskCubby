@@ -384,7 +384,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         if (template == null) {
             Toast.makeText(
                 this,
-                translate("这条日常记录模板已不存在", "This daily record no longer exists", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+                translate("这条结构化记录模板已不存在", "This structured record no longer exists", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
                 Toast.LENGTH_SHORT,
             ).show()
             finish()
@@ -406,7 +406,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
             filters = arrayOf(InputFilter.LengthFilter(MAX_DAILY_RECORD_CHARS))
         }
         val dialog = AlertDialog.Builder(this)
-            .setTitle(translate("日常记录", "Daily record", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))
+            .setTitle(translate("结构化记录", "Structured record", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))
             .setView(editor)
             .setNegativeButton(translate("取消", "Cancel", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) { _, _ -> finish() }
             .setPositiveButton(translate("加入今日日记", "Add to today", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE), null)
@@ -444,7 +444,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                         throw cancelled
                     } catch (_: Exception) {
                         dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                        editor.error = translate("日常记录添加失败", "Could not add the daily record", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                        editor.error = translate("结构化记录添加失败", "Could not add the structured record", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
                     }
                 }
             }

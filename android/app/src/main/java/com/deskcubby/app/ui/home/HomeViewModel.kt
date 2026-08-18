@@ -15,6 +15,7 @@ import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.repository.DailyPoem
 import com.deskcubby.app.data.repository.DateRecordRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
+import com.deskcubby.app.data.structuredrecords.StructuredWorkspaceRepository
 import com.deskcubby.app.data.repository.PoetryRepository
 import com.deskcubby.app.data.repository.PoetryBookRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
@@ -45,6 +46,7 @@ class HomeViewModel @Inject constructor(
     private val poetryRepository: PoetryRepository,
     private val poetryBookRepository: PoetryBookRepository,
     private val diaryFileRepository: DiaryFileRepository,
+    private val structuredWorkspaceRepository: StructuredWorkspaceRepository,
     private val aiTaskQueue: AiTaskQueue,
     private val cloudSyncService: com.deskcubby.app.data.sync.AppCloudSyncService,
     private val cloudSyncUndoStore: com.deskcubby.app.data.sync.CloudSyncUndoStore,
@@ -246,7 +248,9 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             var success = false
             try {
-                diaryFileRepository.appendTextToToday(entry, settings)
+                val journalDay = runCatching { structuredWorkspaceRepository.resolveJournalDay(settings) }
+                    .getOrDefault(java.time.LocalDate.now())
+                diaryFileRepository.appendTextToToday(entry, settings, journalDay)
                 success = true
                 _message.value = if (settings.appLanguage == AppLanguage.ENGLISH) {
                     "Added to today's diary: $entry"

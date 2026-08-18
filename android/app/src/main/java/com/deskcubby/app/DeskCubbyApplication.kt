@@ -29,6 +29,7 @@ class DeskCubbyApplication : Application() {
     @Inject lateinit var usageStatisticsRepository: UsageStatisticsRepository
     @Inject lateinit var pluginRuntime: PluginRuntime
     @Inject lateinit var aiTaskQueue: AiTaskQueue
+    @Inject lateinit var structuredRecordsRepository: com.deskcubby.app.data.structuredrecords.StructuredRecordsRepository
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
@@ -82,6 +83,21 @@ class DeskCubbyApplication : Application() {
                 throw cancelled
             } catch (_: Exception) {
                 // Usage access is optional; a failed startup collection must not block the app.
+            }
+        }
+        applicationScope.launch {
+            try {
+                val stored = settingsRepository.settings.first()
+                if (stored.diaryTreeUri != null) {
+                    // Keep the structured-records index fresh and settle any complete past
+                    // sleep/wake estimates into Markdown. Failures are non-fatal at startup.
+                    structuredRecordsRepository.refreshIncremental(stored)
+                    structuredRecordsRepository.settleAutomaticSleepWake(stored)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The index is a derived cache; a failed refresh simply retries next launch.
             }
         }
     }

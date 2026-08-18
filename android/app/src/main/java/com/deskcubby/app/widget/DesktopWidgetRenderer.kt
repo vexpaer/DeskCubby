@@ -595,7 +595,7 @@ class DesktopWidgetRenderer @Inject constructor(
                 route = NavItemId.THOUGHT.route,
             )
             "daily_records" -> DesktopWidgetText(
-                localized(settings, "日常记录", "Daily records"),
+                localized(settings, "结构化记录", "Structured records"),
                 translate("${settings.dailyEventTemplates.size} 个模板", "${settings.dailyEventTemplates.size} templates", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
                 route = Routes.DAILY_RECORDS_TODAY,
             )
@@ -1100,7 +1100,7 @@ class DesktopWidgetRenderer @Inject constructor(
                     )
                 }
                 primary = ExpandedWidgetRow(
-                    localized(settings, "管理日常记录", "Manage daily records"),
+                    localized(settings, "管理结构化记录", "Manage structured records"),
                     deskCubbyPendingIntent(appWidgetId, Routes.DAILY_RECORDS_TODAY),
                 )
             }

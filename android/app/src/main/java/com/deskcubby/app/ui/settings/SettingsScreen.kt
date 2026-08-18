@@ -2,6 +2,7 @@ package com.deskcubby.app.ui.settings
 
 import android.Manifest
 import android.net.Uri
+import android.provider.Settings
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -263,6 +264,9 @@ private enum class SettingsPage {
     SYNC,
     SYNC_DETAIL,
     DIARY,
+    DIARY_MEAL,
+    STRUCTURED_RECORDS,
+    STRUCTURED_FIELDS,
     BLOG,
     THOUGHT,
     VAULT,
@@ -493,7 +497,10 @@ fun SettingsScreen(
     val cloudSyncUndoAvailable by viewModel.cloudSyncUndoAvailable.collectAsStateWithLifecycle()
     val appDataUsage by viewModel.appDataUsage.collectAsStateWithLifecycle()
     val settingsError by viewModel.settingsError.collectAsStateWithLifecycle()
+    val structuredDayBoundary by viewModel.structuredDayBoundary.collectAsStateWithLifecycle()
+    val structuredFields by viewModel.structuredFields.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
     val rootPage = remember(startPage) { startPage.toSettingsPage() }
     var page by rememberSaveable(startPage) { mutableStateOf(rootPage) }
     val saveCoordinator = remember { SettingsSaveCoordinator() }
@@ -510,6 +517,9 @@ fun SettingsScreen(
             !appDataUsage.loading
         ) {
             viewModel.refreshAppDataUsage()
+        }
+        if (page == SettingsPage.STRUCTURED_RECORDS || page == SettingsPage.STRUCTURED_FIELDS) {
+            viewModel.refreshStructuredWorkspace()
         }
     }
     LaunchedEffect(tutorialTarget) {
@@ -795,6 +805,8 @@ fun SettingsScreen(
                 settings = settings,
                 contentPadding = inner,
                 saveCoordinator = saveCoordinator,
+                onOpenMealCalendar = { page = SettingsPage.DIARY_MEAL },
+                onOpenStructuredRecords = { page = SettingsPage.STRUCTURED_RECORDS },
                 onSave = { draft ->
                     if (draft.diaryTreeUri != null && draft.diaryTreeUri != settings.diaryTreeUri) {
                         viewModel.persistFolder(Uri.parse(draft.diaryTreeUri), diary = true)
@@ -824,6 +836,59 @@ fun SettingsScreen(
                     )
                     completeSave(SettingsPage.SUBPAGES)
                 },
+            )
+
+            SettingsPage.DIARY_MEAL -> MealSettingsPage(
+                settings = settings,
+                contentPadding = inner,
+                saveCoordinator = saveCoordinator,
+                onSave = { imageMaxHeight, showCaptions, wrapEnabled, photosPerRow ->
+                    viewModel.setMealCalendarImageMaxHeight(imageMaxHeight)
+                    viewModel.setMealCalendarShowCaptions(showCaptions)
+                    viewModel.setMealCalendarWrap(
+                        enabled = wrapEnabled,
+                        photosPerRow = photosPerRow,
+                    )
+                    completeSave(SettingsPage.DIARY)
+                },
+            )
+
+            SettingsPage.STRUCTURED_RECORDS -> StructuredRecordsSettingsPage(
+                settings = settings,
+                contentPadding = inner,
+                saveCoordinator = saveCoordinator,
+                dayBoundary = structuredDayBoundary,
+                autoRecord = settings.structuredAutoRecordSleepWake,
+                onAutoRecordChange = { enabled ->
+                    viewModel.refreshStructuredWorkspace()
+                    viewModel.setStructuredAutoRecordSleepWake(enabled)
+                    if (enabled) {
+                        openUsageAccessSettings(context)
+                    }
+                },
+                onDayBoundarySave = { value ->
+                    viewModel.setStructuredDayBoundary(value)
+                },
+                onOpenFields = { page = SettingsPage.STRUCTURED_FIELDS },
+                onAddExamples = { viewModel.seedStructuredExamples() },
+                onRebuildIndex = { viewModel.rebuildStructuredIndex() },
+                onBackToDiary = { page = SettingsPage.DIARY },
+            )
+
+            SettingsPage.STRUCTURED_FIELDS -> StructuredFieldManagementSettingsPage(
+                settings = settings,
+                contentPadding = inner,
+                fields = structuredFields,
+                onAddField = { name, type, unit, options ->
+                    viewModel.addStructuredField(
+                        name = name,
+                        type = type,
+                        unit = unit,
+                        options = options,
+                        onDone = { viewModel.refreshStructuredWorkspace() },
+                    )
+                },
+                onArchiveField = { id -> viewModel.archiveStructuredField(id) },
             )
 
             SettingsPage.BLOG -> BlogSettingsPage(
@@ -4359,6 +4424,8 @@ private fun DiarySettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
     saveCoordinator: SettingsSaveCoordinator,
+    onOpenMealCalendar: () -> Unit,
+    onOpenStructuredRecords: () -> Unit,
     onSave: (DiarySettingsDraft) -> Unit,
 ) {
     var diaryTreeUri by remember(settings.diaryTreeUri) { mutableStateOf(settings.diaryTreeUri) }
@@ -4497,6 +4564,20 @@ private fun DiarySettingsPage(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        item {
+            SettingsSection(tr("业务子页", "Business subpages")) {
+                SettingsSubpageRow(
+                    title = tr("吃历", "Meal calendar"),
+                    description = tr("餐食日历显示与相关设置", "Meal calendar display and related settings"),
+                    onClick = onOpenMealCalendar,
+                )
+                SettingsSubpageRow(
+                    title = tr("结构化记录", "Structured records"),
+                    description = tr("日界线、自动记录与字段管理", "Day boundary, auto-record, and field management"),
+                    onClick = onOpenStructuredRecords,
+                )
+            }
+        }
         item {
             SettingsSection(tr("本地文件", "Local files")) {
                 FolderButton(
@@ -4858,6 +4939,476 @@ private fun AiConfigurationPicker(
             ) }
         }
     }
+}
+
+private fun openUsageAccessSettings(context: Context) {
+    val packageIntent = Intent(
+        Settings.ACTION_USAGE_ACCESS_SETTINGS,
+        Uri.parse("package:${context.packageName}"),
+    )
+    runCatching { context.startActivity(packageIntent) }
+        .recoverCatching { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
+}
+
+@Composable
+private fun SettingsSubpageRow(title: String, description: String, onClick: () -> Unit) {    GlassPanel(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        cornerRadius = 18.dp,
+        padding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun MealSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    onSave: (imageMaxHeight: Int, showCaptions: Boolean, wrapEnabled: Boolean, photosPerRow: MealPhotosPerRow) -> Unit,
+) {
+    var imageMaxHeight by rememberSaveable(settings.mealCalendarImageMaxHeightDp) {
+        mutableIntStateOf(settings.mealCalendarImageMaxHeightDp)
+    }
+    var showCaptions by rememberSaveable(settings.mealCalendarShowCaptions) {
+        mutableStateOf(settings.mealCalendarShowCaptions)
+    }
+    var wrapEnabled by rememberSaveable(settings.mealCalendarWrapEnabled) {
+        mutableStateOf(settings.mealCalendarWrapEnabled)
+    }
+    var photosPerRow by rememberSaveable(settings.mealCalendarPhotosPerRow) {
+        mutableStateOf(settings.mealCalendarPhotosPerRow)
+    }
+    val dirty = imageMaxHeight != settings.mealCalendarImageMaxHeightDp ||
+        showCaptions != settings.mealCalendarShowCaptions ||
+        wrapEnabled != settings.mealCalendarWrapEnabled ||
+        photosPerRow != settings.mealCalendarPhotosPerRow
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = dirty,
+        enabled = true,
+        onSave = {
+            onSave(imageMaxHeight, showCaptions, wrapEnabled, photosPerRow)
+        },
+    )
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            SettingsSection(tr("吃历显示", "Meal calendar display")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(tr("图片高度上限", "Maximum image height"))
+                    Text("$imageMaxHeight dp", color = MaterialTheme.colorScheme.primary)
+                }
+                Slider(
+                    value = imageMaxHeight.toFloat(),
+                    onValueChange = {
+                        imageMaxHeight = (it / 8f).roundToInt().times(8).coerceIn(80, 320)
+                    },
+                    valueRange = 80f..320f,
+                    steps = 29,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("显示餐别文字", "Show meal captions"))
+                        Text(
+                            tr("关闭后只显示图片，仍按早餐、午餐、晚餐的顺序排列。", "When off, only photos are shown; meal order stays fixed."),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = showCaptions, onCheckedChange = { showCaptions = it })
+                }
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("图片自动换行", "Wrap photos into rows"))
+                        Text(
+                            tr(
+                                "关闭时单行横向滑动，开启后按每行数量换行显示。",
+                                "Off keeps one scrollable row; on wraps photos into fixed rows.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = wrapEnabled, onCheckedChange = { wrapEnabled = it })
+                }
+                if (wrapEnabled) {
+                    Text(tr("每行图片数量", "Photos per row"), style = MaterialTheme.typography.labelLarge)
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        MealPhotosPerRow.entries.forEachIndexed { index, mode ->
+                            SegmentedButton(
+                                selected = photosPerRow == mode,
+                                onClick = { photosPerRow = mode },
+                                shape = SegmentedButtonDefaults.itemShape(index = index, count = MealPhotosPerRow.entries.size),
+                            ) {
+                                Text(
+                                    when (mode) {
+                                        MealPhotosPerRow.TWO -> tr("每行 2 张", "2 per row")
+                                        MealPhotosPerRow.THREE -> tr("每行 3 张", "3 per row")
+                                        MealPhotosPerRow.SMART -> tr("智能", "Smart")
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    tr(
+                        "热量估算、图片压缩与吃历滤镜仍保留在「日记与媒体」页面。",
+                        "Energy estimation, image compression, and meal photo filter stay on the Diary & media page.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StructuredRecordsSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    saveCoordinator: SettingsSaveCoordinator,
+    dayBoundary: String,
+    autoRecord: Boolean,
+    onAutoRecordChange: (Boolean) -> Unit,
+    onDayBoundarySave: (String) -> Unit,
+    onOpenFields: () -> Unit,
+    onAddExamples: () -> Unit,
+    onRebuildIndex: () -> Unit,
+    onBackToDiary: () -> Unit,
+) {
+    var boundaryDraft by rememberSaveable(dayBoundary) { mutableStateOf(dayBoundary) }
+    val boundaryDirty = boundaryDraft.trim() != dayBoundary
+    RegisterSettingsSave(
+        coordinator = saveCoordinator,
+        dirty = boundaryDirty,
+        enabled = boundaryDraft.trim().isNotEmpty(),
+        onSave = {
+            onDayBoundarySave(boundaryDraft.trim())
+        },
+    )
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            SettingsSection(tr("日界线", "Day boundary")) {
+                Text(
+                    tr(
+                        "一天从此刻开始切换。默认 05:00；凌晨 5 点前「进入今日日记」仍会打开前一个日记日。",
+                        "A journal day starts at this time. Default 05:00; before it, “Open today's diary” still opens the previous journal day.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = boundaryDraft,
+                    onValueChange = { boundaryDraft = it.take(5) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(tr("一天开始时间 HH:mm", "Day start HH:mm")) },
+                    placeholder = { Text("05:00") },
+                    singleLine = true,
+                )
+                Text(
+                    tr("修改从下一个日记日开始生效。", "Changes take effect from the next journal day."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            SettingsSection(tr("自动记录睡觉/起床时间", "Auto-record sleep & wake")) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("自动记录睡觉/起床时间", "Auto-record sleep & wake"))
+                        Text(
+                            tr(
+                                "根据手机每天第一次/最后一次使用、解锁与锁屏时间自动估算，不使用 Health Connect。",
+                                "Estimated from the phone's first/last use, unlock and lock times. Health Connect is not used.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = autoRecord, onCheckedChange = onAutoRecordChange)
+                }
+                Text(
+                    tr(
+                        "该开关是设备本地设置，只在本机启用；最终估算值会在当天结束后写入日记并随 Markdown 同步。关闭只停止后续采集，不删除历史记录。",
+                        "This switch is device-local. Final estimates are written to the diary after the day settles and travel with Markdown. Turning it off stops future collection without deleting history.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            SettingsSection(tr("字段与模板", "Fields & templates")) {
+                SettingsSubpageRow(
+                    title = tr("字段管理", "Field management"),
+                    description = tr("新建或归档 word / number / type / time / duration 字段", "Create or archive word / number / type / time / duration fields"),
+                    onClick = onOpenFields,
+                )
+                SettingsSubpageRow(
+                    title = tr("示例记录", "Example records"),
+                    description = tr("添加五种类型的起步示例", "Add the five default starter examples"),
+                    onClick = onAddExamples,
+                )
+            }
+        }
+        item {
+            SettingsSection(tr("索引", "Index")) {
+                SettingsSubpageRow(
+                    title = tr("重建结构化记录索引", "Rebuild structured records index"),
+                    description = tr("从 Markdown 完全重建本地索引（可安全反复执行）", "Rebuild the local index from Markdown (safe to repeat)"),
+                    onClick = onRebuildIndex,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StructuredFieldManagementSettingsPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+    fields: List<com.deskcubby.app.data.structuredrecords.StructuredField>,
+    onAddField: (name: String, type: com.deskcubby.app.data.structuredrecords.StructuredFieldType, unit: String?, options: List<String>) -> Unit,
+    onArchiveField: (id: String) -> Unit,
+) {
+    var showNewField by rememberSaveable { mutableStateOf(false) }
+    var archiveCandidate by remember { mutableStateOf<String?>(null) }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Button(onClick = { showNewField = true }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Outlined.Add, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(tr("新建字段", "New field"))
+            }
+        }
+        item {
+            Text(
+                tr(
+                    "字段使用稳定的 ID 作为身份，重命名不会破坏历史统计；删除字段默认归档，旧记录仍可解释。",
+                    "Fields are identified by stable IDs; renaming never breaks history. Deleting a field archives it so old records stay interpretable.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        items(fields, key = com.deskcubby.app.data.structuredrecords.StructuredField::id) { field ->
+            GlassPanel(
+                modifier = Modifier.fillMaxWidth(),
+                cornerRadius = 18.dp,
+                padding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(field.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            if (field.archived) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    tr("已归档", "Archived"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        Text(
+                            buildString {
+                                append(
+                                    when (field.type) {
+                                        com.deskcubby.app.data.structuredrecords.StructuredFieldType.WORD -> tr("文字", "Text")
+                                        com.deskcubby.app.data.structuredrecords.StructuredFieldType.NUMBER -> tr("数字", "Number")
+                                        com.deskcubby.app.data.structuredrecords.StructuredFieldType.TYPE -> tr("分类", "Category")
+                                        com.deskcubby.app.data.structuredrecords.StructuredFieldType.TIME -> tr("时间", "Time")
+                                        com.deskcubby.app.data.structuredrecords.StructuredFieldType.DURATION -> tr("时长", "Duration")
+                                    },
+                                )
+                                if (!field.unit.isNullOrBlank()) append(" · ${field.unit}")
+                                append(" · ").append(field.id)
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (!field.archived) {
+                        IconButton(onClick = { archiveCandidate = field.id }) {
+                            Icon(Icons.Outlined.Archive, tr("归档 ${field.name}", "Archive ${field.name}"))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showNewField) {
+        NewStructuredFieldDialog(
+            onDismiss = { showNewField = false },
+            onConfirm = { name, type, unit, options ->
+                onAddField(name, type, unit, options)
+                showNewField = false
+            },
+        )
+    }
+
+    archiveCandidate?.let { fieldId ->
+        val field = fields.firstOrNull { it.id == fieldId }
+        AlertDialog(
+            onDismissRequest = { archiveCandidate = null },
+            title = { Text(tr("归档字段？", "Archive field?")) },
+            text = { Text(tr("归档“${field?.name ?: fieldId}”后不再出现在新建列表中，历史记录仍可读。", "Archiving “${field?.name ?: fieldId}” removes it from new-record lists; history stays readable.")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    onArchiveField(fieldId)
+                    archiveCandidate = null
+                }) { Text(tr("归档", "Archive")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { archiveCandidate = null }) { Text(tr("取消", "Cancel")) }
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NewStructuredFieldDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (name: String, type: com.deskcubby.app.data.structuredrecords.StructuredFieldType, unit: String?, options: List<String>) -> Unit,
+) {
+    var name by rememberSaveable { mutableStateOf("") }
+    var unit by rememberSaveable { mutableStateOf("") }
+    var options by rememberSaveable { mutableStateOf("") }
+    var selectedType by rememberSaveable {
+        mutableStateOf(com.deskcubby.app.data.structuredrecords.StructuredFieldType.WORD)
+    }
+    var typeMenuOpen by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("新建字段", "New field")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(60) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(tr("字段名称", "Field name")) },
+                    placeholder = { Text(tr("例如：体重", "e.g. Weight")) },
+                    singleLine = true,
+                )
+                ExposedDropdownMenuBox(expanded = typeMenuOpen, onExpandedChange = { typeMenuOpen = it }) {
+                    OutlinedTextField(
+                        value = when (selectedType) {
+                            com.deskcubby.app.data.structuredrecords.StructuredFieldType.WORD -> tr("文字", "Text")
+                            com.deskcubby.app.data.structuredrecords.StructuredFieldType.NUMBER -> tr("数字", "Number")
+                            com.deskcubby.app.data.structuredrecords.StructuredFieldType.TYPE -> tr("分类", "Category")
+                            com.deskcubby.app.data.structuredrecords.StructuredFieldType.TIME -> tr("时间", "Time")
+                            com.deskcubby.app.data.structuredrecords.StructuredFieldType.DURATION -> tr("时长", "Duration")
+                        },
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier.fillMaxWidth().menuAnchor(),
+                        label = { Text(tr("字段类型", "Field type")) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = typeMenuOpen) },
+                    )
+                    ExposedDropdownMenu(expanded = typeMenuOpen, onDismissRequest = { typeMenuOpen = false }) {
+                        com.deskcubby.app.data.structuredrecords.StructuredFieldType.entries.forEach { type ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        when (type) {
+                                            com.deskcubby.app.data.structuredrecords.StructuredFieldType.WORD -> tr("文字", "Text")
+                                            com.deskcubby.app.data.structuredrecords.StructuredFieldType.NUMBER -> tr("数字", "Number")
+                                            com.deskcubby.app.data.structuredrecords.StructuredFieldType.TYPE -> tr("分类", "Category")
+                                            com.deskcubby.app.data.structuredrecords.StructuredFieldType.TIME -> tr("时间", "Time")
+                                            com.deskcubby.app.data.structuredrecords.StructuredFieldType.DURATION -> tr("时长", "Duration")
+                                        },
+                                    )
+                                },
+                                onClick = {
+                                    selectedType = type
+                                    typeMenuOpen = false
+                                },
+                            )
+                        }
+                    }
+                }
+                if (selectedType == com.deskcubby.app.data.structuredrecords.StructuredFieldType.NUMBER) {
+                    OutlinedTextField(
+                        value = unit,
+                        onValueChange = { unit = it.take(20) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(tr("单位（可选）", "Unit (optional)")) },
+                        placeholder = { Text(tr("例如：kg", "e.g. kg")) },
+                        singleLine = true,
+                    )
+                }
+                if (selectedType == com.deskcubby.app.data.structuredrecords.StructuredFieldType.TYPE) {
+                    OutlinedTextField(
+                        value = options,
+                        onValueChange = { options = it.take(200) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(tr("选项（逗号分隔）", "Options (comma separated)")) },
+                        placeholder = { Text(tr("黑色, 白色, 蓝色", "Black, White, Blue")) },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = name.isNotBlank(),
+                onClick = {
+                    onConfirm(
+                        name.trim(),
+                        selectedType,
+                        unit.trim().takeIf(String::isNotEmpty),
+                        options.split(Regex("[,，]")).map(String::trim).filter(String::isNotEmpty),
+                    )
+                },
+            ) { Text(tr("保存", "Save")) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) } },
+    )
 }
 
 @Composable
@@ -7328,6 +7879,18 @@ private fun settingsPageTutorialTarget(page: SettingsPage): PageTutorialTarget {
             "配置 SAF 日记/媒体目录、命名、图片、吃历和热量估算。",
             "Configure SAF diary/media folders, naming, images, the meal calendar, and energy estimation.",
         )
+        SettingsPage.DIARY_MEAL -> tr(
+            "调整吃历的图片高度、餐别文字、换行与每行数量。",
+            "Adjust meal-calendar photo height, captions, wrapping, and photos per row.",
+        )
+        SettingsPage.STRUCTURED_RECORDS -> tr(
+            "设置日界线、自动估算睡觉/起床时间、字段管理与索引重建。",
+            "Set the day boundary, auto sleep/wake estimation, field management, and index rebuild.",
+        )
+        SettingsPage.STRUCTURED_FIELDS -> tr(
+            "新建或归档结构化字段；字段 ID 稳定，改名不影响历史。",
+            "Create or archive structured fields; IDs are stable and renames never break history.",
+        )
         SettingsPage.BLOG -> tr(
             "设置应用内浏览器主页、明暗主题和电脑网页模式。",
             "Set the in-app browser home page, theme, and desktop-site mode.",
@@ -7423,6 +7986,9 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.SYNC -> tr("云端同步", "Cloud sync")
     SettingsPage.SYNC_DETAIL -> tr("同步配置", "Sync configuration")
     SettingsPage.DIARY -> tr("日记与媒体", "Diary & media")
+    SettingsPage.DIARY_MEAL -> tr("吃历", "Meal calendar")
+    SettingsPage.STRUCTURED_RECORDS -> tr("结构化记录", "Structured records")
+    SettingsPage.STRUCTURED_FIELDS -> tr("字段管理", "Field management")
     SettingsPage.BLOG -> tr("浏览器", "Browser")
     SettingsPage.THOUGHT -> tr("小巧思", "Thoughts")
     SettingsPage.VAULT -> tr("收藏夹", "Vault")
@@ -7441,6 +8007,9 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
 
 private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
     SettingsPage.HOME_GREETING -> SettingsPage.HOME
+    SettingsPage.DIARY_MEAL -> SettingsPage.DIARY
+    SettingsPage.STRUCTURED_RECORDS -> SettingsPage.DIARY
+    SettingsPage.STRUCTURED_FIELDS -> SettingsPage.STRUCTURED_RECORDS
 
     SettingsPage.HOME,
     SettingsPage.DIARY,

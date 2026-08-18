@@ -165,6 +165,14 @@ data class DefaultDiaryFolderUris(
     val mediaTreeUri: Uri,
 )
 
+/** Lightweight metadata for a diary Markdown file, used for incremental index checks. */
+data class DiaryFileMeta(
+    val uri: String,
+    val name: String,
+    val lastModified: Long,
+    val size: Long,
+)
+
 /**
  * Keeps a child document inside the parent tree URI that granted access.
  *
@@ -214,8 +222,56 @@ class DiaryFileRepository @Inject constructor(
     private val mealCalendarCacheMutex = Mutex()
     private val mealCalendarContentRevision = AtomicLong(0L)
     private val dirtyMealDiaryRevisions = ConcurrentHashMap<String, AtomicLong>()
+    private val workspaceMutex = Mutex()
 
     fun currentMealCalendarContentRevision(): Long = mealCalendarContentRevision.get()
+
+    /**
+     * Returns the `.deskcubby` workspace directory inside the diary root, creating it on the first
+     * use. This directory holds the structured-records workspace semantics (settings, fields,
+     * records templates and statistics) that must travel with the Markdown across devices. It is a
+     * child of the diary tree root so it stays inside the user's chosen journal folder.
+     */
+    suspend fun ensureWorkspaceDirectory(settings: AppSettings): Uri =
+        workspaceMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val root = settings.diaryTreeUri?.let(::tree) ?: error("请先在设置中选择日记目录")
+                val dir = (root.findFile(WORKSPACE_DIRECTORY)?.takeIf { it.isDirectory }
+                    ?: root.createDirectory(WORKSPACE_DIRECTORY)
+                    ?: error("无法创建 .deskcubby 目录"))
+                dir.uri
+            }
+        }
+
+    /** Reads a file from the `.deskcubby` workspace directory, or null when it does not exist. */
+    suspend fun readWorkspaceFile(settings: AppSettings, fileName: String): String? =
+        workspaceMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext null
+                val dir = root.findFile(WORKSPACE_DIRECTORY)?.takeIf { it.isDirectory } ?: return@withContext null
+                val file = dir.findFile(fileName) ?: return@withContext null
+                runCatching { readText(file.uri) }.getOrNull()
+            }
+        }
+
+    /**
+     * Writes a file into the `.deskcubby` workspace directory, verifying by read-back so a
+     * partial or failed write is never silently accepted as a durable config change.
+     */
+    suspend fun writeWorkspaceFile(settings: AppSettings, fileName: String, content: String) =
+        workspaceMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val root = settings.diaryTreeUri?.let(::tree) ?: error("请先在设置中选择日记目录")
+                val dir = (root.findFile(WORKSPACE_DIRECTORY)?.takeIf { it.isDirectory }
+                    ?: root.createDirectory(WORKSPACE_DIRECTORY)
+                    ?: error("无法创建 .deskcubby 目录"))
+                val file = dir.findFile(fileName)
+                    ?: dir.createFile("application/json", fileName)
+                    ?: error("无法在所选目录中创建配置文件")
+                writeText(file.uri, content)
+                check(readText(file.uri) == content) { "配置文件写入校验失败" }
+            }
+        }
 
     /**
      * Creates the conventional folder layout below a user-confirmed SAF tree and returns scoped
@@ -347,6 +403,27 @@ class DiaryFileRepository @Inject constructor(
         }
         mealCalendarContentRevision.incrementAndGet()
     }
+
+    /**
+     * Lists diary Markdown file metadata without reading file contents. Used by the structured-records
+     * index for cheap incremental change detection (mtime/size) before deciding which files to parse.
+     */
+    suspend fun listDiaryFileMeta(settings: AppSettings): List<DiaryFileMeta> =
+        withContext(Dispatchers.IO) {
+            val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext emptyList()
+            root.listFiles()
+                .asSequence()
+                .filter { it.isFile && it.name?.endsWith(".md", ignoreCase = true) == true }
+                .map { document ->
+                    DiaryFileMeta(
+                        uri = document.uri.toString(),
+                        name = document.name.orEmpty(),
+                        lastModified = document.lastModified(),
+                        size = document.length(),
+                    )
+                }
+                .toList()
+        }
 
     suspend fun scan(settings: AppSettings): List<DiaryDocument> = withContext(Dispatchers.IO) {
         val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext emptyList()
@@ -2088,6 +2165,44 @@ class DiaryFileRepository @Inject constructor(
         }
     }.also { document -> recordMealCalendarContentChange(Uri.parse(document.uri)) }
 
+    /**
+     * Opens (or creates) the journal file for [date] and applies [transform] to its content, with
+     * the same conflict detection and rollback guarantees as [appendTextToToday]. Used by the
+     * structured-records layer to update existing field markers in place without rewriting any other
+     * Markdown. When the transform returns the identical content, no write happens.
+     */
+    suspend fun transformDiaryForDate(
+        settings: AppSettings,
+        date: LocalDate,
+        transform: (content: String) -> String,
+    ): DiaryEditorDocument = writeMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val document = enterTodayUnlocked(settings, date)
+            val updated = transform(document.content)
+            if (updated == document.content) return@withContext document
+            val uri = Uri.parse(document.uri)
+            val immediatelyBeforeWrite = load(uri)
+            if (immediatelyBeforeWrite.sha256 != document.sha256) {
+                throw ExternalFileConflictException(immediatelyBeforeWrite)
+            }
+            try {
+                writeText(uri, updated)
+                check(readText(uri) == updated) { "日记更新后的校验失败" }
+                load(uri)
+            } catch (error: Exception) {
+                val committed = runCatching { readText(uri) == updated }.getOrDefault(false)
+                if (committed && error !is CancellationException) return@withContext load(uri)
+                withContext(NonCancellable + Dispatchers.IO) {
+                    runCatching {
+                        writeText(uri, document.content)
+                        check(readText(uri) == document.content) { "日记原文恢复校验失败" }
+                    }.exceptionOrNull()?.let(error::addSuppressed)
+                }
+                throw error
+            }
+        }
+    }.also { document -> recordMealCalendarContentChange(Uri.parse(document.uri)) }
+
     suspend fun resolveMedia(markdownTarget: String, settings: AppSettings): Uri? =
         resolveDiaryPreviewMedia(listOf(markdownTarget), settings)[markdownTarget]?.uri
 
@@ -2774,7 +2889,7 @@ class DiaryFileRepository @Inject constructor(
         )
     }.getOrNull()?.takeIf(String::isNotBlank)
 
-    private fun extractDate(
+    fun extractDate(
         name: String,
         modified: Long,
         fileNamePattern: String? = null,
@@ -2817,6 +2932,7 @@ class DiaryFileRepository @Inject constructor(
         private const val MEDIA_META_PENDING_FILE_NAME = "dc-media.pending.json"
         private const val MEDIA_META_PREVIOUS_FILE_NAME = "dc-media.previous.json"
         private const val MEDIA_META_MAX_BYTES = 2 * 1024 * 1024
+        private const val WORKSPACE_DIRECTORY = ".deskcubby"
         private const val MEAL_EXPORT_CACHE_PREFIX = "meal-calendar-"
         private const val MEAL_EXPORT_CACHE_SUFFIX = ".png"
         private const val MEAL_EXPORT_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L

@@ -18,10 +18,16 @@ import com.deskcubby.plugin.api.core.api.FileMutationResult
 import com.deskcubby.plugin.api.core.api.FileQuery
 import com.deskcubby.plugin.api.core.api.FileSearchQuery
 import com.deskcubby.plugin.api.core.api.AIToolCall
+import com.deskcubby.app.data.preferences.SettingsRepository
+import com.deskcubby.app.data.structuredrecords.FieldSelector
+import com.deskcubby.app.data.structuredrecords.StructuredRecordsRepository
+import com.deskcubby.app.data.structuredrecords.StructuredStatisticsRepository
+import com.deskcubby.app.data.structuredrecords.StructuredWorkspaceRepository
 import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -31,6 +37,10 @@ class BuiltInAgentToolContributor @Inject constructor(
     private val fileApi: FileAPI,
     private val appApi: AppAPI,
     private val webService: AgentWebService,
+    private val settingsRepository: SettingsRepository,
+    private val structuredWorkspaceRepository: StructuredWorkspaceRepository,
+    private val structuredRecordsRepository: StructuredRecordsRepository,
+    private val structuredStatisticsRepository: StructuredStatisticsRepository,
 ) : AgentToolContributor {
     override fun tools(): List<AgentTool> = listOf(
         listSourcesTool(),
@@ -51,6 +61,11 @@ class BuiltInAgentToolContributor @Inject constructor(
         appSettingsTool(),
         appStateTool(),
         AppSettingMutationTool(appApi),
+        listStructuredFieldsTool(),
+        getStructuredFieldValuesTool(),
+        getStructuredFieldStatsTool(),
+        listStructuredMetricsTool(),
+        getStructuredMetricTool(),
     )
 
     private fun listSourcesTool() = FunctionalAgentTool(
@@ -421,6 +436,225 @@ class BuiltInAgentToolContributor @Inject constructor(
                 jsonResult("state" to JSONObject(appApi.state())),
                 if (scope.english) "Read app state" else "已读取应用状态",
                 "DeskCubby",
+            )
+        },
+    )
+
+    private fun listStructuredFieldsTool() = FunctionalAgentTool(
+        readDefinition(
+            "list_structured_fields",
+            "List the structured record field definitions of the DeskCubby workspace, with type, source, unit, and options.",
+            emptySchema(),
+        ),
+        prepareBlock = { call, scope ->
+            AgentArgs(call.arguments).only()
+            scope.requireSource("statistics")
+            AgentToolPreparation(call, "structured records", "List structured fields", "")
+        },
+        executeBlock = { _, scope ->
+            val settings = settingsRepository.settings.first()
+            val fields = structuredWorkspaceRepository.loadFields(settings)
+            AgentToolOutcome(
+                jsonResult(
+                    "fields" to JSONArray(fields.map { field ->
+                        JSONObject()
+                            .put("id", field.id)
+                            .put("name", field.name)
+                            .put("type", field.type.wireValue)
+                            .put("source", field.source.wireValue)
+                            .put("unit", field.unit)
+                            .put("options", JSONArray(field.options))
+                            .put("archived", field.archived)
+                    }),
+                ),
+                if (scope.english) "List structured record fields" else "列出结构化记录字段",
+                "structured records",
+            )
+        },
+    )
+
+    private fun getStructuredFieldValuesTool() = FunctionalAgentTool(
+        readDefinition(
+            "get_structured_field_values",
+            "Read the recorded values for one structured field, one value per journal day.",
+            objectSchema(
+                linkedMapOf(
+                    "fieldId" to stringProperty("Structured field id"),
+                    "start" to stringProperty("Inclusive ISO date YYYY-MM-DD"),
+                    "end" to stringProperty("Inclusive ISO date YYYY-MM-DD"),
+                ),
+                listOf("fieldId"),
+            ),
+        ),
+        prepareBlock = { call, scope ->
+            val args = AgentArgs(call.arguments).only("fieldId", "start", "end")
+            scope.requireSource("statistics")
+            val token = JSONObject()
+                .put("fieldId", args.string("fieldId", MAX_ID_CHARS))
+                .put("start", args.optionalString("start", 10))
+                .put("end", args.optionalString("end", 10))
+            AgentToolPreparation(call, "structured records", "Read field values", token.toString(), executionToken = token.toString())
+        },
+        executeBlock = { preparation, scope ->
+            val args = JSONObject(preparation.executionToken)
+            val occurrences = structuredRecordsRepository.occurrencesForField(
+                args.getString("fieldId"),
+                args.optNullableString("start") ?: "0001-01-01",
+                args.optNullableString("end") ?: "9999-12-31",
+            )
+            AgentToolOutcome(
+                jsonResult(
+                    "values" to JSONArray(occurrences.map { occurrence ->
+                        JSONObject()
+                            .put("journalDay", occurrence.journalDay)
+                            .put("value", occurrence.rawValue)
+                    }),
+                ),
+                if (scope.english) "Read structured record values" else "读取结构化记录值",
+                preparation.target,
+            )
+        },
+    )
+
+    private fun getStructuredFieldStatsTool() = FunctionalAgentTool(
+        readDefinition(
+            "get_structured_field_stats",
+            "Compute automatic statistics for one structured field across a date range: count, latest, and a per-day series or category histogram.",
+            objectSchema(
+                linkedMapOf(
+                    "fieldId" to stringProperty("Structured field id"),
+                    "start" to stringProperty("Inclusive ISO date YYYY-MM-DD"),
+                    "end" to stringProperty("Inclusive ISO date YYYY-MM-DD"),
+                    "selector" to stringProperty("Aggregation selector: first, last, min, max, sum, average, count (default last)"),
+                ),
+                listOf("fieldId"),
+            ),
+        ),
+        prepareBlock = { call, scope ->
+            val args = AgentArgs(call.arguments).only("fieldId", "start", "end", "selector")
+            scope.requireSource("statistics")
+            val token = JSONObject()
+                .put("fieldId", args.string("fieldId", MAX_ID_CHARS))
+                .put("selector", args.optionalString("selector", 32) ?: "last")
+                .put("start", args.optionalString("start", 10))
+                .put("end", args.optionalString("end", 10))
+            AgentToolPreparation(call, "structured records", "Get field stats", token.toString(), executionToken = token.toString())
+        },
+        executeBlock = { preparation, scope ->
+            val args = JSONObject(preparation.executionToken)
+            val fieldId = args.getString("fieldId")
+            val settings = settingsRepository.settings.first()
+            val field = structuredWorkspaceRepository.loadFields(settings).firstOrNull { it.id == fieldId }
+                ?: invalidArguments("Unknown field id: $fieldId")
+            val stats = structuredStatisticsRepository.autoFieldStats(
+                settings,
+                field,
+                args.optNullableString("start") ?: "0001-01-01",
+                args.optNullableString("end") ?: "9999-12-31",
+                FieldSelector.fromWire(args.optNullableString("selector")) ?: FieldSelector.LAST,
+            )
+            AgentToolOutcome(
+                jsonResult(
+                    "fieldId" to fieldId,
+                    "name" to field.name,
+                    "count" to stats.count,
+                    "latest" to stats.latest,
+                    "series" to stats.series.takeIf { it.isNotEmpty() }?.let { series ->
+                        JSONArray(series.map { point ->
+                            JSONObject()
+                                .put("journalDay", point.journalDay.toString())
+                                .put("value", point.chartValue)
+                                .put("display", point.display)
+                        })
+                    },
+                    "categories" to stats.categoryCounts.takeIf { it.isNotEmpty() }?.let { categories ->
+                        JSONArray(categories.map { JSONObject().put("category", it.category).put("count", it.count) })
+                    },
+                ),
+                if (scope.english) "Statistics for field ${field.name}" else "统计字段 ${field.name}",
+                preparation.target,
+            )
+        },
+    )
+
+    private fun listStructuredMetricsTool() = FunctionalAgentTool(
+        readDefinition(
+            "list_structured_metrics",
+            "List the derived structured-record metrics of the DeskCubby workspace with id, name, and result type.",
+            emptySchema(),
+        ),
+        prepareBlock = { call, scope ->
+            AgentArgs(call.arguments).only()
+            scope.requireSource("statistics")
+            AgentToolPreparation(call, "structured records", "List structured metrics", "")
+        },
+        executeBlock = { _, scope ->
+            val settings = settingsRepository.settings.first()
+            val metrics = structuredWorkspaceRepository.loadMetrics(settings)
+            AgentToolOutcome(
+                jsonResult(
+                    "metrics" to JSONArray(metrics.map { metric ->
+                        JSONObject()
+                            .put("id", metric.id)
+                            .put("name", metric.name)
+                            .put("resultType", metric.resultType.wireValue)
+                    }),
+                ),
+                if (scope.english) "List structured record metrics" else "列出结构化记录指标",
+                "structured records",
+            )
+        },
+    )
+
+    private fun getStructuredMetricTool() = FunctionalAgentTool(
+        readDefinition(
+            "get_structured_metric",
+            "Evaluate one derived structured-record metric across a date range, returning a per-day points series.",
+            objectSchema(
+                linkedMapOf(
+                    "metricId" to stringProperty("Structured metric id"),
+                    "start" to stringProperty("Inclusive ISO date YYYY-MM-DD"),
+                    "end" to stringProperty("Inclusive ISO date YYYY-MM-DD"),
+                ),
+                listOf("metricId"),
+            ),
+        ),
+        prepareBlock = { call, scope ->
+            val args = AgentArgs(call.arguments).only("metricId", "start", "end")
+            scope.requireSource("statistics")
+            val token = JSONObject()
+                .put("metricId", args.string("metricId", MAX_ID_CHARS))
+                .put("start", args.optionalString("start", 10))
+                .put("end", args.optionalString("end", 10))
+            AgentToolPreparation(call, "structured records", "Calculate metric", token.toString(), executionToken = token.toString())
+        },
+        executeBlock = { preparation, scope ->
+            val args = JSONObject(preparation.executionToken)
+            val metricId = args.getString("metricId")
+            val settings = settingsRepository.settings.first()
+            val metric = structuredWorkspaceRepository.loadMetrics(settings).firstOrNull { it.id == metricId }
+                ?: invalidArguments("Unknown metric id: $metricId")
+            val today = LocalDate.now()
+            val series = structuredStatisticsRepository.metricSeries(
+                settings,
+                metric,
+                args.optNullableString("start") ?: today.minusDays(30).toString(),
+                args.optNullableString("end") ?: today.toString(),
+            )
+            val points = series.mapNotNull { point ->
+                point.display?.let { display ->
+                    JSONObject().put("journalDay", point.journalDay.toString()).put("display", display)
+                }
+            }
+            AgentToolOutcome(
+                jsonResult(
+                    "metricId" to metricId,
+                    "name" to metric.name,
+                    "resultType" to metric.resultType.wireValue,
+                    "points" to JSONArray(points),
+                ),
+                if (scope.english) "Calculate metric ${metric.name}" else "计算指标 ${metric.name}",
+                preparation.target,
             )
         },
     )

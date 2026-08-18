@@ -809,6 +809,11 @@ data class AppSettings(
     val mealButtonsUseIcons: Boolean = false,
     val mealButtonIcons: List<String> = DEFAULT_MEAL_BUTTON_ICONS,
     val dailyEventTemplates: List<DailyEventTemplate> = emptyList(),
+    /**
+     * Device-local auto sleep/wake recorder toggle. Deliberately kept out of `.deskcubby` and out
+     * of JSON backups so one device's collection choice never rewrites another device's.
+     */
+    val structuredAutoRecordSleepWake: Boolean = false,
     val rssSubscriptions: List<RssSubscription> = emptyList(),
     val rssMaxItemsPerFeed: Int = 50,
     val rssShowSummaries: Boolean = true,

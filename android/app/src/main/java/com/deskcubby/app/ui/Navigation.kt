@@ -119,8 +119,10 @@ import com.deskcubby.app.ui.diary.DiaryViewModel
 import com.deskcubby.app.ui.diary.MealCalendarScreen
 import com.deskcubby.app.ui.diary.CalorieEstimationProgressScreen
 import com.deskcubby.app.ui.diary.filter.MealPhotoFilterSettingsScreen
-import com.deskcubby.app.ui.daily.DailyRecordScreen
-import com.deskcubby.app.ui.daily.DailyRecordViewModel
+import com.deskcubby.app.ui.structuredrecords.StructuredRecordsScreen
+import com.deskcubby.app.ui.structuredrecords.StructuredRecordsViewModel
+import com.deskcubby.app.ui.structuredstats.StructuredStatisticsScreen
+import com.deskcubby.app.ui.structuredstats.StructuredStatisticsViewModel
 import com.deskcubby.app.ui.date.DateRecordScreen
 import com.deskcubby.app.ui.date.DateRecordViewModel
 import com.deskcubby.app.ui.home.HomeScreen
@@ -185,6 +187,7 @@ object Routes {
     const val STEPS_SETTINGS = "settings/step-statistics"
     const val STATISTICS_USAGE = "statistics/screen-time"
     const val STATISTICS_HEALTH = "statistics/health"
+    const val STATISTICS_STRUCTURED = "statistics/structured"
     const val AI_SETTINGS = "settings/ai"
     const val AI_REVIEW = "ai/review"
     const val POETRY_SETTINGS = "settings/poetry"
@@ -199,7 +202,7 @@ fun DeskCubbyRoot(
     blogViewModel: BlogViewModel = hiltViewModel(),
     homeViewModel: HomeViewModel = hiltViewModel(),
     dateRecordViewModel: DateRecordViewModel = hiltViewModel(),
-    dailyRecordViewModel: DailyRecordViewModel = hiltViewModel(),
+    structuredRecordsViewModel: StructuredRecordsViewModel = hiltViewModel(),
     externalNavigationRoute: String? = null,
     externalDiaryUri: String? = null,
     externalGameId: String? = null,
@@ -549,6 +552,7 @@ fun DeskCubbyRoot(
                             viewModel = statisticsHubViewModel,
                             onOpenUsage = { navController.navigate(Routes.STATISTICS_USAGE) },
                             onOpenHealth = { navController.navigate(Routes.STATISTICS_HEALTH) },
+                            onOpenStructuredRecords = { navController.navigate(Routes.STATISTICS_STRUCTURED) },
                         )
                     }
                     composable(NavItemId.USAGE.route) {
@@ -629,17 +633,16 @@ fun DeskCubbyRoot(
                         )
                     }
                     composable(Routes.DAILY_RECORDS) {
-                        DailyRecordScreen(
+                        StructuredRecordsScreen(
                             padding = padding,
-                            viewModel = dailyRecordViewModel,
+                            viewModel = structuredRecordsViewModel,
                             onBack = { navController.popBackStack() },
-                            onRecordToCurrentDiary = diaryViewModel::appendDailyRecordToCurrent,
                         )
                     }
                     composable(Routes.DAILY_RECORDS_TODAY) {
-                        DailyRecordScreen(
+                        StructuredRecordsScreen(
                             padding = padding,
-                            viewModel = dailyRecordViewModel,
+                            viewModel = structuredRecordsViewModel,
                             onBack = { navController.popBackStack() },
                         )
                     }
@@ -702,6 +705,14 @@ fun DeskCubbyRoot(
                                     stepStatisticsViewModel.onHealthConnectOpenFailed()
                                 }
                             },
+                            onBack = { navController.popBackStack() },
+                        )
+                    }
+                    composable(Routes.STATISTICS_STRUCTURED) {
+                        val structuredStatisticsViewModel: StructuredStatisticsViewModel = hiltViewModel()
+                        StructuredStatisticsScreen(
+                            padding = PaddingValues(0.dp),
+                            viewModel = structuredStatisticsViewModel,
                             onBack = { navController.popBackStack() },
                         )
                     }
@@ -913,6 +924,13 @@ private fun routeTutorialTarget(route: String?, settings: AppSettings): PageTuto
             "Health statistics",
             "查看 Health Connect 提供的步数、距离与活动热量。",
             "View steps, distance, and active calories supplied by Health Connect.",
+        )
+        Routes.STATISTICS_STRUCTURED -> target(
+            "page/statistics-structured",
+            "结构化记录统计",
+            "Structured record statistics",
+            "查看强类型字段的自动统计与用户自定义派生指标。",
+            "Review typed-field auto statistics and your own derived metrics.",
         )
         Routes.AI_REVIEW -> target(
             "page/ai-review",

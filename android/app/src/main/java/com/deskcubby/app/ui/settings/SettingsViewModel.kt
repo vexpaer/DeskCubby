@@ -49,6 +49,9 @@ import com.deskcubby.app.data.repository.UpdateInstallRequest
 import com.deskcubby.app.data.repository.UpdateRepository
 import com.deskcubby.app.data.repository.AppDataUsageRepository
 import com.deskcubby.app.data.repository.AppDataUsageSnapshot
+import com.deskcubby.app.data.structuredrecords.StructuredField
+import com.deskcubby.app.data.structuredrecords.StructuredRecordsRepository
+import com.deskcubby.app.data.structuredrecords.StructuredWorkspaceRepository
 import com.deskcubby.app.data.sync.AppCloudSyncService
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncSecretStore
@@ -139,6 +142,8 @@ class SettingsViewModel @Inject constructor(
     private val cloudSyncUndoStore: CloudSyncUndoStore,
     private val updateRepository: UpdateRepository,
     private val appDataUsageRepository: AppDataUsageRepository,
+    private val structuredWorkspaceRepository: StructuredWorkspaceRepository,
+    private val structuredRecordsRepository: StructuredRecordsRepository,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
     private val _ready = MutableStateFlow(false)
@@ -160,6 +165,124 @@ class SettingsViewModel @Inject constructor(
         SharingStarted.Eagerly,
         AppSettings(),
     )
+
+    // Workspace-level structured-records state (loaded from `.deskcubby/settings.json`).
+    private val _structuredDayBoundary = MutableStateFlow("05:00")
+    val structuredDayBoundary: StateFlow<String> = _structuredDayBoundary.asStateFlow()
+
+    private val _structuredWorkspaceAvailable = MutableStateFlow(false)
+    val structuredWorkspaceAvailable: StateFlow<Boolean> = _structuredWorkspaceAvailable.asStateFlow()
+
+    private val _structuredFields = MutableStateFlow<List<StructuredField>>(emptyList())
+    val structuredFields: StateFlow<List<StructuredField>> = _structuredFields.asStateFlow()
+
+    fun refreshStructuredWorkspace() {
+        viewModelScope.launch {
+            val appSettings = settings.value
+            if (appSettings.diaryTreeUri == null) {
+                _structuredWorkspaceAvailable.value = false
+                _structuredFields.value = emptyList()
+                return@launch
+            }
+            runCatching {
+                structuredWorkspaceRepository.seedExamples(appSettings)
+                structuredWorkspaceRepository.ensureSystemFields(appSettings)
+                val workspace = structuredWorkspaceRepository.loadSettings(appSettings)
+                _structuredDayBoundary.value = workspace.dayBoundary
+                _structuredFields.value = structuredWorkspaceRepository.loadFields(appSettings)
+                _structuredWorkspaceAvailable.value = true
+            }.onFailure {
+                _structuredWorkspaceAvailable.value = false
+            }
+        }
+    }
+
+    /** Adds a new structured field (type/source manual). */
+    fun addStructuredField(
+        name: String,
+        type: com.deskcubby.app.data.structuredrecords.StructuredFieldType,
+        unit: String?,
+        options: List<String>,
+        onDone: () -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            val appSettings = settings.value
+            if (appSettings.diaryTreeUri == null) return@launch
+            val fields = structuredWorkspaceRepository.loadFields(appSettings)
+            val field = StructuredField(
+                id = "f_" + java.util.UUID.randomUUID().toString().take(8),
+                name = name.trim().take(com.deskcubby.app.data.structuredrecords.StructuredRecordsCodec.MAX_NAME_CHARS),
+                type = type,
+                source = com.deskcubby.app.data.structuredrecords.StructuredFieldSource.MANUAL,
+                unit = unit?.takeIf(String::isNotBlank),
+                options = options,
+                sortOrder = fields.size,
+            )
+            structuredWorkspaceRepository.saveFields(appSettings, fields + field)
+            onDone()
+        }
+    }
+
+    /** Archives (soft-deletes) a structured field definition so history stays interpretable. */
+    fun archiveStructuredField(id: String) {
+        viewModelScope.launch {
+            val appSettings = settings.value
+            if (appSettings.diaryTreeUri == null) return@launch
+            val fields = structuredWorkspaceRepository.loadFields(appSettings)
+            structuredWorkspaceRepository.saveFields(
+                appSettings,
+                fields.map { if (it.id == id) it.copy(archived = true) else it },
+            )
+            _structuredFields.value = structuredWorkspaceRepository.loadFields(appSettings)
+        }
+    }
+
+    fun setStructuredAutoRecordSleepWake(value: Boolean) {
+        viewModelScope.launch {
+            repository.setStructuredAutoRecordSleepWake(value)
+        }
+    }
+
+    /** Applies a new day boundary effective from the current Journal Day. */
+    fun setStructuredDayBoundary(value: String) {
+        viewModelScope.launch {
+            val appSettings = settings.value
+            val normalized = value.trim()
+            if (com.deskcubby.app.data.structuredrecords.JournalDayEngine.parseBoundary(normalized) == null) {
+                return@launch
+            }
+            val journalDay = structuredWorkspaceRepository.resolveJournalDay(appSettings)
+            structuredWorkspaceRepository.setDayBoundary(appSettings, normalized, journalDay)
+            _structuredDayBoundary.value = structuredWorkspaceRepository.loadSettings(appSettings).dayBoundary
+        }
+    }
+
+    fun seedStructuredExamples(onDone: (Boolean, String) -> Unit = { _, _ -> }) {
+        viewModelScope.launch {
+            val appSettings = settings.value
+            if (appSettings.diaryTreeUri == null) {
+                onDone(false, "请先选择日记目录")
+                return@launch
+            }
+            runCatching {
+                structuredWorkspaceRepository.seedExamples(appSettings)
+            }.onSuccess { onDone(true, "示例已添加") }
+                .onFailure { onDone(false, it.message ?: "添加失败") }
+        }
+    }
+
+    fun rebuildStructuredIndex(onDone: (Boolean, String) -> Unit = { _, _ -> }) {
+        viewModelScope.launch {
+            val appSettings = settings.value
+            if (appSettings.diaryTreeUri == null) {
+                onDone(false, "请先选择日记目录")
+                return@launch
+            }
+            runCatching { structuredRecordsRepository.rebuildIndex(appSettings) }
+                .onSuccess { onDone(true, "索引已重建") }
+                .onFailure { onDone(false, it.message ?: "重建失败") }
+        }
+    }
 
     private val _backupOperation = MutableStateFlow(BackupOperationState())
     val backupOperation: StateFlow<BackupOperationState> = _backupOperation.asStateFlow()

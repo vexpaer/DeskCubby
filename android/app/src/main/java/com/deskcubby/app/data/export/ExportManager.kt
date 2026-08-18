@@ -223,6 +223,7 @@ class ExportManager @Inject constructor(
         }
     }
 
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
     private fun insertIntoMediaStore(zipFile: File, fileName: String): Uri? {
         val resolver = context.contentResolver
         val values = android.content.ContentValues().apply {

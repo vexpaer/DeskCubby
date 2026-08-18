@@ -200,6 +200,7 @@ class SettingsRepository @Inject constructor(
         val mealButtonsUseIcons = booleanPreferencesKey("meal_buttons_use_icons")
         val mealButtonIcons = stringPreferencesKey("meal_button_icons")
         val dailyEventTemplates = stringPreferencesKey("daily_event_templates")
+        val structuredAutoRecordSleepWake = booleanPreferencesKey("structured_auto_record_sleep_wake")
         val rssSubscriptions = stringPreferencesKey("rss_subscriptions")
         val rssMaxItemsPerFeed = intPreferencesKey("rss_max_items_per_feed")
         val rssShowSummaries = booleanPreferencesKey("rss_show_summaries")
@@ -287,8 +288,7 @@ class SettingsRepository @Inject constructor(
             appLanguage = prefs[Keys.appLanguage].enumValueOr(defaults.appLanguage),
             orientationPreference = prefs[Keys.orientationPreference]
                 .enumValueOr(defaults.orientationPreference),
-            userName = normalizeUserName(prefs[Keys.userName] ?: defaults.userName),
-            homeGreetings = decodeHomeGreetings(
+            userName = normalizeUserName(prefs[Keys.userName] ?: defaults.userName),            homeGreetings = decodeHomeGreetings(
                 prefs[Keys.homeGreetings],
                 defaults.homeGreetings,
             ),
@@ -400,6 +400,8 @@ class SettingsRepository @Inject constructor(
             mealButtonsUseIcons = prefs[Keys.mealButtonsUseIcons] ?: defaults.mealButtonsUseIcons,
             mealButtonIcons = decodeMealButtonIcons(prefs[Keys.mealButtonIcons], defaults.mealButtonIcons),
             dailyEventTemplates = decodeDailyEventTemplates(prefs[Keys.dailyEventTemplates]),
+            structuredAutoRecordSleepWake = prefs[Keys.structuredAutoRecordSleepWake]
+                ?: defaults.structuredAutoRecordSleepWake,
             rssSubscriptions = decodeRssSubscriptions(prefs[Keys.rssSubscriptions]),
             rssMaxItemsPerFeed = (prefs[Keys.rssMaxItemsPerFeed]
                 ?: defaults.rssMaxItemsPerFeed).coerceIn(10, 200),
@@ -525,6 +527,14 @@ class SettingsRepository @Inject constructor(
     /** Device-local rotation preference. Writes only this device's DataStore; never synced. */
     suspend fun setOrientationPreference(value: OrientationPreference) =
         set(Keys.orientationPreference, value.name)
+
+    /**
+     * Device-local auto sleep/wake recorder toggle. It lives on this device only (never written to
+     * `.deskcubby` and never synced), because each phone owns its own interaction events; syncing
+     * the switch would make multiple devices collect into the same workspace.
+     */
+    suspend fun setStructuredAutoRecordSleepWake(value: Boolean) =
+        set(Keys.structuredAutoRecordSleepWake, value)
 
     /** True once the user has picked a language on first launch (device-local, never backed up). */
     val languageSelected: Flow<Boolean> = context.settingsDataStore.data

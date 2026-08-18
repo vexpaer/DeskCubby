@@ -313,7 +313,7 @@ data class GameStateEntity(
 )
 
 /**
- * One lifetime mini-game statistic. Metrics are deliberately separate from paused-game JSON so
+ * One mini-game statistic. Metrics are deliberately separate from paused-game JSON so
  * old saves remain readable and clearing a save can never erase a user's accumulated history.
  */
 @Entity(tableName = "game_statistics", primaryKeys = ["gameId", "metricKey"])
@@ -322,4 +322,43 @@ data class GameStatisticEntity(
     val metricKey: String,
     @ColumnInfo(defaultValue = "0") val value: Long = 0L,
     val updatedAt: Long,
+)
+
+/**
+ * Parse state of one Markdown diary file for the structured-records index. The index is a derived
+ * cache that can be fully rebuilt from Markdown + `.deskcubby`; this row drives incremental
+ * updates by detecting mtime/hash changes without rescanning every file.
+ */
+@Entity(tableName = "structured_record_files")
+data class StructuredRecordFileEntity(
+    @PrimaryKey val sourceFile: String,
+    val modifiedAt: Long,
+    val fileSize: Long,
+    val sha256: String,
+    val parsedAt: Long,
+)
+
+/**
+ * One structured field value occurrence found in a Markdown diary. Belongs to a Journal Day, not a
+ * calendar date, so boundary handling stays uniform across the app.
+ */
+@Entity(
+    tableName = "structured_record_occurrences",
+    indices = [
+        Index(value = ["fieldId", "journalDay"]),
+        Index(value = ["sourceFile"]),
+        Index(value = ["journalDay"]),
+    ],
+)
+data class StructuredRecordOccurrenceEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val journalDay: String,
+    val sourceFile: String,
+    val sourceFileModifiedAt: Long,
+    val fieldId: String,
+    val rawValue: String,
+    val normalizedValue: String,
+    val valueType: String,
+    val orderInFile: Int,
+    val parsedAt: Long,
 )

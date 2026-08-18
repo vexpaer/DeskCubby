@@ -22,6 +22,7 @@ import com.deskcubby.app.data.repository.MealCalendarDay
 import com.deskcubby.app.data.repository.MealDayDetails
 import com.deskcubby.app.data.repository.MAX_MEAL_ENERGY_KJ
 import com.deskcubby.app.data.repository.MAX_MEAL_NOTE_CHARS
+import com.deskcubby.app.data.structuredrecords.StructuredWorkspaceRepository
 import com.deskcubby.app.data.taskqueue.AiTaskQueue
 import com.deskcubby.app.data.taskqueue.CalorieDayTaskPayload
 import com.deskcubby.app.data.taskqueue.CalorieEnqueueOutcome
@@ -103,6 +104,7 @@ internal suspend fun <T, R> mapConcurrentOrdered(
 class DiaryViewModel @Inject constructor(
     private val repository: DiaryFileRepository,
     private val settingsRepository: SettingsRepository,
+    private val workspaceRepository: StructuredWorkspaceRepository,
     private val aiTaskQueue: AiTaskQueue,
 ) : ViewModel() {
     val settings: StateFlow<AppSettings> = settingsRepository.settings.stateIn(
@@ -524,7 +526,10 @@ class DiaryViewModel @Inject constructor(
     fun enterToday(onOpened: () -> Unit) {
         viewModelScope.launch {
             _editorState.value = EditorState(loading = true)
-            runCatching { repository.enterToday(settings.value) }
+            val current = settings.value
+            val journalDay = runCatching { workspaceRepository.resolveJournalDay(current) }
+                .getOrDefault(LocalDate.now())
+            runCatching { repository.enterToday(current, journalDay) }
                 .onSuccess { doc ->
                     undoStack.clear()
                     redoStack.clear()

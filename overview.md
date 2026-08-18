@@ -167,7 +167,7 @@ Rust command boundary
 | 笔记 | `ui/notes/`、`data/repository/NotesRepository.kt`、`ui/components/MarkdownPreview.kt` | SAF 直接打开用户选择的 Obsidian 笔记库，文件夹优先、按名称顺序列出 Markdown；支持新建/重命名/删除文件夹和笔记、自动保存、SHA-256 外部修改冲突的加载/覆盖/另存副本；兼容标准 Markdown 图片与 `![[Wiki 嵌入]]`，每次上传媒体都由用户重新选择当前笔记库内的目标文件夹并写入可移植相对链接；不复用日记媒体目录、不建立日期索引 |
 | 阅读 | `ui/reader/`、`data/repository/ReaderRepository.kt`、`data/sync/ReaderProgressJsonCodec.kt`、`data/statistics/EngagementTimeRepository.kt` | SAF 持久读取 TXT/PDF；增强视图使用 PDFium（`io.legere:pdfiumandroid:1.0.35`），通过 SAF 文件描述符直接打开且不复制原书，提供连续纵向按需渲染、缩放、页码、双色映射、文字搜索跳页与文本目录扫描，失败时安全切换系统 `PdfRenderer` 连续兼容视图。0.13.1 将 TXT、增强 PDF 与兼容 PDF 的本机恢复位置细化为页内 5%，约 600ms 防抖并在离开时检查点保存；0.13.2 让纯净模式控件悬浮覆盖固定正文平面，并把 engagement 私有文件升至 schema v2，为已有时长的书保留最后书名。0.15.0 把 PDF 双指缩放改为矩阵实时变换：手势期间内容围绕捏合中心实时跟随手指且不重新渲染，手势结束后才提交最终比例并重新渲染页面。0.16.0 让提交后按捏合中心锚定滚动位置，重载后的页面与松手时大小、位置一致；缩放滑杆按 1% 步进。0.16.3 用共享 `ReaderPdfContinuousViewport` 彻底替换增强/兼容视图各自的 nested-scroll 补丁：在方向锁定前读取原始 X 并独立结算横移，Y 继续交给 `LazyColumn` 以保留纵向惯性，单指斜向或画圈仍会同时移动两轴，任一轴到边界不吞另一轴；双指接管同一二维移动并增加围绕质心的即时缩放。专用 `ReaderPdfPageViewport` 继续以非约束测量让 100% 以上按目标像素宽度真实渲染，缩到视口内则居中并清除旧横向偏移。PDF 自动封面先取已验证缓存/提供方缩略图，缺失时再串行受限渲染第一页；封面文字可独立编辑、隐藏或恢复书名。Reader schema-v8 兼容 v1–v7；封面文字、更细偏移、书名和时长只留在 Android 私有状态，v33 与可选 `reading/v1/progress.json` 继续按原有页/段字段和完整文件 SHA-256+类型合并，不携带书名、URI、封面、正文或时长 |
 | 吃历滤镜 | `ui/diary/filter/`、`data/model/MealPhotoFilterSettings.kt` | 统一亮度、对比度、饱和度、色温和色调；仅改变 Compose 显示，不改原图 |
-| 日常记录 | `ui/daily/` | 多行模板和多行填写内容保存在 DataStore；可写入当前日记或今日日记，只有真实落盘成功后才重置输入 |
+| 结构化记录 | `ui/daily/`（原日常记录） | 由「日常记录」升级：在 Markdown 日记中嵌入五类类型化字段值（今日一句话 word / 俯卧撑次数 number / 今天衣服颜色 type / 午饭时间 time / 午睡时长 duration），以稳定字段 ID 写入 HTML 注释（如 `<!--dc:f_pushups-->20<!--dc:/f_pushups-->`），正文仍可读；本地 Room 索引可从 Markdown 重建，统计不扫描原文。`.deskcubby/` 工作区存放 `settings.json`（日界线，默认 05:00）、`fields.json`、`records.json`、`statistics.json`；日界线划分日记日，改动从下一日记日生效并保留历史。设置 → 子页面设置 → 日记与媒体 →「结构化记录」管理日界线、自动睡眠/醒来估算（UsageStatsManager，非 Health Connect）、字段管理与重建索引；统计 →「结构化记录统计」提供字段自动统计与公式构造的派生指标 |
 | 小巧思 | `ui/thought/` | `ThoughtRepository` + Room；分类、排序、回收站、页面恢复；首次进入全部/分类页自动定位到列表底部的新内容，新增条目继续精确滚动；顶栏可立即切换一行/完整显示 |
 | 浏览器 | `ui/blog/` | `BrowserRepository` + WebView；多标签、收藏、历史、上传下载 |
 | 日期记录 | `ui/date/` | `DateRecordRepository` + Room |
@@ -198,7 +198,7 @@ Rust command boundary
 | 首页 | 可排序/显隐模块、问候、快速输入、笔记与小游戏快捷入口、记录概览 | 聚合日记索引、SQLite 结构化数据、主页设置与每日诗词缓存 |
 | 日记与编辑器 | 日记分组、CodeMirror、React Markdown、冲突对话框；预览保留相对引用图片并支持百分号编码的中文/空格文件名，空解析结果进入明确不可用状态 | 扫描/读写/重命名、SHA-256 `FileVersion`、安全提交、回收站；图片仍经媒体根协议与叶文件名校验，不开放任意路径 |
 | 媒体与吃历 | 筛选、2/3/智能图片换行、非破坏滤镜、日期卡片单/双列、全屏查看；双列按日期中点分栏且窄窗回退单列 | 安全导入与压缩、EXIF 方向/GPS、`dc-media.json`、受限 PNG 导出；滤镜/布局由独立原子 IPC 持久写入受管设置，不改原图 |
-| 日常记录 | 模板编辑、`xx` 选择替换、写入目标 | 写入成功后刷新索引；失败不清空输入 |
+| 日常记录 | 模板编辑、`xx` 选择替换、写入目标 | Windows 沿用原模板写入；Android 侧已升级为「结构化记录」（类型化字段、`.deskcubby` 索引与统计），Windows 暂未跟进 |
 | 小巧思 | 分类、置顶/重点、拖动与回收站 | SQLite CRUD、持久顺序、软删除与分类文本导出 |
 | 日期记录/诗词 | CRUD、分类/排序、离线诗词预设、每日诗词详情 | SQLite v6；Android 同源预设；每日诗词受限 HTTPS、缓存与内置回退 |
 | 笔记 | `NotesPage.tsx`；目录浏览、Markdown 源码/预览、图片、重命名与冲突选择 | `notes.rs`；全部路径限制在用户选择根目录，拒绝遍历、保留名与符号链接/junction 越界，写入使用 SHA-256 版本检查 |
@@ -332,6 +332,7 @@ Windows 设置采用接近 Android 的层级：设置主页为「外观与语言
 
 ### Android 0.20.1 构建（启用 R8 代码压缩与资源收缩）
 
+- 旧的「日常记录」升级为「结构化记录」：Markdown 日记仍可嵌入五类类型化字段值（今日一句话 word / 俯卧撑次数 number / 今天衣服颜色 type / 午饭时间 time / 午睡时长 duration），以稳定字段 ID 写入 HTML 注释；`.deskcubby/` 工作区（settings/fields/records/statistics.json）加可重建的 Room 索引让统计不再全量扫描 Markdown。日界线（默认 05:00）划分日记日，改动从下一日记日生效并保留历史。设置 → 子页面设置 → 日记与媒体 新增「结构化记录」子页（日界线、自动睡眠/醒来估算开关、字段管理与重建索引）；统计 → 结构化记录统计 提供字段自动统计与公式构造的派生指标（如 睡眠时长）。
 - `android/app/build.gradle.kts` 的 `release` 构建类型开启 `isMinifyEnabled = true` 与 `isShrinkResources = true`（配合 `getDefaultProguardFile("proguard-android-optimize.txt")` 与 `proguard-rules.pro`）。发布产物从约 37.4 MB 降至约 22.6 MB（约 -39.7%），APK 签名仍为 v1/v2 有效。
 - `android/app/proguard-rules.pro` 补充两条规则：`-keepclassmembers enum * { <fields>; ... }` 保住被持久化的枚举常量名（DataStore、v34 JSON 备份、记录同步 codec 与插件 API 都依赖 `Enum.valueOf`/`enumValues { it.name }` 跨进程字符串，R8 默认重命名枚举常量会破坏既有存档与插件 JSON）；`-keepattributes SourceFile, LineNumberTable` + `-renamesourcefileattribute` 保留发布版堆栈行号。
 - Room、Hilt、Health Connect、PDFium、WorkManager、Webkit、OkHttp、Coil 均由各自自带 consumer rules 自动覆盖，无需额外 keep；应用内插件 API（`android/plugin-api`）是经 Hilt 多绑定的编译期库、无动态类加载，无需专门规则。单元测试（Release/Debug 各 508 项）与 lint（0 错误）全部通过。
