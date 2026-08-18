@@ -5,7 +5,7 @@
 
 | 版本 | versionCode | 应用 JSON 备份 | Room | 说明 |
 | --- | --- | --- | --- | --- |
-| [未发布](#unreleased) | — | v34 | v13 | 应用指南内置与 About 内联阅读器；Agent app_guide 只读数据源 |
+| [0.21.0](#android-0210) | 46 | v34 | v14 | 应用数据 zip 导出；AI 任务队列；诗词新诗置顶 |
 | [0.20.1](#android-0201) | 45 | v34 | v13 | 首次启动语言选择器真正显示；记录同步适配器注册与传输提速 |
 | [0.20.0](#android-0200) | 44 | v34 | v13 | 手动备份与云同步解耦为记录同步引擎；手动备份不再包含 API Key/URI/云凭据，新增 Agent 对话备份 |
 | [0.19.1](#android-0191) | 43 | v33 | v13 | 饮食图片落盘后立即释放拍照状态，不再等待 AI 热量估算与索引刷新 |
@@ -39,11 +39,16 @@
 
 ---
 
-## 未发布
+## Android 0.21.0
 
+- 新增「应用数据 → 导出为 zip」：勾选要打包的内容（日记、媒体、笔记、诗词、小巧思、收藏书签、日期记录、阅读进度、游戏、Vault 加密数据、使用统计、Agent 对话、设置与订阅），将日记/媒体/笔记等真实文件连同含目录结构说明的 README 一起打包成 zip，保存到「下载/Downloads/DeskCubby」，导出完成后可直接用系统分享面板分享。
+- 诗词本新增诗词改为显示在最上方，不再追加到列表底部；已手动排序的诗词仍遵循用户调整的顺序。
 - 应用指南内置：仓库根目录以 `README_for_ai.md` 取代 296KB 的 `TUTORIAL.md`（完整教学内容保留，新增平台说明与机器可读的 `##` 章节结构）；字节副本打进 `android/app/src/main/assets/README_for_ai.md`。
-- About 页「应用教学」改为应用内直接渲染打包的 Markdown（新增 `App指南`/`APP_GUIDE` 设置子页，用现有 CommonMark 渲染），不再打开外部浏览器链接。
-- Agent 新增只读 `app_guide` 数据源：勾选「应用指南」后，Agent 系统提示只收到每个 `##` 小节的标题索引（`section-N`，远小于 24 KiB 元数据预算），可按 `section-N` 按需读取单个小节正文。数据源不可写、不进云同步内容清单之外的变更，应用 JSON 备份格式保持 v34。
+- About 页「应用教学」改为应用内直接渲染打包的 Markdown（`App指南`/`APP_GUIDE` 设置子页，用现有 CommonMark 渲染），不再打开外部浏览器链接。
+- Agent 新增只读 `app_guide` 数据源：勾选「应用指南」后，Agent 系统提示只收到每个 `##` 小节的标题索引（`section-N`），可按 `section-N` 按需读取单个小节正文；数据源不可写、不进云同步变更，应用 JSON 备份格式保持 v34。
+- AI 后台执行改为持久的任务队列：热量估算与 Agent 对话统一经 Room 支撑的 `AiTaskQueue`，用 WorkManager 在设备重启后也能排程并续跑，与页面/ViewModel 生命周期解耦（数据库新增 `ai_task_queue` 表，Room 升至 v14）。
+- 启用 R8 代码压缩与资源压缩，release 体积更小；Compose/插件 API 相关规则由依赖自带 consumer rules 合并提供。
+- Android 应用升至 0.21.0（versionCode 46）；应用 JSON 备份保持 v34，Room 升至 v14，Reader 保持 schema v8。
 
 ## Android 0.20.1
 
