@@ -378,9 +378,16 @@ interface SavedPoemDao {
     @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM saved_poems")
     suspend fun nextSortOrder(): Long
 
+    @Query("SELECT COALESCE(MIN(sortOrder), 0) FROM saved_poems")
+    suspend fun firstSortOrder(): Long
+
     @Transaction
     suspend fun insertAtEnd(item: SavedPoemEntity): Long =
         insert(item.copy(sortOrder = nextSortOrder()))
+
+    @Transaction
+    suspend fun insertAtStart(item: SavedPoemEntity): Long =
+        insert(item.copy(sortOrder = firstSortOrder() - 1))
 
     @Query(
         "UPDATE saved_poems SET content = :content, source = :source, categoryId = :categoryId, " +

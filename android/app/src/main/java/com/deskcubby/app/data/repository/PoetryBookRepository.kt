@@ -54,7 +54,7 @@ class PoetryBookRepository private constructor(
 
     suspend fun create(content: String, source: String = "", categoryId: Long? = null): Long {
         val now = System.currentTimeMillis()
-        val id = dao.insertAtEnd(
+        val id = dao.insertAtStart(
             SavedPoemEntity(
                 content = requireContent(content),
                 source = requireSource(source),

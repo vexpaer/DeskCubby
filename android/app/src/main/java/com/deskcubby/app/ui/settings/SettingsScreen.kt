@@ -45,6 +45,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
+import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AccessTime
@@ -258,6 +259,7 @@ private enum class SettingsPage {
     HOME,
     HOME_GREETING,
     BACKUP,
+    EXPORT,
     SYNC,
     SYNC_DETAIL,
     DIARY,
@@ -486,6 +488,7 @@ fun SettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val backupOperation by viewModel.backupOperation.collectAsStateWithLifecycle()
     val backupImportPreview by viewModel.backupImportPreview.collectAsStateWithLifecycle()
+    val zipExport by viewModel.zipExport.collectAsStateWithLifecycle()
     val cloudSyncStatus by viewModel.cloudSyncStatus.collectAsStateWithLifecycle()
     val cloudSyncUndoAvailable by viewModel.cloudSyncUndoAvailable.collectAsStateWithLifecycle()
     val appDataUsage by viewModel.appDataUsage.collectAsStateWithLifecycle()
@@ -778,6 +781,14 @@ fun SettingsScreen(
                 onCloseImportPreview = viewModel::closeBackupImportPreview,
                 onOpenCloudSync = { page = SettingsPage.SYNC },
                 onRefreshDataUsage = viewModel::refreshAppDataUsage,
+                onOpenExport = { page = SettingsPage.EXPORT },
+            )
+
+            SettingsPage.EXPORT -> ExportScreen(
+                contentPadding = inner,
+                zipExport = zipExport,
+                onExport = viewModel::exportZip,
+                onConsumeResult = viewModel::consumeZipExportResult,
             )
 
             SettingsPage.DIARY -> DiarySettingsPage(
@@ -1153,6 +1164,15 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
         ),
         "backup json cloud sync webdav s3 备份 导入 导出 云端 同步",
         SettingsPage.BACKUP,
+    ),
+    SettingsSearchEntry(
+        tr("导出为 zip", "Export as zip"),
+        tr(
+            "勾选日记、媒体、笔记等内容打包为 zip 并分享",
+            "Package diaries, media, notes, and more into a zip and share it",
+        ),
+        "zip export share package archive 导出 zip 打包 分享 压缩包",
+        SettingsPage.EXPORT,
     ),
     SettingsSearchEntry(
         tr("底部导航", "Bottom navigation"),
@@ -2387,6 +2407,7 @@ private fun BackupSettingsPage(
     onCloseImportPreview: () -> Unit,
     onOpenCloudSync: () -> Unit,
     onRefreshDataUsage: () -> Unit,
+    onOpenExport: () -> Unit,
 ) {
     LaunchedEffect(Unit) { onRefreshDataUsage() }
     val exportPicker = rememberLauncherForActivityResult(
@@ -2533,6 +2554,23 @@ private fun BackupSettingsPage(
                         "Export structured app data for migration or recovery. Diary, note, media, and original book files are not included.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
+                )
+                Button(
+                    onClick = onOpenExport,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Outlined.Archive, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("导出为 zip（勾选内容）", "Export as zip (select content)"))
+                }
+                Text(
+                    tr(
+                        "打包日记、媒体、笔记等真实文件，并在包内附带 README 说明目录结构；导出后可直接分享。",
+                        "Packages real diary, media, and note files with a README describing the folder structure; the zip can be shared right after export.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Button(
                     onClick = { exportPicker.launch(defaultBackupFileName(Clock.systemDefaultZone())) },
@@ -7274,6 +7312,10 @@ private fun settingsPageTutorialTarget(page: SettingsPage): PageTutorialTarget {
             "手动导出或恢复 DeskCubby 结构化数据，并查看应用数据占用。",
             "Manually export or restore structured DeskCubby data and inspect app storage use.",
         )
+        SettingsPage.EXPORT -> tr(
+            "勾选日记、媒体、笔记等内容打包成 zip，附带 README 说明目录结构；导出后可分享。",
+            "Package diaries, media, notes, and more into a zip with a README describing the structure; share it after export.",
+        )
         SettingsPage.SYNC -> tr(
             "管理 WebDAV/S3 服务、同步内容与方向；结构化数据走记录同步，真实文件走文件同步。",
             "Manage WebDAV/S3 services, content, and direction. Structured data uses record sync and real files use file sync.",
@@ -7354,6 +7396,7 @@ private fun settingsPageTutorialTarget(page: SettingsPage): PageTutorialTarget {
                 SettingsPage.AI,
                 SettingsPage.ABOUT,
                 SettingsPage.APP_GUIDE,
+                SettingsPage.EXPORT,
             )
         ) {
             listOf(
@@ -7376,6 +7419,7 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.HOME -> tr("主页", "Home")
     SettingsPage.HOME_GREETING -> tr("主页问候", "Home greeting")
     SettingsPage.BACKUP -> tr("应用数据", "App data")
+    SettingsPage.EXPORT -> tr("导出为 zip", "Export as zip")
     SettingsPage.SYNC -> tr("云端同步", "Cloud sync")
     SettingsPage.SYNC_DETAIL -> tr("同步配置", "Sync configuration")
     SettingsPage.DIARY -> tr("日记与媒体", "Diary & media")
@@ -7415,6 +7459,7 @@ private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
     SettingsPage.AI_DETAIL -> SettingsPage.AI_CONFIGS
     SettingsPage.SYNC_DETAIL -> SettingsPage.SYNC
     SettingsPage.SYNC -> SettingsPage.BACKUP
+    SettingsPage.EXPORT -> SettingsPage.BACKUP
 
     SettingsPage.MAIN,
     SettingsPage.APPEARANCE,

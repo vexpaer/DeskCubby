@@ -4,6 +4,7 @@ import com.deskcubby.app.data.local.SavedPoemDao
 import com.deskcubby.app.data.local.SavedPoemEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -47,6 +48,26 @@ class PoetryBookRepositoryTest {
         assertThrows(IllegalStateException::class.java) {
             runBlocking { repository.update(99, "完整正文", "出处") }
         }
+    }
+
+    @Test
+    fun createInsertsNewPoemAtTheTop() = runBlocking {
+        val dao = FakeSavedPoemDao(
+            SavedPoemEntity(
+                id = 1,
+                content = "旧诗",
+                source = "",
+                createdAt = 10,
+                updatedAt = 10,
+                sortOrder = 0,
+            ),
+        )
+        val repository = PoetryBookRepository(dao)
+
+        val newId = repository.create("新诗")
+
+        val order = dao.observeAll().first().map(SavedPoemEntity::id)
+        assertEquals(listOf(newId, 1L), order)
     }
 
     private class FakeSavedPoemDao(
@@ -98,6 +119,9 @@ class PoetryBookRepositoryTest {
 
         override suspend fun nextSortOrder(): Long =
             (items.value.values.maxOfOrNull(SavedPoemEntity::sortOrder) ?: -1L) + 1L
+
+        override suspend fun firstSortOrder(): Long =
+            items.value.values.minOfOrNull(SavedPoemEntity::sortOrder) ?: 0L
 
         override suspend fun getIdsInOrder(): List<Long> =
             items.value.values

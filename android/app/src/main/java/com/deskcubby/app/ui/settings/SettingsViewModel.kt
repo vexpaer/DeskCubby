@@ -13,6 +13,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.deskcubby.app.data.backup.AppBackupRepository
 import com.deskcubby.app.data.backup.BackupSummary
+import com.deskcubby.app.data.export.ExportManager
+import com.deskcubby.app.data.export.ExportSelection
+import com.deskcubby.app.data.export.ZipExportResult
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AppLanguage
@@ -97,6 +100,12 @@ data class AppDataUsageState(
     val failed: Boolean = false,
 )
 
+data class ZipExportState(
+    val busy: Boolean = false,
+    val result: ZipExportResult? = null,
+    val error: String? = null,
+)
+
 sealed interface UpdateDownloadState {
     data object Idle : UpdateDownloadState
     data class Downloading(
@@ -123,6 +132,7 @@ internal fun updateActionUnavailableFailure(action: String?): UpdateDownloadFail
 class SettingsViewModel @Inject constructor(
     private val repository: SettingsRepository,
     private val backupRepository: AppBackupRepository,
+    private val exportManager: ExportManager,
     private val legacyAiKeyMigrationStore: LegacyAiKeyMigrationStore,
     private val cloudSyncService: AppCloudSyncService,
     private val cloudSyncSecretStore: CloudSyncSecretStore,
@@ -155,6 +165,8 @@ class SettingsViewModel @Inject constructor(
     val backupOperation: StateFlow<BackupOperationState> = _backupOperation.asStateFlow()
     private val _backupImportPreview = MutableStateFlow(BackupImportPreviewState())
     val backupImportPreview: StateFlow<BackupImportPreviewState> = _backupImportPreview.asStateFlow()
+    private val _zipExport = MutableStateFlow(ZipExportState())
+    val zipExport: StateFlow<ZipExportState> = _zipExport.asStateFlow()
     val cloudSyncStatus: StateFlow<AppCloudSyncStatus> = cloudSyncService.status
     private val _cloudSyncUndoAvailable = MutableStateFlow(cloudSyncUndoStore.hasUndo())
     val cloudSyncUndoAvailable: StateFlow<Boolean> = _cloudSyncUndoAvailable.asStateFlow()
@@ -986,6 +998,28 @@ class SettingsViewModel @Inject constructor(
             actionEn = "DeskCubby data exported",
             summary = backupRepository.exportTo(uri),
         )
+    }
+
+    fun exportZip(selection: ExportSelection) {
+        if (_zipExport.value.busy) return
+        _zipExport.value = ZipExportState(busy = true)
+        viewModelScope.launch {
+            try {
+                val result = exportManager.buildAndExport(selection)
+                _zipExport.value = ZipExportState(result = result)
+            } catch (error: CancellationException) {
+                _zipExport.value = ZipExportState()
+                throw error
+            } catch (error: Exception) {
+                _zipExport.value = ZipExportState(
+                    error = error.message?.takeIf(String::isNotBlank) ?: "导出失败 / Export failed",
+                )
+            }
+        }
+    }
+
+    fun consumeZipExportResult() {
+        _zipExport.value = ZipExportState()
     }
 
     private fun runBackupOperation(block: suspend () -> String) = viewModelScope.launch {
