@@ -330,6 +330,12 @@ Windows 设置采用接近 Android 的层级：设置主页为「外观与语言
 
 ## 8. 最近完成的功能
 
+### Android 0.20.1 构建（启用 R8 代码压缩与资源收缩）
+
+- `android/app/build.gradle.kts` 的 `release` 构建类型开启 `isMinifyEnabled = true` 与 `isShrinkResources = true`（配合 `getDefaultProguardFile("proguard-android-optimize.txt")` 与 `proguard-rules.pro`）。发布产物从约 37.4 MB 降至约 22.6 MB（约 -39.7%），APK 签名仍为 v1/v2 有效。
+- `android/app/proguard-rules.pro` 补充两条规则：`-keepclassmembers enum * { <fields>; ... }` 保住被持久化的枚举常量名（DataStore、v34 JSON 备份、记录同步 codec 与插件 API 都依赖 `Enum.valueOf`/`enumValues { it.name }` 跨进程字符串，R8 默认重命名枚举常量会破坏既有存档与插件 JSON）；`-keepattributes SourceFile, LineNumberTable` + `-renamesourcefileattribute` 保留发布版堆栈行号。
+- Room、Hilt、Health Connect、PDFium、WorkManager、Webkit、OkHttp、Coil 均由各自自带 consumer rules 自动覆盖，无需额外 keep；应用内插件 API（`android/plugin-api`）是经 Hilt 多绑定的编译期库、无动态类加载，无需专门规则。单元测试（Release/Debug 各 508 项）与 lint（0 错误）全部通过。
+
 ### Android 0.20.1（首次启动语言选择与记录同步修复）
 
 - 修复首次启动语言选择页从未真正显示的问题：`FirstLaunchLanguageScreen` 以前只定义未接线，现由 `DeskCubbyRoot` 在设置加载完成后按 `language_selected=false` 门控显示；已有用户与设置页语言切换不受影响。
