@@ -20,6 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AgentRunEntity::class,
         AgentToolEventEntity::class,
         AgentMutationEntity::class,
+        AiTaskQueueEntity::class,
         VaultItemEntity::class,
         GameStateEntity::class,
         GameStatisticEntity::class,
@@ -31,7 +32,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         StepDayEntity::class,
         LegacyStatisticsMigrationEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -50,6 +51,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun usageStatisticsDao(): UsageStatisticsDao
     abstract fun stepStatisticsDao(): StepStatisticsDao
     abstract fun legacyStatisticsMigrationDao(): LegacyStatisticsMigrationDao
+    abstract fun aiTaskDao(): AiTaskDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -413,6 +415,37 @@ abstract class AppDatabase : RoomDatabase() {
                         PRIMARY KEY(`gameId`, `metricKey`)
                     )
                     """.trimIndent(),
+                )
+            }
+        }
+
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `ai_task_queue` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `type` TEXT NOT NULL,
+                        `state` TEXT NOT NULL,
+                        `payloadJson` TEXT NOT NULL,
+                        `progressJson` TEXT NOT NULL,
+                        `resultJson` TEXT NOT NULL,
+                        `errorSummary` TEXT NOT NULL,
+                        `errorFailure` TEXT NOT NULL,
+                        `attemptCount` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `startedAt` INTEGER,
+                        `completedAt` INTEGER
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ai_task_queue_state` " +
+                        "ON `ai_task_queue` (`state`)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_ai_task_queue_createdAt` " +
+                        "ON `ai_task_queue` (`createdAt`)",
                 )
             }
         }

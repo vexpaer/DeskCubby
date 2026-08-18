@@ -12,6 +12,9 @@ import com.deskcubby.app.agent.AgentRunRequest
 import com.deskcubby.app.agent.AgentRunUsage
 import com.deskcubby.app.agent.AgentRuntime
 import com.deskcubby.app.agent.AgentRuntimeException
+import com.deskcubby.app.data.local.AiTaskQueueEntity
+import com.deskcubby.app.data.local.AiTaskStateEntity
+import com.deskcubby.app.data.local.AiTaskTypeEntity
 import com.deskcubby.app.data.model.AgentDataSource
 import com.deskcubby.app.data.model.AgentPermissionMode
 import com.deskcubby.app.data.model.AiModelType
@@ -26,6 +29,8 @@ import com.deskcubby.app.data.repository.AiChatRepository
 import com.deskcubby.app.data.repository.AiChatRole
 import com.deskcubby.app.data.repository.AiConversation
 import com.deskcubby.app.data.repository.generateConversationTitle
+import com.deskcubby.app.data.taskqueue.AiTaskQueue
+import com.deskcubby.app.data.taskqueue.AgentRunTaskPayload
 import com.deskcubby.plugin.api.core.api.AIImage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
@@ -43,6 +48,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class AiChatUiState(
     val activeConversationId: Long? = null,
@@ -67,6 +73,7 @@ class AiChatViewModel @Inject constructor(
     private val chatRepository: AiChatRepository,
     private val agentRuntime: AgentRuntime,
     private val permissionManager: AgentPermissionManager,
+    private val aiTaskQueue: AiTaskQueue,
 ) : ViewModel() {
     val settings: StateFlow<AppSettings> = settingsRepository.settings.stateIn(
         scope = viewModelScope,
@@ -89,6 +96,7 @@ class AiChatViewModel @Inject constructor(
     private val activeConversationId = MutableStateFlow<Long?>(null)
     private var requestSerial = 0L
     private var sendJob: Job? = null
+    private var activeTaskId: Long? = null
     private var initialConversationResolved = false
 
     init {
@@ -271,34 +279,48 @@ class AiChatViewModel @Inject constructor(
                         },
                     )
                 }
-                val messages = chatRepository.getMessages(conversationId)
-                val runRequest = AgentRunRequest(
-                    runId = UUID.randomUUID().toString(),
-                    conversationId = conversationId,
-                    conversationTitle = mutableUiState.value.activeConversationTitle,
-                    userRequest = effectiveRequest,
-                    modelConfigId = textConfig.id,
-                    customModelInstructions = buildAgentCustomInstructions(
-                        currentSettings.agentPrompt,
-                        textConfig.systemPrompt,
+                val runId = UUID.randomUUID().toString()
+                activeTaskId = aiTaskQueue.enqueueTask(
+                    type = AiTaskTypeEntity.AGENT_RUN,
+                    payload = AgentRunTaskPayload(
+                        conversationId = conversationId,
+                        runId = runId,
+                        conversationTitle = mutableUiState.value.activeConversationTitle,
+                        userRequest = effectiveRequest,
+                        modelConfigId = textConfig.id,
+                        customModelInstructions = buildAgentCustomInstructions(
+                            currentSettings.agentPrompt,
+                            textConfig.systemPrompt,
+                        ),
+                        allowedSources = currentSettings.agentEnabledSources.mapTo(linkedSetOf()) {
+                            it.wireValue
+                        },
+                        permissionMode = currentSettings.agentPermissionMode,
+                        english = currentSettings.appLanguage == AppLanguage.ENGLISH,
                     ),
-                    allowedSources = currentSettings.agentEnabledSources.mapTo(linkedSetOf()) {
-                        it.wireValue
-                    },
-                    permissionMode = currentSettings.agentPermissionMode,
-                    english = currentSettings.appLanguage == AppLanguage.ENGLISH,
-                    messages = buildAgentConversation(messages),
                 )
-                val answer = agentRuntime.run(runRequest, ::recordExecutionUpdate)
+                // The worker runs the Agent and appends the assistant message itself. We only need
+                // to wait for a durable terminal state; navigation/backgrounding/force-stop cannot
+                // cancel a queued task. A killed run surfaces as FAILED/CANCELED below.
+                val terminalTask = waitForAgentTerminal()
+                activeTaskId = null
                 if (requestId != requestSerial) return@launch
-                chatRepository.appendMessage(
-                    conversationId = conversationId,
-                    role = AiChatRole.ASSISTANT,
-                    content = answer.content,
-                    // Agent never surfaces provider reasoning or chain-of-thought.
-                    reasoning = "",
-                )
-                mutableUiState.update { it.copy(lastRunUsage = answer.usage) }
+                if (terminalTask == null || terminalTask.state == AiTaskStateEntity.FAILED) {
+                    mutableUiState.update {
+                        it.copy(
+                            errorMessage = terminalTask?.errorSummary
+                                ?.takeIf(String::isNotBlank)
+                                ?: localized(
+                                    "本次 Agent 运行被中断，请重新发送。",
+                                    "This Agent run was interrupted; please send it again.",
+                                ),
+                        )
+                    }
+                } else if (terminalTask.state == AiTaskStateEntity.CANCELED) {
+                    mutableUiState.update {
+                        it.copy(transientMessage = localized("Agent 已中止。", "Agent stopped."))
+                    }
+                }
             } catch (error: CancellationException) {
                 if (requestId == requestSerial) {
                     mutableUiState.update {
@@ -333,6 +355,11 @@ class AiChatViewModel @Inject constructor(
         pendingApproval.value?.let { permissionManager.reject(it.requestId) }
         sendJob?.cancel()
         sendJob = null
+        val taskId = activeTaskId
+        activeTaskId = null
+        if (taskId != null) {
+            viewModelScope.launch { runCatching { aiTaskQueue.cancelTask(taskId) } }
+        }
         mutableUiState.update {
             it.copy(
                 isSending = false,
@@ -409,6 +436,23 @@ class AiChatViewModel @Inject constructor(
                     state.executionUpdates.toMutableList().apply { this[index] = update }
                 },
             )
+        }
+    }
+
+    /**
+     * Waits for the active agent task to reach a terminal state, returning the durable row. [first]
+     * completes as soon as the task row transitions to SUCCEEDED/FAILED/CANCELED, or when the row
+     * disappears (defensive). A guard timeout keeps a stale observation from blocking forever.
+     */
+    private suspend fun waitForAgentTerminal(): AiTaskQueueEntity? {
+        val taskId = activeTaskId ?: return null
+        return withTimeoutOrNull(AGENT_WAIT_TIMEOUT_MS) {
+            aiTaskQueue.observeTask(taskId).first { row ->
+                val state = row?.state
+                state == AiTaskStateEntity.SUCCEEDED ||
+                    state == AiTaskStateEntity.FAILED ||
+                    state == AiTaskStateEntity.CANCELED
+            }
         }
     }
 
@@ -502,6 +546,7 @@ class AiChatViewModel @Inject constructor(
         const val MAX_HISTORY_MESSAGES = 80
         const val MAX_HISTORY_CONTENT_CHARS = 1024 * 1024
         const val MAX_EXECUTION_UPDATES = 200
+        const val AGENT_WAIT_TIMEOUT_MS = 30 * 60_000L
     }
 }
 

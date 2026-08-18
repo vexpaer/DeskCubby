@@ -19,17 +19,19 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import com.deskcubby.app.MainActivity
 import com.deskcubby.app.data.model.AppLanguage
-import com.deskcubby.app.ui.theme.translate
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.MealCategory
 import com.deskcubby.app.data.model.NavItemId
+import com.deskcubby.app.data.local.AiTaskTypeEntity
 import com.deskcubby.app.data.preferences.SettingsRepository
-import com.deskcubby.app.data.repository.CalorieEstimationRepository
 import com.deskcubby.app.data.repository.DateRecordRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
 import com.deskcubby.app.data.sync.CloudSyncManualScheduler
 import com.deskcubby.app.data.sync.CloudSyncRunMode
+import com.deskcubby.app.data.taskqueue.AiTaskQueue
+import com.deskcubby.app.data.taskqueue.CalorieSingleTaskPayload
+import com.deskcubby.app.ui.theme.translate
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import java.io.File
@@ -53,7 +55,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var thoughtRepository: ThoughtRepository
     @Inject lateinit var diaryFileRepository: DiaryFileRepository
-    @Inject lateinit var calorieEstimationRepository: CalorieEstimationRepository
+    @Inject lateinit var aiTaskQueue: AiTaskQueue
     @Inject lateinit var dateRecordRepository: DateRecordRepository
     @Inject lateinit var thoughtDraftStore: DesktopWidgetThoughtDraftStore
 
@@ -551,14 +553,13 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                     )
                     if (settings.calorieEstimationEnabled) {
                         try {
-                            val estimate = calorieEstimationRepository.estimate(
-                                media.documentUri,
-                                settings,
-                            )
-                            diaryFileRepository.setMealPhotoEstimate(
-                                media.fileName,
-                                estimate,
-                                settings,
+                            aiTaskQueue.enqueueTask(
+                                type = AiTaskTypeEntity.CALORIE_SINGLE,
+                                payload = CalorieSingleTaskPayload(
+                                    uri = media.documentUri,
+                                    fileName = media.fileName,
+                                    settings = settings,
+                                ),
                             )
                         } catch (cancelled: CancellationException) {
                             throw cancelled

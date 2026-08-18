@@ -478,6 +478,49 @@ class AppDatabaseMigrationTest {
         database.close()
     }
 
+    @Test
+    fun migrate13To14AddsAiTaskQueueAndPreservesChatData() {
+        val databaseName = "ai-task-queue-migration-test"
+        helper.createDatabase(databaseName, 13).apply {
+            execSQL(
+                """
+                INSERT INTO ai_conversations (id, title, modelConfigId, createdAt, updatedAt)
+                VALUES (7, '旧 AI 会话', 'legacy-model', 10, 20)
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            databaseName,
+            14,
+            true,
+            AppDatabase.MIGRATION_13_14,
+        )
+
+        database.query("SELECT COUNT(*) FROM ai_conversations WHERE id = 7").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(1, cursor.getInt(0))
+        }
+        database.execSQL(
+            """
+            INSERT INTO ai_task_queue (
+                id, type, state, payloadJson, progressJson, resultJson, errorSummary,
+                errorFailure, attemptCount, createdAt, startedAt, completedAt
+            ) VALUES (1, 'CALORIE_DAY', 'QUEUED', '{}', '', '', '', '', 0, 100, NULL, NULL)
+            """.trimIndent(),
+        )
+        database.query(
+            "SELECT type, state, attemptCount FROM ai_task_queue WHERE id = 1",
+        ).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("CALORIE_DAY", cursor.getString(0))
+            assertEquals("QUEUED", cursor.getString(1))
+            assertEquals(0, cursor.getInt(2))
+        }
+        database.close()
+    }
+
     private companion object {
         const val TEST_DATABASE = "ai-chat-migration-test"
     }

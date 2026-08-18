@@ -8,6 +8,7 @@ import com.deskcubby.app.data.statistics.UsageStatisticsRepository
 import com.deskcubby.app.data.statistics.StatisticsRefreshOutcome
 import com.deskcubby.app.data.statistics.StatisticsScheduler
 import com.deskcubby.app.data.sync.CloudSyncScheduler
+import com.deskcubby.app.data.taskqueue.AiTaskQueue
 import com.deskcubby.app.plugin.PluginRuntime
 import com.deskcubby.app.widget.DeskCubbyWidgetProvider
 import dagger.hilt.android.HiltAndroidApp
@@ -27,12 +28,23 @@ class DeskCubbyApplication : Application() {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var usageStatisticsRepository: UsageStatisticsRepository
     @Inject lateinit var pluginRuntime: PluginRuntime
+    @Inject lateinit var aiTaskQueue: AiTaskQueue
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
         cloudSyncScheduler.start()
         statisticsScheduler.start()
+        applicationScope.launch {
+            try {
+                aiTaskQueue.start()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Startup must continue even if the queue recovery fails; the next enqueue
+                // reschedules it.
+            }
+        }
         DeskCubbyWidgetProvider.requestUpdate(this)
         if (pluginRuntime.hasPlugins()) {
             applicationScope.launch {

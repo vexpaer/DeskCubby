@@ -9,18 +9,20 @@ import com.deskcubby.app.data.local.DiaryIndexDao
 import com.deskcubby.app.data.local.DiaryIndexEntity
 import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
+import com.deskcubby.app.data.local.AiTaskTypeEntity
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.repository.DailyPoem
 import com.deskcubby.app.data.repository.DateRecordRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
-import com.deskcubby.app.data.repository.CalorieEstimationRepository
 import com.deskcubby.app.data.repository.PoetryRepository
 import com.deskcubby.app.data.repository.PoetryBookRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncRunMode
 import com.deskcubby.app.data.sync.CloudSyncManualQueueState
+import com.deskcubby.app.data.taskqueue.AiTaskQueue
+import com.deskcubby.app.data.taskqueue.CalorieSingleTaskPayload
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -43,7 +45,7 @@ class HomeViewModel @Inject constructor(
     private val poetryRepository: PoetryRepository,
     private val poetryBookRepository: PoetryBookRepository,
     private val diaryFileRepository: DiaryFileRepository,
-    private val calorieRepository: CalorieEstimationRepository,
+    private val aiTaskQueue: AiTaskQueue,
     private val cloudSyncService: com.deskcubby.app.data.sync.AppCloudSyncService,
     private val cloudSyncUndoStore: com.deskcubby.app.data.sync.CloudSyncUndoStore,
 ) : ViewModel() {
@@ -204,17 +206,19 @@ class HomeViewModel @Inject constructor(
                 }
                 if (settings.calorieEstimationEnabled) {
                     try {
-                        val estimate = calorieRepository.estimate(media.documentUri, settings)
-                        diaryFileRepository.setMealPhotoEstimate(
-                            media.fileName,
-                            estimate,
-                            settings,
+                        aiTaskQueue.enqueueTask(
+                            type = AiTaskTypeEntity.CALORIE_SINGLE,
+                            payload = CalorieSingleTaskPayload(
+                                uri = media.documentUri,
+                                fileName = media.fileName,
+                                settings = settings,
+                            ),
                         )
-                        _message.value = "${_message.value} · ${estimate.energyKj}kJ"
+                        _message.value = "${_message.value} · 热量估算已加入后台队列"
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Exception) {
-                        _message.value = "${_message.value} · 热量估算失败：${error.message.orEmpty()}"
+                        _message.value = "${_message.value} · 热量估算入队失败：${error.message.orEmpty()}"
                     }
                 }
                 // Index refresh is best-effort background follow-up and must not keep the upload UI busy.

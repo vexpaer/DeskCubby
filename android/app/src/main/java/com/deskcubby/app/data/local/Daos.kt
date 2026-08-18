@@ -1071,3 +1071,109 @@ interface GameStatisticDao {
         if (items.isNotEmpty()) upsertAll(items)
     }
 }
+
+@Dao
+interface AiTaskDao {
+    @Insert
+    suspend fun insert(task: com.deskcubby.app.data.local.AiTaskQueueEntity): Long
+
+    @Query("SELECT * FROM ai_task_queue WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): com.deskcubby.app.data.local.AiTaskQueueEntity?
+
+    @Query("SELECT * FROM ai_task_queue WHERE id = :id")
+    fun observeById(id: Long): Flow<com.deskcubby.app.data.local.AiTaskQueueEntity?>
+
+    @Query("SELECT * FROM ai_task_queue ORDER BY id ASC")
+    fun observeAll(): Flow<List<com.deskcubby.app.data.local.AiTaskQueueEntity>>
+
+    @Query("SELECT * FROM ai_task_queue ORDER BY id ASC")
+    suspend fun getAll(): List<com.deskcubby.app.data.local.AiTaskQueueEntity>
+
+    @Query(
+        "UPDATE ai_task_queue SET state = :running, startedAt = :startedAt " +
+            "WHERE id IN (SELECT id FROM ai_task_queue WHERE state = :queued " +
+            "ORDER BY id ASC LIMIT 1)",
+    )
+    suspend fun claimOldest(
+        queued: com.deskcubby.app.data.local.AiTaskStateEntity,
+        running: com.deskcubby.app.data.local.AiTaskStateEntity,
+        startedAt: Long,
+    ): Int
+
+    @Query(
+        "SELECT * FROM ai_task_queue WHERE id IN " +
+            "(SELECT id FROM ai_task_queue WHERE state = :queued ORDER BY id ASC LIMIT 1) LIMIT 1",
+    )
+    suspend fun peekOldest(queued: com.deskcubby.app.data.local.AiTaskStateEntity): com.deskcubby.app.data.local.AiTaskQueueEntity?
+
+    @Query(
+        "SELECT * FROM ai_task_queue WHERE state = :queued OR state = :running " +
+            "ORDER BY id ASC LIMIT 1",
+    )
+    suspend fun nextIncomplete(
+        queued: com.deskcubby.app.data.local.AiTaskStateEntity,
+        running: com.deskcubby.app.data.local.AiTaskStateEntity,
+    ): com.deskcubby.app.data.local.AiTaskQueueEntity?
+
+    @Query(
+        "UPDATE ai_task_queue SET state = :succeeded, resultJson = :resultJson, " +
+            "completedAt = :completedAt WHERE id = :id",
+    )
+    suspend fun markSucceeded(
+        id: Long,
+        succeeded: com.deskcubby.app.data.local.AiTaskStateEntity,
+        resultJson: String,
+        completedAt: Long,
+    )
+
+    @Query(
+        "UPDATE ai_task_queue SET state = :failed, errorSummary = :errorSummary, " +
+            "errorFailure = :errorFailure, attemptCount = :attemptCount, completedAt = :completedAt " +
+            "WHERE id = :id",
+    )
+    suspend fun markFailed(
+        id: Long,
+        failed: com.deskcubby.app.data.local.AiTaskStateEntity,
+        errorSummary: String,
+        errorFailure: String,
+        attemptCount: Int,
+        completedAt: Long,
+    )
+
+    @Query("UPDATE ai_task_queue SET state = :canceled, completedAt = :completedAt WHERE id = :id")
+    suspend fun markCanceled(
+        id: Long,
+        canceled: com.deskcubby.app.data.local.AiTaskStateEntity,
+        completedAt: Long,
+    )
+
+    @Query("UPDATE ai_task_queue SET state = :waiting WHERE id = :id")
+    suspend fun markWaitingApproval(
+        id: Long,
+        waiting: com.deskcubby.app.data.local.AiTaskStateEntity,
+    )
+
+    @Query("UPDATE ai_task_queue SET progressJson = :progressJson WHERE id = :id")
+    suspend fun setProgress(id: Long, progressJson: String)
+
+    @Query(
+        "UPDATE ai_task_queue SET payloadJson = :payloadJson WHERE id = :id AND state = :queued",
+    )
+    suspend fun updatePayloadIfQueued(
+        id: Long,
+        payloadJson: String,
+        queued: com.deskcubby.app.data.local.AiTaskStateEntity,
+    ): Int
+
+    @Query("UPDATE ai_task_queue SET attemptCount = :attemptCount WHERE id = :id")
+    suspend fun setAttemptCount(id: Long, attemptCount: Int)
+
+    @Query("DELETE FROM ai_task_queue WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("SELECT COUNT(*) FROM ai_task_queue WHERE state = :queued")
+    suspend fun countQueued(queued: com.deskcubby.app.data.local.AiTaskStateEntity): Int
+
+    @Query("SELECT COUNT(*) FROM ai_task_queue WHERE state = :candidate")
+    suspend fun countByState(candidate: com.deskcubby.app.data.local.AiTaskStateEntity): Int
+}
