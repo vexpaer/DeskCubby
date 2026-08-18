@@ -225,11 +225,12 @@ import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncRunMode
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.ColorPickerDialog
-import com.deskcubby.app.ui.iconFor
 import com.deskcubby.app.ui.components.FourDotDragHandle
+import com.deskcubby.app.ui.components.MarkdownText
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
 import com.deskcubby.app.ui.components.PageTutorialTarget
 import com.deskcubby.app.ui.home.HomeGreeting
+import com.deskcubby.app.ui.iconFor
 import com.deskcubby.app.ui.poetry.rememberPoetryFontFamily
 import com.deskcubby.app.ui.poetry.isSevenCharacterPoem
 import com.deskcubby.app.ui.poetry.wrapSevenCharacterVerse
@@ -244,9 +245,11 @@ import java.time.LocalDate
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
-import kotlin.math.roundToInt
 import kotlin.math.exp
 import kotlin.math.ln
+import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private enum class SettingsPage {
     MAIN,
@@ -271,6 +274,7 @@ private enum class SettingsPage {
     USAGE,
     STEPS,
     ABOUT,
+    APP_GUIDE,
 }
 
 enum class SettingsStartPage { MAIN, NAVIGATION, MORE_PAGE, USAGE, STEPS, RSS, AI, POETRY }
@@ -1010,6 +1014,12 @@ fun SettingsScreen(
                 settings = settings,
                 contentPadding = inner,
                 viewModel = viewModel,
+                onOpenGuide = { page = SettingsPage.APP_GUIDE },
+            )
+
+            SettingsPage.APP_GUIDE -> AppGuideReaderPage(
+                settings = settings,
+                contentPadding = inner,
             )
         }
     }
@@ -1173,6 +1183,12 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
         tr("版本、更新检查与应用显示名称", "Version, update check and app display name"),
         "about version update github 关于 版本 更新 名称 桌洞",
         SettingsPage.ABOUT,
+    ),
+    SettingsSearchEntry(
+        tr("App 指南", "App guide"),
+        tr("应用内阅读完整使用教学", "Read the full app tutorial in-app"),
+        "guide tutorial help 指南 教学 帮助 教程 使用说明 帮助文档",
+        SettingsPage.APP_GUIDE,
     ),
 )
 
@@ -6611,10 +6627,52 @@ private fun DeviceTrackingSettingsPage(
 }
 
 @Composable
+private fun AppGuideReaderPage(
+    settings: AppSettings,
+    contentPadding: PaddingValues,
+) {
+    val context = LocalContext.current
+    var markdown by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        markdown = withContext(Dispatchers.IO) { readAppGuideMarkdown(context) }
+    }
+    Column(
+        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        val content = markdown
+        if (content == null) {
+            Text(
+                tr("正在载入应用指南…", "Loading the app guide…"),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(16.dp),
+            )
+        } else if (content.isBlank()) {
+            Text(
+                tr("无法读取应用指南。", "The app guide could not be read."),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(16.dp),
+            )
+        } else {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                MarkdownText(
+                    markdown = content,
+                    headingSizesSp = settings.markdownHeadingSizesSp,
+                    baseTextSizeSp = settings.aiPageFontSizeSp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun AboutSettingsPage(
     settings: AppSettings,
     contentPadding: PaddingValues,
     viewModel: SettingsViewModel,
+    onOpenGuide: () -> Unit,
 ) {
     val context = LocalContext.current
     var showThirdPartyLicenses by remember { mutableStateOf(false) }
@@ -6661,7 +6719,7 @@ private fun AboutSettingsPage(
                     Spacer(Modifier.width(8.dp))
                     Text(tr("GitHub 仓库", "GitHub repository"))
                 }
-                TextButton(onClick = { openUrl(context, TUTORIAL_URL) }) {
+                TextButton(onClick = onOpenGuide) {
                     Icon(Icons.AutoMirrored.Outlined.MenuBook, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(tr("应用教学", "App tutorial"))
@@ -6980,6 +7038,26 @@ private fun AboutSettingsPage(
     }
 }
 
+private const val APP_GUIDE_ASSET_NAME = "README_for_ai.md"
+private const val MAX_APP_GUIDE_BYTES = 1 * 1024 * 1024
+
+private fun readAppGuideMarkdown(context: Context): String? = runCatching {
+    context.assets.open(APP_GUIDE_ASSET_NAME).use { input ->
+        val buffer = ByteArray(16 * 1024)
+        val output = java.io.ByteArrayOutputStream()
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            if (count == 0) continue
+            require(output.size() + count <= MAX_APP_GUIDE_BYTES) {
+                "App guide exceeds the supported size"
+            }
+            output.write(buffer, 0, count)
+        }
+        output.toString(Charsets.UTF_8.name())
+    }
+}.getOrNull()
+
 private fun readPdfiumNotices(context: Context): String? = runCatching {
     context.assets.open(PDFIUM_NOTICES_ASSET).use { input ->
         val buffer = ByteArray(PDFIUM_NOTICES_READ_BUFFER_BYTES)
@@ -7260,6 +7338,10 @@ private fun settingsPageTutorialTarget(page: SettingsPage): PageTutorialTarget {
             "查看版本、教学模式、更新、桌面名称与图标。页面教学可在这里关闭或重置。",
             "View version, tutorials, updates, launcher name, and icon. Page tutorials can be disabled or reset here.",
         )
+        SettingsPage.APP_GUIDE -> tr(
+            "阅读应用使用指南。",
+            "Read the app guide.",
+        )
     }
     return PageTutorialTarget(
         pageId = "settings/${page.name.lowercase(Locale.ROOT)}",
@@ -7271,6 +7353,7 @@ private fun settingsPageTutorialTarget(page: SettingsPage): PageTutorialTarget {
                 SettingsPage.SYNC,
                 SettingsPage.AI,
                 SettingsPage.ABOUT,
+                SettingsPage.APP_GUIDE,
             )
         ) {
             listOf(
@@ -7309,6 +7392,7 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.USAGE -> tr("手机使用时间", "Screen time")
     SettingsPage.STEPS -> tr("健康", "Health")
     SettingsPage.ABOUT -> tr("关于", "About")
+    SettingsPage.APP_GUIDE -> tr("App 指南", "App guide")
 }
 
 private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
@@ -7339,6 +7423,8 @@ private fun parentSettingsPage(page: SettingsPage): SettingsPage = when (page) {
     SettingsPage.NAVIGATION,
     SettingsPage.ABOUT,
     -> SettingsPage.MAIN
+
+    SettingsPage.APP_GUIDE -> SettingsPage.ABOUT
 }
 
 internal fun defaultBackupFileName(clock: Clock): String =
@@ -7470,7 +7556,6 @@ private fun openUrl(context: Context, url: String) {
 }
 
 private const val GITHUB_URL = "https://github.com/vexpaer/DeskCubby"
-private const val TUTORIAL_URL = "https://github.com/vexpaer/DeskCubby/blob/main/TUTORIAL.md"
 private const val PDFIUM_NOTICES_ASSET = "pdfium_NOTICES.txt"
 private const val MAX_PDFIUM_NOTICES_BYTES = 256 * 1024
 private const val PDFIUM_NOTICES_READ_BUFFER_BYTES = 8 * 1024

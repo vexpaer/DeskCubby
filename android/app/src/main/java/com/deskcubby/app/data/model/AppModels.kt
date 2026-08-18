@@ -396,6 +396,7 @@ enum class AgentDataSource(val wireValue: String) {
     POEMS("poems"),
     USAGE("usage"),
     STATISTICS("statistics"),
+    APP_GUIDE("app_guide"),
 }
 
 data class AiModelConfig(

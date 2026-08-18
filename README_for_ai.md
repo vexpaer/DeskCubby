@@ -1,4 +1,11 @@
-# DeskCubby Android 0.20.1 使用教学
+# DeskCubby 应用指南 / App Guide（完整教学）
+
+> 本文件是原 TUTORIAL.md 的完整副本，供 AI 与用户阅读，同时复制到 `android/app/src/main/assets/README_for_ai.md`，两处必须保持一致。
+> This is the full tutorial, kept from TUTORIAL.md, readable by both AI and users, mirrored to `android/app/src/main/assets/README_for_ai.md`.
+>
+> **AI 读取方式**：DeskCubby Agent 勾选「应用指南」数据源后，只把每个 `##` 小节的标题索引进上下文（索引由解析器按文档顺序生成，id 为 `section-N`）；需要细节时按某一 `section-N` 读取单个小节正文。每个 `##` 标题连同其下所有 `###` 与正文构成一个小节。
+> **For AI**: when the Agent grants the "App guide" source, only the `##` heading index (ids `section-N`, in document order) enters the context; it reads one `section-N` body on demand. Each `##` heading plus its `###` subheadings and prose is one section.
+
 
 本文对应 DeskCubby Android **0.20.1** 与 Windows **0.8.0**。平台专属操作会明确标出；未标注的既有编号章节描述 Android。
 
@@ -2294,7 +2301,7 @@ WebDAV 仍严格要求普通响应或有界 `PROPFIND Depth: 0` 提供单个合�
 | 按钮/控件 | 操作 | 效果 |
 | --- | --- | --- |
 | 「GitHub 仓库」按钮 | 单击 | 用外部浏览器打开项目 GitHub 仓库（github.com/vexpaer/DeskCubby）。 |
-| 「应用教学」按钮 | 单击 | 用外部浏览器打开教学文档（仓库中的 TUTORIAL.md，也就是本文档）。 |
+| 「应用教学」按钮 | 单击 | 在应用内直接阅读教学文档（本指南，也就是本文档；不再跳到外部浏览器）。 |
 | 「第三方许可」按钮 | 单击 | 在应用内打开可选择、滚动的 `pdfium_NOTICES.txt`，其中保留 PdfiumAndroid 封装的 Apache-2.0 条款，以及 PDFium 引擎的 BSD 风格版权、许可和免责声明。DeskCubby 自身仍按 MIT License 发布。 |
 | 「软件教学模式」开关 | 单击 | 默认开启；关闭后不再显示任何首次进入蒙版，立即生效且无需顶栏保存。重新开启时，只对尚未确认的逻辑页面继续显示。 |
 | 「重新显示全部页面教学」按钮 | 单击 | 清除当前设备全部逐页确认；不改变总开关。若教学模式保持开启，当前 About 页也会重新出现说明蒙版。没有任何确认时按钮置灰。 |

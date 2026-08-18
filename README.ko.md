@@ -60,7 +60,7 @@ DeskCubby는 Android와 Windows용 **로컬 우선** 일기·개인 지식 베�
 
 ## 문서
 
-- [TUTORIAL.md](TUTORIAL.md) — 단계별 사용 가이드(앱 내 정보 페이지에서도 연결)
+- [README_for_ai.md](README_for_ai.md) — 단계별 사용 가이드(앱 정보 페이지에서 직접 표시, Agent의 읽기 전용 "앱 가이드" 데이터 소스)
 - [overview.md](overview.md) — 아키텍처 및 데이터 흐름
 
 ## 라이선스

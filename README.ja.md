@@ -60,7 +60,7 @@ DeskCubby は Android と Windows 向けの**ローカルファースト**な日
 
 ## ドキュメント
 
-- [TUTORIAL.md](TUTORIAL.md) — ステップバイステップの利用ガイド（アプリ内の「このアプリについて」からもリンク）
+- [README_for_ai.md](README_for_ai.md) — ステップバイステップの利用ガイド（アプリ内の「このアプリについて」から直接表示、Agent の読み取り専用「アプリガイド」データソース）
 - [overview.md](overview.md) — アーキテクチャとデータフロー
 
 ## ライセンス

@@ -62,7 +62,7 @@ DeskCubby is a **local-first** journal and personal knowledge base for Android a
 
 ## Documentation
 
-- [TUTORIAL.md](TUTORIAL.md) — step-by-step user guide (also linked from the in-app About page)
+- [README_for_ai.md](README_for_ai.md) — step-by-step user guide (read inline from the in-app About page, and available to the Agent as the read-only "App guide" source)
 - [overview.md](overview.md) — architecture and data flow
 
 ## License

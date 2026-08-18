@@ -782,6 +782,7 @@ private fun sourceLabel(source: AgentDataSource): String = when (source) {
     AgentDataSource.POEMS -> tr("诗词本", "Poetry book")
     AgentDataSource.USAGE -> tr("手机使用时间", "Phone usage")
     AgentDataSource.STATISTICS -> tr("统计数据", "Statistics")
+    AgentDataSource.APP_GUIDE -> tr("应用指南", "App guide")
 }
 
 @Composable
@@ -794,6 +795,7 @@ private fun sourceDescription(source: AgentDataSource): String = when (source) {
     AgentDataSource.POEMS -> tr("收藏诗词与分类", "Saved poems and categories")
     AgentDataSource.USAGE -> tr("只读的按日/应用使用数据", "Read-only daily/app usage")
     AgentDataSource.STATISTICS -> tr("只读聚合统计", "Read-only aggregate statistics")
+    AgentDataSource.APP_GUIDE -> tr("应用使用教学按章节索引；只读", "Read-only how-to guide indexed by section")
 }
 
 @Composable
@@ -1029,6 +1031,7 @@ private fun agentDataSourceLabel(source: AgentDataSource): String = when (source
     AgentDataSource.POEMS -> tr("诗词", "Poems")
     AgentDataSource.USAGE -> tr("使用时间", "Screen time")
     AgentDataSource.STATISTICS -> tr("统计", "Statistics")
+    AgentDataSource.APP_GUIDE -> tr("应用指南", "App guide")
 }
 
 @Composable

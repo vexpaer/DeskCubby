@@ -49,7 +49,7 @@ DeskCubby/
 ├─ AGENTS.md                 # 后续 AI/开发者的仓库操作指南
 ├─ overview.md               # 本文件：架构、功能和历史概览
 ├─ README.md                 # 用户向功能、构建与发布说明
-├─ TUTORIAL.md               # 应用内 About 页链接的完整教学
+├─ README_for_ai.md           # 完整使用教学（About 页内联渲染 + Agent app_guide 源），镜像到 android assets
 ├─ LICENSE
 ├─ android/                  # 完整 Android Gradle 工程
 │  ├─ app/
@@ -645,7 +645,7 @@ Windows 设置采用接近 Android 的层级：设置主页为「外观与语言
 
 ### 仓库平台目录拆分（2026-07-29）
 
-- 完整 Android Gradle 工程迁入 `android/`，包括 `app` module、Wrapper、构建配置、签名脚本和签名示例；仓库根目录继续保存 `README.md`、`TUTORIAL.md`、`overview.md`、许可证等跨平台文件。构建继续兼容迁移前的根目录签名文件，签名脚本会拒绝在检测到旧长期密钥时生成替代密钥。
+- 完整 Android Gradle 工程迁入 `android/`，包括 `app` module、Wrapper、构建配置、签名脚本和签名示例；仓库根目录继续保存 `README.md`、`README_for_ai.md`、`overview.md`、许可证等跨平台文件。构建继续兼容迁移前的根目录签名文件，签名脚本会拒绝在检测到旧长期密钥时生成替代密钥。
 - 新建可被 Git 跟踪的 `windows/` 目录，为随后落地的 Windows 0.1.0 建立平台边界。此调整不改变 Android 应用版本、数据格式或用户交互。
 
 ### 0.3.7（2026-07-28）
@@ -743,7 +743,7 @@ Windows 设置采用接近 Android 的层级：设置主页为「外观与语言
 - 首次启动预设：默认主页模块精简为 今天/每日诗词/快速输入/饮食图片/年度进度；`decode()` 对无存量 homeWidgets 的全新安装跳过 widget 迁移，避免迁移把旧模块塞回预设。
 - 小巧思：切换分类弹窗内可“新增分类”并自动套用（`createCategoryAndAssign`）；分类编辑对话框可导出该分类全部小巧思（ACTION_SEND 纯文本）；有机未来分类预设色板改为跨色相配色。
 - 吃历顶栏新增餐别筛选（FilterAlt 图标，勾选对话框，会话内状态）；照片滤镜按钮图标改为 AutoFixHigh。
-- About 页新增“应用教学”入口，链接仓库 TUTORIAL.md（由本轮生成，逐页面/逐按钮教学）。
+- About 页新增“应用教学”入口，内联渲染打包的 `README_for_ai.md`（完整教学，不再打开外部浏览器）。
 
 本轮验证：101/101 JVM 测试通过（含游戏引擎、VaultCrypto、吃历排行算法）、Android 仪器测试源码编译通过（含 6→7 迁移测试源码）、`assembleDebug` 与 Lint（0 错误）通过。设备端仍需验证：系统相册写入、启动器别名切换、收藏夹实机解锁、三套主题下新 UI、6→7 迁移 connected test。
 

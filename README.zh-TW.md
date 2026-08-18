@@ -59,7 +59,7 @@ DeskCubby 是一款**本地優先**的日記與個人知識庫應用，同時支
 
 ## 文件
 
-- [TUTORIAL.md](TUTORIAL.md) —— 完整使用教學（應用內「關於」頁也提供連結）
+- [README_for_ai.md](README_for_ai.md) —— 完整使用教學（應用內「關於」頁直接內聯閱讀，也是 Agent 的唯讀「應用指南」資料源）
 - [overview.md](overview.md) —— 架構與資料流
 
 ## 授權條款

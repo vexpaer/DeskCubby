@@ -8,6 +8,7 @@ import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DateRecordRepository
 import com.deskcubby.app.data.repository.PoetryBookRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
+import android.content.Context
 import com.deskcubby.app.data.statistics.GameStatisticsRepository
 import com.deskcubby.app.data.statistics.StepStatisticsRepository
 import com.deskcubby.app.data.statistics.UsageStatisticsRepository
@@ -28,6 +29,7 @@ import com.deskcubby.plugin.api.core.api.FileSearchQuery
 import com.deskcubby.plugin.api.core.api.VaultDocument
 import com.deskcubby.plugin.api.core.api.VaultEntry
 import com.deskcubby.plugin.api.core.api.VaultEntryKind
+import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.LocalDate
 import java.util.UUID
 import javax.inject.Inject
@@ -38,6 +40,7 @@ import org.json.JSONObject
 
 @Singleton
 class DeskCubbyDataApiAdapter @Inject constructor(
+    @ApplicationContext private val appContext: Context,
     private val diaryApi: DiaryApiAdapter,
     private val vaultApi: VaultApiAdapter,
     private val fileApi: FileApiAdapter,
@@ -168,6 +171,20 @@ class DeskCubbyDataApiAdapter @Inject constructor(
                     ),
                 )
             }
+            if (APP_GUIDE in requested) {
+                val sections = appGuideSections()
+                add(
+                    source(
+                        APP_GUIDE,
+                        "应用指南",
+                        "App guide",
+                        "应用使用教学目录（section-1..N 标题索引）；可再按章节读取正文，只读。",
+                        "Index of the app how-to guide (section-1..N titles); fetch one section's body on demand. Read-only.",
+                        sections.size,
+                        categories = sections.map { "${it.id}: ${it.title}" }.take(MAX_SOURCE_CATEGORIES),
+                    ),
+                )
+            }
         }
     }
 
@@ -241,6 +258,16 @@ class DeskCubbyDataApiAdapter @Inject constructor(
         USAGE -> usageEntry(entryId) ?: notFound(sourceId, entryId)
         STATISTICS -> statisticsEntries().firstOrNull { it.entryId == entryId }
             ?: notFound(sourceId, entryId)
+        APP_GUIDE -> {
+            val section = appGuideSections().firstOrNull { it.id == entryId }
+                ?: notFound(sourceId, entryId)
+            DeskCubbyDataEntry(
+                APP_GUIDE,
+                section.id,
+                section.title,
+                content = section.content.take(MAX_APP_GUIDE_SECTION_CHARS),
+            )
+        }
         else -> throw invalidSource(sourceId)
     }
 
@@ -366,6 +393,15 @@ class DeskCubbyDataApiAdapter @Inject constructor(
             )
         }
         STATISTICS -> statisticsEntries()
+        APP_GUIDE -> appGuideSections().map { section ->
+            DeskCubbyDataEntry(
+                APP_GUIDE,
+                section.id,
+                section.title,
+                subtitle = section.id,
+                content = if (query.text.isNullOrBlank()) "" else section.title,
+            )
+        }
         else -> throw invalidSource(query.sourceId)
     }
 
@@ -700,6 +736,13 @@ class DeskCubbyDataApiAdapter @Inject constructor(
         )
     }
 
+    private suspend fun appGuideSections(): List<AppGuideSection> = tolerateFailure(emptyList()) {
+        val text = appContext.assets.open(APP_GUIDE_ASSET)
+            .use { it.readBytes().toString(Charsets.UTF_8) }
+        if (text.length > MAX_APP_GUIDE_BYTES) return@tolerateFailure emptyList()
+        parseAppGuide(text)
+    }
+
     private suspend fun thoughtCategoryId(name: String?): Long? = name?.let { value ->
         thoughtRepository.categories.first().firstOrNull { it.name.equals(value, true) }?.id
             ?: throw IllegalArgumentException("Unknown thought category: $value")
@@ -757,6 +800,9 @@ class DeskCubbyDataApiAdapter @Inject constructor(
         const val POEMS = "poems"
         const val USAGE = "usage"
         const val STATISTICS = "statistics"
+        const val APP_GUIDE = "app_guide"
+        const val APP_GUIDE_ASSET = "README_for_ai.md"
+        const val MAX_APP_GUIDE_BYTES = 1 * 1024 * 1024
         const val PLAN_SCHEMA = "deskcubby.agent-data-plan.v1"
         const val UNDO_SCHEMA = "deskcubby.agent-data-undo.v1"
         const val MAX_PAGE_SIZE = 100
@@ -774,6 +820,7 @@ class DeskCubbyDataApiAdapter @Inject constructor(
             POEMS,
             USAGE,
             STATISTICS,
+            APP_GUIDE,
         )
     }
 }
