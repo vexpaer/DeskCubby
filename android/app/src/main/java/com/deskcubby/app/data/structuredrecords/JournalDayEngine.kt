@@ -129,6 +129,14 @@ object JournalDayEngine {
      *
      * `time < boundary → journalDay + 1` else `journalDay`. This means a 02:37 value on Journal Day
      * 2026-08-18 becomes 2026-08-19 02:37 — the early-morning instant that actually happened.
+     *
+     * Known limitation: a single `HH:mm` value is inherently ambiguous on a journal day whose span
+     * crosses a day-boundary change (e.g. the boundary was raised from 05:00 to 07:00 effective the
+     * next journal day, so the day's span extends to 07:00 the next morning). This projection always
+     * resolves such a value against the day's own boundary, which is correct for the constant
+     * boundary and the change day itself but can be off by one day for a value written inside the
+     * next morning's extension window. The write path still lands such records in the correct file;
+     * only the projected date-time for duration/chart math is approximate on those transition days.
      */
     fun resolveFieldDateTime(
         journalDay: LocalDate,

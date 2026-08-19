@@ -120,6 +120,24 @@ class StructuredMarkdownProtocolTest {
     }
 
     @Test
+    fun parseIgnoresMarkersInsideIndentedFence() {
+        // Both delimiters are indented (1-3 spaces); the block must still be treated as fenced.
+        val content = "   ```\n   <!--dc:f_x-->1<!--dc:/f_x-->\n   ```\n正文：<!--dc:f_x-->2<!--dc:/f_x-->"
+        val occurrences = StructuredMarkdownProtocol.parse(content)
+        assertEquals(1, occurrences.size)
+        assertEquals("2", occurrences[0].rawValue)
+    }
+
+    @Test
+    fun parseIgnoresMarkersInsideDeeplyIndentedFence() {
+        // Even a 4+ space-indented ``` fence pair protects its contents from being indexed.
+        val content = "    ```\n    <!--dc:f_x-->1<!--dc:/f_x-->\n    ```\na<!--dc:f_x-->2<!--dc:/f_x-->"
+        val occurrences = StructuredMarkdownProtocol.parse(content)
+        assertEquals(1, occurrences.size)
+        assertEquals("2", occurrences[0].rawValue)
+    }
+
+    @Test
     fun buildRecordText() {
         val text = StructuredMarkdownProtocol.buildRecordText(
             listOf(
