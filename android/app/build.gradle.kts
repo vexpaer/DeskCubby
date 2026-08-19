@@ -76,8 +76,8 @@ android {
         applicationId = "com.deskcubby.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 46
-        versionName = "0.21.0"
+        versionCode = 47
+        versionName = "0.22.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
