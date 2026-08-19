@@ -84,4 +84,64 @@ class JournalDayEngineTest {
             JournalDayEngine.getEffectiveDayBoundary(LocalDate.of(2026, 7, 1), history),
         )
     }
+
+    @Test
+    fun resolveWithHistoryKeepsCurrentDayOnBoundaryChangeWindow() {
+        // Boundary was 05:00; the user changes to 07:00 effective from the next journal day (08-20).
+        val history = listOf(
+            DayBoundaryRecord(effectiveFromJournalDay = "2026-08-20", value = "07:00"),
+        )
+        // On the change day before the old 05:00 boundary → previous journal day.
+        assertEquals(
+            LocalDate.of(2026, 8, 18),
+            JournalDayEngine.resolveJournalDayWithHistory(
+                LocalDateTime.of(2026, 8, 19, 4, 59),
+                history,
+            ),
+        )
+        // After the old 05:00 boundary the change day keeps its original boundary, NOT the new
+        // 07:00 — a 06:30 record stays in today's file instead of being bounced to yesterday.
+        assertEquals(
+            LocalDate.of(2026, 8, 19),
+            JournalDayEngine.resolveJournalDayWithHistory(
+                LocalDateTime.of(2026, 8, 19, 6, 30),
+                history,
+            ),
+        )
+        // The next journal day starts at the new 07:00 boundary, so 06:30 on 08-20 still belongs
+        // to 08-19's journal day...
+        assertEquals(
+            LocalDate.of(2026, 8, 19),
+            JournalDayEngine.resolveJournalDayWithHistory(
+                LocalDateTime.of(2026, 8, 20, 6, 30),
+                history,
+            ),
+        )
+        // ...and 07:00 on 08-20 starts the new day.
+        assertEquals(
+            LocalDate.of(2026, 8, 20),
+            JournalDayEngine.resolveJournalDayWithHistory(
+                LocalDateTime.of(2026, 8, 20, 7, 0),
+                history,
+            ),
+        )
+    }
+
+    @Test
+    fun resolveWithHistoryWithoutEntriesFallsBackToDefault() {
+        assertEquals(
+            LocalDate.of(2026, 8, 18),
+            JournalDayEngine.resolveJournalDayWithHistory(
+                LocalDateTime.of(2026, 8, 19, 4, 59),
+                emptyList(),
+            ),
+        )
+        assertEquals(
+            LocalDate.of(2026, 8, 19),
+            JournalDayEngine.resolveJournalDayWithHistory(
+                LocalDateTime.of(2026, 8, 19, 5, 0),
+                emptyList(),
+            ),
+        )
+    }
 }

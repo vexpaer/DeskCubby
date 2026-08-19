@@ -118,12 +118,16 @@ class StructuredRecordsViewModel @Inject constructor(
             return
         }
         val workspace = workspaceRepository.loadSettings(appSettings)
-        val boundary = JournalDayEngine.parseBoundary(workspace.dayBoundary)
-        val today = JournalDayEngine.resolveJournalDay(Instant.now(), boundary)
+        val today = JournalDayEngine.resolveJournalDayWithHistory(Instant.now(), workspace.dayBoundaryHistory)
         mutableJournalDay.value = today
         val estimate = if (appSettings.structuredAutoRecordSleepWake) {
             // queryEvents replays the day's interaction history synchronously; keep it off Main.
-            withContext(Dispatchers.IO) { phoneInteractionEstimator.estimateForJournalDay(today, boundary) }
+            withContext(Dispatchers.IO) {
+                phoneInteractionEstimator.estimateForJournalDay(
+                    today,
+                    JournalDayEngine.parseBoundary(workspace.effectiveDayBoundary(today)),
+                )
+            }
         } else null
         mutableSystemSnapshot.value = SystemFieldSnapshot(
             autoRecording = appSettings.structuredAutoRecordSleepWake,

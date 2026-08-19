@@ -40,10 +40,7 @@ class StructuredWorkspaceRepository @Inject constructor(
      */
     suspend fun resolveJournalDay(appSettings: AppSettings, now: Instant = Instant.now()): LocalDate {
         val workspace = loadSettings(appSettings)
-        return JournalDayEngine.resolveJournalDay(
-            now,
-            JournalDayEngine.parseBoundary(workspace.dayBoundary),
-        )
+        return JournalDayEngine.resolveJournalDayWithHistory(now, workspace.dayBoundaryHistory)
     }
 
     /** Effective `HH:mm` boundary for [journalDay] (honors boundary history). */

@@ -108,6 +108,7 @@ object StructuredMarkdownProtocol {
         val spans = ArrayList<IntRange>()
         var lineStart = 0
         var fenceChar: Char? = null
+        var fenceLen = 0
         var spanStart = 0
         while (lineStart <= content.length) {
             var lineEnd = content.indexOf('\n', lineStart)
@@ -116,12 +117,16 @@ object StructuredMarkdownProtocol {
             if (fenceChar == null) {
                 val match = FENCE_REGEX.find(line)
                 if (match != null) {
-                    fenceChar = match.groupValues[1][0]
+                    val run = match.groupValues[1]
+                    fenceChar = run[0]
+                    fenceLen = run.length
                     spanStart = lineStart
                 }
             } else {
                 val trimmed = line.trimEnd()
-                if (trimmed.length >= 3 && trimmed.all { it == fenceChar }) {
+                // A closing fence must be at least as long as the opening run (CommonMark); a
+                // shorter run does not close the block, so its content stays indexed.
+                if (trimmed.length >= fenceLen && trimmed.all { it == fenceChar }) {
                     spans += spanStart..lineEnd
                     fenceChar = null
                 }
@@ -131,7 +136,9 @@ object StructuredMarkdownProtocol {
         return spans
     }
 
-    private val FENCE_REGEX = Regex("""^\s*(`{3,}|~{3,})""")
+    // CommonMark limits fence indent to three spaces; a deeper indent is an indented code block, so
+    // treating it as a fence could hide real markers behind a falsely-opened span.
+    private val FENCE_REGEX = Regex("""^ {0,3}(`{3,}|~{3,})""")
 
     /**
      * Replaces the value of one matched occurrence within [content] by its raw span, preserving

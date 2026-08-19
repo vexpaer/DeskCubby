@@ -71,6 +71,15 @@ class StructuredFieldNormalizerTest {
     }
 
     @Test
+    fun numberAcceptsFullWidthCommaDecimal() {
+        // Chinese IME commonly produces "，" for a decimal separator; it maps to "." like "1,5".
+        assertEquals(
+            NormalizedFieldValue.Number(1.5),
+            StructuredFieldNormalizer.normalize(StructuredFieldType.NUMBER, "1，5").value,
+        )
+    }
+
+    @Test
     fun normalizeRejectsReservedMarkerTokens() {
         // Free-text values must not smuggle the protocol's marker tokens past the normalizer.
         assertTrue(StructuredFieldNormalizer.normalize(StructuredFieldType.WORD, "abc<!--dc:/f_x-->def").isError)

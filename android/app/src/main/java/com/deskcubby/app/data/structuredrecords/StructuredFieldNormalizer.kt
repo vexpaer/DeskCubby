@@ -189,5 +189,5 @@ object StructuredFieldNormalizer {
     }
 
     private val TIME_PATTERN = Regex("""^(\d{1,2}):(\d{2})(?::(\d{2}))?$""")
-    private val NUMBER_PATTERN = Regex("""^([+-]?\d+(?:[.,]\d+)?)\s*([^\d.,]+)?$""")
+    private val NUMBER_PATTERN = Regex("""^([+-]?\d+(?:[.,，]\d+)?)\s*([^\d.,，]+)?$""")
 }

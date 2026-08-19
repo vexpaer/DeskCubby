@@ -59,8 +59,7 @@ class StructuredRecordsRepository @Inject constructor(
         if (!settings.structuredAutoRecordSleepWake) return 0
         workspaceRepository.ensureSystemFields(settings)
         val workspace = workspaceRepository.loadSettings(settings)
-        val boundaryMinutes = JournalDayEngine.parseBoundary(workspace.dayBoundary)
-        val today = JournalDayEngine.resolveJournalDay(now, boundaryMinutes)
+        val today = JournalDayEngine.resolveJournalDayWithHistory(now, workspace.dayBoundaryHistory)
         val fields = workspaceRepository.loadFields(settings).associateBy { it.id }
         val wakeField = fields[SYSTEM_FIELD_WAKE_TIME]
         val sleepField = fields[SYSTEM_FIELD_SLEEP_TIME]
@@ -70,8 +69,10 @@ class StructuredRecordsRepository @Inject constructor(
         // Settle a small bounded window of past days so a missed day heals on the next open.
         for (offset in 1..3) {
             val day = today.minusDays(offset.toLong())
-            val estimate = phoneInteractionEstimator.estimateForJournalDay(day, boundaryMinutes)
-                ?: continue
+            val estimate = phoneInteractionEstimator.estimateForJournalDay(
+                day,
+                JournalDayEngine.parseBoundary(workspace.effectiveDayBoundary(day)),
+            ) ?: continue
             estimate.wakeTime?.let { wake ->
                 val result = upsertSystemFieldValue(settings, wakeField, day, JournalDayEngine.formatTime(wake))
                 if (result.success) written += 1
@@ -86,10 +87,7 @@ class StructuredRecordsRepository @Inject constructor(
 
     suspend fun currentJournalDay(settings: AppSettings, now: Instant = Instant.now()): LocalDate {
         val workspace = workspaceRepository.loadSettings(settings)
-        return JournalDayEngine.resolveJournalDay(
-            now,
-            JournalDayEngine.parseBoundary(workspace.dayBoundary),
-        )
+        return JournalDayEngine.resolveJournalDayWithHistory(now, workspace.dayBoundaryHistory)
     }
 
     suspend fun loadAllOccurrences(): List<StructuredRecordOccurrenceEntity> =
@@ -133,10 +131,7 @@ class StructuredRecordsRepository @Inject constructor(
         }
         val block = StructuredMarkdownProtocol.buildRecordText(template.segments, normalizedTexts)
         val workspace = workspaceRepository.loadSettings(settings)
-        val journalDay = JournalDayEngine.resolveJournalDay(
-            now,
-            JournalDayEngine.parseBoundary(workspace.dayBoundary),
-        )
+        val journalDay = JournalDayEngine.resolveJournalDayWithHistory(now, workspace.dayBoundaryHistory)
         val separator = "\n"
         return try {
             diaryFileRepository.transformDiaryForDate(settings, journalDay) { content ->

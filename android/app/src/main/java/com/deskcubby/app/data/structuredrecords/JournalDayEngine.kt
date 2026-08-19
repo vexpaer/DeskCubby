@@ -73,6 +73,34 @@ object JournalDayEngine {
     }
 
     /**
+     * Resolves the Journal Day for [instant] under a *history-aware* boundary: each candidate day
+     * uses the boundary effective for it per [getEffectiveDayBoundary]. Keeps "today" consistent
+     * with boundary changes recorded as effective from the next Journal Day — the still-running day
+     * keeps its original boundary instead of switching mid-(journal)day on the write path.
+     */
+    fun resolveJournalDayWithHistory(
+        instant: Instant,
+        history: List<DayBoundaryRecord>,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): LocalDate {
+        val local = LocalDateTime.ofInstant(instant, zone)
+        return resolveJournalDayWithHistory(local, history)
+    }
+
+    /** Overload for an already-local moment. */
+    fun resolveJournalDayWithHistory(
+        localDateTime: LocalDateTime,
+        history: List<DayBoundaryRecord>,
+    ): LocalDate {
+        val candidate = localDateTime.toLocalDate()
+        val boundary = parseBoundary(getEffectiveDayBoundary(candidate, history))
+            ?: parseBoundary(DEFAULT_DAY_BOUNDARY)
+            ?: 5 * 60
+        val beforeBoundary = localDateTime.toLocalTime().toSecondOfDay() < boundary * 60
+        return if (beforeBoundary) candidate.minusDays(1) else candidate
+    }
+
+    /**
      * Returns the day boundary value (as `HH:mm`) effective for [journalDay], given a history of
      * boundary changes. The first entry whose `effectiveFromJournalDay <= journalDay` wins.
      * Entries must be sorted ascending. Falls back to the default when empty or when the entry
