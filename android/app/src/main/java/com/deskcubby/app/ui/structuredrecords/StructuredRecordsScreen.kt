@@ -91,7 +91,12 @@ fun StructuredRecordsScreen(
     var pendingDelete by remember { mutableStateOf<StructuredRecordTemplate?>(null) }
     val fieldsById = remember(fields) { fields.associateBy { it.id } }
 
-    LaunchedEffect(Unit) { viewModel.touchNow() }
+    LaunchedEffect(Unit) {
+        viewModel.touchNow()
+        // The ViewModel is scoped to the navigation root, so fields/templates edited on the
+        // settings subpages do not re-emit here by themselves; refresh once on each visit.
+        viewModel.refreshWorkspaceFromUi()
+    }
     LaunchedEffect(feedback?.key) {
         feedback?.let { current ->
             snackbarHostState.showSnackbar(current.message)
@@ -161,7 +166,7 @@ fun StructuredRecordsScreen(
 
     if (showNewEditor) {
         NewRecordEditorDialog(
-            fields = fields,
+            fields = fields.filterNot { it.archived },
             onDismiss = { showNewEditor = false },
             onConfirm = { name, fieldId, prefix ->
                 val field = fieldsById[fieldId]

@@ -39,15 +39,29 @@ object StructuredMarkdownProtocol {
      * matching close marker with the same field ID before the next open marker. Non-matching or
      * unclosed markers do not abort the parse; they are simply not produced as occurrences, and
      * any surrounding text is left untouched (the caller only writes/edits matched regions).
+     *
+     * Markers inside fenced code blocks (` ``` ` / `~~~`) are treated as code, never as
+     * occurrences: a documented example that happens to carry a marker pair must not be indexed,
+     * and must never be rewritten in place by a value update.
      */
     fun parse(content: String): List<Occurrence> {
         val result = ArrayList<Occurrence>()
+        val fenceSpans = fencedSpans(content)
         var cursor = 0
         var order = 0
+        var fenceIndex = 0
         val openPrefix = MARKER_PREFIX
         while (true) {
+            // Advance the fence pointer past any span that is entirely behind the cursor.
+            while (fenceIndex < fenceSpans.size && cursor >= fenceSpans[fenceIndex].last) fenceIndex++
             val open = content.indexOf(openPrefix, cursor)
             if (open < 0) break
+            // A marker that starts inside a fenced block is skipped along with the whole block.
+            if (fenceIndex < fenceSpans.size && open >= fenceSpans[fenceIndex].first && open < fenceSpans[fenceIndex].last) {
+                cursor = fenceSpans[fenceIndex].last
+                fenceIndex++
+                continue
+            }
             val close = content.indexOf(MARKER_SUFFIX, open)
             if (close < 0) break
             val fieldId = content.substring(open + openPrefix.length, close).trim()
@@ -83,6 +97,41 @@ object StructuredMarkdownProtocol {
 
     /** True when [content] contains at least one dc marker (fast path for scans). */
     fun containsMarkers(content: String): Boolean = MARKER_PREFIX in content
+
+    /**
+     * Byte spans of fenced code blocks (backtick or tilde), as `[start, last)` offsets over
+     * [content]. A fence opens on a line whose trimmed start is at least three of the same char and
+     * closes on the next line of that same char (trailing whitespace allowed), per CommonMark.
+     * An unclosed fence is not fenced content.
+     */
+    private fun fencedSpans(content: String): List<IntRange> {
+        val spans = ArrayList<IntRange>()
+        var lineStart = 0
+        var fenceChar: Char? = null
+        var spanStart = 0
+        while (lineStart <= content.length) {
+            var lineEnd = content.indexOf('\n', lineStart)
+            if (lineEnd < 0) lineEnd = content.length
+            val line = content.substring(lineStart, lineEnd)
+            if (fenceChar == null) {
+                val match = FENCE_REGEX.find(line)
+                if (match != null) {
+                    fenceChar = match.groupValues[1][0]
+                    spanStart = lineStart
+                }
+            } else {
+                val trimmed = line.trimEnd()
+                if (trimmed.length >= 3 && trimmed.all { it == fenceChar }) {
+                    spans += spanStart..lineEnd
+                    fenceChar = null
+                }
+            }
+            lineStart = lineEnd + 1
+        }
+        return spans
+    }
+
+    private val FENCE_REGEX = Regex("""^\s*(`{3,}|~{3,})""")
 
     /**
      * Replaces the value of one matched occurrence within [content] by its raw span, preserving

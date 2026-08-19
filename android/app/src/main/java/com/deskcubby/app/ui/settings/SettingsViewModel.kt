@@ -243,7 +243,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** Applies a new day boundary effective from the current Journal Day. */
+    /** Applies a new day boundary, effective from the next Journal Day. */
     fun setStructuredDayBoundary(value: String) {
         viewModelScope.launch {
             val appSettings = settings.value

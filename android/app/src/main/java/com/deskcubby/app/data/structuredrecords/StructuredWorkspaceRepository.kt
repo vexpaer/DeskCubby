@@ -79,9 +79,13 @@ class StructuredWorkspaceRepository @Inject constructor(
         val normalized = JournalDayEngine.parseBoundary(newBoundary)
             ?.let(JournalDayEngine::formatBoundary)
             ?: JournalDayEngine.DEFAULT_DAY_BOUNDARY
+        // The current journal day is already in progress; record the change as effective from the
+        // next one so today's earlier instants are not retroactively reinterpreted under the new
+        // boundary (the settings copy promises "从下一个日记日开始生效").
+        val effectiveFrom = journalDay.plusDays(1)
         val history = current.dayBoundaryHistory
-            .filterNot { it.effectiveFromJournalDay == journalDay.toString() } +
-            DayBoundaryRecord(effectiveFromJournalDay = journalDay.toString(), value = normalized)
+            .filterNot { it.effectiveFromJournalDay == effectiveFrom.toString() } +
+            DayBoundaryRecord(effectiveFromJournalDay = effectiveFrom.toString(), value = normalized)
         val updated = current.copy(
             dayBoundary = normalized,
             dayBoundaryHistory = history.sortedBy { it.effectiveFromJournalDay },

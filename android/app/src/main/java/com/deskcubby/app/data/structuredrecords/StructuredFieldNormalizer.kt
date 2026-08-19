@@ -62,6 +62,12 @@ object StructuredFieldNormalizer {
     fun normalize(fieldType: StructuredFieldType, raw: String): NormalizationResult {
         val text = raw.trim()
         if (text.isEmpty()) return NormalizationResult(null)
+        // A value must never smuggle the protocol's own marker tokens into the document: the parser
+        // would truncate the value at an embedded open marker and re-emit the tail as a close marker
+        // that shadows real data — silently losing user text.
+        if (text.contains("<!--") || text.contains("-->")) {
+            return NormalizationResult(null, error = "内容包含保留标记 <!-- 与 -->")
+        }
         return when (fieldType) {
             StructuredFieldType.WORD -> NormalizationResult(NormalizedFieldValue.Word(text))
             StructuredFieldType.NUMBER -> normalizeNumber(text)
@@ -100,7 +106,9 @@ object StructuredFieldNormalizer {
 
     private fun normalizeNumber(text: String): NormalizationResult {
         // Accept an optional numeric prefix followed by a unit ("30 次", "5.2 km"), a decimal comma
-        // or point, and optional sign. Anything else is rejected rather than silently stored.
+        // or point, and optional sign. The unit must not itself start with a digit/dot/comma or
+        // contain digits, so ambiguous tails like "1.2.3" or "12abc34" are rejected instead of
+        // silently truncated to the numeric prefix.
         val match = NUMBER_PATTERN.matchEntire(text.trim()) ?: return NormalizationResult(
             null,
             error = "数值无效",
@@ -120,6 +128,12 @@ object StructuredFieldNormalizer {
         val hour = match.groupValues[1].toInt()
         val minute = match.groupValues[2].toInt()
         if (hour > 23 || minute > 59) return NormalizationResult(null, error = "时间无效")
+        // HH:mm:ss is accepted for entry but canonicalized to HH:mm; still validate the seconds the
+        // user did type so "23:59:99" is rejected rather than silently coerced.
+        val secondText = match.groupValues[3]
+        if (secondText.isNotEmpty() && secondText.toInt() > 59) {
+            return NormalizationResult(null, error = "时间无效")
+        }
         return NormalizationResult(NormalizedFieldValue.Time(LocalTime.of(hour, minute), text))
     }
 
@@ -175,5 +189,5 @@ object StructuredFieldNormalizer {
     }
 
     private val TIME_PATTERN = Regex("""^(\d{1,2}):(\d{2})(?::(\d{2}))?$""")
-    private val NUMBER_PATTERN = Regex("""^([+-]?\d+(?:[.,]\d+)?)\s*(.*)$""")
+    private val NUMBER_PATTERN = Regex("""^([+-]?\d+(?:[.,]\d+)?)\s*([^\d.,]+)?$""")
 }

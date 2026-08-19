@@ -51,7 +51,7 @@ object MetricEvaluator {
         anchorDay: LocalDate,
         fields: FieldValuesProvider,
     ): EvalResult {
-        val targetDay = anchorDay.plusDays(ref.dayOffset.toLong())
+        val targetDay = anchorDay.plusDays(clampOffset(ref.dayOffset))
         val values = fields.valuesFor(ref.fieldId, targetDay)
         if (values.isEmpty()) return EvalResult.Missing
         val selected = applySelector(values, ref.selector) ?: return EvalResult.Missing
@@ -125,7 +125,7 @@ object MetricEvaluator {
         // V1 supports direct time field refs (and a timeDiff whose operands are time refs).
         if (operand is MetricExpression.FieldRef) {
             val ref = operand.ref
-            val targetDay = anchorDay.plusDays(ref.dayOffset.toLong())
+            val targetDay = anchorDay.plusDays(clampOffset(ref.dayOffset))
             val values = fields.valuesFor(ref.fieldId, targetDay)
             if (values.isEmpty()) return null
             val selected = applySelector(values, ref.selector) ?: return null
@@ -137,6 +137,13 @@ object MetricEvaluator {
         }
         return null
     }
+
+    /**
+     * Bounds a metric's `dayOffset` so a malformed (hand-edited / synced) definition can never push
+     * [LocalDate.plusDays] past LocalDate.MAX/MIN and throw. ±40000 days is ~110 years, far beyond
+     * any real metric but small enough that plusDays stays well inside the date range.
+     */
+    private fun clampOffset(dayOffset: Int): Long = dayOffset.coerceIn(-40000, 40000).toLong()
 
     /**
      * Collapses multiple same-day values into one using [selector]. Type-appropriate selectors are

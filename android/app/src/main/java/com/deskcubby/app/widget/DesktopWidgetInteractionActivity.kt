@@ -27,6 +27,7 @@ import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DateRecordRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
+import com.deskcubby.app.data.structuredrecords.StructuredWorkspaceRepository
 import com.deskcubby.app.data.sync.CloudSyncManualScheduler
 import com.deskcubby.app.data.sync.CloudSyncRunMode
 import com.deskcubby.app.data.taskqueue.AiTaskQueue
@@ -57,6 +58,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
     @Inject lateinit var diaryFileRepository: DiaryFileRepository
     @Inject lateinit var aiTaskQueue: AiTaskQueue
     @Inject lateinit var dateRecordRepository: DateRecordRepository
+    @Inject lateinit var structuredWorkspaceRepository: StructuredWorkspaceRepository
     @Inject lateinit var thoughtDraftStore: DesktopWidgetThoughtDraftStore
 
     private var settings: AppSettings = AppSettings()
@@ -423,7 +425,11 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                 lifecycleScope.launch {
                     try {
                         withContext(Dispatchers.IO) {
-                            diaryFileRepository.appendTextToToday(entry, settings)
+                    // Mirror Home: daily-record writes must land on the current Journal Day so the
+                    // 05:00 boundary (or a custom one) does not split "today" across two files.
+                    val journalDay = runCatching { structuredWorkspaceRepository.resolveJournalDay(settings) }
+                        .getOrDefault(LocalDate.now())
+                    diaryFileRepository.appendTextToToday(entry, settings, journalDay)
                             try {
                                 diaryFileRepository.scan(settings)
                             } catch (cancelled: CancellationException) {

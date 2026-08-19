@@ -20,6 +20,7 @@ import com.deskcubby.plugin.api.core.api.FileSearchQuery
 import com.deskcubby.plugin.api.core.api.AIToolCall
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.structuredrecords.FieldSelector
+import com.deskcubby.app.data.structuredrecords.StructuredFieldNormalizer
 import com.deskcubby.app.data.structuredrecords.StructuredRecordsRepository
 import com.deskcubby.app.data.structuredrecords.StructuredStatisticsRepository
 import com.deskcubby.app.data.structuredrecords.StructuredWorkspaceRepository
@@ -497,10 +498,13 @@ class BuiltInAgentToolContributor @Inject constructor(
         },
         executeBlock = { preparation, scope ->
             val args = JSONObject(preparation.executionToken)
+            val start = args.optNullableString("start") ?: "0001-01-01"
+            val end = args.optNullableString("end") ?: "9999-12-31"
+            if (start > end) invalidArguments("date range is invalid")
             val occurrences = structuredRecordsRepository.occurrencesForField(
                 args.getString("fieldId"),
-                args.optNullableString("start") ?: "0001-01-01",
-                args.optNullableString("end") ?: "9999-12-31",
+                start,
+                end,
             )
             AgentToolOutcome(
                 jsonResult(
@@ -546,12 +550,19 @@ class BuiltInAgentToolContributor @Inject constructor(
             val settings = settingsRepository.settings.first()
             val field = structuredWorkspaceRepository.loadFields(settings).firstOrNull { it.id == fieldId }
                 ?: invalidArguments("Unknown field id: $fieldId")
+            val start = args.optNullableString("start") ?: "0001-01-01"
+            val end = args.optNullableString("end") ?: "9999-12-31"
+            if (start > end) invalidArguments("date range is invalid")
+            val selector = FieldSelector.fromWire(args.optNullableString("selector")) ?: FieldSelector.LAST
+            if (selector !in StructuredFieldNormalizer.allowedSelectors(field.type)) {
+                invalidArguments("selector is not supported for this field type")
+            }
             val stats = structuredStatisticsRepository.autoFieldStats(
                 settings,
                 field,
-                args.optNullableString("start") ?: "0001-01-01",
-                args.optNullableString("end") ?: "9999-12-31",
-                FieldSelector.fromWire(args.optNullableString("selector")) ?: FieldSelector.LAST,
+                start,
+                end,
+                selector,
             )
             AgentToolOutcome(
                 jsonResult(

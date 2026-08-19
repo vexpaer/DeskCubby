@@ -67,27 +67,36 @@ class PhoneInteractionEstimator @Inject constructor(
         val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         var firstUseMillis: Long? = null
         var lastStopMillis: Long? = null
-        val events = usageStatsManager.queryEvents(beginMillis, queryEnd)
-        while (events.hasNextEvent()) {
-            val event = UsageEvents.Event()
-            events.getNextEvent(event)
-            val eventType = event.eventType
-            if (eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
-                eventType == UsageEvents.Event.SCREEN_INTERACTIVE ||
-                eventType == UsageEvents.Event.KEYGUARD_HIDDEN ||
-                eventType == UsageEvents.Event.USER_INTERACTION
-            ) {
-                val candidate = firstUseMillis
-                if (candidate == null || event.timeStamp < candidate) firstUseMillis = event.timeStamp
-            } else if (
-                eventType == UsageEvents.Event.ACTIVITY_PAUSED ||
-                eventType == UsageEvents.Event.SCREEN_NON_INTERACTIVE ||
-                eventType == UsageEvents.Event.KEYGUARD_SHOWN ||
-                eventType == UsageEvents.Event.DEVICE_SHUTDOWN
-            ) {
-                val candidate = lastStopMillis
-                if (candidate == null || event.timeStamp > candidate) lastStopMillis = event.timeStamp
+        try {
+            val events = usageStatsManager.queryEvents(beginMillis, queryEnd)
+            while (events.hasNextEvent()) {
+                val event = UsageEvents.Event()
+                events.getNextEvent(event)
+                val eventType = event.eventType
+                if (eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
+                    eventType == UsageEvents.Event.SCREEN_INTERACTIVE ||
+                    eventType == UsageEvents.Event.KEYGUARD_HIDDEN ||
+                    eventType == UsageEvents.Event.USER_INTERACTION
+                ) {
+                    val candidate = firstUseMillis
+                    if (candidate == null || event.timeStamp < candidate) firstUseMillis = event.timeStamp
+                } else if (
+                    eventType == UsageEvents.Event.ACTIVITY_PAUSED ||
+                    eventType == UsageEvents.Event.SCREEN_NON_INTERACTIVE ||
+                    eventType == UsageEvents.Event.KEYGUARD_SHOWN ||
+                    eventType == UsageEvents.Event.DEVICE_SHUTDOWN
+                ) {
+                    val candidate = lastStopMillis
+                    if (candidate == null || event.timeStamp > candidate) lastStopMillis = event.timeStamp
+                }
             }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: SecurityException) {
+            // Usage access may be revoked between the capability check above and this query.
+            return null
+        } catch (_: RuntimeException) {
+            return null
         }
         if (firstUseMillis == null && lastStopMillis == null) return null
         val wake = firstUseMillis?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalTime() }

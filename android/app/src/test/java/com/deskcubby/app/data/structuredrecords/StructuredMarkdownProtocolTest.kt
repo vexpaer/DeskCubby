@@ -94,6 +94,32 @@ class StructuredMarkdownProtocolTest {
     }
 
     @Test
+    fun parseIgnoresMarkersInsideFencedCodeBlock() {
+        val content = buildString {
+            append("正文：<!--dc:f_a-->真实<!--dc:/f_a-->\n")
+            append("```markdown\n")
+            append("示例 <!--dc:f_a-->假数据<!--dc:/f_a-->\n")
+            append("```\n")
+            append("尾部：<!--dc:f_b-->也是真的<!--dc:/f_b-->")
+        }
+        val occurrences = StructuredMarkdownProtocol.parse(content)
+        assertEquals(listOf("f_a", "f_b"), occurrences.map { it.fieldId })
+        assertEquals(listOf("真实", "也是真的"), occurrences.map { it.rawValue })
+        // stripMarkers must not touch the code block between the fences.
+        val stripped = StructuredMarkdownProtocol.stripMarkers(content)
+        assertTrue(stripped.contains("示例 <!--dc:f_a-->假数据<!--dc:/f_a-->"))
+        assertTrue(stripped.contains("正文：真实"))
+    }
+
+    @Test
+    fun parseIgnoresMarkersInsideTildeFence() {
+        val content = "~~~\n<!--dc:f_x-->1<!--dc:/f_x-->\n~~~\n正文：<!--dc:f_x-->2<!--dc:/f_x-->"
+        val occurrences = StructuredMarkdownProtocol.parse(content)
+        assertEquals(1, occurrences.size)
+        assertEquals("2", occurrences[0].rawValue)
+    }
+
+    @Test
     fun buildRecordText() {
         val text = StructuredMarkdownProtocol.buildRecordText(
             listOf(

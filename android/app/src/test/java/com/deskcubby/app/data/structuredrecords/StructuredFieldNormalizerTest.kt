@@ -54,6 +54,41 @@ class StructuredFieldNormalizerTest {
     }
 
     @Test
+    fun numberRejectsAmbiguousTrailingGarbage() {
+        // A numeric prefix followed by a real unit is fine...
+        assertEquals(
+            NormalizedFieldValue.Number(30.0),
+            StructuredFieldNormalizer.normalize(StructuredFieldType.NUMBER, "30 次").value,
+        )
+        assertEquals(
+            NormalizedFieldValue.Number(5.2),
+            StructuredFieldNormalizer.normalize(StructuredFieldType.NUMBER, "5.2 km").value,
+        )
+        // ...but tails that are not a coherent unit are rejected instead of silently truncated.
+        assertTrue(StructuredFieldNormalizer.normalize(StructuredFieldType.NUMBER, "1.2.3").isError)
+        assertTrue(StructuredFieldNormalizer.normalize(StructuredFieldType.NUMBER, "12abc34").isError)
+        assertTrue(StructuredFieldNormalizer.normalize(StructuredFieldType.NUMBER, "12-5").isError)
+    }
+
+    @Test
+    fun normalizeRejectsReservedMarkerTokens() {
+        // Free-text values must not smuggle the protocol's marker tokens past the normalizer.
+        assertTrue(StructuredFieldNormalizer.normalize(StructuredFieldType.WORD, "abc<!--dc:/f_x-->def").isError)
+        assertTrue(StructuredFieldNormalizer.normalize(StructuredFieldType.TYPE, "值 --> 垃圾").isError)
+        assertTrue(StructuredFieldNormalizer.normalize(StructuredFieldType.WORD, "今天很好").value is NormalizedFieldValue.Word)
+    }
+
+    @Test
+    fun timeRejectsInvalidSeconds() {
+        assertTrue(StructuredFieldNormalizer.normalize(StructuredFieldType.TIME, "23:59:99").isError)
+        // HH:mm:ss is accepted for entry but canonicalized to HH:mm.
+        assertEquals(
+            "12:34",
+            StructuredFieldNormalizer.normalize(StructuredFieldType.TIME, "12:34:56").value?.displayText,
+        )
+    }
+
+    @Test
     fun wordNeverBecomesNumber() {
         val value = StructuredFieldNormalizer.normalize(StructuredFieldType.WORD, "今天很好").value
         assertTrue(value is NormalizedFieldValue.Word)

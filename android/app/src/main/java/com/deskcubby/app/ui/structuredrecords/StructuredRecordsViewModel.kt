@@ -20,6 +20,7 @@ import java.time.LocalTime
 import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class StructuredRecordsFeedback(
     val key: Long,
@@ -120,7 +122,8 @@ class StructuredRecordsViewModel @Inject constructor(
         val today = JournalDayEngine.resolveJournalDay(Instant.now(), boundary)
         mutableJournalDay.value = today
         val estimate = if (appSettings.structuredAutoRecordSleepWake) {
-            phoneInteractionEstimator.estimateForJournalDay(today, boundary)
+            // queryEvents replays the day's interaction history synchronously; keep it off Main.
+            withContext(Dispatchers.IO) { phoneInteractionEstimator.estimateForJournalDay(today, boundary) }
         } else null
         mutableSystemSnapshot.value = SystemFieldSnapshot(
             autoRecording = appSettings.structuredAutoRecordSleepWake,
