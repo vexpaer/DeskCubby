@@ -102,14 +102,12 @@ class PhoneInteractionEstimator @Inject constructor(
                     UsageEvents.Event.ACTIVITY_RESUMED,
                     UsageEvents.Event.SCREEN_INTERACTIVE,
                     UsageEvents.Event.KEYGUARD_HIDDEN,
-                    UsageEvents.Event.USER_INTERACTION,
-                    -> PhoneInteractionKind.START
+                    UsageEvents.Event.USER_INTERACTION -> PhoneInteractionKind.START
 
                     UsageEvents.Event.ACTIVITY_PAUSED,
                     UsageEvents.Event.SCREEN_NON_INTERACTIVE,
                     UsageEvents.Event.KEYGUARD_SHOWN,
-                    UsageEvents.Event.DEVICE_SHUTDOWN,
-                    -> PhoneInteractionKind.STOP
+                    UsageEvents.Event.DEVICE_SHUTDOWN -> PhoneInteractionKind.STOP
 
                     else -> null
                 }
