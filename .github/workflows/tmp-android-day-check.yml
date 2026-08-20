@@ -1,0 +1,124 @@
+name: Temporary Android journal-date check
+
+on:
+  push:
+    branches:
+      - fix/simplify-today-diary-date
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Apply narrow Android-only follow-up patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, found {count}: {old[:80]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          repo = 'android/app/src/main/java/com/deskcubby/app/data/preferences/SettingsRepository.kt'
+          replace_once(
+              repo,
+              ') {\n    private object Keys {',
+              ''' ) {
+    /** Device-local; used only by the explicit “进入今日日记” action. */
+    suspend fun getTodayDiarySwitchTime(): String {
+        val raw = context.settingsDataStore.data.first()[Keys.todayDiarySwitchTime]
+        return normalizeTodayDiarySwitchTime(raw)
+    }
+
+    suspend fun setTodayDiarySwitchTime(value: String) {
+        val normalized = normalizeTodayDiarySwitchTime(value)
+        context.settingsDataStore.edit { preferences ->
+            preferences[Keys.todayDiarySwitchTime] = normalized
+        }
+    }
+
+    private fun normalizeTodayDiarySwitchTime(value: String?): String {
+        val text = value?.trim().orEmpty()
+        val match = Regex("""^(\\d{1,2}):(\\d{2})$""").matchEntire(text) ?: return "05:00"
+        val hour = match.groupValues[1].toIntOrNull() ?: return "05:00"
+        val minute = match.groupValues[2].toIntOrNull() ?: return "05:00"
+        if (hour !in 0..23 || minute !in 0..59) return "05:00"
+        return "%02d:%02d".format(hour, minute)
+    }
+
+    private object Keys {''',
+          )
+          replace_once(
+              repo,
+              '        val orientationPreference = stringPreferencesKey("orientation_preference")',
+              '        val orientationPreference = stringPreferencesKey("orientation_preference")\n        // Device-local diary-file switch time; never written to `.deskcubby/settings.json`.\n        val todayDiarySwitchTime = stringPreferencesKey("today_diary_switch_time")',
+          )
+
+          workspace = 'android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredWorkspaceRepository.kt'
+          replace_once(workspace, 'import com.deskcubby.app.data.preferences.TodayDiarySwitchTimeStore', 'import com.deskcubby.app.data.preferences.SettingsRepository')
+          replace_once(workspace, '    private val todayDiarySwitchTimeStore: TodayDiarySwitchTimeStore,', '    private val settingsRepository: SettingsRepository,')
+          replace_once(workspace, 'todayDiarySwitchTimeStore.current()', 'settingsRepository.getTodayDiarySwitchTime()')
+          replace_once(workspace, 'todayDiarySwitchTimeStore.current()', 'settingsRepository.getTodayDiarySwitchTime()')
+          replace_once(workspace, 'todayDiarySwitchTimeStore.current()', 'settingsRepository.getTodayDiarySwitchTime()')
+          replace_once(workspace, 'todayDiarySwitchTimeStore.set(normalized)', 'settingsRepository.setTodayDiarySwitchTime(normalized)')
+
+          Path('android/app/src/main/java/com/deskcubby/app/data/preferences/TodayDiarySwitchTimeStore.kt').unlink()
+
+          screen = 'android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt'
+          replacements = {
+              'SettingsSection(tr("日界线", "Day boundary"))': 'SettingsSection(tr("今日日记切换时间", "Today diary switch time"))',
+              '"一天从此刻开始切换。默认 05:00；凌晨 5 点前「进入今日日记」仍会打开前一个日记日。"': '"仅影响「进入今日日记」。默认 05:00；早于该时间打开昨天，达到或晚于该时间打开今天。结构化记录、统计、吃历、卡路里与后台任务始终使用自然日期。"',
+              '"A journal day starts at this time. Default 05:00; before it, “Open today\'s diary” still opens the previous journal day."': '"Only affects “Open today\'s diary”. Default 05:00; before it opens yesterday, at or after it opens today. Records, statistics, meals, calories and background jobs always use calendar dates."',
+              'tr("一天开始时间 HH:mm", "Day start HH:mm")': 'tr("今日日记切换时间 HH:mm", "Today diary switch time HH:mm")',
+              'tr("修改从下一个日记日开始生效。", "Changes take effect from the next journal day.")': 'tr("仅保存在本设备；修改不会改变历史数据或统计结果。", "Stored on this device only; changing it never alters historical data or statistics.")',
+              '"根据手机每天第一次/最后一次使用、解锁与锁屏时间自动估算，不使用 Health Connect。"': '"按手机最后使用/锁屏到下一次首次使用/解锁形成睡眠会话，使用真实时间戳，不使用 Health Connect。"',
+              '"Estimated from the phone\'s first/last use, unlock and lock times. Health Connect is not used."': '"A sleep session runs from the last use/lock to the next first use/unlock using real timestamps. Health Connect is not used."',
+              '"该开关是设备本地设置，只在本机启用；最终估算值会在当天结束后写入日记并随 Markdown 同步。关闭只停止后续采集，不删除历史记录。"': '"该开关是设备本地设置，只在本机启用；完整睡眠会话形成后写入真实睡觉/起床时间并随 Markdown 同步。关闭只停止后续采集，不删除历史记录。"',
+              '"This switch is device-local. Final estimates are written to the diary after the day settles and travel with Markdown. Turning it off stops future collection without deleting history."': '"This switch is device-local. Completed sessions write the real sleep/wake times to Markdown. Turning it off stops future collection without deleting history."',
+          }
+          p = Path(screen)
+          text = p.read_text(encoding='utf-8')
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{screen}: expected one match, found {count}: {old[:80]!r}')
+              text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+
+      - name: Verify removed global boundary symbols
+        run: |
+          ! grep -R --line-number --exclude='*.md' -E 'dayBoundaryHistory|resolveJournalDayWithHistory|effectiveDayBoundary|unwrapJournalTime|resolveFieldDateTime' android/app/src/main android/app/src/test
+
+      - name: Run Android unit tests
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Commit tested Android-only follow-up
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- android/app/src/main/java/com/deskcubby/app/data/preferences/SettingsRepository.kt \
+            android/app/src/main/java/com/deskcubby/app/data/preferences/TodayDiarySwitchTimeStore.kt \
+            android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredWorkspaceRepository.kt \
+            android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt
+          git diff --cached --quiet && exit 0
+          git commit -m 'Store today diary switch time in existing settings DataStore'
+          git push
