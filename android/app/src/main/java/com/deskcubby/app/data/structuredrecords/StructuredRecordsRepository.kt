@@ -9,36 +9,28 @@ import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.DiaryTextUtils
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** Outcome of writing one structured record / system value into Markdown. */
 data class StructuredRecordWriteResult(
     val success: Boolean,
     val message: String? = null,
+    /** Legacy property name kept for API/index compatibility; value is the natural Markdown date. */
     val journalDay: LocalDate? = null,
 )
 
-/** Outcome of an incremental index refresh. */
 data class IncrementalIndexResult(
     val parsedFiles: Int,
     val totalOccurrences: Int,
 )
 
 /**
- * The structured-records orchestration layer: it owns the Markdown-first write rules and the
- * derived local index.
- *
- * Write order is always:
- *  1. compute Journal Day
- *  2. normalize values by field type
- *  3. write normal Markdown + dc field markers (through [DiaryFileRepository], which owns SAF I/O)
- *  4. update the local index
- *
- * Markdown is the source of truth. If an index update fails after a durable Markdown write, the
- * Markdown survives and the file stays marked "changed" so a later refresh re-parses it.
+ * Markdown-first structured-record orchestration. All new records belong to the natural local
+ * calendar date. The “今日日记切换时间” is intentionally unavailable to this repository.
  */
 @Singleton
 class StructuredRecordsRepository @Inject constructor(
@@ -50,58 +42,60 @@ class StructuredRecordsRepository @Inject constructor(
     private val indexMutex = Mutex()
 
     /**
-     * Settles the automatic sleep/wake estimates for the previous journal day(s) into Markdown.
-     * Only the final first-use/last-use of a complete journal day is written — individual unlock or
-     * lock events are never appended to the diary. Idempotent: updating an existing marker to the
-     * same value produces no file change.
+     * Writes completed stop -> next-start sleep sessions. A session is summarized on its natural
+     * wake date, using the real local sleep/wake clock times. No Journal Day or diary switch time is
+     * read. A short bounded backfill window heals days missed while the app was closed.
      */
     suspend fun settleAutomaticSleepWake(settings: AppSettings, now: Instant = Instant.now()): Int {
         if (!settings.structuredAutoRecordSleepWake) return 0
         workspaceRepository.ensureSystemFields(settings)
-        val workspace = workspaceRepository.loadSettings(settings)
-        val today = JournalDayEngine.resolveJournalDayWithHistory(now, workspace.dayBoundaryHistory)
+        val today = LocalDateTime.ofInstant(now, ZoneId.systemDefault()).toLocalDate()
         val fields = workspaceRepository.loadFields(settings).associateBy { it.id }
         val wakeField = fields[SYSTEM_FIELD_WAKE_TIME]
         val sleepField = fields[SYSTEM_FIELD_SLEEP_TIME]
         if (wakeField == null || sleepField == null) return 0
 
         var written = 0
-        // Settle a small bounded window of past days so a missed day heals on the next open.
-        for (offset in 1..3) {
-            val day = today.minusDays(offset.toLong())
-            val estimate = phoneInteractionEstimator.estimateForJournalDay(
-                day,
-                JournalDayEngine.parseBoundary(workspace.effectiveDayBoundary(day)),
-            ) ?: continue
-            estimate.wakeTime?.let { wake ->
-                val result = upsertSystemFieldValue(settings, wakeField, day, JournalDayEngine.formatTime(wake))
-                if (result.success) written += 1
-            }
-            estimate.sleepTime?.let { sleep ->
-                val result = upsertSystemFieldValue(settings, sleepField, day, JournalDayEngine.formatTime(sleep))
-                if (result.success) written += 1
-            }
+        for (offset in 0..3) {
+            val wakeDate = today.minusDays(offset.toLong())
+            val session = phoneInteractionEstimator.estimateForWakeDate(wakeDate, now = now) ?: continue
+            val wake = session.wakeLocalTime()
+            val sleep = session.sleepLocalTime()
+            val wakeResult = upsertSystemFieldValue(
+                settings,
+                wakeField,
+                wakeDate,
+                JournalDayEngine.formatTime(wake),
+            )
+            if (wakeResult.success) written += 1
+            val sleepResult = upsertSystemFieldValue(
+                settings,
+                sleepField,
+                wakeDate,
+                JournalDayEngine.formatTime(sleep),
+            )
+            if (sleepResult.success) written += 1
+            // Duration is intentionally derived from the exact timestamps in the same session.
+            // Keeping the computation here prevents any configurable clock boundary from entering
+            // sleep semantics even though only sleep/wake fields are currently persisted.
+            session.durationSeconds
         }
         return written
     }
 
+    /** Legacy API name; returns the natural local date and never reads workspace settings. */
     suspend fun currentJournalDay(settings: AppSettings, now: Instant = Instant.now()): LocalDate {
-        val workspace = workspaceRepository.loadSettings(settings)
-        return JournalDayEngine.resolveJournalDayWithHistory(now, workspace.dayBoundaryHistory)
+        @Suppress("UNUSED_VARIABLE")
+        val ignored = settings
+        return LocalDateTime.ofInstant(now, ZoneId.systemDefault()).toLocalDate()
     }
 
-    suspend fun loadAllOccurrences(): List<StructuredRecordOccurrenceEntity> =
-        structuredRecordDao.getAll()
+    suspend fun loadAllOccurrences(): List<StructuredRecordOccurrenceEntity> = structuredRecordDao.getAll()
 
-    /** Queries the index for one field in a range (inclusive, ISO journal days). */
     suspend fun occurrencesForField(fieldId: String, startIso: String, endIso: String) =
         structuredRecordDao.occurrencesForField(fieldId, startIso, endIso)
 
-    /**
-     * Inserts one template-driven record into the journal file for the resolved Journal Day and
-     * re-parses that file into the index. Values are in template field-segment order and are
-     * validated/normalized by their field type before any Markdown is written.
-     */
+    /** Inserts one template-driven record into the natural-date Markdown file. */
     suspend fun insertRecordFromTemplate(
         settings: AppSettings,
         template: StructuredRecordTemplate,
@@ -111,10 +105,7 @@ class StructuredRecordsRepository @Inject constructor(
         val fields = workspaceRepository.loadFields(settings).associateBy { it.id }
         val fieldSegments = template.segments.filterIsInstance<StructuredRecordSegment.Field>()
         if (fieldSegments.size != values.size) {
-            return StructuredRecordWriteResult(
-                false,
-                "字段与填写值数量不一致",
-            )
+            return StructuredRecordWriteResult(false, "字段与填写值数量不一致")
         }
         val normalizedTexts = ArrayList<String>(values.size)
         for (index in fieldSegments.indices) {
@@ -130,11 +121,9 @@ class StructuredRecordsRepository @Inject constructor(
             normalizedTexts += normalized.value.displayText
         }
         val block = StructuredMarkdownProtocol.buildRecordText(template.segments, normalizedTexts)
-        val workspace = workspaceRepository.loadSettings(settings)
-        val journalDay = JournalDayEngine.resolveJournalDayWithHistory(now, workspace.dayBoundaryHistory)
-        val separator = "\n"
+        val naturalDate = LocalDateTime.ofInstant(now, ZoneId.systemDefault()).toLocalDate()
         return try {
-            diaryFileRepository.transformDiaryForDate(settings, journalDay) { content ->
+            diaryFileRepository.transformDiaryForDate(settings, naturalDate) { content ->
                 val lineEnding = DiaryTextUtils.preferredLineEnding(content)
                 val normalizedBlock = DiaryTextUtils.normalizeTextBlock(block, lineEnding)
                 val sep = when {
@@ -143,22 +132,17 @@ class StructuredRecordsRepository @Inject constructor(
                 }
                 content + sep + normalizedBlock
             }
-            refreshFileIndex(settings, journalDay)
-            StructuredRecordWriteResult(true, null, journalDay)
+            refreshFileIndex(settings, naturalDate)
+            StructuredRecordWriteResult(true, null, naturalDate)
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
-            StructuredRecordWriteResult(
-                false,
-                error.message ?: "写入日记失败",
-                journalDay,
-            )
+            StructuredRecordWriteResult(false, error.message ?: "写入日记失败", naturalDate)
         }
     }
 
     /**
-     * Writes (or updates in place) one system-sourced field value on a Journal Day. When the field
-     * marker already exists in that day's file the visible value is replaced without touching any
-     * surrounding Markdown; otherwise a readable `名称：value` line is appended.
+     * Writes or updates one system field in the supplied natural-date file. The parameter keeps its
+     * old name only to avoid a Room/API migration; it is never resolved through a day boundary.
      */
     suspend fun upsertSystemFieldValue(
         settings: AppSettings,
@@ -196,30 +180,19 @@ class StructuredRecordsRepository @Inject constructor(
         }
     }
 
-    /**
-     * Rebuilds the entire structured-records index from Markdown. Safe to call at any time; the
-     * result must equal an incrementally maintained index.
-     */
     suspend fun rebuildIndex(settings: AppSettings) = indexMutex.withLock {
         refreshIndex(settings, forceAll = true)
     }
 
-    /**
-     * Incremental refresh: only files whose mtime/size changed (or that are new) are re-parsed.
-     * Statistics and Agent queries read the index; nothing here full-scans Markdown on every call.
-     */
     suspend fun refreshIncremental(settings: AppSettings): IncrementalIndexResult = indexMutex.withLock {
-        val result = refreshIndex(settings, forceAll = false)
-        result
+        refreshIndex(settings, forceAll = false)
     }
 
-    /** Re-parses one journal file after an internal write so the index stays current immediately. */
     private suspend fun refreshFileIndex(settings: AppSettings, journalDay: LocalDate) {
         indexMutex.withLock {
             val files = diaryFileRepository.listDiaryFileMeta(settings)
             val target = files.firstOrNull { file ->
-                diaryFileRepository.extractDate(file.name, file.lastModified, settings.fileNamePattern) ==
-                    journalDay
+                diaryFileRepository.extractDate(file.name, file.lastModified, settings.fileNamePattern) == journalDay
             }
             if (target != null) parseAndStoreFile(settings, target)
         }
@@ -234,11 +207,8 @@ class StructuredRecordsRepository @Inject constructor(
             structuredRecordDao.clear()
             return IncrementalIndexResult(parsedFiles = 0, totalOccurrences = 0)
         }
-        val previousStates = if (forceAll) {
-            null
-        } else {
-            structuredRecordDao.allFileStates().associateBy { it.sourceFile }
-        }
+        val previousStates = if (forceAll) null
+        else structuredRecordDao.allFileStates().associateBy { it.sourceFile }
         val activeUris = files.map { it.uri }
         var parsed = 0
         for (file in files) {
@@ -252,14 +222,15 @@ class StructuredRecordsRepository @Inject constructor(
         }
         structuredRecordDao.deleteOccurrencesForMissingFiles(activeUris)
         structuredRecordDao.deleteFileStatesForMissingFiles(activeUris)
-        val total = structuredRecordDao.getAll().size
-        return IncrementalIndexResult(parsedFiles = parsed, totalOccurrences = total)
+        return IncrementalIndexResult(parsedFiles = parsed, totalOccurrences = structuredRecordDao.getAll().size)
     }
 
     private suspend fun parseAndStoreFile(settings: AppSettings, file: DiaryFileMeta) {
         val document = runCatching { diaryFileRepository.load(file.uri) }.getOrNull() ?: return
         val content = document.content
         val sha256 = DiaryTextUtils.sha256(content.toByteArray())
+        // `journalDay` is a legacy DB column name. Its value is strictly the Markdown file's
+        // extracted natural date, so rebuilding the index never reinterprets history.
         val journalDay = diaryFileRepository.extractDate(
             file.name,
             file.lastModified,
@@ -279,9 +250,7 @@ class StructuredRecordsRepository @Inject constructor(
             )
         }
         structuredRecordDao.deleteOccurrencesForFile(file.uri)
-        if (occurrences.isNotEmpty()) {
-            structuredRecordDao.insertOccurrences(occurrences)
-        }
+        if (occurrences.isNotEmpty()) structuredRecordDao.insertOccurrences(occurrences)
         structuredRecordDao.upsertFileState(
             StructuredRecordFileEntity(
                 sourceFile = file.uri,
@@ -293,10 +262,6 @@ class StructuredRecordsRepository @Inject constructor(
         )
     }
 
-    /**
-     * Deletes all occurrences belonging to the journal file at [uri]. Used by the agent edit/delete
-     * path and by file deletion so the index never holds "ghost" values for removed Markdown.
-     */
     suspend fun removeOccurrencesForFile(uri: String) {
         structuredRecordDao.deleteOccurrencesForFile(uri)
     }
