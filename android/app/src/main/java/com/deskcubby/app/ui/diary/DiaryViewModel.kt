@@ -310,9 +310,7 @@ class DiaryViewModel @Inject constructor(
                             error = null,
                         )
                     }
-                    val normalizedOverride = noteOverride
-                        ?.trim()
-                        ?.take(MAX_MEAL_NOTE_CHARS)
+                    val normalizedOverride = noteOverride?.trim()?.take(MAX_MEAL_NOTE_CHARS)
                     val seenPhotoKeys = if (dateIso == null) mutableSetOf<String>() else null
                     val prepared = currentItems
                         .filter { dateIso == null || it.dateIso == dateIso }
@@ -321,16 +319,10 @@ class DiaryViewModel @Inject constructor(
                             val selectedPhotos = day.photos.mapNotNull { photo ->
                                 if (photoFileName != null &&
                                     !photo.fileName.equals(photoFileName, ignoreCase = true)
-                                ) {
-                                    return@mapNotNull null
-                                }
+                                ) return@mapNotNull null
                                 if (!force && photo.energyKj != null) return@mapNotNull null
-                                val key = photo.fileName
-                                    .lowercase(Locale.ROOT)
-                                    .ifBlank { photo.uri.toString() }
-                                if (!seenInDay.add(key)) {
-                                    return@mapNotNull null
-                                }
+                                val key = photo.fileName.lowercase(Locale.ROOT).ifBlank { photo.uri.toString() }
+                                if (!seenInDay.add(key)) return@mapNotNull null
                                 CaloriePhotoSnapshot(
                                     uri = photo.uri.toString(),
                                     caption = photo.caption,
@@ -343,11 +335,7 @@ class DiaryViewModel @Inject constructor(
                                 photos = selectedPhotos,
                                 dayPhotoCount = day.photos.size,
                                 force = force,
-                                noteOverride = if (day.dateIso == dateIso) {
-                                    normalizedOverride
-                                } else {
-                                    null
-                                },
+                                noteOverride = if (day.dateIso == dateIso) normalizedOverride else null,
                                 fallbackNote = day.details.note,
                                 clearManualTotalOnSave = force && photoFileName == null,
                                 existingTotalEnergyKjOverride = day.details.totalEnergyKjOverride,
@@ -365,15 +353,9 @@ class DiaryViewModel @Inject constructor(
                     }
                     if (changedCount == 0) {
                         _message.value = if (prepared.isEmpty()) {
-                            localized(
-                                "没有需要计算的饮食图片",
-                                "No meal photos need calculation",
-                            )
+                            localized("没有需要计算的饮食图片", "No meal photos need calculation")
                         } else {
-                            localized(
-                                "所选日期已在热量估算队列中",
-                                "The selected date is already in the calorie queue",
-                            )
+                            localized("所选日期已在热量估算队列中", "The selected date is already in the calorie queue")
                         }
                     } else {
                         _message.value = localized(
@@ -391,9 +373,7 @@ class DiaryViewModel @Inject constructor(
     }
 
     fun clearFinishedCalorieEstimationProgress() {
-        viewModelScope.launch {
-            runCatching { aiTaskQueue.clearFinishedCalorieTasks() }
-        }
+        viewModelScope.launch { runCatching { aiTaskQueue.clearFinishedCalorieTasks() } }
     }
 
     fun saveMealDayDetails(
@@ -403,10 +383,7 @@ class DiaryViewModel @Inject constructor(
     ) {
         val initialState = _mealCalendarState.value
         if (initialState.loading) return
-        if (calorieEstimationQueueState.value.items.any {
-                it.dateIso == dateIso && !it.isTerminal
-            }
-        ) {
+        if (calorieEstimationQueueState.value.items.any { it.dateIso == dateIso && !it.isTerminal }) {
             _message.value = localized(
                 "该日期正在估算或排队，完成后再修改热量详情",
                 "This date is being estimated or queued; edit its details after it finishes",
@@ -465,13 +442,8 @@ class DiaryViewModel @Inject constructor(
             it.id == settings.calorieTextConfigId && it.type == AiModelType.TEXT
         }
         return if (!hasText) {
-            localized(
-                "请先在日记设置中选择文字模型",
-                "Choose a text model in diary settings first",
-            )
-        } else {
-            null
-        }
+            localized("请先在日记设置中选择文字模型", "Choose a text model in diary settings first")
+        } else null
     }
 
     fun exportMealCalendar(
@@ -527,9 +499,9 @@ class DiaryViewModel @Inject constructor(
         viewModelScope.launch {
             _editorState.value = EditorState(loading = true)
             val current = settings.value
-            val journalDay = runCatching { workspaceRepository.resolveJournalDay(current) }
+            val diaryDate = runCatching { workspaceRepository.resolveTodayDiaryDate(current) }
                 .getOrDefault(LocalDate.now())
-            runCatching { repository.enterToday(current, journalDay) }
+            runCatching { repository.enterToday(current, diaryDate) }
                 .onSuccess { doc ->
                     undoStack.clear()
                     redoStack.clear()
@@ -672,8 +644,6 @@ class DiaryViewModel @Inject constructor(
                             _editorState.value = _editorState.value.copy(error = error.userMessage())
                         }
                     }
-                    // Gallery copy + reverse geocode are best-effort and never part of the editor
-                    // import's completion.
                     runCatching { repository.enrichImportedMedia(uri, media, settings.value) }
                 }
                 .onFailure { _editorState.value = _editorState.value.copy(error = it.userMessage()) }
@@ -724,30 +694,18 @@ class DiaryViewModel @Inject constructor(
                     )
                     if (changedDuringDelete) saveRequests.tryEmit(Unit)
                     _message.value = if (result.mediaFileDeleted) {
-                        localized(
-                            "媒体文件及日记引用已删除",
-                            "Media file and diary references deleted",
-                        )
+                        localized("媒体文件及日记引用已删除", "Media file and diary references deleted")
                     } else {
-                        localized(
-                            "媒体文件已不存在，日记引用已删除",
-                            "The media file was already missing; diary references deleted",
-                        )
+                        localized("媒体文件已不存在，日记引用已删除", "The media file was already missing; diary references deleted")
                     }
                     markMealCalendarDirty()
                     refresh()
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: ExternalFileConflictException) {
-                    _editorState.value = _editorState.value.copy(
-                        saving = false,
-                        conflict = error.diskDocument,
-                    )
+                    _editorState.value = _editorState.value.copy(saving = false, conflict = error.diskDocument)
                 } catch (error: Exception) {
-                    _editorState.value = _editorState.value.copy(
-                        saving = false,
-                        error = error.userMessage(),
-                    )
+                    _editorState.value = _editorState.value.copy(saving = false, error = error.userMessage())
                 }
             }
         }
@@ -765,14 +723,9 @@ class DiaryViewModel @Inject constructor(
                 .onSuccess { renamed ->
                     val editor = _editorState.value
                     if (editor.document?.uri == uri) {
-                        _editorState.value = editor.copy(
-                            document = renamed.copy(content = editor.content),
-                        )
+                        _editorState.value = editor.copy(document = renamed.copy(content = editor.content))
                     }
-                    _message.value = localized(
-                        "已重命名为 ${renamed.name}",
-                        "Renamed to ${renamed.name}",
-                    )
+                    _message.value = localized("已重命名为 ${renamed.name}", "Renamed to ${renamed.name}")
                     markMealCalendarDirty()
                     refresh()
                 }
@@ -783,15 +736,15 @@ class DiaryViewModel @Inject constructor(
     fun delete(uri: String) {
         viewModelScope.launch {
             runCatching {
-                require(repository.delete(uri, settings.value)) { localized("无法移入回收站", "Could not move diary to trash") }
-            }
-                .onSuccess {
-                    _message.value = localized("已移入日记回收站", "Moved to diary trash")
-                    markMealCalendarDirty()
-                    refresh()
-                    refreshTrash()
+                require(repository.delete(uri, settings.value)) {
+                    localized("无法移入回收站", "Could not move diary to trash")
                 }
-                .onFailure { _message.value = it.userMessage() }
+            }.onSuccess {
+                _message.value = localized("已移入日记回收站", "Moved to diary trash")
+                markMealCalendarDirty()
+                refresh()
+                refreshTrash()
+            }.onFailure { _message.value = it.userMessage() }
         }
     }
 
@@ -806,28 +759,28 @@ class DiaryViewModel @Inject constructor(
     fun restoreTrash(uri: String) {
         viewModelScope.launch {
             runCatching {
-                require(repository.restore(uri, settings.value)) { localized("无法恢复日记", "Could not restore diary") }
-            }
-                .onSuccess {
-                    _message.value = localized("日记已恢复", "Diary restored")
-                    markMealCalendarDirty()
-                    refresh()
-                    refreshTrash()
+                require(repository.restore(uri, settings.value)) {
+                    localized("无法恢复日记", "Could not restore diary")
                 }
-                .onFailure { _message.value = it.userMessage() }
+            }.onSuccess {
+                _message.value = localized("日记已恢复", "Diary restored")
+                markMealCalendarDirty()
+                refresh()
+                refreshTrash()
+            }.onFailure { _message.value = it.userMessage() }
         }
     }
 
     fun permanentlyDeleteTrash(uri: String) {
         viewModelScope.launch {
             runCatching {
-                require(repository.permanentlyDelete(uri)) { localized("无法永久删除", "Could not permanently delete diary") }
-            }
-                .onSuccess {
-                    _message.value = localized("已永久删除", "Permanently deleted")
-                    refreshTrash()
+                require(repository.permanentlyDelete(uri)) {
+                    localized("无法永久删除", "Could not permanently delete diary")
                 }
-                .onFailure { _message.value = it.userMessage() }
+            }.onSuccess {
+                _message.value = localized("已永久删除", "Permanently deleted")
+                refreshTrash()
+            }.onFailure { _message.value = it.userMessage() }
         }
     }
 
@@ -841,10 +794,6 @@ class DiaryViewModel @Inject constructor(
     private fun Throwable.userMessage(): String = message ?: "操作失败，请检查目录授权"
 }
 
-/**
- * Maps a durable CALORIE_DAY task row back into the progress-screen model. Stage transitions come
- * from the worker's `progressJson`; the terminal state is authoritative for SUCCEEDED/FAILED.
- */
 private fun AiTaskQueueEntity.toCalorieDayProgress(): CalorieEstimationDayProgress? {
     if (type != AiTaskTypeEntity.CALORIE_DAY) return null
     val payload = runCatching { CalorieDayTaskPayload.decode(payloadJson) }.getOrNull()
@@ -891,18 +840,14 @@ private fun AiTaskQueueEntity.toCalorieDayProgress(): CalorieEstimationDayProgre
             else -> null
         },
         forceRecalculation = payload.force,
-        failedAtStatus = if (status == CalorieEstimationQueueStatus.FAILED &&
-            progress != null
-        ) {
+        failedAtStatus = if (status == CalorieEstimationQueueStatus.FAILED && progress != null) {
             when (progress.stage) {
                 "IMAGE_RECOGNITION" -> CalorieEstimationQueueStatus.IMAGE_RECOGNITION
                 "TEXT_ESTIMATION" -> CalorieEstimationQueueStatus.TEXT_ESTIMATION
                 "SAVING" -> CalorieEstimationQueueStatus.SAVING
                 else -> null
             }
-        } else {
-            null
-        },
+        } else null,
         error = errorSummary.takeIf { it.isNotBlank() },
     )
 }
