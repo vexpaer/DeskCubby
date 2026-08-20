@@ -39,7 +39,7 @@ jobs:
           replace_once(
               repo,
               ') {\n    private object Keys {',
-              ''' ) {
+              ''') {
     /** Device-local; used only by the explicit “进入今日日记” action. */
     suspend fun getTodayDiarySwitchTime(): String {
         val raw = context.settingsDataStore.data.first()[Keys.todayDiarySwitchTime]
@@ -73,12 +73,13 @@ jobs:
           workspace = 'android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredWorkspaceRepository.kt'
           replace_once(workspace, 'import com.deskcubby.app.data.preferences.TodayDiarySwitchTimeStore', 'import com.deskcubby.app.data.preferences.SettingsRepository')
           replace_once(workspace, '    private val todayDiarySwitchTimeStore: TodayDiarySwitchTimeStore,', '    private val settingsRepository: SettingsRepository,')
-          replace_once(workspace, 'todayDiarySwitchTimeStore.current()', 'settingsRepository.getTodayDiarySwitchTime()')
-          replace_once(workspace, 'todayDiarySwitchTimeStore.current()', 'settingsRepository.getTodayDiarySwitchTime()')
-          replace_once(workspace, 'todayDiarySwitchTimeStore.current()', 'settingsRepository.getTodayDiarySwitchTime()')
+          for _ in range(3):
+              replace_once(workspace, 'todayDiarySwitchTimeStore.current()', 'settingsRepository.getTodayDiarySwitchTime()')
           replace_once(workspace, 'todayDiarySwitchTimeStore.set(normalized)', 'settingsRepository.setTodayDiarySwitchTime(normalized)')
 
-          Path('android/app/src/main/java/com/deskcubby/app/data/preferences/TodayDiarySwitchTimeStore.kt').unlink()
+          store = Path('android/app/src/main/java/com/deskcubby/app/data/preferences/TodayDiarySwitchTimeStore.kt')
+          if store.exists():
+              store.unlink()
 
           screen = 'android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt'
           replacements = {
@@ -101,6 +102,28 @@ jobs:
               text = text.replace(old, new, 1)
           p.write_text(text, encoding='utf-8')
 
+          record_screen = Path('android/app/src/main/java/com/deskcubby/app/ui/structuredrecords/StructuredRecordsScreen.kt')
+          text = record_screen.read_text(encoding='utf-8')
+          text = text.replace('tr("当前日记日：", "Journal day: ")', 'tr("当前日期：", "Date: ")')
+          text = text.replace(
+              'tr("根据手机首次/最后一次使用与解锁/锁屏时间估算，不使用 Health Connect；最终值会在当天结算后写入日记。", "Estimated from first/last phone use and unlock/lock events, without Health Connect; final values are written after the day settles.")',
+              'tr("根据手机最后使用/锁屏到下一次首次使用/解锁形成睡眠会话，不使用 Health Connect；睡觉与起床使用真实时间。", "A sleep session runs from the last use/lock to the next first use/unlock, without Health Connect; sleep and wake use real timestamps.")',
+          )
+          record_screen.write_text(text, encoding='utf-8')
+
+      - name: Commit Android-only patch before validation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- android/app/src/main/java/com/deskcubby/app/data/preferences/SettingsRepository.kt \
+            android/app/src/main/java/com/deskcubby/app/data/preferences/TodayDiarySwitchTimeStore.kt \
+            android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredWorkspaceRepository.kt \
+            android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt \
+            android/app/src/main/java/com/deskcubby/app/ui/structuredrecords/StructuredRecordsScreen.kt
+          git diff --cached --quiet && exit 0
+          git commit -m 'Store today diary switch time in existing settings DataStore'
+          git push
+
       - name: Verify removed global boundary symbols
         run: |
           ! grep -R --line-number --exclude='*.md' -E 'dayBoundaryHistory|resolveJournalDayWithHistory|effectiveDayBoundary|unwrapJournalTime|resolveFieldDateTime' android/app/src/main android/app/src/test
@@ -110,15 +133,3 @@ jobs:
         run: |
           chmod +x ./gradlew
           ./gradlew testDebugUnitTest --stacktrace
-
-      - name: Commit tested Android-only follow-up
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -- android/app/src/main/java/com/deskcubby/app/data/preferences/SettingsRepository.kt \
-            android/app/src/main/java/com/deskcubby/app/data/preferences/TodayDiarySwitchTimeStore.kt \
-            android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredWorkspaceRepository.kt \
-            android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt
-          git diff --cached --quiet && exit 0
-          git commit -m 'Store today diary switch time in existing settings DataStore'
-          git push
