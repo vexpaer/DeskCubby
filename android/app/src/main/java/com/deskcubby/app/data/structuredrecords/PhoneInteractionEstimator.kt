@@ -6,26 +6,65 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Process
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
-import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** Estimated first-use and last-use moments of one Journal Day. */
-data class SleepWakeEstimate(
-    val journalDay: LocalDate,
-    val wakeTime: LocalTime?,
-    val sleepTime: LocalTime?,
+/** One completed phone-inactivity session: last stop/lock -> next first use/unlock. */
+data class SleepSessionEstimate(
+    val sleepTimestamp: Instant,
+    val wakeTimestamp: Instant,
+    val zone: ZoneId,
+) {
+    val durationSeconds: Long
+        get() = Duration.between(sleepTimestamp, wakeTimestamp).seconds.coerceAtLeast(0L)
+
+    fun sleepLocalTime(): LocalTime = sleepTimestamp.atZone(zone).toLocalTime()
+    fun wakeLocalTime(): LocalTime = wakeTimestamp.atZone(zone).toLocalTime()
+    fun wakeLocalDate(): LocalDate = wakeTimestamp.atZone(zone).toLocalDate()
+}
+
+internal enum class PhoneInteractionKind { START, STOP }
+
+internal data class PhoneInteractionMoment(
+    val timestamp: Instant,
+    val kind: PhoneInteractionKind,
 )
 
 /**
- * Estimates "wake" and "sleep" from the phone's own interaction events — first use of the day and
- * last stop of the day — derived from [UsageStatsManager]. This is deliberately NOT medical sleep
- * detection and never touches Health Connect. It requires the system "Usage access" permission; the
- * UI must explain the purpose before enabling the collector.
+ * Pairs each latest stop/lock with the next start/unlock. The pairing uses real timestamps only;
+ * there is deliberately no diary-day or configurable boundary input.
+ */
+internal fun buildSleepSessions(
+    moments: List<PhoneInteractionMoment>,
+    zone: ZoneId,
+): List<SleepSessionEstimate> {
+    val sorted = moments.sortedBy { it.timestamp }
+    val sessions = ArrayList<SleepSessionEstimate>()
+    var pendingStop: Instant? = null
+    for (moment in sorted) {
+        when (moment.kind) {
+            PhoneInteractionKind.STOP -> pendingStop = moment.timestamp
+            PhoneInteractionKind.START -> {
+                val stop = pendingStop
+                if (stop != null && moment.timestamp.isAfter(stop)) {
+                    sessions += SleepSessionEstimate(stop, moment.timestamp, zone)
+                }
+                pendingStop = null
+            }
+        }
+    }
+    return sessions
+}
+
+/**
+ * Estimates sleep/wake from phone interaction events. This is not medical sleep detection and does
+ * not use Health Connect. For a natural wake date, the longest completed stop -> next-start session
+ * is selected as that day's sleep session.
  */
 @Singleton
 class PhoneInteractionEstimator @Inject constructor(
@@ -41,66 +80,58 @@ class PhoneInteractionEstimator @Inject constructor(
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    /**
-     * Computes the first/last interaction estimate for [journalDay] within
-     * `[journalDay@boundary, journalDay+1@boundary)`. Returns null when there is no usage access or
-     * no relevant events were found.
-     */
-    fun estimateForJournalDay(
-        journalDay: LocalDate,
-        boundaryMinutes: Int?,
+    fun estimateForWakeDate(
+        wakeDate: LocalDate,
         zone: ZoneId = ZoneId.systemDefault(),
         now: Instant = Instant.now(),
-    ): SleepWakeEstimate? {
+    ): SleepSessionEstimate? {
         if (!hasUsageAccess()) return null
-        val boundary = boundaryMinutes ?: 5 * 60
-        val dayStart = LocalDateTime.of(journalDay, LocalTime.of(0, 0))
-        // A journal day with boundary B runs [dayStart+B, dayStart+1d+B).
-        val begin = dayStart.plusMinutes(boundary.toLong())
-        val end = dayStart.plusDays(1).plusMinutes(boundary.toLong())
-        val beginMillis = begin.atZone(zone).toInstant().toEpochMilli()
-        val endMillis = end.atZone(zone).toInstant().toEpochMilli()
-        // Never query beyond now; UsageStatsManager cannot report future events.
-        val queryEnd = minOf(endMillis, now.toEpochMilli())
-        if (queryEnd <= beginMillis) return null
+        val begin = wakeDate.minusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val naturalEnd = wakeDate.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val queryEnd = minOf(naturalEnd, now.toEpochMilli())
+        if (queryEnd <= begin) return null
 
-        val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        var firstUseMillis: Long? = null
-        var lastStopMillis: Long? = null
+        val manager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val moments = ArrayList<PhoneInteractionMoment>()
         try {
-            val events = usageStatsManager.queryEvents(beginMillis, queryEnd)
+            val events = manager.queryEvents(begin, queryEnd)
             while (events.hasNextEvent()) {
                 val event = UsageEvents.Event()
                 events.getNextEvent(event)
-                val eventType = event.eventType
-                if (eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
-                    eventType == UsageEvents.Event.SCREEN_INTERACTIVE ||
-                    eventType == UsageEvents.Event.KEYGUARD_HIDDEN ||
-                    eventType == UsageEvents.Event.USER_INTERACTION
-                ) {
-                    val candidate = firstUseMillis
-                    if (candidate == null || event.timeStamp < candidate) firstUseMillis = event.timeStamp
-                } else if (
-                    eventType == UsageEvents.Event.ACTIVITY_PAUSED ||
-                    eventType == UsageEvents.Event.SCREEN_NON_INTERACTIVE ||
-                    eventType == UsageEvents.Event.KEYGUARD_SHOWN ||
-                    eventType == UsageEvents.Event.DEVICE_SHUTDOWN
-                ) {
-                    val candidate = lastStopMillis
-                    if (candidate == null || event.timeStamp > candidate) lastStopMillis = event.timeStamp
+                val kind = when (event.eventType) {
+                    UsageEvents.Event.ACTIVITY_RESUMED,
+                    UsageEvents.Event.SCREEN_INTERACTIVE,
+                    UsageEvents.Event.KEYGUARD_HIDDEN,
+                    UsageEvents.Event.USER_INTERACTION -> PhoneInteractionKind.START
+
+                    UsageEvents.Event.ACTIVITY_PAUSED,
+                    UsageEvents.Event.SCREEN_NON_INTERACTIVE,
+                    UsageEvents.Event.KEYGUARD_SHOWN,
+                    UsageEvents.Event.DEVICE_SHUTDOWN -> PhoneInteractionKind.STOP
+
+                    else -> null
+                }
+                if (kind != null) {
+                    moments += PhoneInteractionMoment(Instant.ofEpochMilli(event.timeStamp), kind)
                 }
             }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (_: SecurityException) {
-            // Usage access may be revoked between the capability check above and this query.
             return null
         } catch (_: RuntimeException) {
             return null
         }
-        if (firstUseMillis == null && lastStopMillis == null) return null
-        val wake = firstUseMillis?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalTime() }
-        val sleep = lastStopMillis?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalTime() }
-        return SleepWakeEstimate(journalDay, wake, sleep)
+
+        return buildSleepSessions(moments, zone)
+            .asSequence()
+            .filter { it.wakeLocalDate() == wakeDate }
+            .filter { it.durationSeconds in MIN_SESSION_SECONDS..MAX_SESSION_SECONDS }
+            .maxByOrNull { it.durationSeconds }
+    }
+
+    private companion object {
+        const val MIN_SESSION_SECONDS = 10L * 60L
+        const val MAX_SESSION_SECONDS = 24L * 60L * 60L
     }
 }

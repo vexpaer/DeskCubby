@@ -2,26 +2,16 @@ package com.deskcubby.app.data.structuredrecords
 
 import java.time.Duration
 import java.time.LocalDate
-import java.time.LocalTime
+import java.time.LocalDateTime
 
 /**
- * The derived-metric evaluator. It walks the structured [MetricExpression] AST and never executes
- * user strings as code. Evaluation is anchored on a Journal Day; every field ref's `dayOffset` is
- * relative to that anchor, and the produced value is charted on the anchor day.
- *
- * Missing inputs propagate as [EvalResult.Missing] (null) — never silently 0 — so a day with no
- * sleep time simply has no sleep-duration point instead of showing a fabricated 0.
+ * Derived-metric evaluator anchored on natural calendar dates. It never reads the diary switch time.
+ * Missing inputs propagate as [EvalResult.Missing] rather than silently becoming zero.
  */
 object MetricEvaluator {
 
-    /** A field's normalized values for one Journal Day; the same shape the DAO returns. */
     fun interface FieldValuesProvider {
-        fun valuesFor(fieldId: String, journalDay: LocalDate): List<NormalizedFieldValue>
-    }
-
-    /** Returns the effective `HH:mm` boundary for a Journal Day. */
-    fun interface BoundaryProvider {
-        fun boundaryFor(journalDay: LocalDate): String
+        fun valuesFor(fieldId: String, date: LocalDate): List<NormalizedFieldValue>
     }
 
     sealed interface EvalResult {
@@ -30,29 +20,27 @@ object MetricEvaluator {
         data class Dur(val seconds: Double) : EvalResult
     }
 
-    /** Evaluates [expression] for the anchor [journalDay]. */
     fun evaluate(
         expression: MetricExpression,
-        journalDay: LocalDate,
+        date: LocalDate,
         fields: FieldValuesProvider,
-        boundary: BoundaryProvider,
     ): EvalResult = when (expression) {
         is MetricExpression.Constant -> EvalResult.Num(expression.number)
-        is MetricExpression.FieldRef -> resolveFieldRef(expression.ref, journalDay, fields)
-        is MetricExpression.Add -> arithmetic('+', expression.left, expression.right, journalDay, fields, boundary)
-        is MetricExpression.Subtract -> arithmetic('-', expression.left, expression.right, journalDay, fields, boundary)
-        is MetricExpression.Multiply -> arithmetic('*', expression.left, expression.right, journalDay, fields, boundary)
-        is MetricExpression.Divide -> arithmetic('/', expression.left, expression.right, journalDay, fields, boundary)
-        is MetricExpression.TimeDiff -> timeDiff(expression, journalDay, fields, boundary)
+        is MetricExpression.FieldRef -> resolveFieldRef(expression.ref, date, fields)
+        is MetricExpression.Add -> arithmetic('+', expression.left, expression.right, date, fields)
+        is MetricExpression.Subtract -> arithmetic('-', expression.left, expression.right, date, fields)
+        is MetricExpression.Multiply -> arithmetic('*', expression.left, expression.right, date, fields)
+        is MetricExpression.Divide -> arithmetic('/', expression.left, expression.right, date, fields)
+        is MetricExpression.TimeDiff -> timeDiff(expression, date, fields)
     }
 
     private fun resolveFieldRef(
         ref: FieldRefNode,
-        anchorDay: LocalDate,
+        anchorDate: LocalDate,
         fields: FieldValuesProvider,
     ): EvalResult {
-        val targetDay = anchorDay.plusDays(clampOffset(ref.dayOffset))
-        val values = fields.valuesFor(ref.fieldId, targetDay)
+        val targetDate = anchorDate.plusDays(clampOffset(ref.dayOffset))
+        val values = fields.valuesFor(ref.fieldId, targetDate)
         if (values.isEmpty()) return EvalResult.Missing
         val selected = applySelector(values, ref.selector) ?: return EvalResult.Missing
         return when (selected) {
@@ -67,25 +55,18 @@ object MetricEvaluator {
         op: Char,
         left: MetricExpression,
         right: MetricExpression,
-        journalDay: LocalDate,
+        date: LocalDate,
         fields: FieldValuesProvider,
-        boundary: BoundaryProvider,
     ): EvalResult {
-        val a = evaluate(left, journalDay, fields, boundary)
-        val b = evaluate(right, journalDay, fields, boundary)
+        val a = evaluate(left, date, fields)
+        val b = evaluate(right, date, fields)
         if (a is EvalResult.Missing || b is EvalResult.Missing) return EvalResult.Missing
-
-        data class PairKinds(val x: EvalResult, val y: EvalResult)
         return when (op) {
             '+', '-' -> when {
-                a is EvalResult.Num && b is EvalResult.Num -> {
-                    val value = if (op == '+') a.value + b.value else a.value - b.value
-                    EvalResult.Num(value)
-                }
-                a is EvalResult.Dur && b is EvalResult.Dur -> {
-                    val value = if (op == '+') a.seconds + b.seconds else a.seconds - b.seconds
-                    EvalResult.Dur(value)
-                }
+                a is EvalResult.Num && b is EvalResult.Num ->
+                    EvalResult.Num(if (op == '+') a.value + b.value else a.value - b.value)
+                a is EvalResult.Dur && b is EvalResult.Dur ->
+                    EvalResult.Dur(if (op == '+') a.seconds + b.seconds else a.seconds - b.seconds)
                 else -> EvalResult.Missing
             }
             '*' -> when {
@@ -105,51 +86,44 @@ object MetricEvaluator {
 
     private fun timeDiff(
         expression: MetricExpression.TimeDiff,
-        anchorDay: LocalDate,
+        anchorDate: LocalDate,
         fields: FieldValuesProvider,
-        boundary: BoundaryProvider,
     ): EvalResult {
-        val end = asDateTimeInstant(expression.end, anchorDay, fields, boundary) ?: return EvalResult.Missing
-        val start = asDateTimeInstant(expression.start, anchorDay, fields, boundary) ?: return EvalResult.Missing
-        val seconds = Duration.between(start, end).seconds.toDouble()
-        return EvalResult.Dur(seconds)
-    }
+        var end = asNaturalDateTime(expression.end, anchorDate, fields) ?: return EvalResult.Missing
+        val start = asNaturalDateTime(expression.start, anchorDate, fields) ?: return EvalResult.Missing
 
-    /** Resolves an operand that yields a time-of-day on a known day into a real date-time. */
-    private fun asDateTimeInstant(
-        operand: MetricExpression,
-        anchorDay: LocalDate,
-        fields: FieldValuesProvider,
-        boundary: BoundaryProvider,
-    ): java.time.LocalDateTime? {
-        // V1 supports direct time field refs (and a timeDiff whose operands are time refs).
-        if (operand is MetricExpression.FieldRef) {
-            val ref = operand.ref
-            val targetDay = anchorDay.plusDays(clampOffset(ref.dayOffset))
-            val values = fields.valuesFor(ref.fieldId, targetDay)
-            if (values.isEmpty()) return null
-            val selected = applySelector(values, ref.selector) ?: return null
-            if (selected is NormalizedFieldValue.Time) {
-                val effective = JournalDayEngine.parseBoundary(boundary.boundaryFor(targetDay))
-                return JournalDayEngine.resolveFieldDateTime(targetDay, selected.time, effective)
-            }
-            return null
+        // A same-date pair such as sleep 23:30 -> wake 07:00 is an overnight interval. This is
+        // ordinary clock arithmetic, not a configurable day-boundary projection.
+        if (end.isBefore(start) && sameTargetDate(expression.end, expression.start, anchorDate)) {
+            end = end.plusDays(1)
         }
-        return null
+        return EvalResult.Dur(Duration.between(start, end).seconds.toDouble())
     }
 
-    /**
-     * Bounds a metric's `dayOffset` so a malformed (hand-edited / synced) definition can never push
-     * [LocalDate.plusDays] past LocalDate.MAX/MIN and throw. ±40000 days is ~110 years, far beyond
-     * any real metric but small enough that plusDays stays well inside the date range.
-     */
+    private fun asNaturalDateTime(
+        operand: MetricExpression,
+        anchorDate: LocalDate,
+        fields: FieldValuesProvider,
+    ): LocalDateTime? {
+        if (operand !is MetricExpression.FieldRef) return null
+        val ref = operand.ref
+        val targetDate = anchorDate.plusDays(clampOffset(ref.dayOffset))
+        val selected = applySelector(fields.valuesFor(ref.fieldId, targetDate), ref.selector)
+        return (selected as? NormalizedFieldValue.Time)?.let { LocalDateTime.of(targetDate, it.time) }
+    }
+
+    private fun sameTargetDate(
+        first: MetricExpression,
+        second: MetricExpression,
+        anchorDate: LocalDate,
+    ): Boolean {
+        val a = (first as? MetricExpression.FieldRef)?.ref ?: return false
+        val b = (second as? MetricExpression.FieldRef)?.ref ?: return false
+        return anchorDate.plusDays(clampOffset(a.dayOffset)) == anchorDate.plusDays(clampOffset(b.dayOffset))
+    }
+
     private fun clampOffset(dayOffset: Int): Long = dayOffset.coerceIn(-40000, 40000).toLong()
 
-    /**
-     * Collapses multiple same-day values into one using [selector]. Type-appropriate selectors are
-     * the responsibility of the UI/definition; this function computes sensible results for the ones
-     * that make sense and returns null for any combination it cannot evaluate.
-     */
     fun applySelector(values: List<NormalizedFieldValue>, selector: FieldSelector): NormalizedFieldValue? {
         if (values.isEmpty()) return null
         return when (selector) {

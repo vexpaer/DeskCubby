@@ -4,20 +4,24 @@ import com.deskcubby.app.data.local.StructuredRecordDao
 import com.deskcubby.app.data.local.StructuredRecordOccurrenceEntity
 import com.deskcubby.app.data.model.AppSettings
 import java.time.LocalDate
+import java.time.LocalTime
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.PI
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
-/** One plotted value for a field or metric on a Journal Day. */
+/** One plotted value for a field or metric on a natural calendar date. */
 data class StructuredSeriesPoint(
     val journalDay: LocalDate,
-    /** Numeric value for charts, unwrapped for time-of-day where applicable. */
+    /** Numeric value for charts. TIME uses ordinary minutes since midnight (0..1439). */
     val chartValue: Double?,
-    /** Human-readable display, e.g. `HH:mm` for times or a formatted duration. */
     val display: String?,
     val rawValue: String? = null,
 )
 
-/** A category histogram for [StructuredFieldType.TYPE] fields. */
 data class StructuredCategoryCount(
     val category: String,
     val count: Int,
@@ -34,19 +38,12 @@ data class StructuredFieldAutoStats(
     val total: String? = null,
 )
 
-/**
- * Computes statistics from the local structured-records index. Never scans Markdown during normal
- * use; all queries read [StructuredRecordDao].
- */
+/** Computes statistics from the local index using natural Markdown file dates only. */
 @Singleton
 class StructuredStatisticsRepository @Inject constructor(
     private val structuredRecordDao: StructuredRecordDao,
     private val workspaceRepository: StructuredWorkspaceRepository,
 ) {
-    /**
-     * Automatic per-field statistics driven by the field type. Selector defaults to "last" for a
-     * daily series; callers may override for number/duration aggregation (sum/average/min/max).
-     */
     suspend fun autoFieldStats(
         settings: AppSettings,
         field: StructuredField,
@@ -54,11 +51,10 @@ class StructuredStatisticsRepository @Inject constructor(
         endIso: String,
         selector: FieldSelector = FieldSelector.LAST,
     ): StructuredFieldAutoStats {
+        @Suppress("UNUSED_VARIABLE")
+        val ignoredSettings = settings
         val occurrences = structuredRecordDao.occurrencesForField(field.id, startIso, endIso)
         val byDay = occurrences.groupBy { it.journalDay }
-        val boundaryMinutes = JournalDayEngine.parseBoundary(
-            workspaceRepository.loadSettings(settings).effectiveDayBoundary(startDateOf(occurrences)),
-        )
         val points = byDay.mapNotNull { (dayIso, dayOccurrences) ->
             val day = runCatching { LocalDate.parse(dayIso) }.getOrNull() ?: return@mapNotNull null
             val normalized = dayOccurrences.mapNotNull { occurrence ->
@@ -82,7 +78,9 @@ class StructuredStatisticsRepository @Inject constructor(
                     series = series,
                     latest = latest?.rawValue,
                     average = averageOf(series.mapNotNull { it.chartValue }),
-                    total = if (selector == FieldSelector.SUM) series.mapNotNull { it.chartValue }.sumOrNull()?.let(StructuredFieldNormalizer::formatNumber) else null,
+                    total = if (selector == FieldSelector.SUM) {
+                        series.mapNotNull { it.chartValue }.sumOrNull()?.let(StructuredFieldNormalizer::formatNumber)
+                    } else null,
                 )
             }
             StructuredFieldType.DURATION -> {
@@ -100,30 +98,30 @@ class StructuredStatisticsRepository @Inject constructor(
                     series = series,
                     latest = latest?.rawValue,
                     total = if (selector == FieldSelector.SUM) {
-                        series.mapNotNull { it.chartValue }.sumOrNull()?.let { StructuredFieldNormalizer.formatDuration(it.toLong()) }
+                        series.mapNotNull { it.chartValue }.sumOrNull()
+                            ?.let { StructuredFieldNormalizer.formatDuration(it.toLong()) }
                     } else null,
-                    average = series.mapNotNull { it.chartValue }.averageOrNull()?.let { StructuredFieldNormalizer.formatDuration(it.toLong()) },
+                    average = series.mapNotNull { it.chartValue }.averageOrNull()
+                        ?.let { StructuredFieldNormalizer.formatDuration(it.toLong()) },
                 )
             }
             StructuredFieldType.TIME -> {
-                val unwrapped = points.map { (day, value) ->
+                val series = points.map { (day, value) ->
                     val time = (value as? NormalizedFieldValue.Time)?.time
-                    if (time == null) StructuredSeriesPoint(day, null, null)
-                    else {
-                        val minutes = time.toSecondOfDay() / 60
-                        val boundary = boundaryMinutes ?: 5 * 60
-                        val chart = if (minutes < boundary) (minutes + 1440).toDouble() else minutes.toDouble()
-                        StructuredSeriesPoint(day, chart, JournalDayEngine.formatTime(time))
-                    }
+                    StructuredSeriesPoint(
+                        day,
+                        time?.let { it.toSecondOfDay() / 60.0 },
+                        time?.let(JournalDayEngine::formatTime),
+                    )
                 }
                 val values = points.mapNotNull { (_, value) -> (value as? NormalizedFieldValue.Time)?.time }
                 StructuredFieldAutoStats(
                     fieldId = field.id,
                     count = occurrences.size,
-                    series = unwrapped,
+                    series = series,
                     latest = latest?.rawValue,
                     earliest = values.minOrNull()?.let(JournalDayEngine::formatTime),
-                    average = averageTime(values, boundaryMinutes ?: 5 * 60),
+                    average = circularAverageTime(values),
                 )
             }
             StructuredFieldType.TYPE -> {
@@ -140,13 +138,11 @@ class StructuredStatisticsRepository @Inject constructor(
                 )
             }
             StructuredFieldType.WORD -> {
-                val series = occurrences
-                    .mapNotNull { occurrence ->
-                        val day = runCatching { LocalDate.parse(occurrence.journalDay) }.getOrNull()
-                            ?: return@mapNotNull null
-                        StructuredSeriesPoint(day, null, occurrence.rawValue, occurrence.rawValue)
-                    }
-                    .sortedBy { it.journalDay }
+                val series = occurrences.mapNotNull { occurrence ->
+                    val day = runCatching { LocalDate.parse(occurrence.journalDay) }.getOrNull()
+                        ?: return@mapNotNull null
+                    StructuredSeriesPoint(day, null, occurrence.rawValue, occurrence.rawValue)
+                }.sortedBy { it.journalDay }
                 StructuredFieldAutoStats(
                     fieldId = field.id,
                     count = occurrences.size,
@@ -157,10 +153,6 @@ class StructuredStatisticsRepository @Inject constructor(
         }
     }
 
-    /**
-     * Evaluates a derived metric across every journal day in [startIso]..[endIso] and returns a
-     * chartable series with nulls preserved for missing inputs.
-     */
     suspend fun metricSeries(
         settings: AppSettings,
         metric: StructuredMetric,
@@ -168,7 +160,6 @@ class StructuredStatisticsRepository @Inject constructor(
         endIso: String,
     ): List<StructuredSeriesPoint> {
         val fields = workspaceRepository.loadFields(settings).associateBy { it.id }
-        val workspace = workspaceRepository.loadSettings(settings)
         val start = runCatching { LocalDate.parse(startIso) }.getOrDefault(LocalDate.now())
         val end = runCatching { LocalDate.parse(endIso) }.getOrDefault(LocalDate.now())
         if (start.isAfter(end)) return emptyList()
@@ -186,15 +177,12 @@ class StructuredStatisticsRepository @Inject constructor(
                     else StructuredFieldNormalizer.normalize(field.type, occurrence.rawValue).value
                 }
         }
-        val boundaryProvider = MetricEvaluator.BoundaryProvider { day ->
-            workspace.effectiveDayBoundary(day)
-        }
 
         val days = generateSequence(start) { it.plusDays(1) }
             .takeWhile { !it.isAfter(end) }
             .toList()
         return days.map { day ->
-            when (val result = MetricEvaluator.evaluate(metric.expression, day, provider, boundaryProvider)) {
+            when (val result = MetricEvaluator.evaluate(metric.expression, day, provider)) {
                 is MetricEvaluator.EvalResult.Missing -> StructuredSeriesPoint(day, null, null)
                 is MetricEvaluator.EvalResult.Num -> StructuredSeriesPoint(
                     day,
@@ -210,28 +198,20 @@ class StructuredStatisticsRepository @Inject constructor(
         }
     }
 
-    private fun startDateOf(occurrences: List<StructuredRecordOccurrenceEntity>): LocalDate =
-        occurrences.mapNotNull { runCatching { LocalDate.parse(it.journalDay) }.getOrNull() }
-            .minOrNull() ?: LocalDate.now()
-
-    private fun averageOf(values: List<Double>): String? = values.averageOrNull()?.let(StructuredFieldNormalizer::formatNumber)
-
-    private fun averageTime(times: List<java.time.LocalTime>, boundaryMinutes: Int): String? {
+    private fun circularAverageTime(times: List<LocalTime>): String? {
         if (times.isEmpty()) return null
-        // Average on the unwrapped axis so a 23:40 + 00:20 pair averages to 00:00, not 12:00.
-        val unwrapped = times.map { time ->
-            val minutes = time.toSecondOfDay() / 60
-            if (minutes < boundaryMinutes) minutes + 1440 else minutes
-        }
-        val average = unwrapped.sum() / unwrapped.size
-        val normalized = ((average % 1440) + 1440) % 1440
-        val hour = normalized / 60
-        val minute = normalized % 60
-        return "%02d:%02d".format(hour, minute)
+        val angles = times.map { time -> time.toSecondOfDay() / 86400.0 * 2.0 * PI }
+        val meanSin = angles.sumOf(::sin) / angles.size
+        val meanCos = angles.sumOf(::cos) / angles.size
+        var angle = atan2(meanSin, meanCos)
+        if (angle < 0) angle += 2.0 * PI
+        val minuteOfDay = (angle / (2.0 * PI) * 1440.0).roundToInt() % 1440
+        return "%02d:%02d".format(minuteOfDay / 60, minuteOfDay % 60)
     }
 
-    private fun List<Double>.averageOrNull(): Double? =
-        if (isEmpty()) null else sum() / size
+    private fun averageOf(values: List<Double>): String? =
+        values.averageOrNull()?.let(StructuredFieldNormalizer::formatNumber)
 
+    private fun List<Double>.averageOrNull(): Double? = if (isEmpty()) null else sum() / size
     private fun List<Double>.sumOrNull(): Double? = if (isEmpty()) null else sum()
 }

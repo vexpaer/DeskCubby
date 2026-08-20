@@ -19,63 +19,27 @@ object StructuredRecordsCodec {
     const val MAX_TEMPLATES = 400
     const val MAX_METRICS = 200
     const val MAX_OPTIONS = 200
-    const val MAX_HISTORY = 200
     const val MAX_NAME_CHARS = 80
     const val MAX_TEXT_CHARS = 500
 
     // ---------------------------------------------------------------- settings.json
 
+    /**
+     * Workspace settings no longer persist a day boundary. Legacy `dayBoundary` and
+     * `dayBoundaryHistory` keys are deliberately ignored by [decodeSettings].
+     */
     fun encodeSettings(value: StructuredWorkspaceSettings): String = JSONObject()
         .put("schemaVersion", value.schemaVersion)
         .put("markdownProtocolVersion", value.markdownProtocolVersion)
-        .put("dayBoundary", value.dayBoundary)
-        .put(
-            "dayBoundaryHistory",
-            JSONArray().apply {
-                value.dayBoundaryHistory
-                    .sortedBy { it.effectiveFromJournalDay }
-                    .forEach { entry ->
-                        put(
-                            JSONObject()
-                                .put("effectiveFromJournalDay", entry.effectiveFromJournalDay)
-                                .put("value", entry.value),
-                        )
-                    }
-            },
-        )
         .toString()
 
     fun decodeSettings(raw: String): StructuredWorkspaceSettings = runCatching {
         val json = JSONObject(raw)
-        val schemaVersion = json.optInt("schemaVersion", 1)
-        val protocolVersion = json.optInt("markdownProtocolVersion", 1)
-        val boundary = json.optString("dayBoundary").takeIf(String::isNotBlank)
-            ?: JournalDayEngine.DEFAULT_DAY_BOUNDARY
-        val history = decodeHistory(json.optJSONArray("dayBoundaryHistory"))
-        return@runCatching StructuredWorkspaceSettings(
-            schemaVersion = schemaVersion,
-            markdownProtocolVersion = protocolVersion,
-            dayBoundary = if (JournalDayEngine.parseBoundary(boundary) != null) boundary
-            else JournalDayEngine.DEFAULT_DAY_BOUNDARY,
-            dayBoundaryHistory = history,
+        StructuredWorkspaceSettings(
+            schemaVersion = json.optInt("schemaVersion", 1),
+            markdownProtocolVersion = json.optInt("markdownProtocolVersion", 1),
         )
     }.getOrElse { StructuredWorkspaceSettings() }
-
-    private fun decodeHistory(array: JSONArray?): List<DayBoundaryRecord> {
-        if (array == null) return emptyList()
-        val result = ArrayList<DayBoundaryRecord>()
-        for (index in 0 until array.length()) {
-            val entry = runCatching { array.getJSONObject(index) }.getOrNull() ?: continue
-            val from = entry.optString("effectiveFromJournalDay").trim()
-            val value = entry.optString("value").trim()
-            val validFrom = runCatching { java.time.LocalDate.parse(from) }.getOrNull()
-            val validValue = JournalDayEngine.parseBoundary(value)
-            if (validFrom == null || validValue == null) continue
-            result += DayBoundaryRecord(from, JournalDayEngine.formatBoundary(validValue))
-            if (result.size >= MAX_HISTORY) break
-        }
-        return result.distinctBy { it.effectiveFromJournalDay }
-    }
 
     // ---------------------------------------------------------------- fields.json
 
@@ -135,8 +99,6 @@ object StructuredRecordsCodec {
         }
         result
     }.getOrElse {
-        // A corrupt workspace must never block the app; surface an empty list so the caller can
-        // decide whether to re-seed defaults.
         emptyList()
     }
 
@@ -254,7 +216,6 @@ object StructuredRecordsCodec {
 
     private fun binary(op: String, first: MetricExpression, second: MetricExpression): JSONObject {
         val root = JSONObject()
-        // "end"/"start" naming for timeDiff; "left"/"right" for arithmetic.
         return when (op) {
             "timeDiff" -> root
                 .put("op", op)
@@ -278,18 +239,16 @@ object StructuredRecordsCodec {
             if (id.isBlank() || !ids.add(id)) continue
             val name = item.optString("name").trim().take(MAX_NAME_CHARS)
             val resultType = MetricResultType.fromWire(item.optString("resultType")) ?: continue
-            val expression = decodeExpression(item.optJSONObject("expression")) ?: continue
-            val display = item.optJSONObject("display")
-            val period = MetricChartPeriod.fromWire(display?.optString("period"))
-                ?: MetricChartPeriod.DAY
+            val expression = decodeExpression(item.optJSONObject("expression"), depth = 0) ?: continue
+            val displayJson = item.optJSONObject("display")
             result += StructuredMetric(
                 id = id,
-                name = name.ifBlank { "指标" },
+                name = name.ifBlank { "统计" },
                 resultType = resultType,
                 expression = expression,
                 display = MetricDisplay(
-                    chart = display?.optString("chart")?.takeIf(String::isNotBlank) ?: "line",
-                    period = period,
+                    chart = displayJson?.optString("chart")?.takeIf(String::isNotBlank)?.take(30) ?: "line",
+                    period = MetricChartPeriod.fromWire(displayJson?.optString("period")) ?: MetricChartPeriod.DAY,
                 ),
                 archived = item.optBoolean("archived"),
                 sortOrder = item.optInt("sortOrder", 0),
@@ -299,59 +258,50 @@ object StructuredRecordsCodec {
         result
     }.getOrElse { emptyList() }
 
-    private fun decodeExpression(json: JSONObject?): MetricExpression? {
-        if (json == null) return null
+    private fun decodeExpression(json: JSONObject?, depth: Int): MetricExpression? {
+        if (json == null || depth > 12) return null
         return when (json.optString("op")) {
             "fieldRef" -> {
-                val ref = json.optJSONObject("ref")
-                val fieldId = (ref?.optString("fieldId") ?: json.optString("fieldId")).trim().take(120)
-                if (fieldId.isEmpty()) null
-                else MetricExpression.FieldRef(
+                val fieldId = json.optString("fieldId").trim().take(120)
+                if (fieldId.isBlank()) null else MetricExpression.FieldRef(
                     FieldRefNode(
                         fieldId = fieldId,
-                        dayOffset = (ref?.opt("dayOffset") ?: json.opt("dayOffset"))
-                            ?.let { runCatching { (it as? Number)?.toInt() }.getOrNull() } ?: 0,
-                        selector = FieldSelector.fromWire(
-                            ref?.optString("selector") ?: json.optString("selector"),
-                        ) ?: FieldSelector.LAST,
+                        dayOffset = json.optInt("dayOffset", 0).coerceIn(-40000, 40000),
+                        selector = FieldSelector.fromWire(json.optString("selector")) ?: FieldSelector.LAST,
                     ),
                 )
             }
-            "constant" -> MetricExpression.Constant(
-                json.opt("value")?.let { runCatching { (it as Number).toDouble() }.getOrNull() }
-                    ?: return null,
-            )
-            "add" -> binaryEval("add", json)
-            "subtract" -> binaryEval("subtract", json)
-            "multiply" -> binaryEval("multiply", json)
-            "divide" -> binaryEval("divide", json)
-            "timeDiff" -> binaryEval("timeDiff", json)
+            "constant" -> json.optDouble("value", Double.NaN)
+                .takeIf(Double::isFinite)
+                ?.let(MetricExpression::Constant)
+            "add" -> decodeBinary(json, depth, MetricExpression::Add)
+            "subtract" -> decodeBinary(json, depth, MetricExpression::Subtract)
+            "multiply" -> decodeBinary(json, depth, MetricExpression::Multiply)
+            "divide" -> decodeBinary(json, depth, MetricExpression::Divide)
+            "timeDiff" -> {
+                val end = decodeExpression(json.optJSONObject("end"), depth + 1)
+                val start = decodeExpression(json.optJSONObject("start"), depth + 1)
+                if (end == null || start == null) null else MetricExpression.TimeDiff(end, start)
+            }
             else -> null
         }
     }
 
-    private fun binaryEval(op: String, json: JSONObject): MetricExpression? {
-        if (op == "timeDiff") {
-            val end = decodeExpression(json.optJSONObject("end")) ?: return null
-            val start = decodeExpression(json.optJSONObject("start")) ?: return null
-            return MetricExpression.TimeDiff(end, start)
-        }
-        val left = decodeExpression(json.optJSONObject("left")) ?: return null
-        val right = decodeExpression(json.optJSONObject("right")) ?: return null
-        return when (op) {
-            "add" -> MetricExpression.Add(left, right)
-            "subtract" -> MetricExpression.Subtract(left, right)
-            "multiply" -> MetricExpression.Multiply(left, right)
-            "divide" -> MetricExpression.Divide(left, right)
-            else -> null
-        }
+    private fun decodeBinary(
+        json: JSONObject,
+        depth: Int,
+        create: (MetricExpression, MetricExpression) -> MetricExpression,
+    ): MetricExpression? {
+        val left = decodeExpression(json.optJSONObject("left"), depth + 1)
+        val right = decodeExpression(json.optJSONObject("right"), depth + 1)
+        return if (left == null || right == null) null else create(left, right)
     }
 
     private fun decodeStringList(array: JSONArray?): List<String> {
         if (array == null) return emptyList()
-        val result = ArrayList<String>(array.length())
+        val result = ArrayList<String>(minOf(array.length(), MAX_OPTIONS))
         for (index in 0 until array.length()) {
-            val value = runCatching { array.getString(index) }.getOrNull()?.trim().orEmpty()
+            val value = array.optString(index).trim().take(MAX_NAME_CHARS)
             if (value.isNotEmpty() && value !in result) result += value
             if (result.size >= MAX_OPTIONS) break
         }

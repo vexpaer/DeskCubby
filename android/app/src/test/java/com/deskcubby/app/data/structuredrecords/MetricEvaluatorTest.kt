@@ -7,8 +7,6 @@ import org.junit.Test
 
 class MetricEvaluatorTest {
 
-    private val boundary = MetricEvaluator.BoundaryProvider { "05:00" }
-
     private fun timeProvider(vararg pairs: Triple<String, LocalDate, String>): MetricEvaluator.FieldValuesProvider {
         val map = pairs.groupBy({ it.first to it.second.toString() }, { it.third })
         return MetricEvaluator.FieldValuesProvider { fieldId, day ->
@@ -18,36 +16,48 @@ class MetricEvaluatorTest {
         }
     }
 
-    /** The key acceptance test: 起床时间(D) - 睡觉时间(D-1) = 07:35 with boundary 05:00. */
+    /** Same natural-date sleep/wake values wrap across midnight without a configurable boundary. */
     @Test
-    fun sleepDurationComputesCorrectly() {
-        val wake = LocalDate.of(2026, 8, 19) // D
-        val sleep = LocalDate.of(2026, 8, 18) // D-1
+    fun overnightSleepDurationComputesCorrectly() {
+        val date = LocalDate.of(2026, 8, 20)
         val provider = timeProvider(
-            Triple(SYSTEM_FIELD_WAKE_TIME, wake, "08:12"),
-            Triple(SYSTEM_FIELD_SLEEP_TIME, sleep, "00:37"),
+            Triple(SYSTEM_FIELD_SLEEP_TIME, date, "00:37"),
+            Triple(SYSTEM_FIELD_WAKE_TIME, date, "08:12"),
         )
         val expression = MetricExpression.TimeDiff(
-            end = MetricExpression.FieldRef(FieldRefNode(SYSTEM_FIELD_WAKE_TIME, dayOffset = 0, selector = FieldSelector.LAST)),
-            start = MetricExpression.FieldRef(FieldRefNode(SYSTEM_FIELD_SLEEP_TIME, dayOffset = -1, selector = FieldSelector.LAST)),
+            end = MetricExpression.FieldRef(FieldRefNode(SYSTEM_FIELD_WAKE_TIME, 0, FieldSelector.LAST)),
+            start = MetricExpression.FieldRef(FieldRefNode(SYSTEM_FIELD_SLEEP_TIME, 0, FieldSelector.LAST)),
         )
-        val result = MetricEvaluator.evaluate(expression, wake, provider, boundary)
+        val result = MetricEvaluator.evaluate(expression, date, provider)
         assertTrue("expected Dur, got $result", result is MetricEvaluator.EvalResult.Dur)
-        // 08:12 - 00:37 on D = 7h35m = 27300s.
         assertEquals(27300.0, (result as MetricEvaluator.EvalResult.Dur).seconds, 0.001)
     }
 
     @Test
-    fun missingInputYieldsNullNotZero() {
-        // Wake present but no previous sleep → Missing (null), never 0.
+    fun sleepBeforeMidnightAndWakeAfterMidnightWrapsOnce() {
+        val date = LocalDate.of(2026, 8, 20)
         val provider = timeProvider(
-            Triple(SYSTEM_FIELD_WAKE_TIME, LocalDate.of(2026, 8, 19), "08:12"),
+            Triple(SYSTEM_FIELD_SLEEP_TIME, date, "23:30"),
+            Triple(SYSTEM_FIELD_WAKE_TIME, date, "07:00"),
         )
         val expression = MetricExpression.TimeDiff(
-            end = MetricExpression.FieldRef(FieldRefNode(SYSTEM_FIELD_WAKE_TIME, 0, FieldSelector.LAST)),
-            start = MetricExpression.FieldRef(FieldRefNode(SYSTEM_FIELD_SLEEP_TIME, -1, FieldSelector.LAST)),
+            end = MetricExpression.FieldRef(FieldRefNode(SYSTEM_FIELD_WAKE_TIME)),
+            start = MetricExpression.FieldRef(FieldRefNode(SYSTEM_FIELD_SLEEP_TIME)),
         )
-        val result = MetricEvaluator.evaluate(expression, LocalDate.of(2026, 8, 19), provider, boundary)
+        val result = MetricEvaluator.evaluate(expression, date, provider) as MetricEvaluator.EvalResult.Dur
+        assertEquals(27000.0, result.seconds, 0.001)
+    }
+
+    @Test
+    fun missingInputYieldsNullNotZero() {
+        val provider = timeProvider(
+            Triple(SYSTEM_FIELD_WAKE_TIME, LocalDate.of(2026, 8, 20), "08:12"),
+        )
+        val expression = MetricExpression.TimeDiff(
+            end = MetricExpression.FieldRef(FieldRefNode(SYSTEM_FIELD_WAKE_TIME)),
+            start = MetricExpression.FieldRef(FieldRefNode(SYSTEM_FIELD_SLEEP_TIME)),
+        )
+        val result = MetricEvaluator.evaluate(expression, LocalDate.of(2026, 8, 20), provider)
         assertEquals(MetricEvaluator.EvalResult.Missing, result)
     }
 
@@ -57,7 +67,7 @@ class MetricEvaluatorTest {
             MetricExpression.Constant(30.0),
             MetricExpression.Constant(2.0),
         )
-        val result = MetricEvaluator.evaluate(expression, LocalDate.of(2026, 8, 19), timeProvider(), boundary)
+        val result = MetricEvaluator.evaluate(expression, LocalDate.of(2026, 8, 20), timeProvider())
         assertEquals(MetricEvaluator.EvalResult.Num(60.0), result)
     }
 
@@ -67,12 +77,12 @@ class MetricEvaluatorTest {
             MetricExpression.Constant(30.0),
             MetricExpression.Constant(0.0),
         )
-        val result = MetricEvaluator.evaluate(expression, LocalDate.of(2026, 8, 19), timeProvider(), boundary)
+        val result = MetricEvaluator.evaluate(expression, LocalDate.of(2026, 8, 20), timeProvider())
         assertEquals(MetricEvaluator.EvalResult.Missing, result)
     }
 
     @Test
-    fun selectorAggregatesSameDayValues() {
+    fun selectorAggregatesSameDateValues() {
         val values = listOf(
             NormalizedFieldValue.Number(10.0),
             NormalizedFieldValue.Number(20.0),
