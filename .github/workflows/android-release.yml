@@ -1,0 +1,109 @@
+name: Android Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish signed APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        working-directory: android
+
+    env:
+      DESKCUBBY_RELEASE_STORE_FILE: release.keystore
+      DESKCUBBY_RELEASE_STORE_PASSWORD: ${{ secrets.DESKCUBBY_RELEASE_STORE_PASSWORD }}
+      DESKCUBBY_RELEASE_KEY_ALIAS: ${{ secrets.DESKCUBBY_RELEASE_KEY_ALIAS }}
+      DESKCUBBY_RELEASE_KEY_PASSWORD: ${{ secrets.DESKCUBBY_RELEASE_KEY_PASSWORD }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: >-
+            platform-tools
+            platforms;android-36-ext19
+            build-tools;36.0.0
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Restore release keystore
+        shell: bash
+        run: |
+          test -n "${{ secrets.DESKCUBBY_RELEASE_KEYSTORE_BASE64 }}" || {
+            echo "Missing DESKCUBBY_RELEASE_KEYSTORE_BASE64 secret"
+            exit 1
+          }
+          printf '%s' "${{ secrets.DESKCUBBY_RELEASE_KEYSTORE_BASE64 }}" | base64 --decode > release.keystore
+          chmod 600 release.keystore
+
+      - name: Validate signing secrets
+        shell: bash
+        run: |
+          test -n "$DESKCUBBY_RELEASE_STORE_PASSWORD" || { echo "Missing DESKCUBBY_RELEASE_STORE_PASSWORD"; exit 1; }
+          test -n "$DESKCUBBY_RELEASE_KEY_ALIAS" || { echo "Missing DESKCUBBY_RELEASE_KEY_ALIAS"; exit 1; }
+          test -n "$DESKCUBBY_RELEASE_KEY_PASSWORD" || { echo "Missing DESKCUBBY_RELEASE_KEY_PASSWORD"; exit 1; }
+
+      - name: Build release APK
+        run: >-
+          ./gradlew --no-daemon
+          testReleaseUnitTest
+          lintRelease
+          assembleRelease
+          --stacktrace
+
+      - name: Verify APK exists
+        shell: bash
+        run: test -f app/build/outputs/apk/release/DeskCubby.apk
+
+      - name: Prepare release asset
+        id: asset
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="$GITHUB_REF_NAME"
+          else
+            VERSION="manual-${GITHUB_SHA::7}"
+          fi
+          ASSET_NAME="DeskCubby-${VERSION}.apk"
+          cp app/build/outputs/apk/release/DeskCubby.apk "$ASSET_NAME"
+          echo "name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
+          echo "path=android/$ASSET_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.asset.outputs.name }}
+          path: ${{ steps.asset.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.asset.outputs.path }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
