@@ -1,7 +1,5 @@
 package com.deskcubby.app.data.structuredrecords
 
-import java.time.LocalDate
-
 /** The five V1 strongly-typed field kinds. Each has its own validation and statistics semantics. */
 enum class StructuredFieldType(val wireValue: String) {
     WORD("word"),
@@ -80,7 +78,7 @@ enum class MetricChartPeriod(val wireValue: String) {
     }
 }
 
-/** Aggregation selector applied to all values of a field on one Journal Day. */
+/** Aggregation selector applied to all values of a field on one natural calendar date. */
 enum class FieldSelector(val wireValue: String) {
     FIRST("first"),
     LAST("last"),
@@ -110,7 +108,7 @@ enum class MetricResultType(val wireValue: String) {
     }
 }
 
-/** A reference to a field's value on a Journal Day, with an aggregation selector. */
+/** A reference to a field's value on a natural calendar date, with an aggregation selector. */
 data class FieldRefNode(
     val fieldId: String,
     val dayOffset: Int = 0,
@@ -145,27 +143,18 @@ data class StructuredMetric(
     val sortOrder: Int = 0,
 )
 
-/** One boundary-change history entry. */
-data class DayBoundaryRecord(
-    val effectiveFromJournalDay: String,
-    val value: String,
-)
-
 /**
- * Workspace-level semantics stored in `.deskcubby/settings.json`. This is diary-workspace data that
- * must stay consistent across devices and survives with the Markdown; device-local preferences
- * (dark mode, auto-collection toggle, permissions, API keys and the like) must NOT live here.
+ * Workspace protocol settings stored in `.deskcubby/settings.json`.
+ *
+ * [dayBoundary] is a compatibility/UI adapter only: [StructuredWorkspaceRepository] overlays the
+ * device-local “今日日记切换时间” here so the existing settings screen can keep using its current
+ * state shape. [StructuredRecordsCodec] never persists it, and no record/statistics code may use it.
  */
 data class StructuredWorkspaceSettings(
     val schemaVersion: Int = 1,
     val markdownProtocolVersion: Int = 1,
     val dayBoundary: String = JournalDayEngine.DEFAULT_DAY_BOUNDARY,
-    val dayBoundaryHistory: List<DayBoundaryRecord> = emptyList(),
-) {
-    /** Resolves the boundary effective for a given Journal Day. */
-    fun effectiveDayBoundary(journalDay: LocalDate): String =
-        JournalDayEngine.getEffectiveDayBoundary(journalDay, dayBoundaryHistory)
-}
+)
 
 /** The five default starter examples, one per type (editable / deletable by the user). */
 object DefaultStructuredExamples {
