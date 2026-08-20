@@ -26,8 +26,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -44,6 +46,7 @@ class DeskViewModel @Inject constructor(
     private val dateRecordDao: DateRecordDao,
     private val diaryRepository: DiaryFileRepository,
     private val settingsRepository: SettingsRepository,
+    private val aiTaskQueue: com.deskcubby.app.data.taskqueue.AiTaskQueue,
 ) : ViewModel() {
 
     val settings = settingsRepository.settings.stateIn(
@@ -135,8 +138,7 @@ class DeskViewModel @Inject constructor(
             }
 
             val traces = buildTraces(source, todayIdeas, todayDiary, todayPhotos, language)
-            val totalTraceCount = traces.size + todayIdeas.size + todayPhotos.size +
-                (if (todayDiary != null) 1 else 0)
+            val totalTraceCount = traces.size
 
             _state.value = DeskUiState(
                 loading = false,
@@ -180,7 +182,6 @@ class DeskViewModel @Inject constructor(
 
         val timeFormatter = DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT)
         return rows.sortedBy { (time, _) -> time }
-            .take(MAX_TRACES)
             .map { (time, label) ->
                 val local = LocalDateTime.ofInstant(
                     Instant.ofEpochMilli(time),
@@ -228,6 +229,63 @@ class DeskViewModel @Inject constructor(
     private fun eventTraceLabel(language: AppLanguage): String =
         if (language == AppLanguage.ENGLISH) "event" else "事件"
 
+    /**
+     * Adds a meal/photo to today's diary through the same durable pipeline as Home. The image +
+     * Markdown write is the completion boundary; calorie AI, gallery copy, geocoder and index
+     * refresh all run in the background and never keep this method (or the UI) waiting.
+     */
+    fun addMealPhoto(uri: android.net.Uri) {
+        viewModelScope.launch {
+            val current = settingsRepository.settings.first()
+            val language = current.appLanguage
+            val category = if (language == AppLanguage.ENGLISH) "Photo" else "图片"
+            try {
+                val media = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    diaryRepository.appendImageToToday(uri, category, current)
+                }
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    if (current.calorieEstimationEnabled) {
+                        runCatching {
+                            aiTaskQueue.enqueueTask(
+                                type = com.deskcubby.app.data.local.AiTaskTypeEntity.CALORIE_SINGLE,
+                                payload = com.deskcubby.app.data.taskqueue.CalorieSingleTaskPayload(
+                                    uri = media.documentUri,
+                                    fileName = media.fileName,
+                                    settings = current,
+                                ),
+                            )
+                        }
+                    }
+                    runCatching { diaryRepository.enrichImportedMedia(uri, media, current) }
+                    runCatching { diaryRepository.scan(current) }
+                }
+                _state.value = _state.value.copy(
+                    photoNotice = if (language == AppLanguage.ENGLISH) {
+                        "$category photo added to today's diary"
+                    } else {
+                        "$category 图片已加入今日日记"
+                    },
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    photoNotice = if (language == AppLanguage.ENGLISH) {
+                        "Could not add the photo: ${error.message.orEmpty()}"
+                    } else {
+                        "图片添加失败：${error.message.orEmpty()}"
+                    },
+                )
+            }
+        }
+    }
+
+    fun consumePhotoNotice() {
+        if (_state.value.photoNotice != null) {
+            _state.value = _state.value.copy(photoNotice = null)
+        }
+    }
+
     private fun uiLocale(language: AppLanguage): Locale = when (language) {
         AppLanguage.ENGLISH -> Locale.ENGLISH
         else -> Locale.SIMPLIFIED_CHINESE
@@ -236,7 +294,6 @@ class DeskViewModel @Inject constructor(
     private companion object {
         const val MAX_IDEAS = 2
         const val MAX_PHOTOS = 2
-        const val MAX_TRACES = 6
     }
 }
 

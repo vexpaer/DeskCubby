@@ -117,6 +117,7 @@ fun AiChatScreen(
     viewModel: AiChatViewModel,
     onOpenSettings: () -> Unit,
     onOpenReview: () -> Unit,
+    initialPrompt: String? = null,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
@@ -140,6 +141,14 @@ fun AiChatScreen(
         state.errorMessage?.let {
             snackbar.showSnackbar(it)
             viewModel.consumeError()
+        }
+    }
+
+    // A Desk-provided initial prompt is sent once as the user's first message; the ViewModel's
+    // consumed flag prevents rotation/recomposition from re-sending it.
+    LaunchedEffect(initialPrompt) {
+        if (!initialPrompt.isNullOrBlank()) {
+            viewModel.submitInitialPrompt(initialPrompt)
         }
     }
     LaunchedEffect(state.transientMessage) {

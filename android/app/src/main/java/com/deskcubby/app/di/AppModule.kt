@@ -3,6 +3,7 @@ package com.deskcubby.app.di
 import android.content.Context
 import androidx.room.Room
 import com.deskcubby.app.data.local.AiChatDao
+import com.deskcubby.app.data.local.AgentApprovalDao
 import com.deskcubby.app.data.local.AgentDao
 import com.deskcubby.app.data.local.AppDatabase
 import com.deskcubby.app.data.local.BrowserRecordDao
@@ -48,6 +49,7 @@ object AppModule {
                     AppDatabase.MIGRATION_12_13,
                     AppDatabase.MIGRATION_13_14,
                     AppDatabase.MIGRATION_14_15,
+                    AppDatabase.MIGRATION_15_16,
             )
             .build()
 
@@ -74,6 +76,18 @@ object AppModule {
     fun provideLegacyStatisticsMigrationDao(
         db: AppDatabase,
     ): LegacyStatisticsMigrationDao = db.legacyStatisticsMigrationDao()
+
+    @Provides
+    fun provideAgentApprovalDao(
+        db: AppDatabase,
+    ): AgentApprovalDao = db.agentApprovalDao()
+
+    @Provides
+    @Singleton
+    fun provideAgentPermissionManager(
+        database: AppDatabase,
+    ): com.deskcubby.app.agent.AgentPermissionManager =
+        com.deskcubby.app.agent.AgentPermissionManager(database)
 
     @Provides
     fun provideStructuredRecordDao(

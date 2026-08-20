@@ -19,6 +19,7 @@ class AgentRuntime @Inject constructor(
     suspend fun run(
         request: AgentRunRequest,
         onUpdate: (AgentExecutionUpdate) -> Unit = {},
+        shouldCancel: suspend () -> Boolean = { false },
     ): AgentRunResult {
         reviewStore.startRun(request)
         var usage = AgentRunUsage()
@@ -51,6 +52,7 @@ class AgentRuntime @Inject constructor(
             )
             var sequence = 0
             repeat(MAX_MODEL_ROUNDS) {
+                checkCancellation(shouldCancel)
                 val turn = modelClient.complete(
                     AgentModelRequest(
                         systemPrompt = systemPrompt,
@@ -59,6 +61,7 @@ class AgentRuntime @Inject constructor(
                         modelConfigId = request.modelConfigId,
                     ),
                 )
+                checkCancellation(shouldCancel)
                 usage = usage.plus(turn.usage)
                 if (turn.toolCalls.isEmpty()) {
                     if (turn.content.isBlank()) {
@@ -77,6 +80,7 @@ class AgentRuntime @Inject constructor(
                     toolCalls = turn.toolCalls,
                 )
                 turn.toolCalls.forEach { call ->
+                    checkCancellation(shouldCancel)
                     sequence += 1
                     val result = executor.execute(
                         runId = request.runId,
@@ -85,6 +89,7 @@ class AgentRuntime @Inject constructor(
                         scope = scope,
                         onUpdate = onUpdate,
                     )
+                    checkCancellation(shouldCancel)
                     messages += AIAgentMessage(
                         role = AIAgentMessageRole.TOOL,
                         content = result.content,
@@ -104,6 +109,12 @@ class AgentRuntime @Inject constructor(
                 runCatching { reviewStore.finishRun(request.runId, "FAILED", usage) }
             }
             throw error
+        }
+    }
+
+    private suspend fun checkCancellation(shouldCancel: suspend () -> Boolean) {
+        if (shouldCancel()) {
+            throw CancellationException("Agent run cancelled by user")
         }
     }
 

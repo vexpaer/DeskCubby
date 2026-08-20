@@ -31,8 +31,15 @@ import kotlinx.coroutines.flow.Flow
 class AiTaskQueue @Inject constructor(
     @ApplicationContext private val appContext: Context,
     private val database: AppDatabase,
+    private val agentPermissionManager: com.deskcubby.app.agent.AgentPermissionManager,
 ) {
     private val dao: AiTaskDao get() = database.aiTaskDao()
+
+    init {
+        // Let a durable approve-after-restart wake the worker to resume the re-queued task.
+        agentPermissionManager.attachResolutionScheduler(::ensureScheduled)
+    }
+
     companion object {
         internal const val WORK_NAME = "deskcubby-ai-task-queue"
         internal const val WORK_TAG = "ai-task"
@@ -122,24 +129,55 @@ class AiTaskQueue @Inject constructor(
     }
 
     /**
-     * Cancel a task that has not started yet. A RUNNING task's network call is cancelled by the
-     * worker's own cooperative cancellation when the process dies; there is no cross-process way to
-     * cancel a live coroutine, so cancellation only applies to QUEUED work.
+     * Cancel a task. QUEUED work is cancelled immediately. A RUNNING or WAITING_APPROVAL task is
+     * marked CANCEL_REQUESTED (persisted) so the worker's execution loops stop cooperatively at the
+     * next long-step boundary and coalesce the row to CANCELED; a pending approval, if any, is
+     * rejected so the blocked executor unwinds.
      */
     suspend fun cancelTask(id: Long) {
         val task = dao.getById(id) ?: return
-        if (task.state != AiTaskStateEntity.QUEUED) return
-        dao.markCanceled(id, AiTaskStateEntity.CANCELED, System.currentTimeMillis())
+        val now = System.currentTimeMillis()
+        when (task.state) {
+            AiTaskStateEntity.QUEUED ->
+                dao.markCanceled(id, AiTaskStateEntity.CANCELED, now)
+            AiTaskStateEntity.RUNNING,
+            AiTaskStateEntity.WAITING_APPROVAL,
+            -> {
+                // The state flip and the approval-rejection run under the permission manager's state
+                // Mutex, so a concurrent authorize() can never overwrite CANCEL_REQUESTED back to
+                // WAITING_APPROVAL after this cancel. rejectPendingForTask is called unconditionally
+                // (it matches the live waiter by taskId, not by a pre-lock state snapshot): even if
+                // authorize flipped RUNNING -> WAITING_APPROVAL in the same window, the live waiter
+                // is still completed so the blocked executor unwinds instead of stranding forever.
+                agentPermissionManager.withStateLock {
+                    dao.markCancelRequested(
+                        id = id,
+                        cancelRequested = AiTaskStateEntity.CANCEL_REQUESTED,
+                        running = AiTaskStateEntity.RUNNING,
+                        waitingApproval = AiTaskStateEntity.WAITING_APPROVAL,
+                    )
+                    agentPermissionManager.rejectPendingForTask(id)
+                }
+            }
+            else -> Unit
+        }
     }
 
     suspend fun taskById(id: Long): AiTaskQueueEntity? = dao.getById(id)
 
     fun observeTask(id: Long): Flow<AiTaskQueueEntity?> = dao.observeById(id)
 
-    /** Called from the Application on startup. Re-enqueues an interrupted worker for any leftover
-     * non-terminal work (including rows the OS killed mid-`running`).
-     */
+    /** Called from the Application on startup. Re-surfaces any persisted pending approval and
+     * re-enqueues an interrupted worker for leftover non-terminal work. Interrupted RUNNING rows are
+     * re-queued by the next drain (their lease owner is gone), so no task can stay RUNNING forever. */
     suspend fun start(): Unit = runCatching {
+        agentPermissionManager.refreshPendingFromDb()
+        // A task the user stopped but whose worker died before coalescing is finalized now.
+        dao.coalesceCancelRequested(
+            canceled = AiTaskStateEntity.CANCELED,
+            cancelRequested = AiTaskStateEntity.CANCEL_REQUESTED,
+            now = System.currentTimeMillis(),
+        )
         val incomplete = dao.nextIncomplete(
             queued = AiTaskStateEntity.QUEUED,
             running = AiTaskStateEntity.RUNNING,

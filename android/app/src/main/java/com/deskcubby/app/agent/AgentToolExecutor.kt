@@ -77,6 +77,7 @@ class AgentToolExecutor @Inject constructor(
                         summary = preparation.summary,
                         before = preparation.before,
                         after = preparation.after,
+                        argumentsSummary = preparation.argumentsSummary,
                     ),
                 )
                 if (decision == AgentApprovalDecision.REJECT) {

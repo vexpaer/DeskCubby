@@ -71,6 +71,8 @@ data class DeskUiState(
     val totalTraceCount: Int = 0,
     val ambient: DeskAmbient = DeskAmbient.AFTERNOON,
     val isEmpty: Boolean = true,
+    /** One-shot user-facing notice from a completed photo add (success/failure), localized. */
+    val photoNotice: String? = null,
 ) {
     val hasDiary: Boolean get() = diary != null
     val hasIdeas: Boolean get() = ideas.isNotEmpty()

@@ -33,8 +33,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LegacyStatisticsMigrationEntity::class,
         StructuredRecordFileEntity::class,
         StructuredRecordOccurrenceEntity::class,
+        AgentApprovalRequestEntity::class,
     ],
-    version = 15,
+    version = 16,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -54,9 +55,54 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun stepStatisticsDao(): StepStatisticsDao
     abstract fun legacyStatisticsMigrationDao(): LegacyStatisticsMigrationDao
     abstract fun aiTaskDao(): AiTaskDao
+    abstract fun agentApprovalDao(): AgentApprovalDao
     abstract fun structuredRecordDao(): StructuredRecordDao
 
     companion object {
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `ai_task_queue` ADD COLUMN `leaseOwner` TEXT DEFAULT NULL",
+                )
+                db.execSQL(
+                    "ALTER TABLE `ai_task_queue` ADD COLUMN `leaseStartedAt` INTEGER DEFAULT NULL",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `agent_approval_requests` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `requestId` TEXT NOT NULL,
+                        `runId` TEXT NOT NULL,
+                        `conversationId` INTEGER,
+                        `taskId` INTEGER,
+                        `toolCallId` TEXT NOT NULL,
+                        `toolName` TEXT NOT NULL,
+                        `target` TEXT NOT NULL,
+                        `summary` TEXT NOT NULL,
+                        `argumentsSummary` TEXT NOT NULL,
+                        `beforeContent` TEXT NOT NULL,
+                        `afterContent` TEXT NOT NULL,
+                        `executionToken` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `decidedAt` INTEGER
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_approval_requests_requestId` " +
+                        "ON `agent_approval_requests` (`requestId`)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_agent_approval_requests_runId` " +
+                        "ON `agent_approval_requests` (`runId`)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_agent_approval_requests_status` " +
+                        "ON `agent_approval_requests` (`status`)",
+                )
+            }
+        }
         val MIGRATION_14_15 = object : Migration(14, 15) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(

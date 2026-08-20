@@ -61,4 +61,14 @@
     <exclude
         domain="sharedpref"
         path="cloud_sync_manual_queue.xml" />
+    <!-- The settings DataStore holds API keys, S3 access/secret/session credentials and cloud
+         passwords. It must never be carried into an Android Auto Backup / device transfer; the
+         explicit DeskCubby backup (sanitized JSON / record sync) is the intended settings path. -->
+    <exclude
+        domain="file"
+        path="datastore/deskcubby_settings.preferences_pb" />
+    <!-- Legacy encrypted API-key store (obsolete but kept for migration reads). -->
+    <exclude
+        domain="sharedpref"
+        path="deskcubby_ai_secrets.xml" />
 </full-backup-content>

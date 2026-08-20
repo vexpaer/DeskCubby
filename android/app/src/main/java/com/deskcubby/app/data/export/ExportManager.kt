@@ -17,7 +17,10 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.security.MessageDigest
 import java.util.Locale
+import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import javax.inject.Inject
@@ -66,7 +69,15 @@ data class ZipExportResult(
     val downloadUri: Uri?,
     val fileBytes: Long,
     val counts: Map<String, Int>,
-)
+    /** Files the user selected that could not be read; they were omitted from the archive. */
+    val failedFiles: List<String> = emptyList(),
+    /** Non-null when the archive built but the Downloads copy could not be verified. */
+    val failedReason: String? = null,
+) {
+    /** Export is only "successful" when every selected file was read and the Downloads copy verifies. */
+    val success: Boolean
+        get() = failedFiles.isEmpty() && failedReason == null && downloadUri != null
+}
 
 @Singleton
 class ExportManager @Inject constructor(
@@ -76,14 +87,14 @@ class ExportManager @Inject constructor(
 ) {
     private val mutex = Mutex()
 
-    /** Builds the zip in app cache, then copies it to the Downloads folder. */
+    /** Builds the zip in app cache, then copies it to the Downloads folder with verification. */
     suspend fun buildAndExport(selection: ExportSelection): ZipExportResult = mutex.withLock {
         withContext(Dispatchers.IO) {
             check(selection.anySelected) { "未选择任何导出内容 / Nothing selected to export" }
 
             val zipFile = buildZip(selection)
             val baseName = zipFile.name.removeSuffix(".zip")
-            val downloadUri = copyToDownloads(zipFile, baseName)
+            val (downloadUri, reason) = copyToDownloads(zipFile, baseName)
             val shareUri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
@@ -95,11 +106,17 @@ class ExportManager @Inject constructor(
                 downloadUri = downloadUri,
                 fileBytes = zipFile.length(),
                 counts = selectionCounts,
-            )
+                failedFiles = failedFiles,
+                failedReason = reason,
+            ).also { result ->
+                // Clean the per-run temp staging dir regardless of outcome.
+                runCatching { File(context.cacheDir, TMP_DIR).deleteRecursively() }
+            }
         }
     }
 
     private val selectionCounts = LinkedHashMap<String, Int>()
+    private val failedFiles = mutableListOf<String>()
 
     private suspend fun buildZip(selection: ExportSelection): File {
         val settings = settingsRepository.settings.first()
@@ -109,15 +126,16 @@ class ExportManager @Inject constructor(
         zipFile.delete()
 
         selectionCounts.clear()
+        failedFiles.clear()
         FileOutputStream(zipFile).use { fos ->
             ZipOutputStream(BufferedOutputStream(fos)).use { zos ->
                 zos.setLevel(6)
                 if (selection.anySelected) {
                     putTextEntry(zos, "README.md", readmeText())
                 }
-                if (selection.diaries) copyTreeFiles(zos, settings.diaryTreeUri, DIR_PREFIX, TreeKind.DIARY, selectionCounts)
-                if (selection.media) copyTreeFiles(zos, settings.mediaTreeUri, MEDIA_PREFIX, TreeKind.MEDIA, selectionCounts)
-                if (selection.notes) copyTreeFiles(zos, settings.notesTreeUri, NOTES_PREFIX, TreeKind.NOTES, selectionCounts)
+                if (selection.diaries) copyTreeFiles(zos, settings.diaryTreeUri, DIR_PREFIX, TreeKind.DIARY, selectionCounts, failedFiles)
+                if (selection.media) copyTreeFiles(zos, settings.mediaTreeUri, MEDIA_PREFIX, TreeKind.MEDIA, selectionCounts, failedFiles)
+                if (selection.notes) copyTreeFiles(zos, settings.notesTreeUri, NOTES_PREFIX, TreeKind.NOTES, selectionCounts, failedFiles)
                 if (selection.anyStructuredSelected) {
                     val dataJson = buildDataJson(selection)
                     putTextEntry(zos, "$DATA_PREFIX/data.json", dataJson)
@@ -129,7 +147,9 @@ class ExportManager @Inject constructor(
 
     /**
      * Streams the files of a SAF tree into the zip under [destPrefix], preserving relative folder
-     * structure for [kind]. Media sidecar metadata files are skipped.
+     * structure. Media sidecar metadata files (e.g. dc-media.json) are included so calorie, food
+     * and location metadata is never lost. A file that cannot be read is recorded in [failedFiles]
+     * and omitted entirely (never emitted as a 0-byte entry or counted as success).
      */
     private suspend fun copyTreeFiles(
         zos: ZipOutputStream,
@@ -137,30 +157,53 @@ class ExportManager @Inject constructor(
         destPrefix: String,
         kind: TreeKind,
         counts: MutableMap<String, Int>,
+        failed: MutableList<String>,
     ) {
-        if (treeUri.isNullOrBlank()) return
+        if (treeUri.isNullOrBlank()) {
+            // A selected content type must never be silently dropped while the export reports
+            // success; record it as a failed file so the result reflects the missing tree.
+            failed.add("${kind.label} (目录未设置 / folder not set)")
+            return
+        }
         val root = try {
             DocumentFile.fromTreeUri(context, Uri.parse(treeUri))
         } catch (_: Exception) {
+            failed.add("${kind.label} (目录不可访问 / folder inaccessible)")
             return
-        } ?: return
+        } ?: run {
+            failed.add("${kind.label} (目录不可访问 / folder inaccessible)")
+            return
+        }
 
         fun writeFile(file: DocumentFile, relative: String) {
             val valid = sanitizeEntryName(relative) ?: return
-            if (kind == TreeKind.MEDIA && file.name in MEDIA_SIDECAR_NAMES) return
             if (kind == TreeKind.DIARY && file.name?.endsWith(".md", ignoreCase = true) != true) return
             if (file.name?.endsWith(".$TRASH_SUFFIX", ignoreCase = true) == true) return
             val uri = file.uri
-            counts[kind.label] = counts.getOrDefault(kind.label, 0) + 1
-            writeEntry(zos, destPrefix + valid) { output ->
-                val input = try {
-                    context.contentResolver.openInputStream(uri)
-                } catch (_: Exception) {
-                    null
+            // Stage the full read before creating an entry so a failed read never leaves a partial
+            // or meaningless 0-byte entry; the file is omitted and reported instead.
+            val temp = File(File(context.cacheDir, TMP_DIR).apply { mkdirs() }, "${UUID.randomUUID()}.tmp")
+            val copied: Long = try {
+                readToTemp(uri, temp)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                temp.delete()
+                failed.add(relative)
+                return
+            }
+            if (copied < 0) {
+                temp.delete()
+                failed.add(relative)
+                return
+            }
+            try {
+                writeEntry(zos, destPrefix + valid) { output ->
+                    temp.inputStream().use { it.copyTo(output, DEFAULT_BUFFER_SIZE) }
                 }
-                if (input != null) {
-                    input.use { it.copyTo(output, DEFAULT_BUFFER_SIZE) }
-                }
+                counts[kind.label] = counts.getOrDefault(kind.label, 0) + 1
+            } finally {
+                temp.delete()
             }
         }
 
@@ -180,6 +223,21 @@ class ExportManager @Inject constructor(
                 }
         }
         walk(root, "")
+    }
+
+    /** Reads a SAF uri into [temp], returning bytes copied, or -1 when the source cannot be read. */
+    private fun readToTemp(uri: Uri, temp: File): Long {
+        val input = try {
+            context.contentResolver.openInputStream(uri)
+        } catch (_: Exception) {
+            null
+        }
+        if (input == null) return -1
+        return input.use { source ->
+            temp.outputStream().use { target ->
+                source.copyTo(target, DEFAULT_BUFFER_SIZE)
+            }
+        }
     }
 
     private suspend fun buildDataJson(selection: ExportSelection): String {
@@ -208,8 +266,11 @@ class ExportManager @Inject constructor(
         return BackupJsonCodec.encode(backup)
     }
 
-    /** Writes the zip into the public Downloads/DeskCubby folder, returning its content Uri. */
-    private fun copyToDownloads(zipFile: File, baseName: String): Uri? {
+    /**
+     * Writes the zip into the public Downloads/DeskCubby folder, verifying the copy. Returns the
+     * resulting Uri and a failure reason when the write cannot be confirmed.
+     */
+    private fun copyToDownloads(zipFile: File, baseName: String): Pair<Uri?, String?> {
         val fileName = "${baseName}.zip"
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -217,14 +278,16 @@ class ExportManager @Inject constructor(
             } else {
                 copyToLegacyDownloads(zipFile, fileName)
             }
-        } catch (_: Exception) {
-            // Keep the cache-only copy shareable; the dialog reports cache location.
-            null
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            // Keep the cache-only copy shareable, but report that the Downloads copy failed.
+            null to (error.message ?: "无法写入下载目录 / Could not write to Downloads")
         }
     }
 
     @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
-    private fun insertIntoMediaStore(zipFile: File, fileName: String): Uri? {
+    private fun insertIntoMediaStore(zipFile: File, fileName: String): Pair<Uri?, String?> {
         val resolver = context.contentResolver
         val values = android.content.ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, fileName)
@@ -236,30 +299,91 @@ class ExportManager @Inject constructor(
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        val uri = resolver.insert(collection, values) ?: return null
-        try {
-            resolver.openOutputStream(uri, "w")?.use { output ->
-                zipFile.inputStream().use { it.copyTo(output, DEFAULT_BUFFER_SIZE) }
+        val uri = resolver.insert(collection, values) ?: return null to "无法创建下载文件 / Could not create Downloads entry"
+        return try {
+            val output = resolver.openOutputStream(uri, "w")
+            if (output == null) {
+                runCatching { resolver.delete(uri, null, null) }
+                return null to "无法打开下载文件 / Could not open Downloads output"
+            }
+            val written = output.use { out ->
+                zipFile.inputStream().use { it.copyTo(out, DEFAULT_BUFFER_SIZE) }
+            }
+            if (written != zipFile.length()) {
+                runCatching { resolver.delete(uri, null, null) }
+                return null to "文件写入不完整 / Download write was incomplete"
             }
             values.clear()
             values.put(MediaStore.Downloads.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
-            return uri
+
+            // Reopen and verify the committed copy against the source archive (size + SHA-256).
+            val expectedHash = sha256Hex { zipFile.inputStream() }
+            val reopen = resolver.openInputStream(uri)
+            if (reopen == null) {
+                runCatching { resolver.delete(uri, null, null) }
+                return null to "无法验证下载文件 / Could not verify Downloads copy"
+            }
+            val actualHash = sha256Hex { reopen }
+            if (actualHash != expectedHash) {
+                runCatching { resolver.delete(uri, null, null) }
+                return null to "下载文件校验失败 / Downloads copy failed verification"
+            }
+            uri to null
+        } catch (error: CancellationException) {
+            throw error
         } catch (_: Exception) {
             runCatching { resolver.delete(uri, null, null) }
-            return null
+            null to "无法写入下载文件 / Could not write to Downloads"
         }
     }
 
-    private fun copyToLegacyDownloads(zipFile: File, fileName: String): Uri? {
+    private fun copyToLegacyDownloads(zipFile: File, fileName: String): Pair<Uri?, String?> {
         val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         val deskCubbyDir = File(downloadDir, "DeskCubby")
-        if (!deskCubbyDir.exists() && !deskCubbyDir.mkdirs()) return null
-        val target = File(deskCubbyDir, fileName)
-        zipFile.inputStream().use { input ->
-            target.outputStream().use { output -> input.copyTo(output, DEFAULT_BUFFER_SIZE) }
+        if (!deskCubbyDir.exists() && !deskCubbyDir.mkdirs()) {
+            return null to "无法创建下载目录 / Could not create Downloads folder"
         }
-        return Uri.fromFile(target)
+        val target = File(deskCubbyDir, fileName)
+        val written = try {
+            zipFile.inputStream().use { input ->
+                target.outputStream().use { output -> input.copyTo(output, DEFAULT_BUFFER_SIZE) }
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            runCatching { target.delete() }
+            return null to (error.message ?: "无法写入下载文件 / Could not write to Downloads")
+        }
+        if (written != zipFile.length()) {
+            runCatching { target.delete() }
+            return null to "文件写入不完整 / Download write was incomplete"
+        }
+        val expectedHash = sha256Hex { zipFile.inputStream() }
+        val actualHash = runCatching { sha256Hex { target.inputStream() } }.getOrNull()
+        if (actualHash != expectedHash) {
+            runCatching { target.delete() }
+            return null to "下载文件校验失败 / Downloads copy failed verification"
+        }
+        return Uri.fromFile(target) to null
+    }
+
+    private fun sha256Hex(open: () -> InputStream?): String? = try {
+        val input = open() ?: return null
+        input.use { source ->
+            val digest = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = source.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+            digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+        }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        null
     }
 
     private fun readmeText(): String = README
@@ -318,17 +442,11 @@ class ExportManager @Inject constructor(
 
     private companion object {
         const val EXPORT_CACHE_DIR = "export-zip"
+        const val TMP_DIR = "export-zip-tmp"
         const val DIR_PREFIX = "diaries/"
         const val MEDIA_PREFIX = "media/"
         const val NOTES_PREFIX = "notes/"
         const val DATA_PREFIX = "data"
-
-        val MEDIA_SIDECAR_NAMES = setOf(
-            "dc-media.json",
-            "dc-media.pending.json",
-            "dc-media.previous.json",
-            "deskcubby-media.json",
-        )
 
         const val TRASH_DIRECTORY = ".DeskCubby Trash"
         const val TRASH_SUFFIX = "deskcubby-trash"
@@ -346,7 +464,8 @@ class ExportManager @Inject constructor(
 
             README.md                      本说明文件 / This file
             diaries/                       日记 markdown 原文（.md）/ Diary markdown files
-            media/                         媒体图片等文件 / Media files (photos, etc.)
+            media/                         媒体图片与元数据（照片、dc-media.json 等）
+                                          Media files and metadata (photos, dc-media.json, etc.)
             notes/                         笔记 markdown 原文（保留子目录）/ Notes (.md), subfolders preserved
             data/data.json               结构化数据（诗词、小巧思、收藏、日期记录、阅读进度、
                                          游戏、Vault 加密数据、使用统计、Agent 对话、设置与订阅）
@@ -355,15 +474,19 @@ class ExportManager @Inject constructor(
                                          Agent conversations, settings & subscriptions)
 
             data/data.json 是独立 JSON 文件，可由「应用数据 → 导入」恢复相应内容；媒体/日记/
-            笔记原文件以原始格式保存，不随 JSON 恢复。
+            笔记原文件以原始格式保存，不随 JSON 恢复。媒体元数据（热量、餐食、地点）随
+            media/dc-media.json 一并备份。
 
             data/data.json is a standalone JSON file that can be restored via App Data → Import;
             diary/media/note files are kept in their original format and are not restored via JSON.
+            Media metadata (calories, foods, place) is backed up with media/dc-media.json.
 
             ## 说明 / Notes
 
             - 只有勾选的内容会被导出；未配置目录（日记/媒体/笔记）的类型会被跳过。
               Only selected content is exported; types without a configured folder are skipped.
+            - 无法读取的文件会被跳过并在此界面列出，不会静默产生空文件。
+              Files that cannot be read are skipped and listed here; they are never silently emptied.
             - 凭据、API Key 与本地目录 URI 不会进入导出文件，以保护隐私。
               Credentials, API keys and local folder URIs are excluded for privacy.
         """.trimIndent()

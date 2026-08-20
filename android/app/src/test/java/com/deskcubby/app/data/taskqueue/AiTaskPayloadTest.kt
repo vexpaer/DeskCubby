@@ -74,9 +74,14 @@ class AiTaskPayloadTest {
         assertEquals(original.settings.mediaTreeUri, decoded.settings.mediaTreeUri)
         assertEquals(original.settings.calorieVisionPrompt, decoded.settings.calorieVisionPrompt)
         assertEquals(original.settings.aiTemperature, decoded.settings.aiTemperature)
-        // API keys must survive the codec so background requests authenticate identically.
-        assertEquals("secret-vision", decoded.settings.aiConfigs[0].apiKey)
-        assertEquals("secret-text", decoded.settings.aiConfigs[1].apiKey)
+        // Secrets must NOT survive the codec: the payload never snapshots API keys (they are
+        // hydrated from the live settings at execution time), so a leaked task-history row can
+        // never contain a key.
+        assertEquals("", decoded.settings.aiConfigs[0].apiKey)
+        assertEquals("", decoded.settings.aiConfigs[1].apiKey)
+        assertEquals("vision-config", decoded.settings.aiConfigs[0].id)
+        assertEquals("https://vision.example.com/v1", decoded.settings.aiConfigs[0].endpointUrl)
+        assertEquals("vision-model", decoded.settings.aiConfigs[0].model)
     }
 
     @Test

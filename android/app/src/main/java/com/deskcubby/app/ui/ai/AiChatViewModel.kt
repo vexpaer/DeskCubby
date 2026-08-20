@@ -98,8 +98,13 @@ class AiChatViewModel @Inject constructor(
     private var sendJob: Job? = null
     private var activeTaskId: Long? = null
     private var initialConversationResolved = false
+    private var initialPromptSubmitted = false
 
     init {
+        viewModelScope.launch {
+            // Re-surface an approval persisted before a process death so it can be decided.
+            permissionManager.refreshPendingFromDb()
+        }
         viewModelScope.launch {
             activeConversationId
                 .flatMapLatest { id ->
@@ -366,6 +371,17 @@ class AiChatViewModel @Inject constructor(
                 transientMessage = localized("Agent 已中止。", "Agent stopped."),
             )
         }
+    }
+
+    /**
+     * Sends a one-shot initial prompt (e.g. Desk's "总结今天" action) as the user's first message.
+     * The consumed flag keeps rotation/recomposition from re-sending the same prompt.
+     */
+    fun submitInitialPrompt(prompt: String?) {
+        if (prompt.isNullOrBlank() || initialPromptSubmitted || mutableUiState.value.isSending) return
+        initialPromptSubmitted = true
+        mutableUiState.update { it.copy(draft = prompt) }
+        sendMessage()
     }
 
     fun startNewConversation() {

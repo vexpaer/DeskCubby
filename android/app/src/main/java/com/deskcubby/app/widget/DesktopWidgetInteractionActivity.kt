@@ -20,6 +20,7 @@ import androidx.lifecycle.lifecycleScope
 import com.deskcubby.app.MainActivity
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.ImportedMedia
 import com.deskcubby.app.data.model.MealCategory
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.local.AiTaskTypeEntity
@@ -551,47 +552,68 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
             .show()
         lifecycleScope.launch {
             try {
+                var media: ImportedMedia? = null
                 withContext(Dispatchers.IO) {
-                    val media = diaryFileRepository.appendImageToToday(
+                    media = diaryFileRepository.appendImageToToday(
                         uri,
                         if (english) category.englishLabel else category.chineseLabel,
                         settings,
                     )
-                    if (settings.calorieEstimationEnabled) {
-                        try {
-                            aiTaskQueue.enqueueTask(
-                                type = AiTaskTypeEntity.CALORIE_SINGLE,
-                                payload = CalorieSingleTaskPayload(
-                                    uri = media.documentUri,
-                                    fileName = media.fileName,
-                                    settings = settings,
-                                ),
-                            )
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (_: Exception) {
-                            // The photo and Markdown are already durable; optional AI estimation
-                            // must not turn a successful capture into a duplicate-retry prompt.
-                        }
-                    }
-                    // The image and Markdown are already durable. Index refresh is best effort.
-                    try {
-                        diaryFileRepository.scan(settings)
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Exception) {
-                        // The next normal diary scan will rebuild the index.
-                    }
                 }
-                requestWidgetRefresh()
+                // The image and Markdown are durable now. Dismiss the loading UI immediately before
+                // any slow background follow-up (AI, index scan, gallery copy, geocoder).
                 progressDialog?.dismiss()
                 progressDialog = null
+                requestWidgetRefresh()
                 Toast.makeText(
                     this@DesktopWidgetInteractionActivity,
                     translate("${category.chineseLabel}图片已加入今日日记", "${category.englishLabel} photo added", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
                     Toast.LENGTH_SHORT,
                 ).show()
                 finish()
+                // Background follow-ups must never keep the (already dismissed) loading state.
+                val saved = media
+                // Background follow-ups must never keep the (already dismissed) loading state, and
+                // they must survive the activity calling finish() below. lifecycleScope is destroyed
+                // with the activity, so run them on a detached supervisor scope that completes
+                // independently (the enrichment is bounded and best-effort).
+                kotlinx.coroutines.CoroutineScope(
+                    kotlinx.coroutines.SupervisorJob() + Dispatchers.IO,
+                ).launch {
+                    try {
+                        if (settings.calorieEstimationEnabled && saved != null) {
+                            try {
+                                aiTaskQueue.enqueueTask(
+                                    type = AiTaskTypeEntity.CALORIE_SINGLE,
+                                    payload = CalorieSingleTaskPayload(
+                                        uri = saved.documentUri,
+                                        fileName = saved.fileName,
+                                        settings = settings,
+                                    ),
+                                )
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                // The photo and Markdown are already durable; optional AI
+                                // estimation must not turn a success into a retry prompt.
+                            }
+                        }
+                        if (saved != null) {
+                            diaryFileRepository.enrichImportedMedia(uri, saved, settings)
+                        }
+                        try {
+                            diaryFileRepository.scan(settings)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            // The next normal diary scan will rebuild the index.
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // Follow-up is best-effort after the durable write already succeeded.
+                    }
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {

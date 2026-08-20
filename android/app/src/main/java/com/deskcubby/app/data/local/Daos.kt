@@ -794,6 +794,13 @@ interface AgentDao {
     @Query("DELETE FROM agent_runs")
     suspend fun clearAllRunsForSync()
 
+    /**
+     * Removes a stale/interrupted agent run row so a recovered task can re-insert its run with the
+     * same id. Tool events and mutations cascade-delete with the run.
+     */
+    @Query("DELETE FROM agent_runs WHERE runId = :runId")
+    suspend fun clearAgentRunIfStale(runId: String): Int
+
     @Insert
     suspend fun insertRun(run: AgentRunEntity)
 
@@ -1096,22 +1103,91 @@ interface AiTaskDao {
     @Query("SELECT * FROM ai_task_queue ORDER BY id ASC")
     suspend fun getAll(): List<com.deskcubby.app.data.local.AiTaskQueueEntity>
 
-    @Query(
-        "UPDATE ai_task_queue SET state = :running, startedAt = :startedAt " +
-            "WHERE id IN (SELECT id FROM ai_task_queue WHERE state = :queued " +
-            "ORDER BY id ASC LIMIT 1)",
-    )
-    suspend fun claimOldest(
+    @Query("SELECT * FROM ai_task_queue WHERE state = :running ORDER BY id ASC")
+    suspend fun getAllRunning(
+        running: com.deskcubby.app.data.local.AiTaskStateEntity,
+    ): List<com.deskcubby.app.data.local.AiTaskQueueEntity>
+
+    /**
+     * Atomically claims the oldest QUEUED task and returns *that exact row*. Compared with the old
+     * claim-then-peek-oldest-RUNNING pattern, this can never hand back a different (zombie) row.
+     * The conditional id+state update guards against two concurrent drains claiming the same task.
+     */
+    @Transaction
+    suspend fun claimOne(
         queued: com.deskcubby.app.data.local.AiTaskStateEntity,
         running: com.deskcubby.app.data.local.AiTaskStateEntity,
         startedAt: Long,
+        leaseOwner: String,
+    ): com.deskcubby.app.data.local.AiTaskQueueEntity? {
+        val candidateId = peekQueuedId(queued) ?: return null
+        val claimed = claimById(candidateId, running, startedAt, leaseOwner, queued)
+        if (claimed == 0) return null
+        return getById(candidateId)
+    }
+
+    @Query("SELECT id FROM ai_task_queue WHERE state = :queued ORDER BY id ASC LIMIT 1")
+    suspend fun peekQueuedId(queued: com.deskcubby.app.data.local.AiTaskStateEntity): Long?
+
+    @Query(
+        "UPDATE ai_task_queue SET state = :running, startedAt = :startedAt, " +
+            "leaseOwner = :leaseOwner, leaseStartedAt = :startedAt " +
+            "WHERE id = :id AND state = :queued",
+    )
+    suspend fun claimById(
+        id: Long,
+        running: com.deskcubby.app.data.local.AiTaskStateEntity,
+        startedAt: Long,
+        leaseOwner: String,
+        queued: com.deskcubby.app.data.local.AiTaskStateEntity,
+    ): Int
+
+    /** Returns an interrupted RUNNING task to the queue so it can be claimed and re-executed. */
+    @Query(
+        "UPDATE ai_task_queue SET state = :queued, leaseOwner = NULL, leaseStartedAt = NULL, " +
+            "startedAt = NULL WHERE id = :id AND state = :running",
+    )
+    suspend fun requeueRunning(
+        id: Long,
+        queued: com.deskcubby.app.data.local.AiTaskStateEntity,
+        running: com.deskcubby.app.data.local.AiTaskStateEntity,
+    ): Int
+
+    /** Re-queues a WAITING_APPROVAL task so a durable approve-after-restart resumes the run. */
+    @Query(
+        "UPDATE ai_task_queue SET state = :queued, leaseOwner = NULL, leaseStartedAt = NULL, " +
+            "startedAt = NULL WHERE id = :id AND state = :waitingApproval",
+    )
+    suspend fun requeueWaitingApproval(
+        id: Long,
+        queued: com.deskcubby.app.data.local.AiTaskStateEntity,
+        waitingApproval: com.deskcubby.app.data.local.AiTaskStateEntity,
+    ): Int
+
+    /**
+     * Finalizes any task the user asked to stop but whose worker died before coalescing the
+     * CANCEL_REQUESTED marker to the terminal CANCELED state. Called on startup and during a drain.
+     */
+    @Query(
+        "UPDATE ai_task_queue SET state = :canceled, completedAt = :now " +
+            "WHERE state = :cancelRequested",
+    )
+    suspend fun coalesceCancelRequested(
+        canceled: com.deskcubby.app.data.local.AiTaskStateEntity,
+        cancelRequested: com.deskcubby.app.data.local.AiTaskStateEntity,
+        now: Long,
     ): Int
 
     @Query(
-        "SELECT * FROM ai_task_queue WHERE id IN " +
-            "(SELECT id FROM ai_task_queue WHERE state = :queued ORDER BY id ASC LIMIT 1) LIMIT 1",
+        "UPDATE ai_task_queue SET state = :cancelRequested WHERE id = :id " +
+            "AND (state = :running OR state = :waitingApproval)",
     )
-    suspend fun peekOldest(queued: com.deskcubby.app.data.local.AiTaskStateEntity): com.deskcubby.app.data.local.AiTaskQueueEntity?
+    suspend fun markCancelRequested(
+        id: Long,
+        cancelRequested: com.deskcubby.app.data.local.AiTaskStateEntity,
+        running: com.deskcubby.app.data.local.AiTaskStateEntity,
+        waitingApproval: com.deskcubby.app.data.local.AiTaskStateEntity,
+    ): Int
 
     @Query(
         "SELECT * FROM ai_task_queue WHERE state = :queued OR state = :running " +
@@ -1160,6 +1236,20 @@ interface AiTaskDao {
         waiting: com.deskcubby.app.data.local.AiTaskStateEntity,
     )
 
+    /**
+     * Returns a WAITING_APPROVAL task to RUNNING after a live approval/rejection, so a run that
+     * needs more than one confirmation can keep going. Guarded so it never overwrites a concurrent
+     * CANCEL_REQUESTED / terminal state.
+     */
+    @Query(
+        "UPDATE ai_task_queue SET state = :running WHERE id = :id AND state = :waitingApproval",
+    )
+    suspend fun markRunning(
+        id: Long,
+        running: com.deskcubby.app.data.local.AiTaskStateEntity,
+        waitingApproval: com.deskcubby.app.data.local.AiTaskStateEntity,
+    ): Int
+
     @Query("UPDATE ai_task_queue SET progressJson = :progressJson WHERE id = :id")
     suspend fun setProgress(id: Long, progressJson: String)
 
@@ -1183,6 +1273,48 @@ interface AiTaskDao {
 
     @Query("SELECT COUNT(*) FROM ai_task_queue WHERE state = :candidate")
     suspend fun countByState(candidate: com.deskcubby.app.data.local.AiTaskStateEntity): Int
+}
+
+/** Durable, user-visible Agent approvals. These survive process death so an interrupted
+ * WAITING_APPROVAL task can be re-shown instead of being lost or silently re-run. */
+@Dao
+interface AgentApprovalDao {
+    @Insert
+    suspend fun insert(request: com.deskcubby.app.data.local.AgentApprovalRequestEntity): Long
+
+    @Query("SELECT * FROM agent_approval_requests WHERE requestId = :requestId LIMIT 1")
+    suspend fun getByRequestId(requestId: String): com.deskcubby.app.data.local.AgentApprovalRequestEntity?
+
+    @Query("SELECT * FROM agent_approval_requests WHERE taskId = :taskId AND status = :pending LIMIT 1")
+    suspend fun getPendingByTaskId(
+        taskId: Long,
+        pending: String,
+    ): com.deskcubby.app.data.local.AgentApprovalRequestEntity?
+
+    @Query("SELECT * FROM agent_approval_requests ORDER BY createdAt ASC, id ASC")
+    suspend fun getAll(): List<com.deskcubby.app.data.local.AgentApprovalRequestEntity>
+
+    @Query("SELECT * FROM agent_approval_requests WHERE status = :pending ORDER BY createdAt ASC, id ASC")
+    suspend fun getPending(
+        pending: String,
+    ): List<com.deskcubby.app.data.local.AgentApprovalRequestEntity>
+
+    @Query("SELECT * FROM agent_approval_requests WHERE status = :pending ORDER BY createdAt ASC, id ASC")
+    fun observePending(
+        pending: String,
+    ): Flow<List<com.deskcubby.app.data.local.AgentApprovalRequestEntity>>
+
+    @Query(
+        "UPDATE agent_approval_requests SET status = :status, decidedAt = :decidedAt " +
+            "WHERE requestId = :requestId",
+    )
+    suspend fun markDecided(requestId: String, status: String, decidedAt: Long): Int
+
+    @Query(
+        "UPDATE agent_approval_requests SET status = :status, decidedAt = :decidedAt " +
+            "WHERE taskId = :taskId AND status = :pending",
+    )
+    suspend fun markDecidedByTask(taskId: Long, status: String, pending: String, decidedAt: Long): Int
 }
 
 /**

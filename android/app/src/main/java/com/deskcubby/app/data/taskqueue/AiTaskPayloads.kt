@@ -222,9 +222,12 @@ data class CalorieTaskProgress(
 
 /**
  * Encodes only the AI-relevant settings a background worker needs. This keeps the stored payload
- * small and free of unrelated fields and defaults, while preserving the exact model config
- * (including per-config API keys and HTTP-insecure allowance) so the request behaves identically
- * regardless of whatever the user changed after enqueue time.
+ * small and free of unrelated fields and defaults, while preserving the exact model config so the
+ * request behaves identically regardless of whatever the user changed after enqueue time.
+ *
+ * Secrets are deliberately NOT snapshotted: apiKey is written as empty so a key is never copied
+ * into the task-queue database. The worker re-fills it from the live settings (SecretStore) at
+ * execution time ([com.deskcubby.app.data.taskqueue.AiTaskRunner#hydrateApiKeys]).
  */
 internal object AppSettingsCodec {
     fun encode(settings: AppSettings): JSONObject = JSONObject()
@@ -252,7 +255,8 @@ internal object AppSettingsCodec {
                             .put("allowInsecureHttp", config.allowInsecureHttp)
                             .put("temperature", config.temperature.toDouble())
                             .put("systemPrompt", config.systemPrompt)
-                            .put("apiKey", config.apiKey)
+                            // Never persist the API key.
+                            .put("apiKey", "")
                             .put("supportsToolCalling", config.supportsToolCalling),
                     )
                 }

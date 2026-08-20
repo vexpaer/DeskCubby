@@ -255,6 +255,9 @@ fun DeskCubbyRoot(
         )
         var gameOpen by remember { mutableStateOf(false) }
         var requestedGameId by remember { mutableStateOf<String?>(null) }
+        // One-shot prompt forwarded to the AI Chat screen (e.g. Desk's "总结今天"). Consumed by the
+        // AI chat composable; the ViewModel guards against re-sending on rotation.
+        var pendingAiPrompt by remember { mutableStateOf<String?>(null) }
         var childTutorialTarget by remember { mutableStateOf<PageTutorialTarget?>(null) }
         var tutorialConfirmedThisSession by remember { mutableStateOf(emptySet<String>()) }
         val initialStartDestination = remember { settings.defaultPage.route }
@@ -275,7 +278,9 @@ fun DeskCubbyRoot(
         val route = backStack?.destination?.route
         val windowInfo = rememberWindowInfo()
         val layoutMode = resolveLayoutMode(windowInfo)
-        val workspaceMode = layoutMode != LayoutMode.COMPACT
+        // Navigation placement follows ORIENTATION only: portrait -> bottom bar, landscape -> left
+        // rail. LayoutMode (width) independently drives multi-pane content structure, so a portrait
+        // tablet gets a bottom bar with two-pane content instead of a left navigation rail.
         val visibleTabs = settings.navItems.filter { it.visible || it.id == NavItemId.SETTINGS }
         val bottomSelectedRoute = route.takeIf { currentRoute ->
             visibleTabs.any { it.id.route == currentRoute }
@@ -284,16 +289,14 @@ fun DeskCubbyRoot(
                 item.id.route == route && item.showInMore
             }
         }
-        // Bottom bar stays for COMPACT (portrait phone). In wider modes the rail replaces it
-        // and both are never shown at the same time.
-        val showBottomBar = !workspaceMode &&
+        val showBottomBar = !windowInfo.isLandscape &&
             route in NavItemId.entries.map { it.route } &&
             !(route == NavItemId.SETTINGS.route && settingsSubpageOpen) &&
             !(route == NavItemId.READER.route && readerOpen) &&
             !(route == NavItemId.GAMES.route && gameOpen) &&
             !WindowInsets.isImeVisible
-        // The rail is always visible in workspace modes on top-level destinations.
-        val showWorkspaceRail = workspaceMode &&
+        // The rail is shown in landscape on top-level destinations.
+        val showWorkspaceRail = windowInfo.isLandscape &&
             route in NavItemId.entries.map { it.route }
         val navigateMain: (String) -> Unit = { destination ->
             navController.navigate(destination) {
@@ -438,8 +441,8 @@ fun DeskCubbyRoot(
                                 item.diaryUri?.let { diaryViewModel.open(it); navController.navigate(Routes.EDITOR) }
                             },
                             onOpenEvent = { navController.navigate(NavItemId.DATE.route) },
-                            onOpenTraces = { navController.navigate(NavItemId.THOUGHT.route) },
                             onOpenAi = { prompt ->
+                                pendingAiPrompt = prompt
                                 navController.navigate(NavItemId.AI_CHAT.route)
                             },
                         )
@@ -501,11 +504,16 @@ fun DeskCubbyRoot(
                     }
                     composable(NavItemId.AI_CHAT.route) {
                         val aiChatViewModel: AiChatViewModel = hiltViewModel()
+                        val initialPrompt = pendingAiPrompt
+                        LaunchedEffect(initialPrompt) {
+                            if (initialPrompt != null) pendingAiPrompt = null
+                        }
                         AiChatScreen(
                             padding = padding,
                             viewModel = aiChatViewModel,
                             onOpenSettings = { navController.navigate(Routes.AI_SETTINGS) },
                             onOpenReview = { navController.navigate(Routes.AI_REVIEW) },
+                            initialPrompt = initialPrompt,
                         )
                     }
                     composable(Routes.AI_REVIEW) {

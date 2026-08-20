@@ -672,6 +672,9 @@ class DiaryViewModel @Inject constructor(
                             _editorState.value = _editorState.value.copy(error = error.userMessage())
                         }
                     }
+                    // Gallery copy + reverse geocode are best-effort and never part of the editor
+                    // import's completion.
+                    runCatching { repository.enrichImportedMedia(uri, media, settings.value) }
                 }
                 .onFailure { _editorState.value = _editorState.value.copy(error = it.userMessage()) }
         }
@@ -872,6 +875,7 @@ private fun AiTaskQueueEntity.toCalorieDayProgress(): CalorieEstimationDayProgre
             else -> CalorieEstimationQueueStatus.QUEUED
         }
         AiTaskStateEntity.WAITING_APPROVAL -> CalorieEstimationQueueStatus.QUEUED
+        AiTaskStateEntity.CANCEL_REQUESTED -> CalorieEstimationQueueStatus.QUEUED
         AiTaskStateEntity.QUEUED -> CalorieEstimationQueueStatus.QUEUED
     }
     return CalorieEstimationDayProgress(

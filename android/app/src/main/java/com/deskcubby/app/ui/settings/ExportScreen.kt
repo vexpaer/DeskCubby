@@ -229,7 +229,15 @@ private fun ExportResultDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(tr("导出完成", "Export complete")) },
+        title = {
+            Text(
+                if (result.success) {
+                    tr("导出完成", "Export complete")
+                } else {
+                    tr("导出未完全成功", "Export incomplete")
+                },
+            )
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -254,6 +262,30 @@ private fun ExportResultDialog(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (!result.success) {
+                    result.failedReason?.let { reason ->
+                        Text(
+                            tr("注意：", "Warning: ") + reason,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    if (result.failedFiles.isNotEmpty()) {
+                        Text(
+                            tr(
+                                "以下 ${result.failedFiles.size} 个文件无法读取，已跳过，未计入成功数：",
+                                "${result.failedFiles.size} file(s) could not be read and were skipped (not counted as exported):",
+                            ),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            result.failedFiles.take(20).joinToString("\n"),
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 if (result.counts.isNotEmpty()) {
                     Text(
                         text = result.counts.entries

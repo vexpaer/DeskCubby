@@ -2,6 +2,10 @@
 
 package com.deskcubby.app.ui.desk
 
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -27,15 +31,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -59,7 +64,6 @@ fun DeskScreen(
     onOpenIdea: () -> Unit,
     onOpenPhoto: (DeskItem) -> Unit,
     onOpenEvent: () -> Unit,
-    onOpenTraces: () -> Unit,
     onOpenAi: (String?) -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -67,13 +71,35 @@ fun DeskScreen(
 
     var aiOpen by remember { mutableStateOf(false) }
     var quickCaptureOpen by remember { mutableStateOf(false) }
+    var tracesExpanded by remember { mutableStateOf(false) }
 
-    val entrance = produceState(initialValue = 0f, state.loading) {
-        if (state.loading) return@produceState
-        val animatable = Animatable(0f)
-        animatable.animateTo(1f, tween(durationMillis = 520))
-        value = animatable.value
-    }.value
+    // Desk's "照片" quick action reuses the system photo picker + the shared durable photo
+    // pipeline (appendImageToToday), matching Home/Widget instead of just opening the diary.
+    val context = LocalContext.current
+    val photoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        uri?.let(viewModel::addMealPhoto)
+    }
+    LaunchedEffect(state.photoNotice) {
+        state.photoNotice?.let { notice ->
+            Toast.makeText(context, notice, Toast.LENGTH_SHORT).show()
+            viewModel.consumePhotoNotice()
+        }
+    }
+
+    // Use the Animatable's observable value directly so each module's threshold crosses at a
+    // different moment, producing a real stagger. (A produceState that only writes the final value
+    // after animateTo() completes would flip all thresholds on the same frame.)
+    val entrance = remember { Animatable(if (state.loading) 0f else 1f) }
+    LaunchedEffect(state.loading) {
+        if (state.loading) {
+            entrance.snapTo(0f)
+        } else {
+            entrance.animateTo(1f, tween(durationMillis = 520))
+        }
+    }
+    val entranceValue = entrance.value
 
     val ambientTint = ambientTintColor(state.ambient, scheme.background, scheme.onBackground)
 
@@ -91,7 +117,7 @@ fun DeskScreen(
                 .padding(horizontal = 32.dp)
                 .padding(bottom = 48.dp + padding.calculateBottomPadding()),
         ) {
-            DeskEntrance(entrance >= 0f) {
+            DeskEntrance(entranceValue >= 0f) {
                 DeskDateHeader(
                     label = state.dateLabel,
                     ambient = state.ambient,
@@ -102,7 +128,7 @@ fun DeskScreen(
             Spacer(Modifier.height(40.dp))
 
             if (state.isEmpty && !state.loading) {
-                DeskEntrance(entrance >= 0.45f) {
+                DeskEntrance(entranceValue >= 0.45f) {
                     DeskEmptyState(
                         firstLaunch = true,
                         onQuickCapture = { quickCaptureOpen = !quickCaptureOpen },
@@ -110,7 +136,7 @@ fun DeskScreen(
                 }
             } else {
                 state.diary?.let { diary ->
-                    DeskEntrance(entrance >= 0.4f) {
+                    DeskEntrance(entranceValue >= 0.4f) {
                         DeskDiaryObject(
                             item = diary,
                             onClick = { diary.diaryUri?.let(onOpenDiary) ?: onOpenTodayDiary() },
@@ -120,7 +146,7 @@ fun DeskScreen(
                 }
 
                 if (state.ideas.isNotEmpty()) {
-                    DeskEntrance(entrance >= 0.6f) {
+                    DeskEntrance(entranceValue >= 0.6f) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             state.ideas.forEach { idea ->
                                 DeskIdeaObject(item = idea, onClick = onOpenIdea)
@@ -131,7 +157,7 @@ fun DeskScreen(
                 }
 
                 if (state.photos.isNotEmpty()) {
-                    DeskEntrance(entrance >= 0.75f) {
+                    DeskEntrance(entranceValue >= 0.75f) {
                         FlowRow(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(22.dp, Alignment.CenterHorizontally),
@@ -147,11 +173,11 @@ fun DeskScreen(
             }
 
             Spacer(Modifier.height(8.dp))
-            DeskEntrance(entrance >= 0.85f) {
+            DeskEntrance(entranceValue >= 0.85f) {
                 DeskTraces(
-                    traces = state.traces,
+                    traces = if (tracesExpanded) state.traces else state.traces.take(6),
                     totalCount = state.totalTraceCount,
-                    onExpand = onOpenTraces,
+                    onExpand = { tracesExpanded = !tracesExpanded },
                 )
             }
 
@@ -170,7 +196,10 @@ fun DeskScreen(
             expanded = quickCaptureOpen,
             onSelectDiary = { quickCaptureOpen = false; onOpenTodayDiary() },
             onSelectIdea = { quickCaptureOpen = false; onOpenIdea() },
-            onSelectPhoto = { quickCaptureOpen = false; onOpenTodayDiary() },
+            onSelectPhoto = {
+                quickCaptureOpen = false
+                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
             onSelectEvent = { quickCaptureOpen = false; onOpenEvent() },
             modifier = Modifier.align(Alignment.BottomCenter),
         )

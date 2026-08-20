@@ -231,6 +231,15 @@ class HomeViewModel @Inject constructor(
                 } catch (_: Exception) {
                     // The next normal scan will refresh the index.
                 }
+                // Gallery copy and reverse-geocode place lookup are also background-only; they must
+                // never extend the "adding photo" busy state beyond the durable image+Markdown write.
+                try {
+                    diaryFileRepository.enrichImportedMedia(uri, media, settings)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // Best-effort enrichment; the image and Markdown are already durable.
+                }
             } finally {
                 releaseSource()
             }

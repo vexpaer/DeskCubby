@@ -83,6 +83,8 @@ data class AgentApprovalRequest(
     val summary: String,
     val before: String,
     val after: String,
+    /** Redacted, user-readable argument summary persisted with the durable approval request. */
+    val argumentsSummary: String = "",
 )
 
 enum class AgentApprovalDecision {

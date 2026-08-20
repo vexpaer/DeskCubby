@@ -1,15 +1,17 @@
 package com.deskcubby.app.data.taskqueue
 
-import android.net.Uri
 import com.deskcubby.app.agent.AgentConversationMessage
 import com.deskcubby.app.agent.AgentConversationRole
 import com.deskcubby.app.agent.AgentExecutionUpdate
+import com.deskcubby.app.agent.AgentPermissionManager
 import com.deskcubby.app.agent.AgentRunRequest
 import com.deskcubby.app.agent.AgentRuntime
 import com.deskcubby.app.data.local.AiTaskDao
 import com.deskcubby.app.data.local.AiTaskQueueEntity
 import com.deskcubby.app.data.local.AiTaskStateEntity
 import com.deskcubby.app.data.local.AppDatabase
+import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.AiAttachmentKind
 import com.deskcubby.app.data.repository.AiChatException
 import com.deskcubby.app.data.repository.AiChatMessage
@@ -22,9 +24,12 @@ import com.deskcubby.app.data.repository.MealDayDetails
 import com.deskcubby.app.data.repository.MealEnergyEstimate
 import com.deskcubby.app.data.repository.MealImageRecognition
 import com.deskcubby.plugin.api.core.api.AIImage
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -34,6 +39,15 @@ import org.json.JSONObject
 /**
  * Executes one durable [AiTaskQueueEntity] on the worker. This is the only place that drives the
  * LLM/agent stack from a background context; the rest of the app only enqueues and observes.
+ *
+ * Recovery contract: a RUNNING row is owned by a live drain session via [AiTaskQueueEntity.leaseOwner].
+ * [drain] re-queues any RUNNING row whose owner is no longer live (process death, worker
+ * replacement, or pre-lease legacy rows), so a task can never stay RUNNING forever. A claim returns
+ * *exactly* the row it moved QUEUED -> RUNNING, never a different oldest-RUNNING row.
+ *
+ * Cancellation contract: [AiTaskQueue.cancelTask] persists CANCEL_REQUESTED for a RUNNING /
+ * WAITING_APPROVAL task. The execution loops poll that state at every long-step boundary and stop
+ * cooperatively, coalescing the row to the terminal CANCELED state.
  */
 @Singleton
 class AiTaskRunner @Inject constructor(
@@ -42,30 +56,57 @@ class AiTaskRunner @Inject constructor(
     private val calorieRepository: CalorieEstimationRepository,
     private val diaryRepository: DiaryFileRepository,
     private val agentRuntime: AgentRuntime,
+    private val settingsRepository: SettingsRepository,
+    private val agentPermissionManager: AgentPermissionManager,
 ) {
     private val dao: AiTaskDao = database.aiTaskDao()
+    private val agentDao: com.deskcubby.app.data.local.AgentDao = database.agentDao()
     private val claimMutex = Mutex()
+    private val liveLeaseOwners = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /** Runs queued work until the queue drains or [shouldContinue] returns false. */
     suspend fun drain(shouldContinue: () -> Boolean) {
-        while (shouldContinue()) {
-            val claimed = claimMutex.withLock { claimNext() ?: return }
-            executeSafely(claimed)
+        val leaseOwner = UUID.randomUUID().toString()
+        liveLeaseOwners.add(leaseOwner)
+        try {
+            while (shouldContinue()) {
+                claimMutex.withLock {
+                    recoverStaleRunning()
+                }
+                val claimed = claimMutex.withLock { claimNext(leaseOwner) ?: return }
+                executeSafely(claimed)
+            }
+        } finally {
+            liveLeaseOwners.remove(leaseOwner)
         }
     }
 
-    private suspend fun claimNext(): AiTaskQueueEntity? {
-        val updated = dao.claimOldest(
+    /** Re-queues RUNNING rows whose lease owner is no longer a live session (or never was), and
+     * finalizes CANCEL_REQUESTED rows whose worker died before coalescing them to CANCELED. */
+    private suspend fun recoverStaleRunning() {
+        dao.coalesceCancelRequested(
+            canceled = AiTaskStateEntity.CANCELED,
+            cancelRequested = AiTaskStateEntity.CANCEL_REQUESTED,
+            now = System.currentTimeMillis(),
+        )
+        dao.getAllRunning(AiTaskStateEntity.RUNNING).forEach { task ->
+            if (task.leaseOwner == null || task.leaseOwner !in liveLeaseOwners) {
+                dao.requeueRunning(
+                    id = task.id,
+                    queued = AiTaskStateEntity.QUEUED,
+                    running = AiTaskStateEntity.RUNNING,
+                )
+            }
+        }
+    }
+
+    private suspend fun claimNext(leaseOwner: String): AiTaskQueueEntity? =
+        dao.claimOne(
             queued = AiTaskStateEntity.QUEUED,
             running = AiTaskStateEntity.RUNNING,
             startedAt = System.currentTimeMillis(),
+            leaseOwner = leaseOwner,
         )
-        return if (updated > 0) {
-            dao.peekOldest(AiTaskStateEntity.RUNNING)
-        } else {
-            null
-        }
-    }
 
     private suspend fun executeSafely(task: AiTaskQueueEntity) {
         try {
@@ -77,7 +118,20 @@ class AiTaskRunner @Inject constructor(
                 com.deskcubby.app.data.local.AiTaskTypeEntity.AGENT_RUN ->
                     executeAgentRun(task, AgentRunTaskPayload.decode(task.payloadJson))
             }
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        } catch (cancelled: CancellationException) {
+            // A deliberate user cancel is persisted as CANCEL_REQUESTED before the loops throw.
+            // Coalesce it to the terminal CANCELED state and keep draining. A WorkManager stop is
+            // not pre-marked, so it rethrows and the row is recovered by the next drain.
+            val state = runCatching { dao.getById(task.id)?.state }.getOrNull()
+            if (state == AiTaskStateEntity.CANCEL_REQUESTED) {
+                dao.markCanceled(
+                    id = task.id,
+                    canceled = AiTaskStateEntity.CANCELED,
+                    completedAt = System.currentTimeMillis(),
+                )
+                agentPermissionManager.discardPendingForTask(task.id)
+                return
+            }
             throw cancelled
         } catch (error: Throwable) {
             dao.markFailed(
@@ -88,11 +142,13 @@ class AiTaskRunner @Inject constructor(
                 attemptCount = task.attemptCount + 1,
                 completedAt = System.currentTimeMillis(),
             )
+            // A FAILED task must not leave a dangling PENDING approval that could surface later.
+            agentPermissionManager.discardPendingForTask(task.id)
         }
     }
 
     private suspend fun executeCalorieDay(task: AiTaskQueueEntity, payload: CalorieDayTaskPayload) {
-        val settings = payload.settings
+        val settings = hydrateApiKeys(payload.settings)
         require(settings.diaryTreeUri != null && settings.mediaTreeUri != null) {
             "请先选择日记和媒体目录"
         }
@@ -102,6 +158,7 @@ class AiTaskRunner @Inject constructor(
         )
         val recognitions = withContext(Dispatchers.IO) {
             payload.photos.map { photo ->
+                checkTaskCancelled(task.id)
                 RecognizedCaloriePhoto(
                     fileName = photo.fileName,
                     recognition = calorieRepository.recognizeImage(
@@ -111,6 +168,7 @@ class AiTaskRunner @Inject constructor(
                 )
             }
         }
+        checkTaskCancelled(task.id)
         val calculationNote = payload.noteOverride
             ?.trim()
             ?.take(MAX_MEAL_NOTE_CHARS)
@@ -131,6 +189,7 @@ class AiTaskRunner @Inject constructor(
                 note = calculationNote,
             )
         }
+        checkTaskCancelled(task.id)
         val estimates = linkedMapOf<String, MealEnergyEstimate>().apply {
             recognitions.zip(estimateList).forEach { (recognized, estimate) ->
                 put(recognized.fileName, estimate)
@@ -155,6 +214,7 @@ class AiTaskRunner @Inject constructor(
             calorieProgress(progressStage = "SAVING", payload = payload),
         )
         withContext(Dispatchers.IO) {
+            checkTaskCancelled(task.id)
             diaryRepository.setMealEnergyResults(estimates, detailsByDate, settings)
         }
         dao.markSucceeded(
@@ -166,7 +226,7 @@ class AiTaskRunner @Inject constructor(
     }
 
     private suspend fun executeCalorieSingle(task: AiTaskQueueEntity, payload: CalorieSingleTaskPayload) {
-        val settings = payload.settings
+        val settings = hydrateApiKeys(payload.settings)
         require(settings.mediaTreeUri != null) { "请先选择媒体目录" }
         dao.setProgress(
             task.id,
@@ -178,6 +238,7 @@ class AiTaskRunner @Inject constructor(
                 settings = settings,
             )
         }
+        checkTaskCancelled(task.id)
         dao.setProgress(
             task.id,
             calorieProgress(progressStage = "TEXT_ESTIMATION", payload = payload),
@@ -189,6 +250,7 @@ class AiTaskRunner @Inject constructor(
             ).single()
         }
         withContext(Dispatchers.IO) {
+            checkTaskCancelled(task.id)
             diaryRepository.setMealPhotoEstimate(payload.fileName, estimate, settings)
         }
         dao.markSucceeded(
@@ -204,6 +266,7 @@ class AiTaskRunner @Inject constructor(
         chatRepository.getConversation(conversationId)
             ?: throw IllegalStateException("对话已不存在")
         val messages = chatRepository.getMessages(conversationId)
+        checkTaskCancelled(task.id)
         val request = AgentRunRequest(
             runId = payload.runId,
             conversationId = conversationId,
@@ -216,24 +279,64 @@ class AiTaskRunner @Inject constructor(
             english = payload.english,
             messages = buildAgentConversation(messages),
         )
-        val answer = agentRuntime.run(request, ::recordExecutionUpdate)
-        chatRepository.appendMessage(
-            conversationId = conversationId,
-            role = AiChatRole.ASSISTANT,
-            content = answer.content,
-            reasoning = "",
-        )
-        dao.markSucceeded(
-            id = task.id,
-            succeeded = AiTaskStateEntity.SUCCEEDED,
-            resultJson = encodeAgentResult(answer.usage),
-            completedAt = System.currentTimeMillis(),
-        )
+        // A recovered/interrupted run may already have a durable agent_runs row under the same id
+        // (created before a process death or an approval wait). Clear it so startRun can re-insert.
+        agentDao.clearAgentRunIfStale(payload.runId)
+        agentPermissionManager.setActiveTask(payload.runId, task.id)
+        try {
+            val answer = agentRuntime.run(
+                request = request,
+                onUpdate = ::recordExecutionUpdate,
+                shouldCancel = { isCancellationRequested(task.id) },
+            )
+            checkTaskCancelled(task.id)
+            chatRepository.appendMessage(
+                conversationId = conversationId,
+                role = AiChatRole.ASSISTANT,
+                content = answer.content,
+                reasoning = "",
+            )
+            dao.markSucceeded(
+                id = task.id,
+                succeeded = AiTaskStateEntity.SUCCEEDED,
+                resultJson = encodeAgentResult(answer.usage),
+                completedAt = System.currentTimeMillis(),
+            )
+        } finally {
+            agentPermissionManager.clearActiveTask(payload.runId)
+        }
     }
 
     private fun recordExecutionUpdate(update: AgentExecutionUpdate) {
         // Agent-run progress is already durable in the AgentReviewStore Room tables, which the
         // chat/review screens observe directly. No in-memory passthrough is needed here.
+    }
+
+    /** Refills apiKey (never persisted in task payloads) from the live settings at execution time. */
+    private suspend fun hydrateApiKeys(payloadSettings: AppSettings): AppSettings {
+        val live = runCatching { settingsRepository.settings.first() }.getOrNull()
+            ?: return payloadSettings
+        if (live.aiConfigs.isEmpty()) return payloadSettings
+        val liveById = live.aiConfigs.associateBy { it.id }
+        val hydratedConfigs = payloadSettings.aiConfigs.map { config ->
+            val liveConfig = liveById[config.id]
+            if (liveConfig != null && liveConfig.apiKey.isNotBlank()) {
+                config.copy(apiKey = liveConfig.apiKey)
+            } else {
+                config
+            }
+        }
+        return payloadSettings.copy(aiConfigs = hydratedConfigs)
+    }
+
+    private suspend fun isCancellationRequested(taskId: Long): Boolean =
+        runCatching { dao.getById(taskId)?.state == AiTaskStateEntity.CANCEL_REQUESTED }
+            .getOrDefault(false)
+
+    private suspend fun checkTaskCancelled(taskId: Long) {
+        if (isCancellationRequested(taskId)) {
+            throw CancellationException("Task cancelled by user")
+        }
     }
 
     private fun buildAgentConversation(messages: List<AiChatMessage>): List<AgentConversationMessage> {

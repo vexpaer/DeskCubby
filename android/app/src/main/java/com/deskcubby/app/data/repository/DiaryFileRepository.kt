@@ -1973,18 +1973,10 @@ class DiaryFileRepository @Inject constructor(
                 }
 
                 val actualName = destination.name ?: fileName
-                if (settings.saveOriginalToGallery) {
-                    // Best-effort: a gallery failure must never fail or roll back the SAF write.
-                    runCatching {
-                        saveOriginalToGallery(
-                            sourceUri = sourceUri,
-                            mime = sourceMime,
-                            displayName = actualName.substringBeforeLast('.') + "." + sourceExtension,
-                        )
-                    }
-                }
                 if (settings.photoLocationEnabled) {
-                    // Best-effort EXIF location capture into the media JSON sidecar.
+                    // Fast, local EXIF read only; the reverse-geocoder lookup is deferred to
+                    // [enrichImportedMedia] so it can never block the "adding photo" UI. The
+                    // sidecar entry is created now with coordinates and the place backfilled later.
                     // mediaMutex is already held here.
                     runCatching {
                         readPhotoLatLong(sourceUri)?.let { latLong ->
@@ -1992,7 +1984,6 @@ class DiaryFileRepository @Inject constructor(
                                 entry.copy(
                                     latitude = latLong[0],
                                     longitude = latLong[1],
-                                    place = geocodePlaceName(latLong[0], latLong[1]) ?: entry.place,
                                 )
                             }
                         }
@@ -2059,6 +2050,52 @@ class DiaryFileRepository @Inject constructor(
             runCatching { resolver.delete(itemUri, null, null) }
             throw error
         }
+    }
+
+    /**
+     * Best-effort, non-blocking follow-up for a photo whose image + Markdown are already durable.
+     * Runs gallery copy and the reverse-geocoder place lookup so [appendImageToToday] (and the
+     * "adding photo" UI) never waits on slow I/O. Failures here are intentionally swallowed.
+     */
+    suspend fun enrichImportedMedia(
+        sourceUri: Uri?,
+        media: ImportedMedia,
+        settings: AppSettings,
+    ) {
+        withContext(Dispatchers.IO) {
+            if (settings.saveOriginalToGallery && sourceUri != null) {
+                val sourceMime = resolver.getType(sourceUri) ?: "image/jpeg"
+                val extension = sourceMime.substringAfterLast('/', "jpg")
+                runCatching {
+                    saveOriginalToGallery(
+                        sourceUri = sourceUri,
+                        mime = sourceMime,
+                        displayName = media.fileName.substringBeforeLast('.').ifBlank { "image" } +
+                            "." + extension,
+                    )
+                }
+            }
+            if (settings.photoLocationEnabled && settings.mediaTreeUri != null) {
+                runCatching {
+                    val root = tree(settings.mediaTreeUri!!)
+                    mediaMutex.withLock { enrichPlaceNameUnlocked(root, media.fileName) }
+                }
+            }
+        }
+    }
+
+    /** Caller must hold [mediaMutex]. Backfills a stored sidecar entry's place name via Geocoder. */
+    private suspend fun enrichPlaceNameUnlocked(root: DocumentFile, fileName: String) {
+        val decoded = MediaMetaJsonCodec.decode(readMediaMetaRawUnlocked(root))
+        val entry = decoded.entries[fileName.lowercase(Locale.ROOT)] ?: return
+        val latLong = if (entry.latitude != null && entry.longitude != null) {
+            doubleArrayOf(entry.latitude, entry.longitude)
+        } else {
+            return
+        }
+        if (!entry.place.isNullOrBlank()) return
+        val place = geocodePlaceName(latLong[0], latLong[1]) ?: return
+        updateMediaMetaEntryUnlocked(root, fileName) { it.copy(place = place) }
     }
 
     suspend fun appendImageToToday(

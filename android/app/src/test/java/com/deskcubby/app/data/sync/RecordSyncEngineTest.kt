@@ -17,13 +17,14 @@ class RecordSyncEngineTest {
         val fixture = Fixture(policy = RecordConflictPolicy.CONFLICT_COPY)
         fixture.adapter.put("local-1", record("r1", 10L, "hello"))
 
+        val id = recordIdFor("local-1")
         val first = fixture.sync()
-        assertEquals(CloudSyncItemOutcome.UPLOADED, first.singleOutcome(seedId("hello")))
-        assertTrue(fixture.remote.payloads.containsKey(fixture.payloadKey(fixture.content, seedId("hello"))))
+        assertEquals(CloudSyncItemOutcome.UPLOADED, first.singleOutcome(id))
+        assertTrue(fixture.remote.payloads.containsKey(fixture.payloadKey(fixture.content, id)))
         assertEquals(1, fixture.remote.manifests[fixture.manifestKey()]!!.entries.size)
 
         val second = fixture.sync()
-        assertEquals(CloudSyncItemOutcome.UNCHANGED, second.singleOutcome(seedId("hello")))
+        assertEquals(CloudSyncItemOutcome.UNCHANGED, second.singleOutcome(id))
     }
 
     @Test
@@ -33,8 +34,8 @@ class RecordSyncEngineTest {
         fixture.adapter.put("local-2", record("r2", 10L, "v2"))
         fixture.sync()
 
-        val firstId = seedId("v1")
-        val secondId = seedId("v2")
+        val firstId = recordIdFor("local-1")
+        val secondId = recordIdFor("local-2")
         fixture.adapter.put("local-1", record("r1", 20L, "v1 updated"))
         val result = fixture.sync()
         assertEquals(CloudSyncItemOutcome.UPLOADED, result.singleOutcome(firstId))
@@ -62,7 +63,7 @@ class RecordSyncEngineTest {
         fixture.remote.seed(fixture.content, "b", record("b", 2L, "pad B"))
 
         val result = fixture.sync()
-        assertEquals(CloudSyncItemOutcome.UPLOADED, result.singleOutcome(seedId("phone A")))
+        assertEquals(CloudSyncItemOutcome.UPLOADED, result.singleOutcome(recordIdFor("local-a")))
         assertEquals(CloudSyncItemOutcome.DOWNLOADED, result.singleOutcome("b"))
         assertEquals(0, result.conflictCount)
     }
@@ -72,7 +73,7 @@ class RecordSyncEngineTest {
         val fixture = Fixture(policy = RecordConflictPolicy.CONFLICT_COPY)
         fixture.adapter.put("local-1", record("r1", 10L, "base"))
         fixture.sync()
-        val id = seedId("base")
+        val id = recordIdFor("local-1")
         fixture.adapter.put("local-1", record("r1", 20L, "phone"))
         fixture.remote.seed(fixture.content, id, record(id, 21L, "pad"))
 
@@ -93,16 +94,17 @@ class RecordSyncEngineTest {
         fixture.adapter.put("local-1", record("r1", 10L, "to delete"))
         fixture.sync()
 
-        val id = seedId("to delete")
+        val id = recordIdFor("local-1")
         fixture.adapter.remove("local-1")
         val deletionRun = fixture.sync()
         assertEquals(CloudSyncItemOutcome.UPLOADED, deletionRun.singleOutcome(id))
         assertTrue(fixture.remote.manifestEntry(id).deleted)
 
         val offline = Fixture(policy = RecordConflictPolicy.LWW, remote = fixture.remote)
-        offline.adapter.put("offline-1", record("r1", 10L, "to delete"))
+        // The offline device recreates the same logical record under the SAME local key; the
+        // published tombstone must then keep it deleted rather than resurrect it.
+        offline.adapter.put("local-1", record("r1", 10L, "to delete"))
         val offlineResult = offline.sync()
-        println("OFFLINE_DEBUG ${offline.adapter.records.values.map{it.payloadText()}}")
         assertFalse(offline.adapter.records.values.any { it.payloadText() == "to delete" })
         assertEquals(CloudSyncItemOutcome.DOWNLOADED, offlineResult.singleOutcome(id))
         assertTrue(offline.remote.manifestEntry(id).deleted)
@@ -113,17 +115,38 @@ class RecordSyncEngineTest {
     }
 
     @Test
-    fun `new device bootstrap merges different ids and identical content`() = runBlocking {
+    fun `identical content under different local keys keeps two distinct records`() = runBlocking {
+        // P2-6 regression: identity must never be derived from the payload, so two records with
+        // identical content on one device must not collapse into a single record.
         val fixture = Fixture(policy = RecordConflictPolicy.CONFLICT_COPY)
-        fixture.adapter.put("cloud-record", record("shared", 10L, "same"))
+        fixture.adapter.put("local-a", record("ra", 10L, "same"))
+        fixture.adapter.put("local-b", record("rb", 10L, "same"))
+
+        val result = fixture.sync()
+        val idA = recordIdFor("local-a")
+        val idB = recordIdFor("local-b")
+        assertEquals(CloudSyncItemOutcome.UPLOADED, result.singleOutcome(idA))
+        assertEquals(CloudSyncItemOutcome.UPLOADED, result.singleOutcome(idB))
+        assertTrue(fixture.remote.payloads.containsKey(fixture.payloadKey(fixture.content, idA)))
+        assertTrue(fixture.remote.payloads.containsKey(fixture.payloadKey(fixture.content, idB)))
+        // Two manifest entries, not one.
+        assertEquals(2, fixture.remote.manifests[fixture.manifestKey()]!!.entries.size)
+    }
+
+    @Test
+    fun `same logical key on a second device converges to one record`() = runBlocking {
+        // Aggregate objects (settings, reader preferences, ...) use a fixed logical key on every
+        // device, so they must keep a single shared identity instead of duplicating.
+        val fixture = Fixture(policy = RecordConflictPolicy.CONFLICT_COPY)
+        fixture.adapter.put("global-key", record("shared", 10L, "same"))
         fixture.sync()
 
         val newDevice = Fixture(policy = RecordConflictPolicy.CONFLICT_COPY, remote = fixture.remote)
-        newDevice.adapter.put("new-local", record("shared", 10L, "same"))
+        newDevice.adapter.put("global-key", record("shared", 10L, "same"))
         newDevice.adapter.put("another-local", record("another", 11L, "new text"))
         val result = newDevice.sync()
-        assertEquals(CloudSyncItemOutcome.UNCHANGED, result.singleOutcome(seedId("same")))
-        assertEquals(CloudSyncItemOutcome.UPLOADED, result.singleOutcome(seedId("new text")))
+        assertEquals(CloudSyncItemOutcome.UNCHANGED, result.singleOutcome(recordIdFor("global-key")))
+        assertEquals(CloudSyncItemOutcome.UPLOADED, result.singleOutcome(recordIdFor("another-local")))
         assertTrue(newDevice.adapter.records.values.any { it.payloadText() == "same" })
     }
 
@@ -146,7 +169,7 @@ class RecordSyncEngineTest {
         val fixture = Fixture(policy = RecordConflictPolicy.LWW)
         fixture.adapter.put("local-1", record("r1", 10L, "base"))
         fixture.sync()
-        val id = seedId("base")
+        val id = recordIdFor("local-1")
         fixture.adapter.put("local-1", record("r1", 20L, "phone newer"))
         fixture.remote.seed(fixture.content, id, record(id, 21L, "pad newest"))
 
@@ -163,7 +186,9 @@ class RecordSyncEngineTest {
     private fun record(id: String, revision: Long, text: String): SyncRecord =
         SyncRecord(id, revision, revision, false, text.toByteArray())
 
-    private fun seedId(text: String): String = "seed-${sha256(text.toByteArray())}"
+    /** Mirrors [RecordSyncEngine.stableRecordId]: identity is derived from the local key only. */
+    private fun recordIdFor(localKey: String): String =
+        "record-" + sha256("record-key $localKey".toByteArray(Charsets.UTF_8)).take(32)
 
     private fun RemoteRecordManifestEntry.payloadText(fixture: Fixture): String =
         fixture.remote.payloads.getValue(fixture.payloadKey(fixture.content, id)).toString(Charsets.UTF_8)

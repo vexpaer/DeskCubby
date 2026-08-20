@@ -60,6 +60,14 @@
         <exclude
             domain="sharedpref"
             path="cloud_sync_manual_queue.xml" />
+        <!-- Secrets (API keys, S3 credentials, cloud passwords) live in the settings DataStore;
+             never extract them to cloud or transfer them device-to-device. -->
+        <exclude
+            domain="file"
+            path="datastore/deskcubby_settings.preferences_pb" />
+        <exclude
+            domain="sharedpref"
+            path="deskcubby_ai_secrets.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude
@@ -119,5 +127,13 @@
         <exclude
             domain="sharedpref"
             path="cloud_sync_manual_queue.xml" />
+        <!-- Secrets (API keys, S3 credentials, cloud passwords) live in the settings DataStore;
+             never extract them to cloud or transfer them device-to-device. -->
+        <exclude
+            domain="file"
+            path="datastore/deskcubby_settings.preferences_pb" />
+        <exclude
+            domain="sharedpref"
+            path="deskcubby_ai_secrets.xml" />
     </device-transfer>
 </data-extraction-rules>

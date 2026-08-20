@@ -295,12 +295,16 @@ private class GlobalSettingsRecordSyncAdapter(
     override val contentType = CloudSyncContent.GLOBAL_SETTINGS
     override val conflictPolicy = RecordConflictPolicy.LWW
 
-    override suspend fun listLocalRecords(): List<LocalRecordRef> =
-        listOf(LocalRecordRef("global-settings", 1L, 0L))
+    override suspend fun listLocalRecords(): List<LocalRecordRef> {
+        val payload = GlobalSettingsSyncCodec.encode(repository.settings.first())
+        val rev = contentRevision(payload)
+        return listOf(LocalRecordRef("global-settings", rev, rev))
+    }
 
     override suspend fun readLocalRecord(localKey: String): SyncRecord {
         val payload = GlobalSettingsSyncCodec.encode(repository.settings.first())
-        return SyncRecord("local", 1L, 0L, payload = payload)
+        val rev = contentRevision(payload)
+        return SyncRecord("local", rev, rev, payload = payload)
     }
 
     override suspend fun applyRemoteRecord(
@@ -323,24 +327,27 @@ private class RssSubscriptionRecordSyncAdapter(
     override val contentType = CloudSyncContent.RSS_SUBSCRIPTIONS
     override val conflictPolicy = RecordConflictPolicy.LWW
 
+    private fun payloadFor(item: com.deskcubby.app.data.model.RssSubscription): ByteArray =
+        recordPayload(
+            JSONObject()
+                .put("id", item.id)
+                .put("title", item.title)
+                .put("url", item.url)
+                .put("enabled", item.enabled),
+        )
+
     override suspend fun listLocalRecords(): List<LocalRecordRef> =
-        repository.settings.first().rssSubscriptions.map { LocalRecordRef(it.id, 1L, 0L) }
+        repository.settings.first().rssSubscriptions.map { item ->
+            val rev = contentRevision(payloadFor(item))
+            LocalRecordRef(item.id, rev, rev)
+        }
 
     override suspend fun readLocalRecord(localKey: String): SyncRecord {
         val item = repository.settings.first().rssSubscriptions.firstOrNull { it.id == localKey }
             ?: throw CloudSyncConflictException("本地 RSS 订阅在同步读取期间被删除。")
-        return SyncRecord(
-            "local",
-            1L,
-            0L,
-            payload = recordPayload(
-                JSONObject()
-                    .put("id", item.id)
-                    .put("title", item.title)
-                    .put("url", item.url)
-                    .put("enabled", item.enabled),
-            ),
-        )
+        val payload = payloadFor(item)
+        val rev = contentRevision(payload)
+        return SyncRecord("local", rev, rev, payload = payload)
     }
 
     override suspend fun applyRemoteRecord(
@@ -356,10 +363,21 @@ private class RssSubscriptionRecordSyncAdapter(
             enabled = json.requiredRecordBoolean("enabled"),
         )
         val current = repository.settings.first().rssSubscriptions
-        repository.setRssSubscriptions(
-            if (current.any { it.id == remote.id }) current.map { if (it.id == remote.id) remote else it }
-            else current + remote,
-        )
+        // Dedupe by feed URL, not by the device-local record id. Each device generates a fresh UUID
+        // per subscription, so matching on id would never converge and would create a duplicate feed
+        // for the same URL on every other device. Keep the local row's own id when the URL matches.
+        val sameUrl = current.firstOrNull { it.url.equals(remote.url, ignoreCase = true) }
+        if (sameUrl != null) {
+            val merged = sameUrl.copy(
+                title = remote.title.ifBlank { sameUrl.title },
+                enabled = remote.enabled,
+            )
+            repository.setRssSubscriptions(
+                current.map { if (it.id == sameUrl.id) merged else it },
+            )
+            return RecordApplyResult(sameUrl.id)
+        }
+        repository.setRssSubscriptions(current + remote)
         return RecordApplyResult(remote.id)
     }
 
@@ -376,11 +394,16 @@ private class ReaderPreferencesRecordSyncAdapter(
     override val contentType = CloudSyncContent.READER_PREFERENCES
     override val conflictPolicy = RecordConflictPolicy.LWW
 
-    override suspend fun listLocalRecords(): List<LocalRecordRef> =
-        listOf(LocalRecordRef("reader-preferences", 1L, 0L))
+    override suspend fun listLocalRecords(): List<LocalRecordRef> {
+        val rev = contentRevision(encode(repository.state.value.preferences))
+        return listOf(LocalRecordRef("reader-preferences", rev, rev))
+    }
 
-    override suspend fun readLocalRecord(localKey: String): SyncRecord =
-        SyncRecord("local", 1L, 0L, payload = encode(repository.state.value.preferences))
+    override suspend fun readLocalRecord(localKey: String): SyncRecord {
+        val payload = encode(repository.state.value.preferences)
+        val rev = contentRevision(payload)
+        return SyncRecord("local", rev, rev, payload = payload)
+    }
 
     override suspend fun applyRemoteRecord(
         record: SyncRecord,
@@ -423,3 +446,13 @@ private class ReaderPreferencesRecordSyncAdapter(
         )
     }
 }
+
+/**
+ * A deterministic 64-bit revision derived from the canonical payload. Aggregate configuration
+ * (settings, reader preferences, RSS) has no natural monotonic counter, so a stable content
+ * fingerprint is used as the sync revision: identical content yields the same revision (no
+ * ping-pong), and any content change yields a different revision (change detection works). The
+ * underlying payload hash is also the record's integrity check.
+ */
+private fun contentRevision(payload: ByteArray): Long =
+    java.lang.Long.parseUnsignedLong(sha256(payload).take(16), 16)

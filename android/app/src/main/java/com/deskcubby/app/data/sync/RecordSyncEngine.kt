@@ -4,7 +4,6 @@ import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection
 import java.util.Locale
-import java.util.UUID
 
 class RecordSyncEngine(
     private val adapters: Map<CloudSyncContent, RecordSyncAdapter>,
@@ -68,11 +67,12 @@ class RecordSyncEngine(
             val existingId = stateEntries.entries.firstOrNull {
                 it.value.localKey == ref.localKey && !it.value.deleted
             }?.key
-            // First bootstrap has no stable mapping yet. Seed the id from the payload hash so
-            // identical content on two devices establishes the same record instead of duplicating.
-            val id = existingId ?: seedRecordId(
-                adapter.readLocalRecord(ref.localKey).payloadSha256,
-            )
+            // Stable identity is derived from the record's logical key, never from its payload.
+            // Two distinct records with identical content therefore keep distinct identities (no
+            // collision), while a logical object that lives on two devices under the same key
+            // (e.g. aggregate settings) converges. Any cross-device "same legacy content" dedupe,
+            // if still desired, must be a separate heuristic and must not drive record identity.
+            val id = existingId ?: stableRecordId(ref.localKey)
             require(idByLocalKey.put(ref.localKey, id) == null) { "记录同步本地标识重复。" }
             localRefById[id] = ref
         }
@@ -360,9 +360,11 @@ class RecordSyncEngine(
         )
     }
 
-    private fun newRecordId(): String = "local-${UUID.randomUUID()}"
-
-    private fun seedRecordId(payloadSha256: String): String = "seed-$payloadSha256"
+    /** Stable, payload-independent identity derived from the record's logical local key. */
+    private fun stableRecordId(localKey: String): String {
+        val digest = sha256("record-key $localKey".toByteArray(Charsets.UTF_8)).take(32)
+        return "record-$digest"
+    }
 
     private fun recordKey(content: CloudSyncContent, id: String): String =
         "records/${content.remoteDirectory.substringAfter('/')}/$id"
