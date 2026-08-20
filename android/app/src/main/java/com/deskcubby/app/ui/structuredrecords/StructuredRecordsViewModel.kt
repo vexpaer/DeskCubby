@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.preferences.SettingsRepository
-import com.deskcubby.app.data.structuredrecords.JournalDayEngine
 import com.deskcubby.app.data.structuredrecords.PhoneInteractionEstimator
 import com.deskcubby.app.data.structuredrecords.StructuredField
 import com.deskcubby.app.data.structuredrecords.StructuredRecordSegment
@@ -14,7 +13,6 @@ import com.deskcubby.app.data.structuredrecords.StructuredRecordsRepository
 import com.deskcubby.app.data.structuredrecords.SystemFieldSnapshot
 import com.deskcubby.app.data.structuredrecords.StructuredWorkspaceRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.util.UUID
@@ -72,6 +70,7 @@ class StructuredRecordsViewModel @Inject constructor(
     private val mutableSystemSnapshot = MutableStateFlow<SystemFieldSnapshot?>(null)
     val systemSnapshot: StateFlow<SystemFieldSnapshot?> = mutableSystemSnapshot.asStateFlow()
 
+    /** Legacy state name kept for the current UI; value is always the natural local date. */
     private val mutableJournalDay = MutableStateFlow<LocalDate?>(null)
     val journalDay: StateFlow<LocalDate?> = mutableJournalDay.asStateFlow()
 
@@ -102,7 +101,6 @@ class StructuredRecordsViewModel @Inject constructor(
         mutableTemplates.value = workspaceRepository.loadTemplates(appSettings)
     }
 
-    /** Re-reads workspace fields/templates after a change elsewhere (settings screen etc.). */
     fun refreshWorkspaceFromUi() {
         viewModelScope.launch { refreshWorkspace() }
     }
@@ -115,25 +113,21 @@ class StructuredRecordsViewModel @Inject constructor(
         mutableNow.value = LocalTime.now()
         if (appSettings.diaryTreeUri == null) {
             mutableSystemSnapshot.value = null
+            mutableJournalDay.value = null
             return
         }
-        val workspace = workspaceRepository.loadSettings(appSettings)
-        val today = JournalDayEngine.resolveJournalDayWithHistory(Instant.now(), workspace.dayBoundaryHistory)
+        val today = LocalDate.now()
         mutableJournalDay.value = today
-        val estimate = if (appSettings.structuredAutoRecordSleepWake) {
-            // queryEvents replays the day's interaction history synchronously; keep it off Main.
+        val session = if (appSettings.structuredAutoRecordSleepWake) {
             withContext(Dispatchers.IO) {
-                phoneInteractionEstimator.estimateForJournalDay(
-                    today,
-                    JournalDayEngine.parseBoundary(workspace.effectiveDayBoundary(today)),
-                )
+                phoneInteractionEstimator.estimateForWakeDate(today)
             }
         } else null
         mutableSystemSnapshot.value = SystemFieldSnapshot(
             autoRecording = appSettings.structuredAutoRecordSleepWake,
             usageAccessGranted = phoneInteractionEstimator.hasUsageAccess(),
-            wakeTime = estimate?.wakeTime,
-            sleepTime = estimate?.sleepTime,
+            wakeTime = session?.wakeLocalTime(),
+            sleepTime = session?.sleepLocalTime(),
         )
     }
 
@@ -141,7 +135,6 @@ class StructuredRecordsViewModel @Inject constructor(
         mutableNow.value = LocalTime.now()
     }
 
-    /** Records one template with typed values (in field-segment order). */
     fun record(template: StructuredRecordTemplate, values: List<String>) {
         if (template.id in mutableSending.value) return
         mutableSending.value += template.id
@@ -171,7 +164,6 @@ class StructuredRecordsViewModel @Inject constructor(
         }
     }
 
-    /** Creates a template from a plain text, or text + one field. */
     fun addTemplate(name: String, field: StructuredField?, prefix: String?) {
         viewModelScope.launch {
             val appSettings = settings.value
