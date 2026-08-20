@@ -1,51 +1,70 @@
 package com.deskcubby.app.data.structuredrecords
 
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.preferences.TodayDiarySwitchTimeStore
 import com.deskcubby.app.data.repository.DiaryFileRepository
-import javax.inject.Inject
-import javax.inject.Singleton
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
- * Loads and persists the `.deskcubby` workspace files inside the diary root. These files are the
- * "how to interpret the Markdown" semantics and must travel with the diary folder across devices.
- * The first launch seeds the five default examples only when the workspace is empty; existing user
- * templates are never duplicated.
+ * Loads and persists the `.deskcubby` workspace files inside the diary root. These files contain the
+ * structured-record protocol, fields, templates and metrics. Calendar ownership is always the
+ * natural local date; the device-local “今日日记切换时间” never changes structured data ownership.
  */
 @Singleton
 class StructuredWorkspaceRepository @Inject constructor(
     private val diaryFileRepository: DiaryFileRepository,
+    private val todayDiarySwitchTimeStore: TodayDiarySwitchTimeStore,
 ) {
     private val settingsCache = SettingsCache()
 
     /** Loads (creating on first use) the workspace [StructuredWorkspaceSettings]. */
     suspend fun loadSettings(appSettings: AppSettings): StructuredWorkspaceSettings {
-        settingsCache.current?.let { return it }
+        val localSwitchTime = todayDiarySwitchTimeStore.current()
+        settingsCache.current?.let { cached ->
+            return cached.copy(dayBoundary = localSwitchTime)
+        }
         val raw = diaryFileRepository.readWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_SETTINGS)
         val decoded = if (raw == null) {
             seedSettings(appSettings)
         } else {
             StructuredRecordsCodec.decodeSettings(raw)
-        }
+        }.copy(dayBoundary = localSwitchTime)
         settingsCache.current = decoded
         return decoded
     }
 
     /**
-     * The unified "what is today" resolver. Every page that needs the current day for journaling
-     * must call this instead of comparing calendar midnights.
+     * Compatibility helper for old callers that only need the current date. It deliberately ignores
+     * the diary switch time and returns the natural device-local calendar date.
      */
-    suspend fun resolveJournalDay(appSettings: AppSettings, now: Instant = Instant.now()): LocalDate {
-        val workspace = loadSettings(appSettings)
-        return JournalDayEngine.resolveJournalDayWithHistory(now, workspace.dayBoundaryHistory)
+    suspend fun resolveJournalDay(
+        appSettings: AppSettings,
+        now: Instant = Instant.now(),
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): LocalDate {
+        @Suppress("UNUSED_VARIABLE")
+        val ignored = appSettings
+        return LocalDateTime.ofInstant(now, zone).toLocalDate()
     }
 
-    /** Effective `HH:mm` boundary for [journalDay] (honors boundary history). */
-    suspend fun effectiveDayBoundary(appSettings: AppSettings, journalDay: LocalDate): String =
-        loadSettings(appSettings).effectiveDayBoundary(journalDay)
+    /**
+     * The one and only switched-date resolver. Call this only from the explicit “进入今日日记” action.
+     */
+    suspend fun resolveTodayDiaryDate(
+        appSettings: AppSettings,
+        now: Instant = Instant.now(),
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): LocalDate {
+        @Suppress("UNUSED_VARIABLE")
+        val ignored = appSettings
+        val switchMinutes = JournalDayEngine.parseBoundary(todayDiarySwitchTimeStore.current())
+        return JournalDayEngine.resolveTodayDiaryDate(LocalDateTime.ofInstant(now, zone), switchMinutes)
+    }
 
     /** Re-reads settings from disk, ignoring the in-memory cache (e.g. after a rebuild). */
     suspend fun reloadSettings(appSettings: AppSettings): StructuredWorkspaceSettings {
@@ -59,36 +78,28 @@ class StructuredWorkspaceRepository @Inject constructor(
             StructuredRecordsCodec.FILE_SETTINGS,
             StructuredRecordsCodec.encodeSettings(value),
         )
-        settingsCache.current = value
+        settingsCache.current = value.copy(dayBoundary = todayDiarySwitchTimeStore.current())
     }
 
     /**
-     * Applies a new day boundary. Boundary changes take effect from the next Journal Day (the
-     * boundary itself changes, but the change is recorded in the history so old records keep their
-     * original effective boundary when restoring real date-times).
+     * Compatibility entry point used by the existing settings UI. The value is now device-local and
+     * takes effect immediately only for “进入今日日记”; no history is created and no workspace JSON
+     * field is changed.
      */
     suspend fun setDayBoundary(
         appSettings: AppSettings,
         newBoundary: String,
         journalDay: LocalDate,
     ): StructuredWorkspaceSettings {
-        val current = loadSettings(appSettings)
+        @Suppress("UNUSED_VARIABLE")
+        val ignoredDay = journalDay
         val normalized = JournalDayEngine.parseBoundary(newBoundary)
             ?.let(JournalDayEngine::formatBoundary)
             ?: JournalDayEngine.DEFAULT_DAY_BOUNDARY
-        // The current journal day is already in progress; record the change as effective from the
-        // next one so today's earlier instants are not retroactively reinterpreted under the new
-        // boundary (the settings copy promises "从下一个日记日开始生效").
-        val effectiveFrom = journalDay.plusDays(1)
-        val history = current.dayBoundaryHistory
-            .filterNot { it.effectiveFromJournalDay == effectiveFrom.toString() } +
-            DayBoundaryRecord(effectiveFromJournalDay = effectiveFrom.toString(), value = normalized)
-        val updated = current.copy(
-            dayBoundary = normalized,
-            dayBoundaryHistory = history.sortedBy { it.effectiveFromJournalDay },
-        )
-        saveSettings(appSettings, updated)
-        return updated
+        todayDiarySwitchTimeStore.set(normalized)
+        val current = loadSettings(appSettings).copy(dayBoundary = normalized)
+        settingsCache.current = current
+        return current
     }
 
     /** Loads the field definitions, seeding the five defaults when none exist yet. */
@@ -149,12 +160,8 @@ class StructuredWorkspaceRepository @Inject constructor(
 
     /** Adds the default example fields, only when the workspace has no fields at all. */
     suspend fun seedExamples(appSettings: AppSettings) {
-        if (loadFields(appSettings).isEmpty()) {
-            seedFields(appSettings)
-        }
-        if (loadTemplates(appSettings).isEmpty()) {
-            seedTemplates(appSettings)
-        }
+        if (loadFields(appSettings).isEmpty()) seedFields(appSettings)
+        if (loadTemplates(appSettings).isEmpty()) seedTemplates(appSettings)
     }
 
     /**
@@ -190,18 +197,7 @@ class StructuredWorkspaceRepository @Inject constructor(
     }
 
     private suspend fun seedSettings(appSettings: AppSettings): StructuredWorkspaceSettings {
-        val today = LocalDate.now()
-        val seeded = StructuredWorkspaceSettings(
-            schemaVersion = 1,
-            markdownProtocolVersion = 1,
-            dayBoundary = JournalDayEngine.DEFAULT_DAY_BOUNDARY,
-            dayBoundaryHistory = listOf(
-                DayBoundaryRecord(
-                    effectiveFromJournalDay = today.toString(),
-                    value = JournalDayEngine.DEFAULT_DAY_BOUNDARY,
-                ),
-            ),
-        )
+        val seeded = StructuredWorkspaceSettings(schemaVersion = 1, markdownProtocolVersion = 1)
         diaryFileRepository.writeWorkspaceFile(
             appSettings,
             StructuredRecordsCodec.FILE_SETTINGS,
@@ -230,12 +226,7 @@ class StructuredWorkspaceRepository @Inject constructor(
         return templates
     }
 
-    /**
-     * Migrates the legacy "日常事件" templates (with `xx` placeholders) into structured record
-     * templates. Each `xx` becomes a `word` field segment; templates without any placeholder stay
-     * plain text. Old Markdown history is never aggressively rewritten — only the reusable
-     * templates are upgraded, and the migrated fields are freely renameable afterwards.
-     */
+    /** Migrates legacy daily-event templates without rewriting historical Markdown. */
     private suspend fun migrateLegacyDailyEvents(
         appSettings: AppSettings,
     ): List<StructuredRecordTemplate> {
@@ -267,12 +258,8 @@ class StructuredWorkspaceRepository @Inject constructor(
                 }
                 val parts = xxPattern.split(text)
                 for (index in parts.indices) {
-                    if (parts[index].isNotEmpty()) {
-                        segments += StructuredRecordSegment.Text(parts[index])
-                    }
-                    if (index < parts.size - 1) {
-                        segments += StructuredRecordSegment.Field(fieldId)
-                    }
+                    if (parts[index].isNotEmpty()) segments += StructuredRecordSegment.Text(parts[index])
+                    if (index < parts.size - 1) segments += StructuredRecordSegment.Field(fieldId)
                 }
             }
             if (segments.isNotEmpty()) {
@@ -291,12 +278,11 @@ class StructuredWorkspaceRepository @Inject constructor(
 
     private fun stableId(value: String): String {
         val hash = value.hashCode()
-        var result: Long = (hash.toLong() and 0xffffffffL)
+        var result: Long = hash.toLong() and 0xffffffffL
         result = result * 31 + value.length
         return result.toString(36).take(10)
     }
 
-    /** Small in-memory cache so stats queries do not re-read the workspace file every frame. */
     private class SettingsCache {
         var current: StructuredWorkspaceSettings? = null
     }
