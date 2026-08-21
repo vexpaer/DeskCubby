@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - main
+    paths:
+      - "android/app/build.gradle.kts"
+      - ".github/workflows/android-release.yml"
   workflow_dispatch:
 
 permissions:
@@ -11,6 +16,12 @@ permissions:
 
 jobs:
   release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref_type == 'tag' ||
+      (github.event_name == 'push' &&
+       github.ref == 'refs/heads/main' &&
+       startsWith(github.event.head_commit.message, 'release(android): v'))
     name: Build and publish signed APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -82,8 +93,18 @@ jobs:
         id: asset
         shell: bash
         run: |
+          PUBLISH=false
+          TAG=""
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             VERSION="$GITHUB_REF_NAME"
+            TAG="$GITHUB_REF_NAME"
+            PUBLISH=true
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+            APP_VERSION="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)"/\1/p' app/build.gradle.kts | head -n 1)"
+            test -n "$APP_VERSION" || { echo "Unable to read versionName"; exit 1; }
+            VERSION="v$APP_VERSION"
+            TAG="$VERSION"
+            PUBLISH=true
           else
             VERSION="manual-${GITHUB_SHA::7}"
           fi
@@ -91,6 +112,8 @@ jobs:
           cp app/build/outputs/apk/release/DeskCubby.apk "$ASSET_NAME"
           echo "name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
           echo "path=android/$ASSET_NAME" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -101,9 +124,11 @@ jobs:
           retention-days: 30
 
       - name: Publish GitHub Release
-        if: github.ref_type == 'tag'
+        if: steps.asset.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.asset.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: ${{ steps.asset.outputs.path }}
           generate_release_notes: true
           fail_on_unmatched_files: true
