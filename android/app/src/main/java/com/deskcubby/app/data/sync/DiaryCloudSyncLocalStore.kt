@@ -170,17 +170,18 @@ class DiaryCloudSyncLocalStore(
     ): LocalWriteResult {
         require(fileName in WORKSPACE_FILES) { "结构化工作区文件路径无效。" }
         val settings = settingsProvider()
-        val before = diaryRepository.readWorkspaceFile(settings, fileName)?.toByteArray(Charsets.UTF_8)
-        val beforeHash = before?.let(::sha256)
-        if (beforeHash != expectedLocalSha256) {
-            throw CloudSyncConflictException("结构化工作区文件已在同步期间变化，未覆盖本地版本。")
-        }
         val text = bytes.toString(Charsets.UTF_8)
-        diaryRepository.writeWorkspaceFile(settings, fileName, text)
+        diaryRepository.updateWorkspaceFile(settings, fileName) { current ->
+            val currentHash = current?.toByteArray(Charsets.UTF_8)?.let(::sha256)
+            if (currentHash != expectedLocalSha256) {
+                throw CloudSyncConflictException("结构化工作区文件已在同步期间变化，未覆盖本地版本。")
+            }
+            text
+        }
         val verified = diaryRepository.readWorkspaceFile(settings, fileName)?.toByteArray(Charsets.UTF_8)
             ?: throw CloudSyncConflictException("结构化工作区文件写入后无法读取。")
         if (sha256(verified) != contentSha256) {
-            // writeWorkspaceFile already verifies its own write under the workspace mutex. A
+            // updateWorkspaceFile verifies the compare-and-write under the workspace mutex. A
             // different read here therefore means another app/provider changed the file after our
             // write completed. Never "roll back" the old bytes here: that would overwrite the
             // concurrent edit we just detected.

@@ -8,9 +8,13 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.text.InputFilter
+import android.text.InputType
+import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.PickVisualMediaRequest
@@ -29,6 +33,10 @@ import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DateRecordRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
+import com.deskcubby.app.data.structuredrecords.JournalDayEngine
+import com.deskcubby.app.data.structuredrecords.StructuredFieldType
+import com.deskcubby.app.data.structuredrecords.StructuredRecordSegment
+import com.deskcubby.app.data.structuredrecords.StructuredRecordsRepository
 import com.deskcubby.app.data.structuredrecords.StructuredWorkspaceRepository
 import com.deskcubby.app.data.sync.CloudSyncManualScheduler
 import com.deskcubby.app.data.sync.CloudSyncRunMode
@@ -39,6 +47,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
 import java.security.MessageDigest
 import java.time.LocalDate
+import java.time.LocalTime
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -54,6 +63,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
     @Inject lateinit var aiTaskQueue: AiTaskQueue
     @Inject lateinit var dateRecordRepository: DateRecordRepository
     @Inject lateinit var structuredWorkspaceRepository: StructuredWorkspaceRepository
+    @Inject lateinit var structuredRecordsRepository: StructuredRecordsRepository
     @Inject lateinit var thoughtDraftStore: DesktopWidgetThoughtDraftStore
 
     private var settings: AppSettings = AppSettings()
@@ -364,19 +374,9 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         dialog.show()
     }
 
-    private fun showDailyRecordInput() {
+    private suspend fun showDailyRecordInput() {
         val english = settings.appLanguage == AppLanguage.ENGLISH
         val templateId = intent.getStringExtra(EXTRA_DAILY_TEMPLATE_ID)
-        val template = settings.dailyEventTemplates.firstOrNull { it.id == templateId }
-        if (template == null) {
-            Toast.makeText(
-                this,
-                translate("这条结构化记录模板已不存在", "This structured record no longer exists", language(english)),
-                Toast.LENGTH_SHORT,
-            ).show()
-            finish()
-            return
-        }
         if (settings.diaryTreeUri == null) {
             Toast.makeText(
                 this,
@@ -386,49 +386,137 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
             finish()
             return
         }
-        val editor = EditText(this).apply {
-            setText(template.text)
-            setSelection(text.length)
-            maxLines = 8
-            filters = arrayOf(InputFilter.LengthFilter(MAX_DAILY_RECORD_CHARS))
+        val template = try {
+            structuredWorkspaceRepository.resolveTemplateForWidget(settings, templateId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            Toast.makeText(
+                this,
+                translate("无法读取结构化记录", "Could not load structured records", language(english)),
+                Toast.LENGTH_SHORT,
+            ).show()
+            finish()
+            return
         }
+        if (template == null) {
+            Toast.makeText(
+                this,
+                translate("这条结构化记录模板已不存在", "This structured record no longer exists", language(english)),
+                Toast.LENGTH_SHORT,
+            ).show()
+            finish()
+            return
+        }
+        val fieldsById = try {
+            structuredWorkspaceRepository.loadFields(settings).associateBy { it.id }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            Toast.makeText(
+                this,
+                translate("无法读取结构化字段", "Could not load structured fields", language(english)),
+                Toast.LENGTH_SHORT,
+            ).show()
+            finish()
+            return
+        }
+        val fieldSegments = template.segments.filterIsInstance<StructuredRecordSegment.Field>()
+        val bindings = fieldSegments.mapNotNull { segment ->
+            fieldsById[segment.fieldId]?.let { field ->
+                field to EditText(this).apply {
+                    val optionHint = if (field.type == StructuredFieldType.TYPE && field.options.isNotEmpty()) {
+                        " · " + field.options.joinToString(" / ")
+                    } else ""
+                    hint = field.name + field.unit?.let { " ($it)" }.orEmpty() + optionHint
+                    filters = arrayOf(InputFilter.LengthFilter(500))
+                    maxLines = 2
+                    if (field.type == StructuredFieldType.NUMBER) {
+                        inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+                    }
+                    if (field.type == StructuredFieldType.TIME) {
+                        setText(JournalDayEngine.formatTime(LocalTime.now()))
+                        setSelection(text.length)
+                    }
+                }
+            }
+        }
+        if (bindings.size != fieldSegments.size) {
+            Toast.makeText(
+                this,
+                translate("模板引用了不存在的字段", "The template references a missing field", language(english)),
+                Toast.LENGTH_SHORT,
+            ).show()
+            finish()
+            return
+        }
+
+        val density = resources.displayMetrics.density
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val horizontal = (24 * density).toInt()
+            setPadding(horizontal, 0, horizontal, 0)
+        }
+        val preview = template.segments.joinToString(separator = "") { segment ->
+            when (segment) {
+                is StructuredRecordSegment.Text -> segment.value
+                is StructuredRecordSegment.Field -> fieldsById[segment.fieldId]?.let { "【${it.name}】" }.orEmpty()
+            }
+        }
+        container.addView(TextView(this).apply {
+            text = preview
+            setPadding(0, 0, 0, (8 * density).toInt())
+        })
+        bindings.forEach { (_, editor) -> container.addView(editor) }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(
+                container,
+                android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+
         val dialog = AlertDialog.Builder(this)
-            .setTitle(translate("结构化记录", "Structured record", language(english)))
-            .setView(editor)
+            .setTitle(template.name)
+            .setView(scroll)
             .setNegativeButton(translate("取消", "Cancel", language(english))) { _, _ -> finish() }
             .setPositiveButton(translate("加入今日日记", "Add to today", language(english)), null)
             .setOnCancelListener { finish() }
             .create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val entry = editor.text?.toString()?.trim().orEmpty()
-                if (entry.isEmpty()) {
-                    editor.error = translate("请输入内容", "Enter some text", language(english))
+                val values = bindings.map { it.second.text?.toString()?.trim().orEmpty() }
+                val blankIndex = values.indexOfFirst(String::isBlank)
+                if (blankIndex >= 0) {
+                    bindings[blankIndex].second.error = translate("请填写此字段", "Fill this field", language(english))
                     return@setOnClickListener
                 }
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
                 lifecycleScope.launch {
                     try {
-                        withContext(Dispatchers.IO) {
-                            // resolveJournalDay is retained as a compatibility API but now resolves
-                            // the natural local date; the diary switch time only affects navigation.
-                            val naturalDate = runCatching {
-                                structuredWorkspaceRepository.resolveJournalDay(settings)
-                            }.getOrDefault(LocalDate.now())
-                            diaryFileRepository.appendTextToToday(entry, settings, naturalDate)
-                            try {
-                                diaryFileRepository.scan(settings)
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (_: Exception) {
-                                // Markdown is already durable.
+                        val result = withContext(Dispatchers.IO) {
+                            structuredRecordsRepository.insertRecordFromTemplate(settings, template, values)
+                        }
+                        if (!result.success) {
+                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                            val message = if (english) {
+                                result.messageEnglish ?: "Could not add the structured record"
+                            } else {
+                                result.message ?: "结构化记录添加失败"
                             }
+                            bindings.firstOrNull()?.second?.error = message
+                            Toast.makeText(this@DesktopWidgetInteractionActivity, message, Toast.LENGTH_SHORT).show()
+                            return@launch
                         }
                         requestWidgetRefresh()
+                        val warning = if (english) result.messageEnglish else result.message
                         Toast.makeText(
                             this@DesktopWidgetInteractionActivity,
-                            translate("已加入今日日记", "Added to today's diary", language(english)),
-                            Toast.LENGTH_SHORT,
+                            warning ?: translate("已加入今日日记", "Added to today's diary", language(english)),
+                            if (warning == null) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
                         ).show()
                         dialog.dismiss()
                         finish()
@@ -436,7 +524,9 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                         throw cancelled
                     } catch (_: Exception) {
                         dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                        editor.error = translate("结构化记录添加失败", "Could not add the structured record", language(english))
+                        val message = translate("结构化记录添加失败", "Could not add the structured record", language(english))
+                        bindings.firstOrNull()?.second?.error = message
+                        Toast.makeText(this@DesktopWidgetInteractionActivity, message, Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -798,7 +888,6 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         private const val ACTION_VIEW_THOUGHT = "view_thought"
         private const val ACTION_OPEN_DIARY = "open_diary"
         private const val MAX_THOUGHT_CHARS = 4_000
-        private const val MAX_DAILY_RECORD_CHARS = 8_000
 
         fun quickInputPendingIntent(context: Context, appWidgetId: Int): PendingIntent =
             pendingIntent(context, appWidgetId, ACTION_QUICK_INPUT, null)

@@ -41,6 +41,13 @@ class StructuredRecordDraftTest {
     }
 
     @Test
+    fun incompleteTypedDraftStillAllowsSubmitAttemptForValidation() {
+        val draft = createStructuredRecordDraft(template, fields, LocalTime.NOON)
+        assertTrue(isStructuredDraftReady(draft))
+        assertNull(structuredDraftValues(draft))
+    }
+
+    @Test
     fun ordinaryTextEditShiftsFieldRangesWithoutUnbinding() {
         val draft = createStructuredRecordDraft(template, fields, LocalTime.NOON)
         val edited = applyStructuredDraftEdit(draft, "今天" + draft.text)!!

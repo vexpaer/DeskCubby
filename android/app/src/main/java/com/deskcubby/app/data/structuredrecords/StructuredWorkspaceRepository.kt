@@ -9,6 +9,21 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.StateFlow
+
+/** True only when a workspace file has never been created; existing empty files are intentional. */
+internal fun shouldInitializeStructuredWorkspaceFile(raw: String?): Boolean = raw == null
+
+/** Starter templates are safe only when every field they reference exists. */
+internal fun defaultTemplatesSupportedBy(
+    fields: List<StructuredField>,
+): List<StructuredRecordTemplate> {
+    val fieldIds = fields.mapTo(HashSet(fields.size)) { it.id }
+    return DefaultStructuredExamples.TEMPLATES.filter { template ->
+        template.segments.filterIsInstance<StructuredRecordSegment.Field>()
+            .all { it.fieldId in fieldIds }
+    }
+}
 
 /**
  * Loads and persists the `.deskcubby` workspace files inside the diary root. These files contain the
@@ -20,26 +35,35 @@ class StructuredWorkspaceRepository @Inject constructor(
     private val diaryFileRepository: DiaryFileRepository,
     private val todayDiarySwitchTimeStore: TodayDiarySwitchTimeStore,
 ) {
+    /** Includes app writes, seed writes and same-root cloud-sync replacements. */
+    val workspaceChanges: StateFlow<Long>
+        get() = diaryFileRepository.workspaceChanges
+
     /**
-     * Loads (creating on first use) the workspace settings. This intentionally does not cache the
-     * file: settings.json only contains the lightweight schema/protocol versions, while Cloud Sync
-     * may replace the same diary root's file without changing its URI. Reading through SAF here
-     * avoids returning stale settings after such a same-directory sync.
+     * Loads (creating on first use) the workspace settings. Cloud Sync may replace the same diary
+     * root's file without changing its URI, so this intentionally never caches file contents.
      */
     suspend fun loadSettings(appSettings: AppSettings): StructuredWorkspaceSettings {
         val localSwitchTime = todayDiarySwitchTimeStore.current()
         val raw = diaryFileRepository.readWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_SETTINGS)
-        return (if (raw == null) {
-            seedSettings(appSettings)
-        } else {
-            StructuredRecordsCodec.decodeSettings(raw)
-        }).copy(dayBoundary = localSwitchTime)
+        if (raw != null) {
+            return StructuredRecordsCodec.decodeSettings(raw).copy(dayBoundary = localSwitchTime)
+        }
+
+        val seeded = StructuredWorkspaceSettings(schemaVersion = 1, markdownProtocolVersion = 1)
+        var resolved = seeded
+        diaryFileRepository.updateWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_SETTINGS) { current ->
+            if (current == null) {
+                StructuredRecordsCodec.encodeSettings(seeded)
+            } else {
+                resolved = StructuredRecordsCodec.decodeSettings(current)
+                current
+            }
+        }
+        return resolved.copy(dayBoundary = localSwitchTime)
     }
 
-    /**
-     * Compatibility helper for old callers that only need the current date. It deliberately ignores
-     * the diary switch time and returns the natural device-local calendar date.
-     */
+    /** Compatibility helper: structured records always use the natural local date. */
     suspend fun resolveJournalDay(
         appSettings: AppSettings,
         now: Instant = Instant.now(),
@@ -50,9 +74,7 @@ class StructuredWorkspaceRepository @Inject constructor(
         return LocalDateTime.ofInstant(now, zone).toLocalDate()
     }
 
-    /**
-     * The one and only switched-date resolver. Call this only from the explicit “进入今日日记” action.
-     */
+    /** The one switched-date resolver, used only by the explicit “进入今日日记” action. */
     suspend fun resolveTodayDiaryDate(
         appSettings: AppSettings,
         now: Instant = Instant.now(),
@@ -64,7 +86,6 @@ class StructuredWorkspaceRepository @Inject constructor(
         return JournalDayEngine.resolveTodayDiaryDate(LocalDateTime.ofInstant(now, zone), switchMinutes)
     }
 
-    /** Kept for caller compatibility; settings are already read from disk on every load. */
     suspend fun reloadSettings(appSettings: AppSettings): StructuredWorkspaceSettings = loadSettings(appSettings)
 
     suspend fun saveSettings(appSettings: AppSettings, value: StructuredWorkspaceSettings) {
@@ -75,11 +96,6 @@ class StructuredWorkspaceRepository @Inject constructor(
         )
     }
 
-    /**
-     * Compatibility entry point used by the existing settings UI. The value is now device-local and
-     * takes effect immediately only for “进入今日日记”; no history is created and no workspace JSON
-     * field is changed.
-     */
     suspend fun setDayBoundary(
         appSettings: AppSettings,
         newBoundary: String,
@@ -94,15 +110,30 @@ class StructuredWorkspaceRepository @Inject constructor(
         return loadSettings(appSettings).copy(dayBoundary = normalized)
     }
 
-    /** Loads the field definitions, seeding the five defaults when none exist yet. */
+    /** Missing fields.json initializes defaults; an existing empty array remains empty. */
     suspend fun loadFields(appSettings: AppSettings): List<StructuredField> {
         val raw = diaryFileRepository.readWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_FIELDS)
-        val decoded = if (raw == null) emptyList() else StructuredRecordsCodec.decodeFields(raw)
-        return if (decoded.isEmpty()) {
-            seedFields(appSettings)
-        } else {
-            decoded.sortedBy { it.sortOrder }
+        if (!shouldInitializeStructuredWorkspaceFile(raw)) {
+            return StructuredRecordsCodec.decodeFields(requireNotNull(raw)).sortedBy { it.sortOrder }
         }
+
+        var resolved = DefaultStructuredExamples.FIELDS
+        diaryFileRepository.updateWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_FIELDS) { current ->
+            if (current == null) {
+                StructuredRecordsCodec.encodeFields(DefaultStructuredExamples.FIELDS)
+            } else {
+                resolved = StructuredRecordsCodec.decodeFields(current).sortedBy { it.sortOrder }
+                current
+            }
+        }
+        return resolved
+    }
+
+    /** Read-only variant for surfaces (notably widgets) that must never initialize workspace data. */
+    suspend fun loadFieldsReadOnly(appSettings: AppSettings): List<StructuredField> {
+        val raw = diaryFileRepository.readWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_FIELDS)
+            ?: return emptyList()
+        return StructuredRecordsCodec.decodeFields(raw).sortedBy { it.sortOrder }
     }
 
     suspend fun saveFields(appSettings: AppSettings, fields: List<StructuredField>) {
@@ -113,19 +144,103 @@ class StructuredWorkspaceRepository @Inject constructor(
         )
     }
 
-    /** Loads record templates, seeding defaults or migrating legacy daily events when none exist. */
+    /** Applies a field transform to the latest on-disk value under the shared workspace mutex. */
+    suspend fun mutateFields(
+        appSettings: AppSettings,
+        transform: (List<StructuredField>) -> List<StructuredField>,
+    ): List<StructuredField> {
+        loadFields(appSettings)
+        var resolved: List<StructuredField>? = null
+        diaryFileRepository.updateWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_FIELDS) { current ->
+            val existing = current?.let(StructuredRecordsCodec::decodeFields).orEmpty().sortedBy { it.sortOrder }
+            val updated = transform(existing)
+            resolved = updated
+            if (current != null && updated == existing) current else StructuredRecordsCodec.encodeFields(updated)
+        }
+        return requireNotNull(resolved)
+    }
+
+    /**
+     * Loads record templates. Missing records.json migrates legacy events or seeds only starter
+     * templates whose referenced fields exist. An existing explicit empty array is always valid.
+     */
     suspend fun loadTemplates(appSettings: AppSettings): List<StructuredRecordTemplate> {
         val raw = diaryFileRepository.readWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_RECORDS)
-        val decoded = if (raw == null) emptyList() else StructuredRecordsCodec.decodeTemplates(raw)
-        return if (decoded.isEmpty()) {
-            val migrated = migrateLegacyDailyEvents(appSettings)
-            if (migrated.isEmpty()) seedTemplates(appSettings) else {
-                saveTemplates(appSettings, migrated)
-                migrated
-            }
-        } else {
-            decoded.sortedBy { it.sortOrder }
+        if (!shouldInitializeStructuredWorkspaceFile(raw)) {
+            return StructuredRecordsCodec.decodeTemplates(requireNotNull(raw)).sortedBy { it.sortOrder }
         }
+
+        val migrated = migrateLegacyDailyEvents(appSettings)
+        val candidate = if (migrated.isNotEmpty()) {
+            migrated
+        } else {
+            defaultTemplatesSupportedBy(loadFields(appSettings))
+        }
+        var resolved = candidate
+        diaryFileRepository.updateWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_RECORDS) { current ->
+            if (current == null) {
+                StructuredRecordsCodec.encodeTemplates(candidate)
+            } else {
+                resolved = StructuredRecordsCodec.decodeTemplates(current).sortedBy { it.sortOrder }
+                current
+            }
+        }
+        return resolved
+    }
+
+    /** Background read: missing records.json means no rows yet, never a seed/migration write. */
+    suspend fun loadTemplatesReadOnly(appSettings: AppSettings): List<StructuredRecordTemplate> {
+        val raw = diaryFileRepository.readWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_RECORDS)
+            ?: return emptyList()
+        return StructuredRecordsCodec.decodeTemplates(raw).sortedBy { it.sortOrder }
+    }
+
+    /**
+     * Widget read that distinguishes a genuinely missing records.json from an intentional empty one.
+     * Before first migration, render legacy rows with their original IDs so existing PendingIntents
+     * still have an entry point that can perform the durable migration on tap.
+     */
+    suspend fun loadTemplatesForWidget(appSettings: AppSettings): List<StructuredRecordTemplate> {
+        val raw = diaryFileRepository.readWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_RECORDS)
+        if (raw != null) return StructuredRecordsCodec.decodeTemplates(raw).sortedBy { it.sortOrder }
+        return appSettings.dailyEventTemplates.mapIndexedNotNull { index, event ->
+            val text = event.text.trim().take(StructuredRecordsCodec.MAX_TEXT_CHARS)
+            if (text.isBlank()) null else StructuredRecordTemplate(
+                id = event.id,
+                name = text.take(StructuredRecordsCodec.MAX_NAME_CHARS),
+                segments = listOf(StructuredRecordSegment.Text(text)),
+                sortOrder = index,
+            )
+        }
+    }
+
+    /** Accepts both current IDs and pre-migration DailyEventTemplate IDs from already-installed widgets. */
+    suspend fun resolveTemplateForWidget(
+        appSettings: AppSettings,
+        templateId: String?,
+    ): StructuredRecordTemplate? {
+        if (templateId.isNullOrBlank()) return null
+        val templates = loadTemplates(appSettings)
+        templates.firstOrNull { it.id == templateId }?.let { current ->
+            return current.takeUnless { it.archived }
+        }
+        if (templates.isEmpty()) return null
+        val legacy = appSettings.dailyEventTemplates.firstOrNull { it.id == templateId } ?: return null
+        val migratedId = "r_migrated_${stableId(legacy.id)}"
+        templates.firstOrNull { it.id == migratedId }?.let { migrated ->
+            return migrated.takeUnless { it.archived }
+        }
+
+        // records.json may already exist even though this particular old widget ID was never
+        // migrated. Build the same deterministic legacy representation, then atomically merge only
+        // the requested template into the latest records file.
+        val migrated = migrateLegacyDailyEvents(appSettings).firstOrNull { it.id == migratedId }
+            ?: return null
+        val canonical = mutateTemplates(appSettings) { current ->
+            if (current.any { it.id == migrated.id }) current
+            else current + migrated.copy(sortOrder = (current.maxOfOrNull { it.sortOrder } ?: -1) + 1)
+        }
+        return canonical.firstOrNull { it.id == migratedId }?.takeUnless { it.archived }
     }
 
     suspend fun saveTemplates(appSettings: AppSettings, templates: List<StructuredRecordTemplate>) {
@@ -134,6 +249,22 @@ class StructuredWorkspaceRepository @Inject constructor(
             StructuredRecordsCodec.FILE_RECORDS,
             StructuredRecordsCodec.encodeTemplates(templates),
         )
+    }
+
+    /** Applies a template transform to the latest on-disk list atomically with cloud-sync writes. */
+    suspend fun mutateTemplates(
+        appSettings: AppSettings,
+        transform: (List<StructuredRecordTemplate>) -> List<StructuredRecordTemplate>,
+    ): List<StructuredRecordTemplate> {
+        loadTemplates(appSettings)
+        var resolved: List<StructuredRecordTemplate>? = null
+        diaryFileRepository.updateWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_RECORDS) { current ->
+            val existing = current?.let(StructuredRecordsCodec::decodeTemplates).orEmpty().sortedBy { it.sortOrder }
+            val updated = transform(existing)
+            resolved = updated
+            if (current != null && updated == existing) current else StructuredRecordsCodec.encodeTemplates(updated)
+        }
+        return requireNotNull(resolved)
     }
 
     suspend fun loadMetrics(appSettings: AppSettings): List<StructuredMetric> {
@@ -150,72 +281,79 @@ class StructuredWorkspaceRepository @Inject constructor(
         )
     }
 
-    /** Adds the default example fields, only when the workspace has no fields at all. */
+    /** Applies a statistics transform atomically with same-root cloud-sync workspace writes. */
+    suspend fun mutateMetrics(
+        appSettings: AppSettings,
+        transform: (List<StructuredMetric>) -> List<StructuredMetric>,
+    ): List<StructuredMetric> {
+        var resolved: List<StructuredMetric>? = null
+        diaryFileRepository.updateWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_STATISTICS) { current ->
+            val existing = current?.let(StructuredRecordsCodec::decodeMetrics).orEmpty().sortedBy { it.sortOrder }
+            val updated = transform(existing)
+            resolved = updated
+            if (current != null && updated == existing) current else StructuredRecordsCodec.encodeMetrics(updated)
+        }
+        return requireNotNull(resolved)
+    }
+
+    /** Lazy initialization used by normal screens. Existing explicit empty arrays remain empty. */
+    suspend fun initializeMissingFiles(appSettings: AppSettings) {
+        loadFields(appSettings)
+        loadTemplates(appSettings)
+    }
+
+    /** Explicit Settings action: merge starter examples back without replacing user definitions. */
     suspend fun seedExamples(appSettings: AppSettings) {
-        if (loadFields(appSettings).isEmpty()) seedFields(appSettings)
-        if (loadTemplates(appSettings).isEmpty()) seedTemplates(appSettings)
+        val fields = mutateFields(appSettings) { current ->
+            val existingIds = current.mapTo(HashSet(current.size)) { it.id }
+            var nextOrder = (current.maxOfOrNull { it.sortOrder } ?: -1) + 1
+            current + DefaultStructuredExamples.FIELDS
+                .filter { it.id !in existingIds }
+                .map { it.copy(sortOrder = nextOrder++) }
+        }
+        val supportedDefaults = defaultTemplatesSupportedBy(fields)
+        mutateTemplates(appSettings) { current ->
+            val existingIds = current.mapTo(HashSet(current.size)) { it.id }
+            var nextOrder = (current.maxOfOrNull { it.sortOrder } ?: -1) + 1
+            current + supportedDefaults
+                .filter { it.id !in existingIds }
+                .map { it.copy(sortOrder = nextOrder++) }
+        }
     }
 
-    /**
-     * Ensures the system-sourced sleep/wake fields exist (used when the auto recorder is enabled).
-     * Never duplicates; leaves user-defined fields untouched.
-     */
-    suspend fun ensureSystemFields(appSettings: AppSettings): List<StructuredField> {
-        val fields = loadFields(appSettings)
+    /** Ensures the system-sourced sleep/wake fields exist without dropping concurrent field edits. */
+    suspend fun ensureSystemFields(appSettings: AppSettings): List<StructuredField> = mutateFields(appSettings) { fields ->
         val existingIds = fields.mapTo(HashSet(fields.size)) { it.id }
-        val systemFields = listOf(
-            StructuredField(
-                id = SYSTEM_FIELD_SLEEP_TIME,
-                name = "睡觉时间",
-                type = StructuredFieldType.TIME,
-                source = StructuredFieldSource.SYSTEM,
-                collector = COLLECTOR_LAST_PHONE_LOCK,
-                sortOrder = fields.size,
-            ),
-            StructuredField(
-                id = SYSTEM_FIELD_WAKE_TIME,
-                name = "起床时间",
-                type = StructuredFieldType.TIME,
-                source = StructuredFieldSource.SYSTEM,
-                collector = COLLECTOR_FIRST_PHONE_UNLOCK,
-                sortOrder = fields.size + 1,
-            ),
-        )
-        val toAdd = systemFields.filter { it.id !in existingIds }
-        if (toAdd.isEmpty()) return fields
-        val merged = (fields + toAdd).sortedBy { it.sortOrder }
-        saveFields(appSettings, merged)
-        return merged
-    }
-
-    private suspend fun seedSettings(appSettings: AppSettings): StructuredWorkspaceSettings {
-        val seeded = StructuredWorkspaceSettings(schemaVersion = 1, markdownProtocolVersion = 1)
-        diaryFileRepository.writeWorkspaceFile(
-            appSettings,
-            StructuredRecordsCodec.FILE_SETTINGS,
-            StructuredRecordsCodec.encodeSettings(seeded),
-        )
-        return seeded
-    }
-
-    private suspend fun seedFields(appSettings: AppSettings): List<StructuredField> {
-        val fields = DefaultStructuredExamples.FIELDS
-        diaryFileRepository.writeWorkspaceFile(
-            appSettings,
-            StructuredRecordsCodec.FILE_FIELDS,
-            StructuredRecordsCodec.encodeFields(fields),
-        )
-        return fields
-    }
-
-    private suspend fun seedTemplates(appSettings: AppSettings): List<StructuredRecordTemplate> {
-        val templates = DefaultStructuredExamples.TEMPLATES
-        diaryFileRepository.writeWorkspaceFile(
-            appSettings,
-            StructuredRecordsCodec.FILE_RECORDS,
-            StructuredRecordsCodec.encodeTemplates(templates),
-        )
-        return templates
+        val additions = buildList {
+            if (SYSTEM_FIELD_SLEEP_TIME !in existingIds) {
+                add(
+                    StructuredField(
+                        id = SYSTEM_FIELD_SLEEP_TIME,
+                        name = "睡觉时间",
+                        type = StructuredFieldType.TIME,
+                        source = StructuredFieldSource.SYSTEM,
+                        collector = COLLECTOR_LAST_PHONE_LOCK,
+                    ),
+                )
+            }
+            if (SYSTEM_FIELD_WAKE_TIME !in existingIds) {
+                add(
+                    StructuredField(
+                        id = SYSTEM_FIELD_WAKE_TIME,
+                        name = "起床时间",
+                        type = StructuredFieldType.TIME,
+                        source = StructuredFieldSource.SYSTEM,
+                        collector = COLLECTOR_FIRST_PHONE_UNLOCK,
+                    ),
+                )
+            }
+        }
+        if (additions.isEmpty()) {
+            fields
+        } else {
+            var nextOrder = (fields.maxOfOrNull { it.sortOrder } ?: -1) + 1
+            fields + additions.map { it.copy(sortOrder = nextOrder++) }
+        }
     }
 
     /** Migrates legacy daily-event templates without rewriting historical Markdown. */
@@ -224,9 +362,8 @@ class StructuredWorkspaceRepository @Inject constructor(
     ): List<StructuredRecordTemplate> {
         val legacy = appSettings.dailyEventTemplates
         if (legacy.isEmpty()) return emptyList()
-        val fields = loadFields(appSettings).toMutableList()
-        val existingFieldIds = fields.mapTo(HashSet(fields.size)) { it.id }
         val templates = ArrayList<StructuredRecordTemplate>(legacy.size)
+        val fieldsToMerge = ArrayList<StructuredField>()
         var wordIndex = 0
         val xxPattern = Regex("xx", RegexOption.IGNORE_CASE)
         for (event in legacy) {
@@ -238,16 +375,12 @@ class StructuredWorkspaceRepository @Inject constructor(
                 segments += StructuredRecordSegment.Text(text)
             } else {
                 val fieldId = "f_migrated_word_${wordIndex++}_${stableId(event.id)}"
-                if (fieldId !in existingFieldIds) {
-                    fields += StructuredField(
-                        id = fieldId,
-                        name = "文字",
-                        type = StructuredFieldType.WORD,
-                        source = StructuredFieldSource.MANUAL,
-                        sortOrder = fields.size,
-                    )
-                    existingFieldIds += fieldId
-                }
+                fieldsToMerge += StructuredField(
+                    id = fieldId,
+                    name = "文字",
+                    type = StructuredFieldType.WORD,
+                    source = StructuredFieldSource.MANUAL,
+                )
                 val parts = xxPattern.split(text)
                 for (index in parts.indices) {
                     if (parts[index].isNotEmpty()) segments += StructuredRecordSegment.Text(parts[index])
@@ -264,7 +397,15 @@ class StructuredWorkspaceRepository @Inject constructor(
             }
         }
         if (templates.isEmpty()) return emptyList()
-        saveFields(appSettings, fields)
+        if (fieldsToMerge.isNotEmpty()) {
+            mutateFields(appSettings) { current ->
+                val existingIds = current.mapTo(HashSet(current.size)) { it.id }
+                var nextOrder = (current.maxOfOrNull { it.sortOrder } ?: -1) + 1
+                current + fieldsToMerge
+                    .filter { it.id !in existingIds }
+                    .map { it.copy(sortOrder = nextOrder++) }
+            }
+        }
         return templates
     }
 

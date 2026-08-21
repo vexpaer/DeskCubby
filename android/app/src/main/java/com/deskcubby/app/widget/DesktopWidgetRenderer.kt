@@ -34,6 +34,8 @@ import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DateRecordRepository
 import com.deskcubby.app.data.repository.PoetryRepository
 import com.deskcubby.app.data.repository.ThoughtRepository
+import com.deskcubby.app.data.structuredrecords.StructuredRecordTemplate
+import com.deskcubby.app.data.structuredrecords.StructuredWorkspaceRepository
 import com.deskcubby.app.data.sync.AppCloudSyncService
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncManualQueueState
@@ -75,6 +77,7 @@ class DesktopWidgetRenderer @Inject constructor(
     private val thoughtRepository: ThoughtRepository,
     private val dateRecordRepository: DateRecordRepository,
     private val poetryRepository: PoetryRepository,
+    private val structuredWorkspaceRepository: StructuredWorkspaceRepository,
     private val cloudSyncService: AppCloudSyncService,
     private val gameRenderer: DesktopWidgetGameRenderer,
     private val appPanelRenderer: DesktopWidgetAppPanelRenderer,
@@ -104,6 +107,12 @@ class DesktopWidgetRenderer @Inject constructor(
                 loadOrNull { dateRecordRepository.records.first() }.orEmpty()
             }
             val poem = async { loadOrNull { poetryRepository.poem.first() } }
+            val structuredTemplates = async {
+                if (settings.diaryTreeUri == null) emptyList()
+                else loadOrNull { structuredWorkspaceRepository.loadTemplatesForWidget(settings) }
+                    .orEmpty()
+                    .filterNot { it.archived }
+            }
             val resolvedPoem = poem.await()
             val resolvedDiaries = diaries.await()
             DesktopWidgetContentSnapshot(
@@ -111,6 +120,7 @@ class DesktopWidgetRenderer @Inject constructor(
                 recentThoughts = recentThoughts.await(),
                 thoughtCount = thoughtCount.await(),
                 dateRecords = dateRecords.await(),
+                structuredTemplates = structuredTemplates.await(),
                 poemContent = resolvedPoem?.content
                     ?: localized(settings, "打开应用查看", "Open the app to view"),
                 poemSource = resolvedPoem?.source.orEmpty(),
@@ -596,7 +606,7 @@ class DesktopWidgetRenderer @Inject constructor(
             )
             "daily_records" -> DesktopWidgetText(
                 localized(settings, "结构化记录", "Structured records"),
-                translate("${settings.dailyEventTemplates.size} 个模板", "${settings.dailyEventTemplates.size} templates", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+                translate("${snapshot.structuredTemplates.size} 个模板", "${snapshot.structuredTemplates.size} templates", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
                 route = Routes.DAILY_RECORDS_TODAY,
             )
             "meal_photos" -> DesktopWidgetText(
@@ -1089,9 +1099,9 @@ class DesktopWidgetRenderer @Inject constructor(
                 )
             }
             "daily_records" -> {
-                rows = settings.dailyEventTemplates.take(4).map { template ->
+                rows = snapshot.structuredTemplates.take(maxRows).map { template ->
                     ExpandedWidgetRow(
-                        template.text.replace(Regex("\\s+"), " ").trim(),
+                        template.name,
                         DesktopWidgetInteractionActivity.dailyRecordPendingIntent(
                             context,
                             appWidgetId,
@@ -1374,6 +1384,7 @@ class DesktopWidgetRenderer @Inject constructor(
         val recentThoughts: List<FlashThoughtEntity>,
         val thoughtCount: Int,
         val dateRecords: List<DateRecordEntity>,
+        val structuredTemplates: List<StructuredRecordTemplate>,
         val poemContent: String,
         val poemSource: String,
         val randomDiary: DiaryIndexEntity?,
