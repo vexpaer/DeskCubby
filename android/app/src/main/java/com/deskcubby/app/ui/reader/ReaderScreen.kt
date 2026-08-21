@@ -10,6 +10,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.Build
 import androidx.activity.compose.BackHandler
@@ -118,6 +119,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -273,6 +275,8 @@ private fun ReaderLibrary(
     var pendingDelete by remember { mutableStateOf<ReaderBook?>(null) }
     var coverBook by remember { mutableStateOf<ReaderBook?>(null) }
     var showShelfSettings by remember { mutableStateOf(false) }
+    val configuration = LocalConfiguration.current
+    val coverColumns = if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) 5 else 2
     val coverLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val selectedBook = coverBook
         if (selectedBook != null && uri != null) {
@@ -373,7 +377,7 @@ private fun ReaderLibrary(
             }
         } else {
             LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
+                columns = GridCells.Fixed(coverColumns),
                 modifier = Modifier.fillMaxSize().padding(inner),
                 contentPadding = PaddingValues(
                     start = 14.dp,
@@ -1148,7 +1152,7 @@ private fun ReaderShelfSettingsDialog(
                         selected = draft.libraryLayout == ReaderLibraryLayout.GRID,
                         onClick = { draft = draft.copy(libraryLayout = ReaderLibraryLayout.GRID) },
                         leadingIcon = { Icon(Icons.Outlined.GridView, contentDescription = null) },
-                        label = { Text(tr("两列封面", "Two-column covers")) },
+                        label = { Text(tr("封面", "Covers")) },
                     )
                 }
                 if (draft.libraryLayout == ReaderLibraryLayout.GRID) {
@@ -1161,8 +1165,8 @@ private fun ReaderShelfSettingsDialog(
                             Text(tr("显示封面下方书名", "Show titles below covers"))
                             Text(
                                 tr(
-                                    "关闭后隐藏两列封面下方的书名；无图片的 TXT 默认封面仍会显示书名。",
-                                    "Hide titles below the two-column covers. TXT books without an image still show their title on the default cover.",
+                                    "关闭后隐藏封面下方的书名；无图片的 TXT 默认封面仍会显示书名。",
+                                    "Hide titles below covers. TXT books without an image still show their title on the default cover.",
                                 ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
