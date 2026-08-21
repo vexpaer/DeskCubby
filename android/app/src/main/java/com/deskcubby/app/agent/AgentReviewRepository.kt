@@ -62,8 +62,10 @@ data class AgentReviewToolEvent(
 class AgentReviewRepository @Inject constructor(
     private val dao: AgentDao,
     private val registry: AgentToolRegistry,
+    private val recoveryStore: AgentRecoveryStore,
 ) : AgentReviewStore {
     private val undoMutex = Mutex()
+
     fun observeRuns(): Flow<List<AgentReviewRun>> = dao.observeRuns().map { runs ->
         runs.map(AgentRunEntity::toReviewRun)
     }
@@ -75,6 +77,9 @@ class AgentReviewRepository @Inject constructor(
         dao.observeToolEvents(runId).map { items -> items.map(AgentToolEventEntity::toReviewEvent) }
 
     override suspend fun startRun(request: AgentRunRequest) = withContext(Dispatchers.IO) {
+        // Process recovery keeps the original run and tool ledger. Re-enter RUNNING instead of
+        // deleting the row and cascading away proof of already committed side effects.
+        if (recoveryStore.resumeRunIfExists(request.runId)) return@withContext
         dao.insertRun(
             AgentRunEntity(
                 runId = request.runId,
@@ -125,6 +130,15 @@ class AgentReviewRepository @Inject constructor(
         call: AIToolCall,
         definition: AgentToolDefinition?,
     ): Long = withContext(Dispatchers.IO) {
+        recoveryStore.toolCheckpoint(runId, sequence)?.let { existing ->
+            if (existing.toolName != call.name) {
+                throw AgentToolException(
+                    "RECOVERY_CONFLICT",
+                    "Recovered tool sequence no longer matches the persisted execution ledger.",
+                )
+            }
+            return@withContext existing.id
+        }
         dao.insertToolEvent(
             AgentToolEventEntity(
                 runId = runId,
@@ -259,7 +273,7 @@ class AgentReviewRepository @Inject constructor(
         const val MAX_SOURCES_JSON_CHARS = 2_048
         const val MAX_TARGET_CHARS = 1_024
         const val MAX_SUMMARY_CHARS = 4_096
-        const val MAX_RESULT_SUMMARY_CHARS = 8_192
+        const val MAX_RESULT_SUMMARY_CHARS = 256 * 1024
         const val MAX_ARGUMENT_SUMMARY_CHARS = 8_192
         const val MAX_REVIEW_CONTENT_CHARS = 256 * 1024
         const val MAX_UNDO_PAYLOAD_CHARS = 512 * 1024

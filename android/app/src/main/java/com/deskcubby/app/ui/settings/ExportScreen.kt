@@ -3,6 +3,8 @@ package com.deskcubby.app.ui.settings
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -30,8 +32,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.deskcubby.app.data.export.DiaryZipRestoreResult
 import com.deskcubby.app.data.export.ExportSelection
 import com.deskcubby.app.data.export.ZipExportResult
 import com.deskcubby.app.data.model.AppLanguage
@@ -69,11 +73,16 @@ fun ExportScreen(
     zipExport: ZipExportState,
     onExport: (ExportSelection) -> Unit,
     onConsumeResult: () -> Unit,
+    restoreViewModel: DiaryZipRestoreViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
     val language = LocalAppLanguage.current
     var selection by remember { mutableStateOf(ExportSelection()) }
     val english = language == AppLanguage.ENGLISH
+    val zipRestore by restoreViewModel.state.collectAsStateWithLifecycle()
+    val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(restoreViewModel::restore)
+    }
 
     zipExport.result?.let { result ->
         ExportResultDialog(
@@ -83,6 +92,13 @@ fun ExportScreen(
                 context.startActivity(shareZipIntent(context, result))
             },
             onDismiss = onConsumeResult,
+        )
+    }
+    zipRestore.result?.let { result ->
+        RestoreResultDialog(
+            result = result,
+            warning = zipRestore.warning,
+            onDismiss = restoreViewModel::consumeResult,
         )
     }
 
@@ -157,12 +173,12 @@ fun ExportScreen(
                     Text(
                         text = tr(
                             "README.md\n" +
-                                "diaries/      日记 markdown\n" +
+                                "diaries/      日记 markdown + .deskcubby 工作区元数据\n" +
                                 "media/        媒体文件\n" +
                                 "notes/        笔记 markdown（保留子目录）\n" +
                                 "data/         结构化数据 data.json（诗词、小巧思、收藏、日期记录、阅读进度、游戏、Vault 加密、使用统计、Agent 对话、设置与订阅）",
                             "README.md\n" +
-                                "diaries/      Diary markdown\n" +
+                                "diaries/      Diary markdown + .deskcubby workspace metadata\n" +
                                 "media/        Media files\n" +
                                 "notes/        Note markdown (subfolders kept)\n" +
                                 "data/         Structured data.json (poems, thoughts, bookmarks, date records, reading progress, games, encrypted Vault, usage stats, Agent chats, settings)",
@@ -175,11 +191,57 @@ fun ExportScreen(
         }
 
         item {
+            GlassPanel(
+                modifier = Modifier.fillMaxWidth(),
+                role = PanelRole.STANDARD,
+                padding = PaddingValues(16.dp),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        tr("恢复日记 workspace", "Restore diary workspace"),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        tr(
+                            "从 DeskCubby 导出的 zip 恢复 diaries/ 下的 Markdown 与 .deskcubby 四个元数据文件。不会覆盖媒体、笔记或 data/data.json；请先在设置中选好日记目录。",
+                            "Restore Markdown plus the four .deskcubby metadata files under diaries/ from a DeskCubby export zip. Media, notes, and data/data.json are not overwritten; choose a diary folder first.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(
+                        onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) },
+                        enabled = !zipRestore.busy && !zipExport.busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(tr("选择 zip 并恢复", "Choose zip and restore"))
+                    }
+                    if (zipRestore.busy) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            AppLoadingIndicator(size = 20.dp, strokeWidth = 2.dp)
+                            Text(tr("正在校验并恢复…", "Validating and restoring…"))
+                        }
+                    }
+                    zipRestore.error?.let { error ->
+                        Text(
+                            tr("恢复失败：", "Restore failed: ") + error,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
             val busy = zipExport.busy
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = { onExport(selection) },
-                    enabled = !busy && selection.anySelected,
+                    enabled = !busy && !zipRestore.busy && selection.anySelected,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(tr("导出为 zip", "Export as zip"))
@@ -304,6 +366,41 @@ private fun ExportResultDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(tr("关闭", "Close")) }
         },
+    )
+}
+
+@Composable
+private fun RestoreResultDialog(
+    result: DiaryZipRestoreResult,
+    warning: String?,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("恢复完成", "Restore complete")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    tr(
+                        "已恢复 ${result.diaryMarkdownCount} 个 Markdown 与 ${result.workspaceMetadataCount} 个 workspace 元数据文件。",
+                        "Restored ${result.diaryMarkdownCount} Markdown file(s) and ${result.workspaceMetadataCount} workspace metadata file(s).",
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    tr(
+                        "恢复后已重新扫描结构化记录索引。",
+                        "The structured-record index was rescanned after restore.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                warning?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(tr("完成", "Done")) } },
     )
 }
 

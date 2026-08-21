@@ -60,7 +60,11 @@ data class AiTaskQueueEntity(
 /** A persisted, user-readable Agent approval that survives process death and is re-shown after restart. */
 @Entity(
     tableName = "agent_approval_requests",
-    indices = [Index("runId"), Index("status")],
+    indices = [
+        Index("runId"),
+        Index("status"),
+        Index(value = ["requestId"], unique = true),
+    ],
 )
 data class AgentApprovalRequestEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

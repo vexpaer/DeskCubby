@@ -25,13 +25,7 @@ import kotlinx.coroutines.sync.withLock
  * awaiting the user. This means a process kill during the wait neither loses the approval nor
  * leaves an ownerless RUNNING task — after restart the pending request is re-shown from the DB and
  * the decision is applied durably.
- *
- * While the process is alive the decision completes a live [CompletableDeferred] (the original fast
- * path); when the app was restarted mid-wait there is no waiter, so the durable resolution applies
- * directly to the task row (reject -> FAILED, approve -> re-queue to resume the run).
  */
-// Bound in AppModule via a @Provides; the nullable database (with lazy DAOs) lets tests that only
-// exercise the FULL_AUTO path (which never touches the durable store) construct this without Room.
 class AgentPermissionManager(
     database: AppDatabase? = null,
 ) : AgentApprovalGateway {
@@ -40,14 +34,9 @@ class AgentPermissionManager(
         val decision: CompletableDeferred<AgentApprovalDecision>,
     )
 
-    // Resolved lazily so tests that only exercise the FULL_AUTO path (which never touches the
-    // durable store) can construct this manager without a Room database.
     private val approvalDao: AgentApprovalDao by lazy { requireNotNull(database).agentApprovalDao() }
     private val taskDao: AiTaskDao by lazy { requireNotNull(database).aiTaskDao() }
     private val lock = Any()
-    // Serializes the durable RUNNING -> WAITING_APPROVAL transition against a concurrent cancel's
-    // RUNNING/WAITING -> CANCEL_REQUESTED transition, so a cancel can never be overwritten back to
-    // WAITING_APPROVAL (which would strand the task awaiting a decision the cancel already rejected).
     private val stateMutex = kotlinx.coroutines.sync.Mutex()
     private var waiting: WaitingApproval? = null
     private val mutablePending = MutableStateFlow<AgentApprovalRequest?>(null)
@@ -62,7 +51,6 @@ class AgentPermissionManager(
         const val STATUS_REJECTED = "REJECTED"
     }
 
-    /** Provided by the AI task queue so a durable approve-after-restart can wake the worker. */
     fun attachResolutionScheduler(scheduler: () -> Unit) {
         resolutionScheduler = scheduler
     }
@@ -75,10 +63,7 @@ class AgentPermissionManager(
         taskIdByRunId.remove(runId)
     }
 
-    /** Re-surfaces the oldest persisted pending approval after a process restart, ignoring requests
-     * that belong to tasks which are no longer awaiting approval (e.g. a run that died FAILED or was
-     * cancelled while a PENDING row was left dangling). Dead rows are marked REJECTED so they never
-     * accumulate or re-surface. */
+    /** Re-surfaces the oldest persisted pending approval after a process restart. */
     suspend fun refreshPendingFromDb() {
         val pendings = approvalDao.getPending(STATUS_PENDING)
         var valid: AgentApprovalRequestEntity? = null
@@ -108,8 +93,27 @@ class AgentPermissionManager(
             requestId = request.requestId.ifBlank { UUID.randomUUID().toString() },
         )
         val taskId = taskIdByRunId[request.runId]
-        // Persist the durable request first: a kill while awaiting must not lose the approval.
-        if (approvalDao.getByRequestId(normalized.requestId)?.status != STATUS_PENDING) {
+
+        // A recovered tool sequence uses a deterministic request id. Reuse the already durable
+        // decision instead of replacing APPROVED/REJECTED with a fresh PENDING request.
+        val existing = approvalDao.getByRequestId(normalized.requestId)
+        if (existing != null) {
+            if (existing.runId != normalized.runId || existing.toolName != normalized.toolName) {
+                throw AgentToolException(
+                    "APPROVAL_RECOVERY_CONFLICT",
+                    "Recovered approval does not match the persisted tool execution.",
+                )
+            }
+            when (existing.status) {
+                STATUS_APPROVED -> return AgentApprovalDecision.APPROVE
+                STATUS_REJECTED -> return AgentApprovalDecision.REJECT
+                STATUS_PENDING -> Unit
+                else -> throw AgentToolException(
+                    "APPROVAL_RECOVERY_CONFLICT",
+                    "Recovered approval has an unknown durable status.",
+                )
+            }
+        } else {
             approvalDao.insert(
                 AgentApprovalRequestEntity(
                     requestId = normalized.requestId,
@@ -122,16 +126,15 @@ class AgentPermissionManager(
                     argumentsSummary = normalized.argumentsSummary,
                     beforeContent = normalized.before,
                     afterContent = normalized.after,
-                    executionToken = "",
+                    // The execution identity itself is durable even though the concrete mutation
+                    // token is stored later in agent_mutations when the side effect is claimed.
+                    executionToken = normalized.requestId,
                     status = STATUS_PENDING,
                     createdAt = System.currentTimeMillis(),
                 ),
             )
         }
-        // Reflect the durable wait so the task is never "ownerless RUNNING". The RUNNING ->
-        // WAITING_APPROVAL transition runs under the same Mutex a concurrent cancelTask uses, so
-        // the cancel can never overwrite this back to WAITING_APPROVAL and strand the task awaiting
-        // a decision the cancel already intended to reject.
+
         val canceled = stateMutex.withLock {
             val current = taskId?.let { taskDao.getById(it) }
             when (current?.state) {
@@ -139,6 +142,7 @@ class AgentPermissionManager(
                     taskDao.markWaitingApproval(taskId!!, AiTaskStateEntity.WAITING_APPROVAL)
                     false
                 }
+                AiTaskStateEntity.WAITING_APPROVAL -> false
                 AiTaskStateEntity.CANCEL_REQUESTED,
                 AiTaskStateEntity.CANCELED,
                 -> true
@@ -146,13 +150,10 @@ class AgentPermissionManager(
             }
         }
         if (canceled) {
-            // The user cancelled this task between enqueue and approval (or the task is already
-            // terminal). Mark the pending row rejected and unwind the executor so it does not
-            // continue a cancelled run.
             try {
                 withStateLock { discardPendingNow(taskId) }
             } catch (_: Exception) {
-                // Cleanup is best-effort; the APPROVAL_CANCELED unwind below is what matters.
+                // Cleanup is best-effort; the unwind below is what matters.
             }
             throw AgentToolException(
                 "APPROVAL_CANCELED",
@@ -179,24 +180,18 @@ class AgentPermissionManager(
                     mutablePending.value = null
                 }
             }
-            // A live approve/reject must return the task to RUNNING (from WAITING_APPROVAL) so the
-            // agent run can continue and the NEXT mutation tool can authorize again. Without this,
-            // a run needing more than one approval would find the row still in WAITING_APPROVAL and
-            // throw APPROVAL_CANCELED on the second approval, killing the whole run. Restoring under
-            // stateMutex keeps it mutually exclusive with a concurrent cancel.
             if (taskId != null) {
                 try {
                     stateMutex.withLock { resumeAfterApprovalLocked(taskId) }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    // The resume is best-effort; the run has already obtained its decision.
+                    // The durable decision remains authoritative.
                 }
             }
         }
     }
 
-    /** Caller holds [stateMutex]. Restores a waiting task to RUNNING unless it was cancelled/terminal. */
     private suspend fun resumeAfterApprovalLocked(taskId: Long) {
         val current = taskDao.getById(taskId)?.state ?: return
         if (current == AiTaskStateEntity.WAITING_APPROVAL) {
@@ -212,7 +207,6 @@ class AgentPermissionManager(
 
     fun reject(requestId: String) = decide(requestId, AgentApprovalDecision.REJECT)
 
-    /** Rejects the pending approval (if any) for a task that was cancelled by the user. */
     fun rejectPendingForTask(taskId: Long) {
         val target = synchronized(lock) {
             waiting?.takeIf { request ->
@@ -222,22 +216,9 @@ class AgentPermissionManager(
         if (target != null) decide(target.requestId, AgentApprovalDecision.REJECT)
     }
 
-    /**
-     * Runs a cancel-side state flip under the same Mutex [authorize] uses to transition RUNNING ->
-     * WAITING_APPROVAL. This makes the cancel's durable state flip mutually exclusive with the
-     * approval wait marker, closing the race where a cancel could be overwritten back to
-     * WAITING_APPROVAL (and the task stranded awaiting a decision the cancel already rejected).
-     */
     suspend fun <T> withStateLock(block: suspend () -> T): T = stateMutex.withLock { block() }
 
-    /**
-     * Cleans up any leftover PENDING approval for a task that reached a terminal state (FAILED /
-     * CANCELED) without a decision. Leaves the durable row marked REJECTED so it is never surfaced
-     * again, and completes a live waiter if one is blocked on this task.
-     */
     suspend fun discardPendingForTask(taskId: Long) {
-        // Live-waiter completion must not run under the state Mutex (decide() launches on its own
-        // scope and touches the same resolve path); only the durable-row cleanup is serialized.
         val live = synchronized(lock) {
             waiting?.takeIf { request -> taskIdByRunId[request.request.runId] == taskId }
         }
@@ -248,7 +229,6 @@ class AgentPermissionManager(
         withStateLock { discardPendingNow(taskId) }
     }
 
-    /** Cleans up a task's pending approval row; caller holds [stateMutex]. */
     private suspend fun discardPendingNow(taskId: Long?) {
         if (taskId == null) return
         val pending = approvalDao.getPendingByTaskId(taskId, STATUS_PENDING) ?: return
@@ -281,13 +261,14 @@ class AgentPermissionManager(
         approvalDao.markDecided(requestId, status, now)
         if (hadLiveWaiter) return
 
-        // No live waiter: the process was restarted while waiting. Apply the decision durably.
+        // No live waiter means the process was restarted while waiting. Approve re-queues the same
+        // runId; AgentRecoveryStore + the tool ledger prevent committed sequences from executing
+        // twice when the runtime reconstructs its transcript.
         val taskId = request.taskId
         if (taskId != null) {
             val task = taskDao.getById(taskId)
             if (task != null && task.state == AiTaskStateEntity.WAITING_APPROVAL) {
                 if (decision == AgentApprovalDecision.REJECT) {
-                    // The mutation never executed; failing with USER_REJECTED is data-safe.
                     taskDao.markFailed(
                         id = taskId,
                         failed = AiTaskStateEntity.FAILED,
@@ -297,8 +278,6 @@ class AgentPermissionManager(
                         completedAt = now,
                     )
                 } else {
-                    // Resume: re-queue so the worker re-runs the agent from its durable
-                    // conversation. Prior completed side effects may re-run (at-least-once).
                     taskDao.requeueWaitingApproval(
                         id = taskId,
                         queued = AiTaskStateEntity.QUEUED,

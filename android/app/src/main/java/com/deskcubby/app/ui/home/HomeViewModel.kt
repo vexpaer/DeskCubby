@@ -10,6 +10,8 @@ import com.deskcubby.app.data.local.DiaryIndexEntity
 import com.deskcubby.app.data.local.FlashThoughtEntity
 import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.local.AiTaskTypeEntity
+import com.deskcubby.app.data.media.GalleryOriginalStager
+import com.deskcubby.app.data.media.GalleryOriginalStaging
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.repository.DailyPoem
@@ -39,7 +41,7 @@ import kotlinx.coroutines.sync.withLock
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
-    @ApplicationContext context: Context,
+    @ApplicationContext private val context: Context,
     diaryIndexDao: DiaryIndexDao,
     private val thoughtRepository: ThoughtRepository,
     dateRecordRepository: DateRecordRepository,
@@ -127,13 +129,8 @@ class HomeViewModel @Inject constructor(
     fun savePoem(poem: DailyPoem, language: AppLanguage) {
         viewModelScope.launch {
             try {
-                // Prefer the whole origin poem when the API provided it.
                 poetryBookRepository.create(poem.fullContent.ifBlank { poem.content }, poem.source)
-                _message.value = if (language == AppLanguage.ENGLISH) {
-                    "Added to poetry book"
-                } else {
-                    "已加入诗词本"
-                }
+                _message.value = if (language == AppLanguage.ENGLISH) "Added to poetry book" else "已加入诗词本"
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -172,6 +169,7 @@ class HomeViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             var sourceReleased = false
+            var galleryStaging: GalleryOriginalStaging? = null
             fun releaseSource() {
                 if (!sourceReleased) {
                     sourceReleased = true
@@ -179,6 +177,21 @@ class HomeViewModel @Inject constructor(
                 }
             }
             try {
+                if (settings.saveOriginalToGallery) {
+                    galleryStaging = try {
+                        GalleryOriginalStager.stage(context, uri, "$category-original")
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        _message.value = error.message ?: if (settings.appLanguage == AppLanguage.ENGLISH) {
+                            "Could not stage the original photo"
+                        } else {
+                            "原图暂存失败，未添加照片"
+                        }
+                        return@launch
+                    }
+                }
+
                 val media = try {
                     mealUploadMutex.withLock {
                         runMealPhotoDurableWrite(
@@ -190,6 +203,8 @@ class HomeViewModel @Inject constructor(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
+                    GalleryOriginalStager.discard(galleryStaging)
+                    galleryStaging = null
                     _message.value = error.message ?: if (settings.appLanguage == AppLanguage.ENGLISH) {
                         "Could not add the photo"
                     } else {
@@ -198,8 +213,13 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
 
-                // The interaction is complete once the image and Markdown are durable. Release the
-                // camera source and re-enable the meal buttons before optional AI/index follow-up.
+                galleryStaging?.let { staged ->
+                    GalleryOriginalStager.enqueue(context, staged)
+                    galleryStaging = null
+                }
+
+                // Source can be released only after the original (when requested), media file,
+                // Markdown and durable gallery worker input all live in app-owned storage.
                 releaseSource()
                 _message.value = if (settings.appLanguage == AppLanguage.ENGLISH) {
                     "$category photo added to today's diary"
@@ -223,7 +243,6 @@ class HomeViewModel @Inject constructor(
                         _message.value = "${_message.value} · 热量估算入队失败：${error.message.orEmpty()}"
                     }
                 }
-                // Index refresh is best-effort background follow-up and must not keep the upload UI busy.
                 try {
                     diaryFileRepository.scan(settings)
                 } catch (cancelled: CancellationException) {
@@ -231,16 +250,21 @@ class HomeViewModel @Inject constructor(
                 } catch (_: Exception) {
                     // The next normal scan will refresh the index.
                 }
-                // Gallery copy and reverse-geocode place lookup are also background-only; they must
-                // never extend the "adding photo" busy state beyond the durable image+Markdown write.
+                // Gallery copy is handled by the durable worker. Place-name enrichment no longer
+                // receives a temporary camera URI and therefore remains safe after source release.
                 try {
-                    diaryFileRepository.enrichImportedMedia(uri, media, settings)
+                    diaryFileRepository.enrichImportedMedia(
+                        sourceUri = null,
+                        media = media,
+                        settings = settings.copy(saveOriginalToGallery = false),
+                    )
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    // Best-effort enrichment; the image and Markdown are already durable.
+                    // Best-effort place-name enrichment; durable user data already exists.
                 }
             } finally {
+                GalleryOriginalStager.discard(galleryStaging)
                 releaseSource()
             }
         }
@@ -305,7 +329,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    /** "撤回一次": restores the local diary files changed by the most recent sync run. */
     fun undoLastCloudSync(onDone: (Int) -> Unit = {}) {
         viewModelScope.launch {
             try {
