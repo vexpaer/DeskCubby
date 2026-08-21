@@ -58,6 +58,21 @@ data class CloudSyncRunResult(
         get() = reports.count { it.outcome == CloudSyncItemOutcome.CONFLICT_COPY_SAVED }
 }
 
+internal fun recordSyncContentBatches(contents: Set<CloudSyncContent>): List<Set<CloudSyncContent>> {
+    val dependencies = linkedSetOf<CloudSyncContent>()
+    if (CloudSyncContent.THOUGHT_CATEGORIES in contents) {
+        dependencies += CloudSyncContent.THOUGHT_CATEGORIES
+    }
+    if (CloudSyncContent.POETRY_CATEGORIES in contents) {
+        dependencies += CloudSyncContent.POETRY_CATEGORIES
+    }
+    val remaining = contents - dependencies
+    return buildList {
+        if (dependencies.isNotEmpty()) add(dependencies)
+        if (remaining.isNotEmpty()) add(remaining)
+    }
+}
+
 class CloudSyncEngine(
     private val localStore: CloudSyncLocalStore,
     private val remoteStoreFactory: CloudSyncRemoteStoreFactory,
@@ -125,16 +140,27 @@ class CloudSyncEngine(
             if (missing.isNotEmpty()) {
                 throw CloudSyncConfigurationException(missingRecordAdaptersMessage(missing))
             }
-            engine.syncContents(
-                config = config,
-                validated = validated,
-                contents = recordContents,
-                limits = limits,
-                remoteStore = remoteStore,
-                mode = mode,
-            ) { progress ->
-                onProgress(progress)
+            val reports = ArrayList<CloudSyncItemReport>()
+            var completedContents = 0
+            recordSyncContentBatches(recordContents).forEach { batch ->
+                reports += engine.syncContents(
+                    config = config,
+                    validated = validated,
+                    contents = batch,
+                    limits = limits,
+                    remoteStore = remoteStore,
+                    mode = mode,
+                ) { progress ->
+                    onProgress(
+                        progress.copy(
+                            completedObjects = completedContents + progress.completedObjects,
+                            totalObjects = recordContents.size,
+                        ),
+                    )
+                }
+                completedContents += batch.size
             }
+            reports
         }
         val reports = fileReports + recordReports
         return CloudSyncRunResult(
@@ -350,8 +376,8 @@ class CloudSyncEngine(
             val bytes = readRemote(remoteStore, remote, limits)
             return when (
                 localStore.writeRemote(
-                    key,
-                    bytes,
+                    key = key,
+                    bytes = bytes,
                     remote.sha256,
                     remote.lastModifiedMillis,
                     expectedLocalSha256 = local.sha256,
@@ -371,8 +397,8 @@ class CloudSyncEngine(
         val bytes = readRemote(remoteStore, remote, limits)
         return when (
             localStore.writeRemote(
-                key,
-                bytes,
+                key = key,
+                bytes = bytes,
                 remote.sha256,
                 remote.lastModifiedMillis,
                 // Null means "must be absent"; because local exists this deliberately preserves

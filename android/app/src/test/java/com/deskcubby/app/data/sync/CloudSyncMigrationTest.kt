@@ -1,5 +1,6 @@
 package com.deskcubby.app.data.sync
 
+import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent
 import com.deskcubby.app.data.model.CloudSyncContentKind
 import org.junit.Assert.assertEquals
@@ -16,6 +17,54 @@ class CloudSyncMigrationTest {
         assertFalse(CloudSyncContent.entries.any { it.name == "JSON_BACKUP" })
         assertEquals(selected, selected)
         assertTrue(CloudSyncContent.DIARIES in CloudSyncContent.entries)
+    }
+
+    @Test
+    fun legacyParentSelectionsGainCategoryDependenciesAtRuntime() {
+        val validated = CloudSyncConfig(
+            id = "legacy",
+            name = "Legacy",
+            endpointUrl = "https://example.com",
+            selectedContents = setOf(
+                CloudSyncContent.THOUGHTS,
+                CloudSyncContent.POEMS,
+            ),
+        ).validateForSync()
+
+        assertEquals(
+            setOf(
+                CloudSyncContent.THOUGHTS,
+                CloudSyncContent.THOUGHT_CATEGORIES,
+                CloudSyncContent.POEMS,
+                CloudSyncContent.POETRY_CATEGORIES,
+            ),
+            validated.source.selectedContents,
+        )
+    }
+
+    @Test
+    fun categoryDependenciesSyncBeforeDependentRecords() {
+        val batches = recordSyncContentBatches(
+            setOf(
+                CloudSyncContent.THOUGHTS,
+                CloudSyncContent.THOUGHT_CATEGORIES,
+                CloudSyncContent.POEMS,
+                CloudSyncContent.POETRY_CATEGORIES,
+                CloudSyncContent.DATE_RECORDS,
+            ),
+        )
+
+        assertEquals(2, batches.size)
+        assertEquals(
+            setOf(
+                CloudSyncContent.THOUGHT_CATEGORIES,
+                CloudSyncContent.POETRY_CATEGORIES,
+            ),
+            batches.first(),
+        )
+        assertTrue(CloudSyncContent.THOUGHTS in batches.last())
+        assertTrue(CloudSyncContent.POEMS in batches.last())
+        assertTrue(CloudSyncContent.DATE_RECORDS in batches.last())
     }
 
     @Test

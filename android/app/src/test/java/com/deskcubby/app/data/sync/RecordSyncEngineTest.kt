@@ -188,7 +188,9 @@ class RecordSyncEngineTest {
 
     /** Mirrors [RecordSyncEngine.stableRecordId]: identity is derived from the local key only. */
     private fun recordIdFor(localKey: String): String =
-        "record-" + sha256("record-key $localKey".toByteArray(Charsets.UTF_8)).take(32)
+        "record-" + sha256(
+            ("record-key" + 0.toChar() + localKey).toByteArray(Charsets.UTF_8),
+        ).take(32)
 
     private fun RemoteRecordManifestEntry.payloadText(fixture: Fixture): String =
         fixture.remote.payloads.getValue(fixture.payloadKey(fixture.content, id)).toString(Charsets.UTF_8)
@@ -197,7 +199,7 @@ class RecordSyncEngineTest {
         policy: RecordConflictPolicy,
         val remote: FakeRecordRemoteStore = FakeRecordRemoteStore(),
     ) {
-        val content = CloudSyncContent.THOUGHTS
+        val content = CloudSyncContent.DATE_RECORDS
         val adapter = FakeRecordAdapter(content, policy)
         val stateStore = FakeRecordStateStore()
         val config = CloudSyncConfig(

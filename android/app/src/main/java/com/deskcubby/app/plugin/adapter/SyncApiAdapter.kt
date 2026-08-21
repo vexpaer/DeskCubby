@@ -4,6 +4,7 @@ import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncContent as AppSyncContent
 import com.deskcubby.app.data.model.CloudSyncDirection as AppSyncDirection
 import com.deskcubby.app.data.model.CloudSyncServiceType as AppSyncServiceType
+import com.deskcubby.app.data.model.withRequiredSyncDependencies
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.sync.AppCloudSyncService
 import com.deskcubby.app.data.sync.CloudSyncRunResult
@@ -62,7 +63,7 @@ private fun CloudSyncConfig.toPluginConfig(): SyncConfiguration = SyncConfigurat
         AppSyncDirection.UPLOAD_ONLY -> SyncDirection.UPLOAD_ONLY
         AppSyncDirection.TWO_WAY -> SyncDirection.TWO_WAY
     },
-    selectedContents = selectedContents.mapTo(linkedSetOf()) { content ->
+    selectedContents = selectedContents.withRequiredSyncDependencies().mapTo(linkedSetOf()) { content ->
         when (content) {
             AppSyncContent.DIARIES -> SyncContent.DIARIES
             AppSyncContent.NOTES -> SyncContent.NOTES

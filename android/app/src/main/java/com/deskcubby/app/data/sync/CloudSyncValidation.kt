@@ -2,6 +2,7 @@ package com.deskcubby.app.data.sync
 
 import com.deskcubby.app.data.model.CloudSyncConfig
 import com.deskcubby.app.data.model.CloudSyncServiceType
+import com.deskcubby.app.data.model.withRequiredSyncDependencies
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -27,6 +28,7 @@ internal fun CloudSyncConfig.validateForSync(): ValidatedCloudSyncConfig {
     if (selectedContents.isEmpty()) {
         throw CloudSyncConfigurationException("请至少选择一类需要同步的内容。")
     }
+    val normalizedSelectedContents = selectedContents.withRequiredSyncDependencies()
     if (userAgent.isBlank() || userAgent.length > MAX_USER_AGENT_CHARS ||
         userAgent.any(Char::isISOControl)
     ) {
@@ -117,7 +119,7 @@ internal fun CloudSyncConfig.validateForSync(): ValidatedCloudSyncConfig {
         }
     }
     return ValidatedCloudSyncConfig(
-        source = this,
+        source = copy(selectedContents = normalizedSelectedContents),
         endpoint = endpoint,
         remotePath = normalizedRemotePath,
         scopeFingerprint = sha256(scope.toByteArray(StandardCharsets.UTF_8)),
