@@ -381,59 +381,59 @@ fun HomeScreen(
             )
         } else {
             LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(inner),
-            contentPadding = PaddingValues(if (compact) 10.dp else 16.dp),
-            verticalArrangement = Arrangement.spacedBy(
-                when {
-                    !settings.homeWidgetBordersEnabled -> 0.dp
-                    compact -> 6.dp
-                    else -> 12.dp
-                },
-            ),
-        ) {
-            items(settings.homeWidgets, key = { it }) { id ->
-                HomeWidget(
-                    id = id,
-                    settings = settings,
-                    diaries = diaries,
-                    thoughts = thoughts,
-                    thoughtCategories = thoughtCategories,
-                    dateRecords = dateRecords,
-                    poem = poem,
-                    onOpenDiary = onOpenDiary,
-                    onOpenThoughts = onOpenThoughts,
-                    onOpenDateRecords = onOpenDateRecords,
-                    onOpenWebsite = onOpenWebsite,
-                    onQuickThought = viewModel::addThought,
-                    poemRefreshing = poemRefreshing,
-                    onRefreshPoem = {
-                        viewModel.refreshPoem(settings.appLanguage)
+                modifier = Modifier.fillMaxSize().padding(inner),
+                contentPadding = PaddingValues(if (compact) 10.dp else 16.dp),
+                verticalArrangement = Arrangement.spacedBy(
+                    when {
+                        !settings.homeWidgetBordersEnabled -> 0.dp
+                        compact -> 6.dp
+                        else -> 12.dp
                     },
-                    onSavePoem = { viewModel.savePoem(poem, settings.appLanguage) },
-                    mealUploadInProgress = mealInteractionBusy,
-                    onChooseMealPhoto = chooseMealPhoto,
-                    onCaptureMealPhoto = captureMealPhoto,
-                    dailyRecordInProgress = dailyRecordInProgress,
-                    onAddDailyRecord = { templateId, entry, onDone ->
-                        viewModel.addDailyRecordToToday(templateId, entry, settings, onDone)
-                    },
-                    onOpenDailyRecords = onOpenDailyRecords,
-                    onOpenNotes = onOpenNotes,
-                    onOpenGame = onOpenGame,
-                    onOpenStatistics = onOpenStatistics,
-                    cloudSyncStatus = cloudSyncStatus,
-                    cloudSyncActionState = cloudSyncActionState,
-                    cloudSyncUndoAvailable = cloudSyncUndoAvailable,
-                    onRunCloudSync = { mode ->
-                        val accepted = CloudSyncManualScheduler.enqueue(context, mode)
-                        viewModel.recordCloudSyncEnqueue(mode, accepted)
-                        accepted
-                    },
-                    onUndoCloudSync = { viewModel.undoLastCloudSync() },
-                )
+                ),
+            ) {
+                items(settings.homeWidgets, key = { it }) { id ->
+                    HomeWidget(
+                        id = id,
+                        settings = settings,
+                        diaries = diaries,
+                        thoughts = thoughts,
+                        thoughtCategories = thoughtCategories,
+                        dateRecords = dateRecords,
+                        poem = poem,
+                        onOpenDiary = onOpenDiary,
+                        onOpenThoughts = onOpenThoughts,
+                        onOpenDateRecords = onOpenDateRecords,
+                        onOpenWebsite = onOpenWebsite,
+                        onQuickThought = viewModel::addThought,
+                        poemRefreshing = poemRefreshing,
+                        onRefreshPoem = {
+                            viewModel.refreshPoem(settings.appLanguage)
+                        },
+                        onSavePoem = { viewModel.savePoem(poem, settings.appLanguage) },
+                        mealUploadInProgress = mealInteractionBusy,
+                        onChooseMealPhoto = chooseMealPhoto,
+                        onCaptureMealPhoto = captureMealPhoto,
+                        dailyRecordInProgress = dailyRecordInProgress,
+                        onAddDailyRecord = { templateId, entry, onDone ->
+                            viewModel.addDailyRecordToToday(templateId, entry, settings, onDone)
+                        },
+                        onOpenDailyRecords = onOpenDailyRecords,
+                        onOpenNotes = onOpenNotes,
+                        onOpenGame = onOpenGame,
+                        onOpenStatistics = onOpenStatistics,
+                        cloudSyncStatus = cloudSyncStatus,
+                        cloudSyncActionState = cloudSyncActionState,
+                        cloudSyncUndoAvailable = cloudSyncUndoAvailable,
+                        onRunCloudSync = { mode ->
+                            val accepted = CloudSyncManualScheduler.enqueue(context, mode)
+                            viewModel.recordCloudSyncEnqueue(mode, accepted)
+                            accepted
+                        },
+                        onUndoCloudSync = { viewModel.undoLastCloudSync() },
+                    )
+                }
+                item { Spacer(Modifier.height(20.dp)) }
             }
-            item { Spacer(Modifier.height(20.dp)) }
-        }
         }
     }
 }
@@ -573,7 +573,7 @@ private fun HomeWidget(
             diaries.take(3).forEach { item ->
                 TextButton(onClick = { onOpenDiary(item.uri) }, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.fillMaxWidth()) {
-                            Text(item.name.removeSuffix(".md"), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(item.name.removeSuffix(".md"), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(item.dateIso, style = MaterialTheme.typography.bodySmall)
                     }
                 }
@@ -725,6 +725,9 @@ private fun CloudSyncHomeWidget(
     val canRun = settings.cloudSyncEnabled && enabledSourceCount > 0 && !status.running
     var confirmationMode by remember { mutableStateOf<CloudSyncRunMode?>(null) }
     var showLastRunDetails by remember { mutableStateOf(false) }
+    val uploaded = status.lastUploadedCount
+    val downloaded = status.lastDownloadedCount
+    val conflicts = status.lastConflictCount
 
     WidgetCard(
         if (forceActions) tr("强制上传 / 下载", "Force upload / download")
@@ -804,9 +807,6 @@ private fun CloudSyncHomeWidget(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        val uploaded = status.lastUploadedCount
-        val downloaded = status.lastDownloadedCount
-        val conflicts = status.lastConflictCount
         if (uploaded != null && downloaded != null && conflicts != null) {
             TextButton(
                 onClick = { showLastRunDetails = true },
@@ -1386,6 +1386,7 @@ private fun streakDays(diaries: List<DiaryIndexEntity>, today: LocalDate): Int {
 
 private const val CAMERA_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L
 private const val HOME_DAILY_EVENT_LIMIT = 4
+
 @Composable
 private fun HomeWorkspaceContent(
     padding: PaddingValues,
