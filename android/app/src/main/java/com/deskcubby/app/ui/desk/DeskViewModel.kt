@@ -29,7 +29,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -48,7 +47,6 @@ class DeskViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val aiTaskQueue: com.deskcubby.app.data.taskqueue.AiTaskQueue,
 ) : ViewModel() {
-
     val settings = settingsRepository.settings.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
@@ -67,9 +65,7 @@ class DeskViewModel @Inject constructor(
                 settings,
             ) { diaries, thoughts, dates, current ->
                 Source(diaries, thoughts, dates, current)
-            }.collect { source ->
-                refresh(source)
-            }
+            }.collect { source -> refresh(source) }
         }
     }
 
@@ -79,14 +75,12 @@ class DeskViewModel @Inject constructor(
             val today = LocalDate.now(ZoneId.systemDefault())
             val language = source.settings.appLanguage
             val ambient = ambientFor(LocalDateTime.now().hour)
-
             val todayDiary = source.diaries
                 .filter { it.dateIso == today.toString() }
                 .maxByOrNull { it.lastModified }
             val diaryItem = todayDiary?.let { diary ->
-                val excerpt = runCatching {
-                    plainExcerpt(diaryRepository.load(diary.uri).content)
-                }.getOrDefault("")
+                val excerpt = runCatching { plainExcerpt(diaryRepository.load(diary.uri).content) }
+                    .getOrDefault("")
                 DeskItem(
                     kind = DeskItemKind.DIARY,
                     id = "diary:" + diary.uri,
@@ -102,8 +96,10 @@ class DeskViewModel @Inject constructor(
             val endOfDay = today.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
             val todayIdeas = source.thoughts
                 .filter { it.createdAt in startOfDay until endOfDay }
-                .sortedWith(compareByDescending<FlashThoughtEntity> { it.highlighted }
-                    .thenByDescending { it.createdAt })
+                .sortedWith(
+                    compareByDescending<FlashThoughtEntity> { it.highlighted }
+                        .thenByDescending { it.createdAt },
+                )
             val ideaItems = todayIdeas.take(MAX_IDEAS).mapIndexed { index, idea ->
                 DeskItem(
                     kind = DeskItemKind.IDEA,
@@ -137,9 +133,9 @@ class DeskViewModel @Inject constructor(
                 )
             }
 
-            val traces = buildTraces(source, todayIdeas, todayDiary, todayPhotos, language)
-            val totalTraceCount = traces.size
-
+            // MealCalendarPhoto currently carries no trustworthy capture/import timestamp. Keep the
+            // photo card, but omit it from the timed trace until a real timestamp is available.
+            val traces = buildTraces(source, todayIdeas, todayDiary, language)
             _state.value = DeskUiState(
                 loading = false,
                 dateLabel = DeskDateLabel(
@@ -152,7 +148,7 @@ class DeskViewModel @Inject constructor(
                 ideas = ideaItems,
                 photos = photoItems,
                 traces = traces,
-                totalTraceCount = totalTraceCount,
+                totalTraceCount = traces.size,
                 ambient = ambient,
                 isEmpty = diaryItem == null && ideaItems.isEmpty() && photoItems.isEmpty() && traces.isEmpty(),
             )
@@ -167,43 +163,21 @@ class DeskViewModel @Inject constructor(
         source: Source,
         ideas: List<FlashThoughtEntity>,
         diary: DiaryIndexEntity?,
-        photos: List<MealCalendarPhoto>,
         language: AppLanguage,
     ): List<DeskTrace> {
         val rows = mutableListOf<Pair<Long, String>>()
         ideas.forEach { rows += it.createdAt to ideaTraceLabel(language) }
         diary?.let { rows += it.lastModified to diaryTraceLabel(language) }
-        photos.forEach { photo ->
-            rows += photoTraceTime(photo, ideas, diary) to photoTraceLabel(photo, language)
-        }
         source.dates
             .filter { it.dateIso == LocalDate.now(ZoneId.systemDefault()).toString() }
-            .forEach { rows += it.createdAt to (it.name.ifBlank { eventTraceLabel(language) }) }
+            .forEach { rows += it.createdAt to it.name.ifBlank { eventTraceLabel(language) } }
 
         val timeFormatter = DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT)
         return rows.sortedBy { (time, _) -> time }
             .map { (time, label) ->
-                val local = LocalDateTime.ofInstant(
-                    Instant.ofEpochMilli(time),
-                    ZoneId.systemDefault(),
-                )
-                DeskTrace(
-                    timeLabel = local.format(timeFormatter),
-                    label = label,
-                    weight = 1,
-                )
+                val local = LocalDateTime.ofInstant(Instant.ofEpochMilli(time), ZoneId.systemDefault())
+                DeskTrace(timeLabel = local.format(timeFormatter), label = label, weight = 1)
             }
-    }
-
-    private fun photoTraceTime(
-        photo: MealCalendarPhoto,
-        ideas: List<FlashThoughtEntity>,
-        diary: DiaryIndexEntity?,
-    ): Long {
-        // MealCalendarPhoto has no stable timestamp; derive a deterministic value from the file
-        // name so ordering is reproducible within a day and never mutates across recompositions.
-        val fallback = photo.fileName.hashCode().toLong() and 0x7FFFFFFF
-        return fallback
     }
 
     private fun photoMetaLabel(photo: MealCalendarPhoto, language: AppLanguage): String =
@@ -211,14 +185,13 @@ class DeskViewModel @Inject constructor(
             if (language == AppLanguage.ENGLISH) photo.category.englishLabel else photo.category.chineseLabel
         }
 
-    private fun photoTraceLabel(photo: MealCalendarPhoto, language: AppLanguage): String =
-        photo.caption.ifBlank { if (language == AppLanguage.ENGLISH) "photo" else "照片" }
-
-    private fun ideaMetaLabel(index: Int, language: AppLanguage): String =
-        if (language == AppLanguage.ENGLISH) "Idea" else "小巧思"
+    private fun ideaMetaLabel(index: Int, language: AppLanguage): String {
+        @Suppress("UNUSED_VARIABLE") val ignored = index
+        return if (language == AppLanguage.ENGLISH) "Idea" else "小巧思"
+    }
 
     private fun wordCountLabel(count: Int, language: AppLanguage): String =
-        if (language == AppLanguage.ENGLISH) count.toString() + " words" else count.toString() + " 字"
+        if (language == AppLanguage.ENGLISH) "$count words" else "$count 字"
 
     private fun ideaTraceLabel(language: AppLanguage): String =
         if (language == AppLanguage.ENGLISH) "idea" else "小巧思"
@@ -229,11 +202,6 @@ class DeskViewModel @Inject constructor(
     private fun eventTraceLabel(language: AppLanguage): String =
         if (language == AppLanguage.ENGLISH) "event" else "事件"
 
-    /**
-     * Adds a meal/photo to today's diary through the same durable pipeline as Home. The image +
-     * Markdown write is the completion boundary; calorie AI, gallery copy, geocoder and index
-     * refresh all run in the background and never keep this method (or the UI) waiting.
-     */
     fun addMealPhoto(uri: android.net.Uri) {
         viewModelScope.launch {
             val current = settingsRepository.settings.first()
@@ -281,9 +249,7 @@ class DeskViewModel @Inject constructor(
     }
 
     fun consumePhotoNotice() {
-        if (_state.value.photoNotice != null) {
-            _state.value = _state.value.copy(photoNotice = null)
-        }
+        if (_state.value.photoNotice != null) _state.value = _state.value.copy(photoNotice = null)
     }
 
     private fun uiLocale(language: AppLanguage): Locale = when (language) {
@@ -321,8 +287,14 @@ internal fun plainExcerpt(markdown: String, maxChars: Int = 140): String {
     val sb = StringBuilder()
     var inCode = false
     for (ch in markdown) {
-        if (ch == '`') { inCode = !inCode; continue }
-        if (ch == '#' || ch == '!' || ch == '>' || ch == '*' || ch == '-' || ch == '_' || ch == '[' || ch == ']' || ch == '(' || ch == ')') {
+        if (ch == '`') {
+            inCode = !inCode
+            continue
+        }
+        if (
+            ch == '#' || ch == '!' || ch == '>' || ch == '*' || ch == '-' || ch == '_' ||
+            ch == '[' || ch == ']' || ch == '(' || ch == ')'
+        ) {
             if (!inCode) continue
         }
         sb.append(ch)

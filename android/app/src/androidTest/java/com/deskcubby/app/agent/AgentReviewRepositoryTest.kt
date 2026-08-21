@@ -38,10 +38,7 @@ class AgentReviewRepositoryTest {
     @Test
     fun appliedMutationIsRecordedAndUndoExecutesToolThenDisablesIt() = runBlocking {
         val tool = UndoTool()
-        val repository = AgentReviewRepository(
-            database.agentDao(),
-            AgentToolRegistry(setOf(AgentToolContributor { listOf(tool) })),
-        )
+        val repository = repositoryFor(AgentToolRegistry(setOf(AgentToolContributor { listOf(tool) })))
         val request = request()
         repository.startRun(request)
         val call = AIToolCall("call-1", tool.definition.name, mapOf("content" to "after"))
@@ -117,10 +114,7 @@ class AgentReviewRepositoryTest {
     @Test
     fun failedMutationIsNeverUndoable() = runBlocking {
         val tool = UndoTool()
-        val repository = AgentReviewRepository(
-            database.agentDao(),
-            AgentToolRegistry(setOf(AgentToolContributor { listOf(tool) })),
-        )
+        val repository = repositoryFor(AgentToolRegistry(setOf(AgentToolContributor { listOf(tool) })))
         repository.startRun(request())
         val call = AIToolCall("call-1", tool.definition.name, emptyMap())
         val eventId = repository.startToolEvent("run-1", 1, call, tool.definition)
@@ -142,10 +136,7 @@ class AgentReviewRepositoryTest {
 
     @Test
     fun providerOmittedCacheUsageRemainsUnknownInsteadOfZero() = runBlocking {
-        val repository = AgentReviewRepository(
-            database.agentDao(),
-            AgentToolRegistry(emptySet()),
-        )
+        val repository = repositoryFor(AgentToolRegistry(emptySet()))
         repository.startRun(request())
         repository.finishRun(
             "run-1",
@@ -165,6 +156,12 @@ class AgentReviewRepositoryTest {
         assertNull(usage.cachedInputTokens)
         assertNull(usage.cacheRate)
     }
+
+    private fun repositoryFor(registry: AgentToolRegistry) = AgentReviewRepository(
+        database.agentDao(),
+        registry,
+        AgentRecoveryStore(database),
+    )
 
     private fun request() = AgentRunRequest(
         "run-1",

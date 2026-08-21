@@ -27,9 +27,8 @@ class DiaryCloudSyncLocalStore(
         agentChatBridge: CloudSyncAgentChatBridge? = null,
         cloudSyncUndoStore: CloudSyncUndoStore? = null,
     ) : this(diaryRepository, settingsProvider, cloudSyncUndoStore)
+
     private val mutex = Mutex()
-    // Key -> scanned file, kept so the undo store can snapshot the exact local bytes that a
-    // downloaded diary file is about to replace.
     private var lastListedDiaryFiles: Map<String, DiaryCloudSyncFile> = emptyMap()
 
     override suspend fun list(
@@ -49,9 +48,21 @@ class DiaryCloudSyncLocalStore(
         )
         lastListedDiaryFiles = files.associateBy { file -> file.toLocalObject().key }
         val result = files.map { it.toLocalObject() }.toMutableList()
-        if (result.size > limits.maxObjects) {
-            throw CloudSyncLimitException("同步文件数量超过上限。")
+
+        if (CloudSyncContent.DIARIES in selectedContents) {
+            WORKSPACE_FILES.forEach { fileName ->
+                val raw = diaryRepository.readWorkspaceFile(settings, fileName) ?: return@forEach
+                val bytes = raw.toByteArray(Charsets.UTF_8)
+                if (bytes.size.toLong() > limits.maxObjectBytes) {
+                    throw CloudSyncLimitException("结构化工作区文件超过单文件同步上限。")
+                }
+                if (result.size >= limits.maxObjects) {
+                    throw CloudSyncLimitException("同步文件数量超过上限。")
+                }
+                result += workspaceLocalObject(fileName, bytes)
+            }
         }
+        if (result.size > limits.maxObjects) throw CloudSyncLimitException("同步文件数量超过上限。")
         result
     }
 
@@ -59,8 +70,16 @@ class DiaryCloudSyncLocalStore(
         objectInfo: LocalSyncObject,
         maxBytes: Long,
     ): ByteArray = mutex.withLock {
+        workspaceFileFromLocalId(objectInfo.localId)?.let { fileName ->
+            val raw = diaryRepository.readWorkspaceFile(settingsProvider(), fileName)
+                ?: throw CloudSyncConflictException("结构化工作区文件已在同步期间删除。")
+            val bytes = raw.toByteArray(Charsets.UTF_8)
+            if (bytes.size.toLong() > maxBytes || sha256(bytes) != objectInfo.sha256) {
+                throw CloudSyncConflictException("结构化工作区文件在同步读取期间发生变化。")
+            }
+            return@withLock bytes
+        }
         diaryRepository.readForCloudSync(
-
             file = objectInfo.toDiaryFile(),
             maxObjectBytes = maxBytes,
         )
@@ -79,21 +98,23 @@ class DiaryCloudSyncLocalStore(
             throw CloudSyncConflictException("远端文件校验失败，未写入本地。")
         }
         val (content, area, fileName) = parseDiaryOrMediaKey(key)
-        // One-shot undo snapshot: remember the exact local bytes a downloaded diary file is about
-        // to replace (and files the run creates) so "撤回一次" can restore them afterwards.
+        if (area == DiaryCloudSyncArea.DIARY && fileName.startsWith(WORKSPACE_PREFIX)) {
+            return@withLock writeWorkspaceRemote(
+                key = key,
+                fileName = fileName.removePrefix(WORKSPACE_PREFIX),
+                bytes = bytes,
+                contentSha256 = contentSha256,
+                expectedLocalSha256 = expectedLocalSha256,
+            )
+        }
+
         val undoStore = cloudSyncUndoStore
         val scannedBefore = if (undoStore != null && area == DiaryCloudSyncArea.DIARY) {
             lastListedDiaryFiles[key]
-        } else {
-            null
-        }
+        } else null
         val previousBytes: ByteArray? = if (undoStore != null && scannedBefore != null) {
-            runCatching {
-                diaryRepository.readForCloudSync(scannedBefore, limits.maxObjectBytes)
-            }.getOrNull()
-        } else {
-            null
-        }
+            runCatching { diaryRepository.readForCloudSync(scannedBefore, limits.maxObjectBytes) }.getOrNull()
+        } else null
         val result = diaryRepository.writeFromCloudSync(
             settings = settingsProvider(),
             area = area,
@@ -122,13 +143,9 @@ class DiaryCloudSyncLocalStore(
                 is DiaryCloudSyncWriteResult.ConflictCopy -> Unit
             }
         }
-        if (area == DiaryCloudSyncArea.DIARY) {
-            // A durable file write is the source of truth; rebuild Room only afterwards.
-            diaryRepository.scan(settingsProvider())
-        }
+        if (area == DiaryCloudSyncArea.DIARY) diaryRepository.scan(settingsProvider())
         when (result) {
-            is DiaryCloudSyncWriteResult.Applied ->
-                LocalWriteResult.Applied(result.file.toLocalObject())
+            is DiaryCloudSyncWriteResult.Applied -> LocalWriteResult.Applied(result.file.toLocalObject())
             is DiaryCloudSyncWriteResult.ConflictCopy -> {
                 val existing = result.existing?.toLocalObject()
                     ?: LocalSyncObject(
@@ -142,6 +159,34 @@ class DiaryCloudSyncLocalStore(
                 LocalWriteResult.ConflictCopy(existing, result.copy.toLocalObject())
             }
         }
+    }
+
+    private suspend fun writeWorkspaceRemote(
+        key: String,
+        fileName: String,
+        bytes: ByteArray,
+        contentSha256: String,
+        expectedLocalSha256: String?,
+    ): LocalWriteResult {
+        require(fileName in WORKSPACE_FILES) { "结构化工作区文件路径无效。" }
+        val settings = settingsProvider()
+        val before = diaryRepository.readWorkspaceFile(settings, fileName)?.toByteArray(Charsets.UTF_8)
+        val beforeHash = before?.let(::sha256)
+        if (beforeHash != expectedLocalSha256) {
+            throw CloudSyncConflictException("结构化工作区文件已在同步期间变化，未覆盖本地版本。")
+        }
+        val text = bytes.toString(Charsets.UTF_8)
+        diaryRepository.writeWorkspaceFile(settings, fileName, text)
+        val verified = diaryRepository.readWorkspaceFile(settings, fileName)?.toByteArray(Charsets.UTF_8)
+            ?: throw CloudSyncConflictException("结构化工作区文件写入后无法读取。")
+        if (sha256(verified) != contentSha256) {
+            // writeWorkspaceFile already verifies its own write under the workspace mutex. A
+            // different read here therefore means another app/provider changed the file after our
+            // write completed. Never "roll back" the old bytes here: that would overwrite the
+            // concurrent edit we just detected.
+            throw CloudSyncConflictException("结构化工作区文件写入后再次变化，已保留当前本地版本。")
+        }
+        return LocalWriteResult.Applied(workspaceLocalObject(fileName, verified, key))
     }
 
     private fun DiaryCloudSyncFile.toLocalObject(): LocalSyncObject {
@@ -158,6 +203,23 @@ class DiaryCloudSyncLocalStore(
             localId = uri,
         )
     }
+
+    private fun workspaceLocalObject(
+        fileName: String,
+        bytes: ByteArray,
+        explicitKey: String? = null,
+    ): LocalSyncObject = LocalSyncObject(
+        key = explicitKey ?: "${CloudSyncContent.DIARIES.remoteDirectory}/$WORKSPACE_PREFIX$fileName",
+        content = CloudSyncContent.DIARIES,
+        size = bytes.size.toLong(),
+        lastModifiedMillis = 0L,
+        sha256 = sha256(bytes),
+        localId = "$WORKSPACE_LOCAL_ID_PREFIX$fileName",
+    )
+
+    private fun workspaceFileFromLocalId(localId: String): String? =
+        localId.removePrefix(WORKSPACE_LOCAL_ID_PREFIX)
+            .takeIf { localId.startsWith(WORKSPACE_LOCAL_ID_PREFIX) && it in WORKSPACE_FILES }
 
     private fun LocalSyncObject.toDiaryFile(): DiaryCloudSyncFile {
         val area = when (content) {
@@ -181,23 +243,26 @@ class DiaryCloudSyncLocalStore(
     ): Triple<CloudSyncContent, DiaryCloudSyncArea, String> {
         val directory = key.substringBefore('/')
         val name = key.substringAfter('/', "")
-        if (name.isBlank() || '/' in name) throw CloudSyncException("同步文件路径无效。")
+        if (name.isBlank()) throw CloudSyncException("同步文件路径无效。")
         return when (directory) {
-            CloudSyncContent.DIARIES.remoteDirectory -> Triple(
-                CloudSyncContent.DIARIES,
-                DiaryCloudSyncArea.DIARY,
-                name,
-            )
-            CloudSyncContent.MEDIA.remoteDirectory -> Triple(
-                CloudSyncContent.MEDIA,
-                DiaryCloudSyncArea.MEDIA,
-                name,
-            )
+            CloudSyncContent.DIARIES.remoteDirectory -> {
+                val validDiaryPath = '/' !in name ||
+                    (name.startsWith(WORKSPACE_PREFIX) && name.removePrefix(WORKSPACE_PREFIX) in WORKSPACE_FILES)
+                if (!validDiaryPath) throw CloudSyncException("同步文件路径无效。")
+                Triple(CloudSyncContent.DIARIES, DiaryCloudSyncArea.DIARY, name)
+            }
+            CloudSyncContent.MEDIA.remoteDirectory -> {
+                if ('/' in name) throw CloudSyncException("同步文件路径无效。")
+                Triple(CloudSyncContent.MEDIA, DiaryCloudSyncArea.MEDIA, name)
+            }
             else -> throw CloudSyncException("同步文件类别无效。")
         }
     }
 
     private companion object {
+        const val WORKSPACE_PREFIX = ".deskcubby/"
+        const val WORKSPACE_LOCAL_ID_PREFIX = "workspace://"
+        val WORKSPACE_FILES = setOf("fields.json", "records.json", "statistics.json", "settings.json")
         val EMPTY_SHA256 =
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }

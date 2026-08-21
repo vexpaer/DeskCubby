@@ -36,7 +36,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilledIconButton
@@ -59,16 +58,30 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.structuredrecords.JournalDayEngine
 import com.deskcubby.app.data.structuredrecords.StructuredField
-import com.deskcubby.app.data.structuredrecords.StructuredFieldSource
 import com.deskcubby.app.data.structuredrecords.StructuredFieldType
-import com.deskcubby.app.data.structuredrecords.StructuredRecordSegment
+import com.deskcubby.app.data.structuredrecords.StructuredRecordDraft
 import com.deskcubby.app.data.structuredrecords.StructuredRecordTemplate
+import com.deskcubby.app.data.structuredrecords.applyStructuredDraftEdit
+import com.deskcubby.app.data.structuredrecords.createStructuredRecordDraft
+import com.deskcubby.app.data.structuredrecords.createStructuredTemplateDraft
+import com.deskcubby.app.data.structuredrecords.insertStructuredTemplateField
+import com.deskcubby.app.data.structuredrecords.isStructuredDraftReady
+import com.deskcubby.app.data.structuredrecords.replaceStructuredDraftField
+import com.deskcubby.app.data.structuredrecords.structuredDraftToSegments
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.tr
 
@@ -85,6 +98,7 @@ fun StructuredRecordsScreen(
     val feedback by viewModel.feedback.collectAsStateWithLifecycle()
     val now by viewModel.now.collectAsStateWithLifecycle()
     val systemSnapshot by viewModel.systemSnapshot.collectAsStateWithLifecycle()
+    val journalDay by viewModel.journalDay.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var editingTemplate by remember { mutableStateOf<StructuredRecordTemplate?>(null) }
     var showNewEditor by rememberSaveable { mutableStateOf(false) }
@@ -93,8 +107,6 @@ fun StructuredRecordsScreen(
 
     LaunchedEffect(Unit) {
         viewModel.touchNow()
-        // The ViewModel is scoped to the navigation root, so fields/templates edited on the
-        // settings subpages do not re-emit here by themselves; refresh once on each visit.
         viewModel.refreshWorkspaceFromUi()
     }
     LaunchedEffect(feedback?.key) {
@@ -129,9 +141,9 @@ fun StructuredRecordsScreen(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (systemSnapshot != null && systemSnapshot!!.autoRecording) {
+            if (systemSnapshot?.autoRecording == true) {
                 item(key = "system") {
-                    SystemSleepWakeCard(snapshot = systemSnapshot!!, journalDay = viewModel.journalDay.collectAsStateWithLifecycle().value)
+                    SystemSleepWakeCard(snapshot = systemSnapshot!!, journalDay = journalDay)
                 }
             }
             if (templates.isEmpty()) {
@@ -146,16 +158,13 @@ fun StructuredRecordsScreen(
                     clearInputsKey = feedback
                         ?.takeIf { !it.isError && it.recordedTemplateId == template.id }
                         ?.key,
-                    onRecord = { values -> viewModel.record(template, values) },
+                    onRecord = { draft -> viewModel.record(template, draft) },
                     onEdit = { editingTemplate = template },
                     onDelete = { pendingDelete = template },
                 )
             }
             item(key = "add") {
-                Button(
-                    onClick = { showNewEditor = true },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
+                Button(onClick = { showNewEditor = true }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Outlined.Add, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(tr("新建结构化记录", "New structured record"))
@@ -165,40 +174,33 @@ fun StructuredRecordsScreen(
     }
 
     if (showNewEditor) {
-        NewRecordEditorDialog(
+        TemplateEditorDialog(
+            initialTemplate = null,
             fields = fields.filterNot { it.archived },
+            fieldsById = fieldsById,
             onDismiss = { showNewEditor = false },
-            onConfirm = { name, fieldId, prefix ->
-                val field = fieldsById[fieldId]
-                viewModel.addTemplate(name, field, prefix)
+            onSaveNew = { name, draft ->
+                viewModel.addTemplate(name, draft)
                 showNewEditor = false
             },
+            onSaveExisting = { _, _ -> },
         )
     }
 
     editingTemplate?.let { template ->
-        val fieldSegments = template.segments.filterIsInstance<StructuredRecordSegment.Field>()
-        if (fieldSegments.isNotEmpty() && fieldSegments.all { fieldsById.containsKey(it.fieldId) }) {
-            TemplateFieldEditorDialog(
-                template = template,
-                fieldsById = fieldsById,
-                onDismiss = { editingTemplate = null },
-                onSave = { updated ->
-                    viewModel.updateTemplate(updated)
-                    editingTemplate = null
-                },
-            )
-        } else {
-            // Template has no editable fields (pure text) — rename only.
-            PureTextTemplateEditorDialog(
-                template = template,
-                onDismiss = { editingTemplate = null },
-                onSave = { updated ->
-                    viewModel.updateTemplate(updated)
-                    editingTemplate = null
-                },
-            )
-        }
+        TemplateEditorDialog(
+            initialTemplate = template,
+            fields = fields.filterNot { it.archived },
+            fieldsById = fieldsById,
+            onDismiss = { editingTemplate = null },
+            onSaveNew = { _, _ -> },
+            onSaveExisting = { name, draft ->
+                viewModel.updateTemplate(
+                    template.copy(name = name, segments = structuredDraftToSegments(draft)),
+                )
+                editingTemplate = null
+            },
+        )
     }
 
     pendingDelete?.let { template ->
@@ -212,9 +214,7 @@ fun StructuredRecordsScreen(
                     pendingDelete = null
                 }) { Text(tr("删除", "Delete")) }
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) { Text(tr("取消", "Cancel")) }
-            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text(tr("取消", "Cancel")) } },
         )
     }
 }
@@ -233,17 +233,20 @@ private fun EmptyStructuredRecords(onAdd: () -> Unit) {
             Icon(Icons.Outlined.EventNote, contentDescription = null, modifier = Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
             Text(tr("还没有结构化记录", "No structured records yet"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
-                tr("添加一句带类型字段的记录，例如「做了 [数字] 个俯卧撑」。", "Add a sentence with a typed field, e.g. “Did [number] push-ups.”"),
+                tr("模板正文里可以放任意多个类型字段；记录时所有字段都在同一个输入框中原地填写。", "A template can contain any number of typed fields; fill them inline in one editor."),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            TextButton(onClick = onAdd) { Text(tr("添加示例记录", "Add example records")) }
+            TextButton(onClick = onAdd) { Text(tr("新建记录", "Create record")) }
         }
     }
 }
 
 @Composable
-private fun SystemSleepWakeCard(snapshot: com.deskcubby.app.data.structuredrecords.SystemFieldSnapshot, journalDay: java.time.LocalDate?) {
+private fun SystemSleepWakeCard(
+    snapshot: com.deskcubby.app.data.structuredrecords.SystemFieldSnapshot,
+    journalDay: java.time.LocalDate?,
+) {
     GlassPanel(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp, padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -253,35 +256,25 @@ private fun SystemSleepWakeCard(snapshot: com.deskcubby.app.data.structuredrecor
             }
             Text(
                 tr(
-                    "根据手机首次/最后一次使用与解锁/锁屏时间估算，不使用 Health Connect；最终值会在当天结算后写入日记。",
-                    "Estimated from first/last phone use and unlock/lock events, not Health Connect. Final values are written to the diary after the day settles.",
+                    "根据手机首次/最后一次使用与解锁/锁屏时间估算，不使用 Health Connect；归属起床时间的自然日期。",
+                    "Estimated from first/last phone use and unlock/lock events, not Health Connect; assigned to the wake timestamp's calendar date.",
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (journalDay != null) {
-                Text(
-                    tr("当前日记日：$journalDay", "Journal day: $journalDay"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text(tr("自然日期：$journalDay", "Calendar date: $journalDay"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Outlined.WbSunny, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        tr("起床：${snapshot.wakeTime?.let(JournalDayEngine::formatTime) ?: "—"}", "Wake: ${snapshot.wakeTime?.let(JournalDayEngine::formatTime) ?: "—"}"),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                    Text(tr("起床：${snapshot.wakeTime?.let(JournalDayEngine::formatTime) ?: "—"}", "Wake: ${snapshot.wakeTime?.let(JournalDayEngine::formatTime) ?: "—"}"))
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Outlined.Bedtime, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        tr("睡觉：${snapshot.sleepTime?.let(JournalDayEngine::formatTime) ?: "—"}", "Sleep: ${snapshot.sleepTime?.let(JournalDayEngine::formatTime) ?: "—"}"),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                    Text(tr("睡觉：${snapshot.sleepTime?.let(JournalDayEngine::formatTime) ?: "—"}", "Sleep: ${snapshot.sleepTime?.let(JournalDayEngine::formatTime) ?: "—"}"))
                 }
             }
         }
@@ -294,22 +287,25 @@ private fun StructuredRecordRecorder(
     fieldsById: Map<String, StructuredField>,
     now: java.time.LocalTime,
     isSending: Boolean,
-    clearInputsKey: Long? = null,
-    onRecord: (List<String>) -> Unit,
+    clearInputsKey: Long?,
+    onRecord: (StructuredRecordDraft) -> Unit,
     onEdit: (() -> Unit)?,
     onDelete: (() -> Unit)?,
 ) {
-    val fieldSegments = template.segments.filterIsInstance<StructuredRecordSegment.Field>()
-    val state = remember(template.id) { mutableStateOf(emptyList<String>()) }
-    val values = state.value
+    fun freshDraft() = createStructuredRecordDraft(template, fieldsById, now)
+    var draft by remember(template.id, template.segments, fieldsById) { mutableStateOf(freshDraft()) }
+    var editor by remember(template.id, template.segments, fieldsById) {
+        mutableStateOf(TextFieldValue(draft.text, TextRange(draft.text.length)))
+    }
     LaunchedEffect(clearInputsKey) {
-        if (clearInputsKey != null) state.value = emptyList()
+        if (clearInputsKey != null) {
+            draft = freshDraft()
+            editor = TextFieldValue(draft.text, TextRange(draft.text.length))
+        }
     }
-    val ready = fieldSegments.indices.all { index ->
-        values.getOrNull(index)?.isNotBlank() == true
-    }
-    // Show the sentence as a preview; field positions render as their current values or the field name.
-    val preview = remember(template.segments, values, fieldsById) { previewText(template.segments, values, fieldsById) }
+    val activeSpan = activeDraftField(draft, editor.selection)
+    val activeField = activeSpan?.let { fieldsById[it.fieldId] }
+    val ready = isStructuredDraftReady(draft)
 
     GlassPanel(
         modifier = Modifier.fillMaxWidth(),
@@ -317,45 +313,47 @@ private fun StructuredRecordRecorder(
         padding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(
-                preview,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (fieldSegments.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    fieldSegments.forEachIndexed { index, segment ->
-                        val field = fieldsById[segment.fieldId]
-                        if (field != null) {
-                            TypedFieldInput(
-                                field = field,
-                                now = now,
-                                value = values.getOrNull(index).orEmpty(),
-                                onValueChange = { newValue ->
-                                    val updated = values.toMutableList()
-                                    while (updated.size <= index) updated.add("")
-                                    updated[index] = newValue
-                                    state.value = updated
-                                },
-                            )
+            Text(template.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedTextField(
+                value = editor,
+                onValueChange = { candidate ->
+                    if (candidate.text == editor.text) {
+                        editor = selectWholeFieldWhenTapped(candidate, draft)
+                    } else {
+                        val updated = applyStructuredDraftEdit(draft, candidate.text)
+                        if (updated != null) {
+                            draft = updated
+                            editor = candidate.copy(selection = candidate.selection.coerceTo(updated.text.length))
                         }
                     }
-                }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 3,
+                maxLines = 10,
+                visualTransformation = draftVisualTransformation(draft),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = if (activeField?.type == StructuredFieldType.NUMBER) KeyboardType.Decimal else KeyboardType.Text,
+                ),
+            )
+            if (activeSpan != null && activeField != null) {
+                val span = activeSpan
+                InlineFieldAssist(
+                    field = activeField,
+                    now = now,
+                    value = span.value.orEmpty(),
+                    onValue = { replacement ->
+                        draft = replaceStructuredDraftField(draft, span.occurrenceIndex, replacement)
+                        val changed = draft.fields.first { it.occurrenceIndex == span.occurrenceIndex }
+                        editor = TextFieldValue(draft.text, TextRange(changed.start, changed.endExclusive))
+                    },
+                )
             }
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Row(modifier = Modifier.weight(1f)) {
-                    onEdit?.let { edit -> IconButton(onClick = edit, enabled = !isSending) {
-                        Icon(Icons.Outlined.Edit, tr("编辑 ${template.name}", "Edit ${template.name}"))
-                    } }
-                    onDelete?.let { delete -> IconButton(onClick = delete, enabled = !isSending) {
-                        Icon(Icons.Outlined.Delete, tr("删除 ${template.name}", "Delete ${template.name}"))
-                    } }
+                    onEdit?.let { edit -> IconButton(onClick = edit, enabled = !isSending) { Icon(Icons.Outlined.Edit, tr("编辑 ${template.name}", "Edit ${template.name}")) } }
+                    onDelete?.let { delete -> IconButton(onClick = delete, enabled = !isSending) { Icon(Icons.Outlined.Delete, tr("删除 ${template.name}", "Delete ${template.name}")) } }
                 }
-                FilledIconButton(
-                    onClick = { onRecord(values) },
-                    enabled = !isSending && ready,
-                ) {
+                FilledIconButton(onClick = { onRecord(draft) }, enabled = !isSending && ready) {
                     if (isSending) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                     } else {
@@ -367,123 +365,60 @@ private fun StructuredRecordRecorder(
     }
 }
 
-private fun previewText(
-    segments: List<StructuredRecordSegment>,
-    values: List<String>,
-    fieldsById: Map<String, StructuredField>,
-): String {
-    val sb = StringBuilder()
-    var valueIndex = 0
-    for (segment in segments) {
-        when (segment) {
-            is StructuredRecordSegment.Text -> sb.append(segment.value)
-            is StructuredRecordSegment.Field -> {
-                val value = values.getOrNull(valueIndex)
-                if (!value.isNullOrBlank()) {
-                    sb.append(value)
-                } else {
-                    val field = fieldsById[segment.fieldId]
-                    sb.append("[").append(field?.name ?: segment.fieldId).append("]")
-                }
-                valueIndex++
-            }
-        }
-    }
-    return sb.toString().trim()
-}
-
 @Composable
-private fun TypedFieldInput(
+private fun InlineFieldAssist(
     field: StructuredField,
     now: java.time.LocalTime,
     value: String,
-    onValueChange: (String) -> Unit,
+    onValue: (String) -> Unit,
 ) {
     when (field.type) {
-        StructuredFieldType.WORD -> OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(field.name) },
-            minLines = 1,
-            maxLines = 4,
-        )
-        StructuredFieldType.NUMBER -> OutlinedTextField(
-            value = value,
-            onValueChange = { candidate -> onValueChange(candidate.take(24)) },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(if (field.unit.isNullOrBlank()) field.name else "${field.name}（${field.unit}）") },
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-            singleLine = true,
-        )
-        StructuredFieldType.TIME -> OutlinedTextField(
-            value = value,
-            onValueChange = { candidate -> onValueChange(candidate.take(5)) },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(field.name) },
-            placeholder = { Text(JournalDayEngine.formatTime(now)) },
-            singleLine = true,
-        )
-        StructuredFieldType.DURATION -> OutlinedTextField(
-            value = value,
-            onValueChange = { candidate -> onValueChange(candidate.take(12)) },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(field.name) },
-            placeholder = { Text(tr("00:42", "00:42")) },
-            singleLine = true,
-        )
-        StructuredFieldType.TYPE -> TypeOptionInput(field = field, value = value, onValueChange = onValueChange)
-    }
-}
-
-@Composable
-private fun TypeOptionInput(field: StructuredField, value: String, onValueChange: (String) -> Unit) {
-    val options = field.options
-    if (options.isNotEmpty()) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            options.forEach { option ->
-                val selected = option == value
-                TextButton(
-                    onClick = { onValueChange(option) },
-                    modifier = Modifier,
-                ) {
-                    Text(option, color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        StructuredFieldType.TYPE -> {
+            if (field.options.isNotEmpty()) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    field.options.forEach { option ->
+                        TextButton(onClick = { onValue(option) }) {
+                            Text(option, color = if (option == value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
             }
-            if (field.allowCustomOption || value !in options) {
-                OutlinedTextField(
-                    value = if (value in options) "" else value,
-                    onValueChange = onValueChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(tr("自定义", "Custom")) },
-                    singleLine = true,
-                )
-            }
         }
-    } else {
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(field.name) },
-            singleLine = true,
-        )
+        StructuredFieldType.TIME -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            TextButton(onClick = { onValue(JournalDayEngine.formatTime(now)) }) { Text(tr("当前时间", "Now")) }
+        }
+        StructuredFieldType.DURATION -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            TextButton(onClick = { onValue("00:15") }) { Text("15m") }
+            TextButton(onClick = { onValue("00:30") }) { Text("30m") }
+            TextButton(onClick = { onValue("01:00") }) { Text("1h") }
+        }
+        StructuredFieldType.WORD,
+        StructuredFieldType.NUMBER,
+        -> Unit
     }
 }
 
 @Composable
-private fun NewRecordEditorDialog(
+private fun TemplateEditorDialog(
+    initialTemplate: StructuredRecordTemplate?,
     fields: List<StructuredField>,
+    fieldsById: Map<String, StructuredField>,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, fieldId: String, prefix: String) -> Unit,
+    onSaveNew: (String, StructuredRecordDraft) -> Unit,
+    onSaveExisting: (String, StructuredRecordDraft) -> Unit,
 ) {
-    var name by rememberSaveable { mutableStateOf("") }
-    var prefix by rememberSaveable { mutableStateOf("") }
-    var selectedFieldId by rememberSaveable { mutableStateOf(fields.firstOrNull()?.id.orEmpty()) }
+    var name by rememberSaveable(initialTemplate?.id) { mutableStateOf(initialTemplate?.name.orEmpty()) }
+    val initialDraft = remember(initialTemplate?.id, initialTemplate?.segments, fieldsById) {
+        initialTemplate?.let { createStructuredTemplateDraft(it, fieldsById) }
+            ?: StructuredRecordDraft("", emptyList())
+    }
+    var draft by remember(initialTemplate?.id) { mutableStateOf(initialDraft) }
+    var editor by remember(initialTemplate?.id) { mutableStateOf(TextFieldValue(initialDraft.text, TextRange(initialDraft.text.length))) }
+    var selectedFieldId by rememberSaveable(initialTemplate?.id) { mutableStateOf(fields.firstOrNull()?.id.orEmpty()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(tr("新建结构化记录", "New structured record")) },
+        title = { Text(if (initialTemplate == null) tr("新建结构化记录", "New structured record") else tr("编辑结构化记录", "Edit structured record")) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
@@ -491,24 +426,49 @@ private fun NewRecordEditorDialog(
                     onValueChange = { name = it.take(60) },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text(tr("记录名称", "Record name")) },
-                    placeholder = { Text(tr("例如：俯卧撑次数", "e.g. Push-ups")) },
                     singleLine = true,
                 )
                 OutlinedTextField(
-                    value = prefix,
-                    onValueChange = { prefix = it.take(80) },
+                    value = editor,
+                    onValueChange = { candidate ->
+                        if (candidate.text == editor.text) {
+                            editor = selectWholeFieldWhenTapped(candidate, draft)
+                        } else {
+                            applyStructuredDraftEdit(draft, candidate.text)?.let { updated ->
+                                draft = updated
+                                editor = candidate.copy(selection = candidate.selection.coerceTo(updated.text.length))
+                            }
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text(tr("前导文字（可选）", "Prefix text (optional)")) },
-                    placeholder = { Text(tr("例如：做了 ", "e.g. Did ")) },
-                    singleLine = true,
+                    label = { Text(tr("模板正文", "Template body")) },
+                    placeholder = { Text(tr("例如：今天做了  个俯卧撑，午饭吃了 。", "e.g. Today I did  push-ups and ate  for lunch.")) },
+                    minLines = 4,
+                    maxLines = 10,
+                    visualTransformation = draftVisualTransformation(draft),
                 )
-                FieldPicker(
-                    fields = fields,
-                    selectedFieldId = selectedFieldId,
-                    onSelect = { selectedFieldId = it },
-                )
+                if (fields.isNotEmpty()) {
+                    FieldPicker(fields, selectedFieldId) { selectedFieldId = it }
+                    TextButton(
+                        enabled = selectedFieldId.isNotBlank(),
+                        onClick = {
+                            val field = fieldsById[selectedFieldId] ?: return@TextButton
+                            val inserted = insertStructuredTemplateField(draft, field, editor.selection.start)
+                            draft = inserted
+                            val span = inserted.fields.lastOrNull { it.fieldId == field.id }
+                            editor = TextFieldValue(
+                                inserted.text,
+                                span?.let { TextRange(it.start, it.endExclusive) } ?: TextRange(inserted.text.length),
+                            )
+                        },
+                    ) {
+                        Icon(Icons.Outlined.Add, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text(tr("在光标处插入字段", "Insert field at cursor"))
+                    }
+                }
                 Text(
-                    tr("选择一个已存在的字段；也可以稍后在字段管理中添加新字段。", "Choose an existing field; you can add new fields later in field management."),
+                    tr("字段在正文中以下划线显示；可以插入多个字段、重复字段和多行文字。", "Fields stay underlined inline; multiple, repeated and multiline fields are supported."),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -516,17 +476,17 @@ private fun NewRecordEditorDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = selectedFieldId.isNotEmpty() && name.isNotBlank(),
-                onClick = { onConfirm(name.trim(), selectedFieldId, prefix.trim()) },
+                enabled = name.isNotBlank() && draft.text.isNotBlank(),
+                onClick = {
+                    if (initialTemplate == null) onSaveNew(name.trim(), draft)
+                    else onSaveExisting(name.trim(), draft)
+                },
             ) { Text(tr("保存", "Save")) }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) }
-        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) } },
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FieldPicker(fields: List<StructuredField>, selectedFieldId: String, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
@@ -562,85 +522,36 @@ private fun fieldTypeLabel(type: StructuredFieldType): String = when (type) {
     StructuredFieldType.DURATION -> tr("时长", "Duration")
 }
 
-@Composable
-private fun TemplateFieldEditorDialog(
-    template: StructuredRecordTemplate,
-    fieldsById: Map<String, StructuredField>,
-    onDismiss: () -> Unit,
-    onSave: (StructuredRecordTemplate) -> Unit,
-) {
-    var name by rememberSaveable(template.id) { mutableStateOf(template.name) }
-    var prefix by rememberSaveable(template.id) {
-        mutableStateOf(template.segments.firstOrNull { it is StructuredRecordSegment.Text }?.let { (it as StructuredRecordSegment.Text).value }.orEmpty())
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(tr("编辑结构化记录", "Edit structured record")) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it.take(60) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(tr("记录名称", "Record name")) },
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = prefix,
-                    onValueChange = { prefix = it.take(80) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(tr("前导文字", "Prefix text")) },
-                    singleLine = true,
+private fun draftVisualTransformation(draft: StructuredRecordDraft): VisualTransformation =
+    VisualTransformation { input ->
+        val builder = AnnotatedString.Builder(input)
+        draft.fields.forEach { field ->
+            if (field.start >= 0 && field.endExclusive <= input.length && field.start < field.endExclusive) {
+                builder.addStyle(
+                    SpanStyle(textDecoration = TextDecoration.Underline),
+                    field.start,
+                    field.endExclusive,
                 )
             }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = name.isNotBlank(),
-                onClick = {
-                    val segments = template.segments.toMutableList()
-                    val leadingTextIndex = segments.indexOfFirst { it is StructuredRecordSegment.Text }
-                    if (prefix.isBlank()) {
-                        if (leadingTextIndex >= 0) segments.removeAt(leadingTextIndex)
-                    } else if (leadingTextIndex >= 0) {
-                        segments[leadingTextIndex] = StructuredRecordSegment.Text(prefix)
-                    } else {
-                        segments.add(0, StructuredRecordSegment.Text(prefix))
-                    }
-                    val updated = template.copy(name = name.trim(), segments = segments)
-                    onSave(updated)
-                },
-            ) { Text(tr("保存", "Save")) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) } },
-    )
+        }
+        TransformedText(builder.toAnnotatedString(), OffsetMapping.Identity)
+    }
+
+private fun activeDraftField(draft: StructuredRecordDraft, selection: TextRange) =
+    draft.fields.firstOrNull { field ->
+        selection.start >= field.start && selection.end <= field.endExclusive &&
+            (selection.start < field.endExclusive || selection.end > field.start)
+    }
+
+private fun selectWholeFieldWhenTapped(value: TextFieldValue, draft: StructuredRecordDraft): TextFieldValue {
+    if (!value.selection.collapsed) return value
+    val cursor = value.selection.start
+    val field = draft.fields.firstOrNull { cursor >= it.start && cursor <= it.endExclusive }
+        ?: return value
+    return value.copy(selection = TextRange(field.start, field.endExclusive))
 }
 
-@Composable
-private fun PureTextTemplateEditorDialog(
-    template: StructuredRecordTemplate,
-    onDismiss: () -> Unit,
-    onSave: (StructuredRecordTemplate) -> Unit,
-) {
-    var name by rememberSaveable(template.id) { mutableStateOf(template.name) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(tr("编辑结构化记录", "Edit structured record")) },
-        text = {
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it.take(60) },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(tr("记录名称", "Record name")) },
-                singleLine = true,
-            )
-        },
-        confirmButton = {
-            TextButton(
-                enabled = name.isNotBlank(),
-                onClick = { onSave(template.copy(name = name.trim())) },
-            ) { Text(tr("保存", "Save")) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(tr("取消", "Cancel")) } },
-    )
-}
+private fun TextRange.coerceTo(length: Int): TextRange = TextRange(
+    start.coerceIn(0, length),
+    end.coerceIn(0, length),
+)

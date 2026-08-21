@@ -9,6 +9,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.mockito.Mockito.mock
 
 class AgentToolExecutorTest {
     @Test
@@ -27,7 +28,7 @@ class AgentToolExecutorTest {
         assertTrue(result.success)
         assertEquals(AgentPermissionMode.REQUIRE_APPROVAL, approval.mode)
         assertNotNull(approval.request)
-        assertTrue(tool.executed)
+        assertEquals(1, tool.executionCount)
         assertTrue(review.mutationStarted)
         assertTrue(review.mutationCompleted)
         assertFalse(review.mutationFailed)
@@ -47,7 +48,7 @@ class AgentToolExecutorTest {
         assertFalse(result.success)
         assertTrue(result.rejected)
         assertEquals("USER_REJECTED", result.errorCode)
-        assertFalse(tool.executed)
+        assertEquals(0, tool.executionCount)
         assertFalse(review.mutationStarted)
         assertEquals(AgentExecutionStatus.REJECTED, review.eventStatus)
     }
@@ -92,6 +93,112 @@ class AgentToolExecutorTest {
     }
 
     @Test
+    fun committedToolCheckpointIsReusedWithoutExecutingMutationAgain() = runBlocking {
+        val tool = MutationTool()
+        val review = RecordingReview()
+        val recovery = mock(AgentRecoveryStore::class.java)
+        org.mockito.Mockito.`when`(recovery.toolCheckpoint("run", 1)).thenReturn(
+            toolCheckpoint(status = AgentExecutionStatus.SUCCEEDED.name, result = "{\"ok\":true}"),
+        )
+
+        val result = executor(
+            tool,
+            RecordingApproval(AgentApprovalDecision.APPROVE),
+            review,
+            recovery,
+        ).execute("run", 1, call(), scope(AgentPermissionMode.FULL_AUTO)) {}
+
+        assertTrue(result.success)
+        assertEquals(0, tool.executionCount)
+        assertFalse(review.mutationStarted)
+    }
+
+    @Test
+    fun pendingMutationAlreadyAtAfterStateCommitsReceiptWithoutRewrite() = runBlocking {
+        val tool = MutationTool(currentBefore = "after")
+        val review = RecordingReview()
+        val recovery = mock(AgentRecoveryStore::class.java)
+        org.mockito.Mockito.`when`(recovery.toolCheckpoint("run", 1)).thenReturn(
+            toolCheckpoint(status = AgentExecutionStatus.RUNNING.name),
+        )
+        org.mockito.Mockito.`when`(recovery.mutationCheckpoint(3L)).thenReturn(
+            mutationCheckpoint(status = "PENDING"),
+        )
+        org.mockito.Mockito.`when`(
+            recovery.markRecoveredMutationCommitted(
+                9L,
+                3L,
+                "diary/2026-08-13",
+                "Replace one line",
+                "{\"ok\":true,\"recovered\":true,\"message\":\"Committed side effect reused without re-execution.\"}",
+            ),
+        ).thenReturn(Unit)
+
+        val result = executor(
+            tool,
+            RecordingApproval(AgentApprovalDecision.APPROVE),
+            review,
+            recovery,
+        ).execute("run", 1, call(), scope(AgentPermissionMode.FULL_AUTO)) {}
+
+        assertTrue(result.success)
+        assertEquals(0, tool.executionCount)
+        assertFalse(review.mutationStarted)
+        assertFalse(review.mutationCompleted)
+    }
+
+    @Test
+    fun pendingMutationStillAtBeforeStateExecutesExistingReceiptExactlyOnce() = runBlocking {
+        val tool = MutationTool(currentBefore = "before")
+        val review = RecordingReview()
+        val recovery = mock(AgentRecoveryStore::class.java)
+        org.mockito.Mockito.`when`(recovery.toolCheckpoint("run", 1)).thenReturn(
+            toolCheckpoint(status = AgentExecutionStatus.RUNNING.name),
+        )
+        org.mockito.Mockito.`when`(recovery.mutationCheckpoint(3L)).thenReturn(
+            mutationCheckpoint(status = "PENDING"),
+        )
+
+        val result = executor(
+            tool,
+            RecordingApproval(AgentApprovalDecision.APPROVE),
+            review,
+            recovery,
+        ).execute("run", 1, call(), scope(AgentPermissionMode.FULL_AUTO)) {}
+
+        assertTrue(result.success)
+        assertEquals(1, tool.executionCount)
+        assertFalse(review.mutationStarted)
+        assertTrue(review.mutationCompleted)
+        assertEquals(9L, review.completedMutationId)
+    }
+
+    @Test
+    fun pendingMutationWithUnknownExternalStateFailsClosed() = runBlocking {
+        val tool = MutationTool(currentBefore = "external edit")
+        val review = RecordingReview()
+        val recovery = mock(AgentRecoveryStore::class.java)
+        org.mockito.Mockito.`when`(recovery.toolCheckpoint("run", 1)).thenReturn(
+            toolCheckpoint(status = AgentExecutionStatus.RUNNING.name),
+        )
+        org.mockito.Mockito.`when`(recovery.mutationCheckpoint(3L)).thenReturn(
+            mutationCheckpoint(status = "PENDING"),
+        )
+
+        val result = executor(
+            tool,
+            RecordingApproval(AgentApprovalDecision.APPROVE),
+            review,
+            recovery,
+        ).execute("run", 1, call(), scope(AgentPermissionMode.FULL_AUTO)) {}
+
+        assertFalse(result.success)
+        assertEquals("RECOVERY_CONFLICT", result.errorCode)
+        assertEquals(0, tool.executionCount)
+        assertFalse(review.mutationStarted)
+    }
+
+    @Test
     fun unauthorizedSourceFailsClosed() {
         val scope = AgentRunScope(
             "run",
@@ -111,18 +218,46 @@ class AgentToolExecutorTest {
         tool: AgentTool,
         approval: AgentApprovalGateway,
         review: RecordingReview,
+        recovery: AgentRecoveryStore = mock(AgentRecoveryStore::class.java),
     ) = AgentToolExecutor(
         AgentToolRegistry(setOf(AgentToolContributor { listOf(tool) })),
         approval,
         review,
+        recovery,
     )
 
     private fun scope(mode: AgentPermissionMode) = AgentRunScope("run", setOf("diary"), mode, true)
 
     private fun call() = AIToolCall("call", "edit_content", mapOf("content" to "after"))
 
-    private class MutationTool(private val fail: Boolean = false) : AgentTool {
-        var executed = false
+    private fun toolCheckpoint(
+        status: String,
+        result: String = "",
+    ) = AgentRecoveryStore.ToolCheckpoint(
+        id = 3L,
+        toolCallId = "call",
+        toolName = "edit_content",
+        classification = AgentToolClassification.MUTATION.name,
+        status = status,
+        target = "diary/2026-08-13",
+        summary = "Replace one line",
+        resultContent = result,
+        errorCode = null,
+    )
+
+    private fun mutationCheckpoint(status: String) = AgentRecoveryStore.MutationCheckpoint(
+        id = 9L,
+        status = status,
+        target = "diary/2026-08-13",
+        beforeContent = "before",
+        afterContent = "after",
+    )
+
+    private class MutationTool(
+        private val fail: Boolean = false,
+        private val currentBefore: String = "before",
+    ) : AgentTool {
+        var executionCount = 0
         override val definition = AgentToolDefinition(
             "edit_content",
             "Edit a test object",
@@ -135,7 +270,7 @@ class AgentToolExecutorTest {
             target = "diary/2026-08-13",
             summary = "Replace one line",
             argumentsSummary = "content=after",
-            before = "before",
+            before = currentBefore,
             after = "after",
             executionToken = "prepared",
         )
@@ -144,13 +279,13 @@ class AgentToolExecutorTest {
             preparation: AgentToolPreparation,
             scope: AgentRunScope,
         ): AgentToolOutcome {
-            executed = true
+            executionCount++
             if (fail) throw AgentToolException("MUTATION_FAILED", "Atomic write failed")
             return AgentToolOutcome(
                 content = "{\"ok\":true}",
                 summary = "Changed one line",
                 target = preparation.target,
-                before = "before",
+                before = currentBefore,
                 after = "after",
                 undoToken = "undo-token",
             )
@@ -177,6 +312,7 @@ class AgentToolExecutorTest {
         var mutationStarted = false
         var mutationCompleted = false
         var mutationFailed = false
+        var completedMutationId: Long? = null
         override suspend fun startRun(request: AgentRunRequest) = Unit
         override suspend fun finishRun(runId: String, status: String, usage: AgentRunUsage) = Unit
         override suspend fun startToolEvent(
@@ -206,6 +342,7 @@ class AgentToolExecutorTest {
         }
         override suspend fun completeMutation(mutationId: Long, outcome: AgentToolOutcome) {
             mutationCompleted = true
+            completedMutationId = mutationId
         }
         override suspend fun failMutation(mutationId: Long) {
             mutationFailed = true

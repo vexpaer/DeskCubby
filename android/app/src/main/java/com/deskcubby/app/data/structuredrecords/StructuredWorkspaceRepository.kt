@@ -20,22 +20,20 @@ class StructuredWorkspaceRepository @Inject constructor(
     private val diaryFileRepository: DiaryFileRepository,
     private val todayDiarySwitchTimeStore: TodayDiarySwitchTimeStore,
 ) {
-    private val settingsCache = SettingsCache()
-
-    /** Loads (creating on first use) the workspace [StructuredWorkspaceSettings]. */
+    /**
+     * Loads (creating on first use) the workspace settings. This intentionally does not cache the
+     * file: settings.json only contains the lightweight schema/protocol versions, while Cloud Sync
+     * may replace the same diary root's file without changing its URI. Reading through SAF here
+     * avoids returning stale settings after such a same-directory sync.
+     */
     suspend fun loadSettings(appSettings: AppSettings): StructuredWorkspaceSettings {
         val localSwitchTime = todayDiarySwitchTimeStore.current()
-        settingsCache.current?.let { cached ->
-            return cached.copy(dayBoundary = localSwitchTime)
-        }
         val raw = diaryFileRepository.readWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_SETTINGS)
-        val decoded = if (raw == null) {
+        return (if (raw == null) {
             seedSettings(appSettings)
         } else {
             StructuredRecordsCodec.decodeSettings(raw)
-        }.copy(dayBoundary = localSwitchTime)
-        settingsCache.current = decoded
-        return decoded
+        }).copy(dayBoundary = localSwitchTime)
     }
 
     /**
@@ -66,11 +64,8 @@ class StructuredWorkspaceRepository @Inject constructor(
         return JournalDayEngine.resolveTodayDiaryDate(LocalDateTime.ofInstant(now, zone), switchMinutes)
     }
 
-    /** Re-reads settings from disk, ignoring the in-memory cache (e.g. after a rebuild). */
-    suspend fun reloadSettings(appSettings: AppSettings): StructuredWorkspaceSettings {
-        settingsCache.current = null
-        return loadSettings(appSettings)
-    }
+    /** Kept for caller compatibility; settings are already read from disk on every load. */
+    suspend fun reloadSettings(appSettings: AppSettings): StructuredWorkspaceSettings = loadSettings(appSettings)
 
     suspend fun saveSettings(appSettings: AppSettings, value: StructuredWorkspaceSettings) {
         diaryFileRepository.writeWorkspaceFile(
@@ -78,7 +73,6 @@ class StructuredWorkspaceRepository @Inject constructor(
             StructuredRecordsCodec.FILE_SETTINGS,
             StructuredRecordsCodec.encodeSettings(value),
         )
-        settingsCache.current = value.copy(dayBoundary = todayDiarySwitchTimeStore.current())
     }
 
     /**
@@ -97,9 +91,7 @@ class StructuredWorkspaceRepository @Inject constructor(
             ?.let(JournalDayEngine::formatBoundary)
             ?: JournalDayEngine.DEFAULT_DAY_BOUNDARY
         todayDiarySwitchTimeStore.set(normalized)
-        val current = loadSettings(appSettings).copy(dayBoundary = normalized)
-        settingsCache.current = current
-        return current
+        return loadSettings(appSettings).copy(dayBoundary = normalized)
     }
 
     /** Loads the field definitions, seeding the five defaults when none exist yet. */
@@ -281,9 +273,5 @@ class StructuredWorkspaceRepository @Inject constructor(
         var result: Long = hash.toLong() and 0xffffffffL
         result = result * 31 + value.length
         return result.toString(36).take(10)
-    }
-
-    private class SettingsCache {
-        var current: StructuredWorkspaceSettings? = null
     }
 }

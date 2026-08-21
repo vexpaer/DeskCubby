@@ -28,6 +28,15 @@ data class IncrementalIndexResult(
     val totalOccurrences: Int,
 )
 
+internal const val STRUCTURED_HASH_AUDIT_INTERVAL_MS = 6L * 60L * 60L * 1000L
+
+internal fun shouldVerifyStructuredFile(
+    lastModified: Long,
+    lastVerifiedAt: Long,
+    nowMillis: Long,
+): Boolean = lastModified <= 0L ||
+    nowMillis - lastVerifiedAt >= STRUCTURED_HASH_AUDIT_INTERVAL_MS
+
 /**
  * Markdown-first structured-record orchestration. All new records belong to the natural local
  * calendar date. The “今日日记切换时间” is intentionally unavailable to this repository.
@@ -75,9 +84,6 @@ class StructuredRecordsRepository @Inject constructor(
                 JournalDayEngine.formatTime(sleep),
             )
             if (sleepResult.success) written += 1
-            // Duration is intentionally derived from the exact timestamps in the same session.
-            // Keeping the computation here prevents any configurable clock boundary from entering
-            // sleep semantics even though only sleep/wake fields are currently persisted.
             session.durationSeconds
         }
         return written
@@ -213,10 +219,26 @@ class StructuredRecordsRepository @Inject constructor(
         var parsed = 0
         for (file in files) {
             val previous = previousStates?.get(file.uri)
-            val unchanged = previous != null &&
+            val metadataUnchanged = previous != null &&
                 previous.modifiedAt == file.lastModified &&
                 previous.fileSize == file.size
-            if (unchanged) continue
+            val nowMillis = Instant.now().toEpochMilli()
+            val requiresHashAudit = previous != null && shouldVerifyStructuredFile(
+                lastModified = file.lastModified,
+                lastVerifiedAt = previous.parsedAt,
+                nowMillis = nowMillis,
+            )
+            if (metadataUnchanged && !requiresHashAudit) continue
+            if (metadataUnchanged && previous != null) {
+                val document = runCatching { diaryFileRepository.load(file.uri) }.getOrNull()
+                if (document != null) {
+                    val currentHash = DiaryTextUtils.sha256(document.content.toByteArray())
+                    if (currentHash == previous.sha256) {
+                        structuredRecordDao.upsertFileState(previous.copy(parsedAt = nowMillis))
+                        continue
+                    }
+                }
+            }
             parseAndStoreFile(settings, file)
             parsed += 1
         }
@@ -229,8 +251,6 @@ class StructuredRecordsRepository @Inject constructor(
         val document = runCatching { diaryFileRepository.load(file.uri) }.getOrNull() ?: return
         val content = document.content
         val sha256 = DiaryTextUtils.sha256(content.toByteArray())
-        // `journalDay` is a legacy DB column name. Its value is strictly the Markdown file's
-        // extracted natural date, so rebuilding the index never reinterprets history.
         val journalDay = diaryFileRepository.extractDate(
             file.name,
             file.lastModified,

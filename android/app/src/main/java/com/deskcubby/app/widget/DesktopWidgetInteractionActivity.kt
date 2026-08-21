@@ -18,12 +18,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import com.deskcubby.app.MainActivity
+import com.deskcubby.app.data.local.AiTaskTypeEntity
+import com.deskcubby.app.data.media.GalleryOriginalStager
+import com.deskcubby.app.data.media.GalleryOriginalStaging
 import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
-import com.deskcubby.app.data.model.ImportedMedia
 import com.deskcubby.app.data.model.MealCategory
 import com.deskcubby.app.data.model.NavItemId
-import com.deskcubby.app.data.local.AiTaskTypeEntity
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DateRecordRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
@@ -35,23 +36,16 @@ import com.deskcubby.app.data.taskqueue.AiTaskQueue
 import com.deskcubby.app.data.taskqueue.CalorieSingleTaskPayload
 import com.deskcubby.app.ui.theme.translate
 import dagger.hilt.android.AndroidEntryPoint
-import javax.inject.Inject
 import java.io.File
-import java.time.LocalDate
 import java.security.MessageDigest
+import java.time.LocalDate
+import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * Small, non-exported UI boundary for interactions RemoteViews cannot host itself.
- *
- * Launcher widgets cannot contain an editable EditText and cannot retain a photo URI beyond an
- * Activity result. This proxy therefore owns the keyboard/photo picker and keeps itself visible
- * until the selected content is durably written through the normal repositories.
- */
 @AndroidEntryPoint
 class DesktopWidgetInteractionActivity : ComponentActivity() {
     @Inject lateinit var settingsRepository: SettingsRepository
@@ -63,12 +57,12 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
     @Inject lateinit var thoughtDraftStore: DesktopWidgetThoughtDraftStore
 
     private var settings: AppSettings = AppSettings()
-    private var settingsLoaded: Boolean = false
+    private var settingsLoaded = false
     private var progressDialog: AlertDialog? = null
     private var input: EditText? = null
     private var pendingCameraPath: String? = null
-    private var externalSourceLaunched: Boolean = false
-    private var switchingToCategoryPicker: Boolean = false
+    private var externalSourceLaunched = false
+    private var switchingToCategoryPicker = false
 
     private val photoPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         externalSourceLaunched = false
@@ -123,9 +117,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                         pendingCameraPath,
                         externalSourceLaunched,
                     )
-                ) {
-                    launchMealPhotoPicker()
-                }
+                ) launchMealPhotoPicker()
                 ACTION_FORCE_CLOUD -> showForceCloudConfirmation()
                 ACTION_DATE_RECORD_ADD -> showDateRecordInput()
                 ACTION_DAILY_RECORD -> showDailyRecordInput()
@@ -167,17 +159,17 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         if (thought == null) {
             Toast.makeText(
                 this,
-                translate("这条小巧思已不存在", "This thought is no longer available", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+                translate("这条小巧思已不存在", "This thought is no longer available", language(english)),
                 Toast.LENGTH_SHORT,
             ).show()
             finish()
             return
         }
         AlertDialog.Builder(this)
-            .setTitle(translate("小巧思", "Thought", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))
+            .setTitle(translate("小巧思", "Thought", language(english)))
             .setMessage(thought.content)
-            .setNegativeButton(translate("关闭", "Close", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) { _, _ -> finish() }
-            .setPositiveButton(translate("查看全部", "View all", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) { _, _ ->
+            .setNegativeButton(translate("关闭", "Close", language(english))) { _, _ -> finish() }
+            .setPositiveButton(translate("查看全部", "View all", language(english))) { _, _ ->
                 startActivity(
                     Intent(this, MainActivity::class.java)
                         .putExtra(DesktopWidgetRenderer.EXTRA_START_ROUTE, NavItemId.THOUGHT.route)
@@ -205,25 +197,22 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         finish()
     }
 
-    /** Quick-send: pick a category (or none) first, then type and send in one go. */
     private fun showQuickInputCategoryPicker(initialValue: String = "") {
         val english = settings.appLanguage == AppLanguage.ENGLISH
         lifecycleScope.launch {
-            val categories = runCatching {
-                thoughtRepository.categories.first()
-            }.getOrDefault(emptyList())
+            val categories = runCatching { thoughtRepository.categories.first() }.getOrDefault(emptyList())
             val labels = buildList {
-                add(translate("无分类", "No category", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))
+                add(translate("无分类", "No category", language(english)))
                 categories.forEach { add(it.name) }
             }
             AlertDialog.Builder(this@DesktopWidgetInteractionActivity)
-                .setTitle(translate("发送到分类", "Send to category", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))
+                .setTitle(translate("发送到分类", "Send to category", language(english)))
                 .setItems(labels.toTypedArray()) { _, which ->
                     val categoryId = if (which == 0) -1L else categories[which - 1].id
                     val label = if (which == 0) null else categories[which - 1].name
                     showQuickInput(initialValue, categoryId, label)
                 }
-                .setNegativeButton(translate("取消", "Cancel", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) { _, _ -> finish() }
+                .setNegativeButton(translate("取消", "Cancel", language(english))) { _, _ -> finish() }
                 .setOnCancelListener { finish() }
                 .show()
         }
@@ -236,7 +225,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
     ) {
         val english = settings.appLanguage == AppLanguage.ENGLISH
         val editor = EditText(this).apply {
-            hint = translate("记录一条小巧思", "Capture a thought", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+            hint = translate("记录一条小巧思", "Capture a thought", language(english))
             setText(initialValue)
             setSelection(text.length)
             maxLines = 6
@@ -244,19 +233,19 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         }
         input = editor
         val dialogTitle = if (categoryLabel != null) {
-            translate("快速输入 → " + categoryLabel, "Quick input -> " + categoryLabel, if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+            translate("快速输入 → $categoryLabel", "Quick input -> $categoryLabel", language(english))
         } else {
-            translate("快速输入", "Quick input", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+            translate("快速输入", "Quick input", language(english))
         }
         val positiveLabel = if (categoryId >= 0L) {
-            translate("添加到分类", "Add to category", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+            translate("添加到分类", "Add to category", language(english))
         } else {
-            translate("保存到卡片", "Save to widget", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+            translate("保存到卡片", "Save to widget", language(english))
         }
         val dialog = AlertDialog.Builder(this)
             .setTitle(dialogTitle)
             .setView(editor)
-            .setNegativeButton(translate("取消", "Cancel", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) { _, _ -> finish() }
+            .setNegativeButton(translate("取消", "Cancel", language(english))) { _, _ -> finish() }
             .setPositiveButton(positiveLabel, null)
             .setOnCancelListener { finish() }
             .create()
@@ -264,18 +253,13 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val content = editor.text?.toString()?.trim().orEmpty()
                 if (content.isEmpty()) {
-                    editor.error = translate("请输入内容", "Enter some text", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                    editor.error = translate("请输入内容", "Enter some text", language(english))
                 } else {
                     dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                    if (categoryId >= 0L) {
-                        persistThought(content, dialog, categoryId)
-                    } else {
-                        saveThoughtDraft(content, dialog)
-                    }
+                    if (categoryId >= 0L) persistThought(content, dialog, categoryId)
+                    else saveThoughtDraft(content, dialog)
                 }
             }
-            // Launchers do not forward a widget long-click to RemoteViews. Keep the requested
-            // category shortcut on this editor's primary action instead.
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnLongClickListener {
                 switchingToCategoryPicker = true
                 val value = editor.text?.toString().orEmpty()
@@ -303,7 +287,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         requestWidgetRefresh()
         Toast.makeText(
             this,
-            translate("已放入桌面输入框", "Draft placed in the widget", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+            translate("已放入桌面输入框", "Draft placed in the widget", language(english)),
             Toast.LENGTH_SHORT,
         ).show()
         dialog.dismiss()
@@ -318,11 +302,11 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
             setPadding(horizontal, 0, horizontal, 0)
         }
         val nameInput = EditText(this).apply {
-            hint = translate("名称", "Name", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+            hint = translate("名称", "Name", language(english))
             filters = arrayOf(InputFilter.LengthFilter(256))
         }
         val iconInput = EditText(this).apply {
-            hint = translate("图标", "Icon", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+            hint = translate("图标", "Icon", language(english))
             setText("🎯")
             filters = arrayOf(InputFilter.LengthFilter(64))
         }
@@ -335,10 +319,10 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         container.addView(iconInput)
         container.addView(dateInput)
         val dialog = AlertDialog.Builder(this)
-            .setTitle(translate("添加日期记录", "Add date record", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))
+            .setTitle(translate("添加日期记录", "Add date record", language(english)))
             .setView(container)
-            .setNegativeButton(translate("取消", "Cancel", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) { _, _ -> finish() }
-            .setPositiveButton(translate("添加", "Add", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE), null)
+            .setNegativeButton(translate("取消", "Cancel", language(english))) { _, _ -> finish() }
+            .setPositiveButton(translate("添加", "Add", language(english)), null)
             .setOnCancelListener { finish() }
             .create()
         dialog.setOnShowListener {
@@ -347,11 +331,11 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                 val icon = iconInput.text?.toString().orEmpty()
                 val date = dateInput.text?.toString().orEmpty()
                 if (name.isBlank()) {
-                    nameInput.error = translate("请输入名称", "Enter a name", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                    nameInput.error = translate("请输入名称", "Enter a name", language(english))
                     return@setOnClickListener
                 }
                 if (runCatching { LocalDate.parse(date) }.isFailure) {
-                    dateInput.error = translate("请输入有效的 yyyy-MM-dd 日期", "Use a valid yyyy-MM-dd date", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                    dateInput.error = translate("请输入有效的 yyyy-MM-dd 日期", "Use a valid yyyy-MM-dd date", language(english))
                     return@setOnClickListener
                 }
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
@@ -363,7 +347,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                         requestWidgetRefresh()
                         Toast.makeText(
                             this@DesktopWidgetInteractionActivity,
-                            translate("日期记录已添加", "Date record added", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+                            translate("日期记录已添加", "Date record added", language(english)),
                             Toast.LENGTH_SHORT,
                         ).show()
                         dialog.dismiss()
@@ -372,7 +356,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                         throw cancelled
                     } catch (_: Exception) {
                         dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                        nameInput.error = translate("添加失败", "Could not add the record", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                        nameInput.error = translate("添加失败", "Could not add the record", language(english))
                     }
                 }
             }
@@ -387,7 +371,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         if (template == null) {
             Toast.makeText(
                 this,
-                translate("这条结构化记录模板已不存在", "This structured record no longer exists", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+                translate("这条结构化记录模板已不存在", "This structured record no longer exists", language(english)),
                 Toast.LENGTH_SHORT,
             ).show()
             finish()
@@ -396,7 +380,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         if (settings.diaryTreeUri == null) {
             Toast.makeText(
                 this,
-                translate("请先在 DeskCubby 中选择日记目录", "Choose a diary folder in DeskCubby first", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+                translate("请先在 DeskCubby 中选择日记目录", "Choose a diary folder in DeskCubby first", language(english)),
                 Toast.LENGTH_LONG,
             ).show()
             finish()
@@ -409,40 +393,41 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
             filters = arrayOf(InputFilter.LengthFilter(MAX_DAILY_RECORD_CHARS))
         }
         val dialog = AlertDialog.Builder(this)
-            .setTitle(translate("结构化记录", "Structured record", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))
+            .setTitle(translate("结构化记录", "Structured record", language(english)))
             .setView(editor)
-            .setNegativeButton(translate("取消", "Cancel", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) { _, _ -> finish() }
-            .setPositiveButton(translate("加入今日日记", "Add to today", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE), null)
+            .setNegativeButton(translate("取消", "Cancel", language(english))) { _, _ -> finish() }
+            .setPositiveButton(translate("加入今日日记", "Add to today", language(english)), null)
             .setOnCancelListener { finish() }
             .create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val entry = editor.text?.toString()?.trim().orEmpty()
                 if (entry.isEmpty()) {
-                    editor.error = translate("请输入内容", "Enter some text", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                    editor.error = translate("请输入内容", "Enter some text", language(english))
                     return@setOnClickListener
                 }
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
                 lifecycleScope.launch {
                     try {
                         withContext(Dispatchers.IO) {
-                    // Mirror Home: daily-record writes must land on the current Journal Day so the
-                    // 05:00 boundary (or a custom one) does not split "today" across two files.
-                    val journalDay = runCatching { structuredWorkspaceRepository.resolveJournalDay(settings) }
-                        .getOrDefault(LocalDate.now())
-                    diaryFileRepository.appendTextToToday(entry, settings, journalDay)
+                            // resolveJournalDay is retained as a compatibility API but now resolves
+                            // the natural local date; the diary switch time only affects navigation.
+                            val naturalDate = runCatching {
+                                structuredWorkspaceRepository.resolveJournalDay(settings)
+                            }.getOrDefault(LocalDate.now())
+                            diaryFileRepository.appendTextToToday(entry, settings, naturalDate)
                             try {
                                 diaryFileRepository.scan(settings)
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (_: Exception) {
-                                // The Markdown write already succeeded.
+                                // Markdown is already durable.
                             }
                         }
                         requestWidgetRefresh()
                         Toast.makeText(
                             this@DesktopWidgetInteractionActivity,
-                            translate("已加入今日日记", "Added to today's diary", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+                            translate("已加入今日日记", "Added to today's diary", language(english)),
                             Toast.LENGTH_SHORT,
                         ).show()
                         dialog.dismiss()
@@ -451,7 +436,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                         throw cancelled
                     } catch (_: Exception) {
                         dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                        editor.error = translate("结构化记录添加失败", "Could not add the structured record", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                        editor.error = translate("结构化记录添加失败", "Could not add the structured record", language(english))
                     }
                 }
             }
@@ -470,7 +455,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                 requestWidgetRefresh()
                 Toast.makeText(
                     this@DesktopWidgetInteractionActivity,
-                    translate("小巧思已保存", "Thought saved", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+                    translate("小巧思已保存", "Thought saved", language(english)),
                     Toast.LENGTH_SHORT,
                 ).show()
                 dialog.dismiss()
@@ -478,7 +463,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                 throw cancelled
             } catch (_: Exception) {
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                input?.error = translate("保存失败", "Could not save", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                input?.error = translate("保存失败", "Could not save", language(english))
             }
         }
     }
@@ -493,17 +478,13 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         if (settings.diaryTreeUri == null || settings.mediaTreeUri == null) {
             Toast.makeText(
                 this,
-                translate("请先在 DeskCubby 中选择日记和媒体目录", "Choose diary and media folders in DeskCubby first", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+                translate("请先在 DeskCubby 中选择日记和媒体目录", "Choose diary and media folders in DeskCubby first", language(english)),
                 Toast.LENGTH_LONG,
             ).show()
             finish()
             return
         }
-        // Meal buttons capture directly with the camera (no picker step). If the camera cannot
-        // start (missing activity, no permission), fall back to the photo picker once.
-        if (!runCatching { launchCamera() }.getOrDefault(false)) {
-            launchPhotoPicker()
-        }
+        if (!runCatching { launchCamera() }.getOrDefault(false)) launchPhotoPicker()
     }
 
     private fun launchPhotoPicker() {
@@ -523,11 +504,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                 check(exists() || mkdirs()) { "Could not create camera cache" }
             }
             file = File.createTempFile("meal-widget-", ".jpg", directory)
-            val uri = FileProvider.getUriForFile(
-                this,
-                "$packageName.fileprovider",
-                requireNotNull(file),
-            )
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", requireNotNull(file))
             pendingCameraPath = file?.absolutePath
             externalSourceLaunched = true
             camera.launch(uri)
@@ -547,71 +524,100 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         }
         val english = settings.appLanguage == AppLanguage.ENGLISH
         progressDialog = AlertDialog.Builder(this)
-            .setMessage(translate("正在添加照片…", "Adding photo…", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))
+            .setMessage(translate("正在添加照片…", "Adding photo…", language(english)))
             .setCancelable(false)
             .show()
         lifecycleScope.launch {
+            var galleryStaging: GalleryOriginalStaging? = null
+            var durableWriteSucceeded = false
+            var followUpWarning: String? = null
             try {
-                var media: ImportedMedia? = null
-                withContext(Dispatchers.IO) {
-                    media = diaryFileRepository.appendImageToToday(
+                if (settings.saveOriginalToGallery) {
+                    galleryStaging = withContext(Dispatchers.IO) {
+                        GalleryOriginalStager.stage(
+                            this@DesktopWidgetInteractionActivity,
+                            uri,
+                            "${category.key}-original",
+                        )
+                    }
+                }
+
+                val media = withContext(Dispatchers.IO) {
+                    diaryFileRepository.appendImageToToday(
                         uri,
                         if (english) category.englishLabel else category.chineseLabel,
-                        settings,
+                        settings.copy(saveOriginalToGallery = false),
                     )
                 }
-                // The image and Markdown are durable now. Dismiss the loading UI immediately before
-                // any slow background follow-up (AI, index scan, gallery copy, geocoder).
+                durableWriteSucceeded = true
+
+                // The queue row itself must exist before finish(); only inference remains async.
+                if (settings.calorieEstimationEnabled) {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            aiTaskQueue.enqueueTask(
+                                type = AiTaskTypeEntity.CALORIE_SINGLE,
+                                payload = CalorieSingleTaskPayload(
+                                    uri = media.documentUri,
+                                    fileName = media.fileName,
+                                    settings = settings,
+                                ),
+                            )
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        followUpWarning = translate(
+                            "照片已保存，但热量估算入队失败：${error.message.orEmpty()}",
+                            "Photo saved, but calorie estimation could not be queued: ${error.message.orEmpty()}",
+                            language(english),
+                        )
+                    }
+                }
+
+                galleryStaging?.let { staged ->
+                    try {
+                        GalleryOriginalStager.enqueue(this@DesktopWidgetInteractionActivity, staged)
+                        galleryStaging = null
+                    } catch (error: Exception) {
+                        followUpWarning = translate(
+                            "照片已保存，但原图相册任务入队失败：${error.message.orEmpty()}",
+                            "Photo saved, but the gallery copy could not be queued: ${error.message.orEmpty()}",
+                            language(english),
+                        )
+                    }
+                }
+
                 progressDialog?.dismiss()
                 progressDialog = null
                 requestWidgetRefresh()
                 Toast.makeText(
                     this@DesktopWidgetInteractionActivity,
-                    translate("${category.chineseLabel}图片已加入今日日记", "${category.englishLabel} photo added", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
-                    Toast.LENGTH_SHORT,
+                    followUpWarning ?: translate(
+                        "${category.chineseLabel}图片已加入今日日记",
+                        "${category.englishLabel} photo added",
+                        language(english),
+                    ),
+                    if (followUpWarning == null) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
                 ).show()
                 finish()
-                // Background follow-ups must never keep the (already dismissed) loading state.
-                val saved = media
-                // Background follow-ups must never keep the (already dismissed) loading state, and
-                // they must survive the activity calling finish() below. lifecycleScope is destroyed
-                // with the activity, so run them on a detached supervisor scope that completes
-                // independently (the enrichment is bounded and best-effort).
+
+                // Only best-effort work remains here. It references durable app-owned media, never
+                // the temporary camera file that is deleted in finally.
                 kotlinx.coroutines.CoroutineScope(
                     kotlinx.coroutines.SupervisorJob() + Dispatchers.IO,
                 ).launch {
                     try {
-                        if (settings.calorieEstimationEnabled && saved != null) {
-                            try {
-                                aiTaskQueue.enqueueTask(
-                                    type = AiTaskTypeEntity.CALORIE_SINGLE,
-                                    payload = CalorieSingleTaskPayload(
-                                        uri = saved.documentUri,
-                                        fileName = saved.fileName,
-                                        settings = settings,
-                                    ),
-                                )
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (_: Exception) {
-                                // The photo and Markdown are already durable; optional AI
-                                // estimation must not turn a success into a retry prompt.
-                            }
-                        }
-                        if (saved != null) {
-                            diaryFileRepository.enrichImportedMedia(uri, saved, settings)
-                        }
-                        try {
-                            diaryFileRepository.scan(settings)
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (_: Exception) {
-                            // The next normal diary scan will rebuild the index.
-                        }
+                        diaryFileRepository.enrichImportedMedia(
+                            sourceUri = null,
+                            media = media,
+                            settings = settings.copy(saveOriginalToGallery = false),
+                        )
+                        runCatching { diaryFileRepository.scan(settings) }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
-                        // Follow-up is best-effort after the durable write already succeeded.
+                        // Durable user data and durable queues already exist.
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -621,11 +627,18 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                 progressDialog = null
                 Toast.makeText(
                     this@DesktopWidgetInteractionActivity,
-                    translate("图片添加失败", "Could not add the photo", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+                    if (durableWriteSucceeded) {
+                        translate("照片已保存，但后台任务准备失败", "Photo saved, but a background task could not be prepared", language(english))
+                    } else {
+                        translate("图片添加失败", "Could not add the photo", language(english))
+                    },
                     Toast.LENGTH_LONG,
                 ).show()
                 finish()
             } finally {
+                // Staging is app-owned. If it could not be enqueued, keep it for bounded orphan
+                // cleanup rather than deleting the only durable copy before the source disappears.
+                if (!durableWriteSucceeded) GalleryOriginalStager.discard(galleryStaging)
                 sourceFile?.delete()
             }
         }
@@ -635,7 +648,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         val english = settings.appLanguage == AppLanguage.ENGLISH
         Toast.makeText(
             this,
-            translate("无法打开照片来源", "Could not open the photo source", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE),
+            translate("无法打开照片来源", "Could not open the photo source", language(english)),
             Toast.LENGTH_SHORT,
         ).show()
         finish()
@@ -659,41 +672,58 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         )
         if (availability != ForceCloudAvailability.READY) {
             val message = when (availability) {
-                ForceCloudAvailability.SYNC_DISABLED -> translate("云端同步尚未开启。请先进入设置检查并明确开启。", "Cloud sync is turned off. Open settings to review it before continuing.", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
-                ForceCloudAvailability.NO_ENABLED_SOURCE -> translate("没有已启用的云端来源。请先进入设置完成配置。", "No cloud source is enabled. Open settings to configure one first.", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
-                ForceCloudAvailability.DOWNLOAD_REQUIRES_ONE_SOURCE -> translate("强制下载需要恰好一个已启用的云端来源。", "Force download requires exactly one enabled cloud source.", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                ForceCloudAvailability.SYNC_DISABLED -> translate(
+                    "云端同步尚未开启。请先进入设置检查并明确开启。",
+                    "Cloud sync is turned off. Open settings to review it before continuing.",
+                    language(english),
+                )
+                ForceCloudAvailability.NO_ENABLED_SOURCE -> translate(
+                    "没有已启用的云端来源。请先进入设置完成配置。",
+                    "No cloud source is enabled. Open settings to configure one first.",
+                    language(english),
+                )
+                ForceCloudAvailability.DOWNLOAD_REQUIRES_ONE_SOURCE -> translate(
+                    "强制下载需要恰好一个已启用的云端来源。",
+                    "Force download requires exactly one enabled cloud source.",
+                    language(english),
+                )
                 ForceCloudAvailability.READY -> return
             }
             AlertDialog.Builder(this)
-                .setTitle(translate("云端同步不可用", "Cloud sync unavailable", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE))
+                .setTitle(translate("云端同步不可用", "Cloud sync unavailable", language(english)))
                 .setMessage(message)
-                .setNegativeButton(translate("取消", "Cancel", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) { _, _ -> finish() }
-                .setPositiveButton(translate("打开设置", "Open settings", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) { _, _ ->
-                    openSettings()
-                }
+                .setNegativeButton(translate("取消", "Cancel", language(english))) { _, _ -> finish() }
+                .setPositiveButton(translate("打开设置", "Open settings", language(english))) { _, _ -> openSettings() }
                 .setOnCancelListener { finish() }
                 .show()
             return
         }
 
         val title = if (download) {
-            translate("确认强制下载？", "Force download?", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+            translate("确认强制下载？", "Force download?", language(english))
         } else {
-            translate("确认强制上传？", "Force upload?", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+            translate("确认强制上传？", "Force upload?", language(english))
         }
         val risk = if (download) {
-            translate("强制下载仅使用当前唯一的已启用云端来源。云端新增项目会下载；同路径内容不同时，将仅在本机文件仍匹配扫描快照时采用云端版本。本机独有项目不会删除，并发本机修改会保留并产生冲突副本。", "Force download uses the single currently enabled cloud source. New remote items are downloaded. Different items at the same path use remote data only while the local file still matches its scanned snapshot. Local-only items are not deleted, and concurrent local edits are preserved with a conflict copy.", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
-        } else translate("本机新增项目会上传；同路径内容不同时，将以扫描到的远端版本为条件覆盖远端。远端独有项目不会删除，扫描后发生的远端修改会阻止覆盖。", "New local items are uploaded. Different items at the same path replace remote data only if its scanned version still matches. Remote-only items are not deleted, and later remote edits stop the overwrite.", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+            translate(
+                "强制下载仅使用当前唯一的已启用云端来源。云端新增项目会下载；同路径内容不同时，将仅在本机文件仍匹配扫描快照时采用云端版本。本机独有项目不会删除，并发本机修改会保留并产生冲突副本。",
+                "Force download uses the single currently enabled cloud source. New remote items are downloaded. Different items at the same path use remote data only while the local file still matches its scanned snapshot. Local-only items are not deleted, and concurrent local edits are preserved with a conflict copy.",
+                language(english),
+            )
+        } else {
+            translate(
+                "本机新增项目会上传；同路径内容不同时，将以扫描到的远端版本为条件覆盖远端。远端独有项目不会删除，扫描后发生的远端修改会阻止覆盖。",
+                "New local items are uploaded. Different items at the same path replace remote data only if its scanned version still matches. Remote-only items are not deleted, and later remote edits stop the overwrite.",
+                language(english),
+            )
+        }
         AlertDialog.Builder(this)
             .setTitle(title)
             .setMessage(risk)
-            .setNegativeButton(translate("取消", "Cancel", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)) { _, _ -> finish() }
+            .setNegativeButton(translate("取消", "Cancel", language(english))) { _, _ -> finish() }
             .setPositiveButton(
-                if (download) {
-                    translate("强制下载", "Force download", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
-                } else {
-                    translate("强制上传", "Force upload", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
-                },
+                if (download) translate("强制下载", "Force download", language(english))
+                else translate("强制上传", "Force upload", language(english)),
             ) { _, _ -> enqueueForcedCloudSync(mode) }
             .setOnCancelListener { finish() }
             .show()
@@ -706,15 +736,12 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
             this,
             if (queued) {
                 when (mode) {
-                    CloudSyncRunMode.FORCE_UPLOAD ->
-                        translate("强制上传已加入队列", "Forced upload queued", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
-                    CloudSyncRunMode.FORCE_DOWNLOAD ->
-                        translate("强制下载已加入队列", "Forced download queued", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
-                    CloudSyncRunMode.NORMAL ->
-                        translate("同步已加入队列", "Sync queued", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                    CloudSyncRunMode.FORCE_UPLOAD -> translate("强制上传已加入队列", "Forced upload queued", language(english))
+                    CloudSyncRunMode.FORCE_DOWNLOAD -> translate("强制下载已加入队列", "Forced download queued", language(english))
+                    CloudSyncRunMode.NORMAL -> translate("同步已加入队列", "Sync queued", language(english))
                 }
             } else {
-                translate("无法加入同步队列，请稍后重试", "Could not queue the sync; try again", if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE)
+                translate("无法加入同步队列，请稍后重试", "Could not queue the sync; try again", language(english))
             },
             Toast.LENGTH_LONG,
         ).show()
@@ -748,6 +775,9 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         AppWidgetManager.INVALID_APPWIDGET_ID,
     )
 
+    private fun language(english: Boolean): AppLanguage =
+        if (english) AppLanguage.ENGLISH else AppLanguage.CHINESE
+
     companion object {
         private const val EXTRA_ACTION = "com.deskcubby.app.extra.WIDGET_ACTION"
         private const val EXTRA_MEAL_CATEGORY = "com.deskcubby.app.extra.WIDGET_MEAL_CATEGORY"
@@ -773,7 +803,6 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
         fun quickInputPendingIntent(context: Context, appWidgetId: Int): PendingIntent =
             pendingIntent(context, appWidgetId, ACTION_QUICK_INPUT, null)
 
-        /** Send button: opens the category picker (direct send or one of the thought categories). */
         fun quickInputCategoriesPendingIntent(context: Context, appWidgetId: Int): PendingIntent =
             pendingIntent(context, appWidgetId, ACTION_QUICK_INPUT_CATEGORIES, null)
 

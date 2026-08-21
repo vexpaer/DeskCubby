@@ -7,11 +7,13 @@ import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.structuredrecords.PhoneInteractionEstimator
 import com.deskcubby.app.data.structuredrecords.StructuredField
-import com.deskcubby.app.data.structuredrecords.StructuredRecordSegment
+import com.deskcubby.app.data.structuredrecords.StructuredRecordDraft
 import com.deskcubby.app.data.structuredrecords.StructuredRecordTemplate
 import com.deskcubby.app.data.structuredrecords.StructuredRecordsRepository
 import com.deskcubby.app.data.structuredrecords.SystemFieldSnapshot
 import com.deskcubby.app.data.structuredrecords.StructuredWorkspaceRepository
+import com.deskcubby.app.data.structuredrecords.structuredDraftToSegments
+import com.deskcubby.app.data.structuredrecords.structuredDraftValues
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import java.time.LocalTime
@@ -135,7 +137,7 @@ class StructuredRecordsViewModel @Inject constructor(
         mutableNow.value = LocalTime.now()
     }
 
-    fun record(template: StructuredRecordTemplate, values: List<String>) {
+    fun record(template: StructuredRecordTemplate, draft: StructuredRecordDraft) {
         if (template.id in mutableSending.value) return
         mutableSending.value += template.id
         viewModelScope.launch {
@@ -147,7 +149,14 @@ class StructuredRecordsViewModel @Inject constructor(
                     isError = true,
                 )
             } else {
-                val result = recordsRepository.insertRecordFromTemplate(appSettings, template, values)
+                val values = structuredDraftValues(draft)
+                if (values == null) {
+                    showFeedback("请填写所有下划线字段", "Fill every underlined field", isError = true)
+                    mutableSending.value -= template.id
+                    return@launch
+                }
+                val editedTemplate = template.copy(segments = structuredDraftToSegments(draft))
+                val result = recordsRepository.insertRecordFromTemplate(appSettings, editedTemplate, values)
                 if (result.success) {
                     showFeedback(
                         "已记录到 ${result.journalDay}",
@@ -164,31 +173,22 @@ class StructuredRecordsViewModel @Inject constructor(
         }
     }
 
-    fun addTemplate(name: String, field: StructuredField?, prefix: String?) {
+    fun addTemplate(name: String, draft: StructuredRecordDraft) {
         viewModelScope.launch {
             val appSettings = settings.value
             if (appSettings.diaryTreeUri == null) {
                 showFeedback("请先选择日记目录", "Choose a diary folder first", isError = true)
                 return@launch
             }
-            val currentFields = workspaceRepository.loadFields(appSettings)
-            val segments = buildList {
-                prefix?.takeIf(String::isNotBlank)?.let { add(StructuredRecordSegment.Text(it)) }
-                field?.let {
-                    if (currentFields.none { f -> f.id == it.id }) {
-                        workspaceRepository.saveFields(appSettings, currentFields + it)
-                    }
-                    add(StructuredRecordSegment.Field(it.id))
-                }
-            }
+            val segments = structuredDraftToSegments(draft)
             if (segments.isEmpty()) {
-                showFeedback("请添加字段", "Add a field first", isError = true)
+                showFeedback("请输入模板正文", "Enter template text", isError = true)
                 return@launch
             }
             val templates = workspaceRepository.loadTemplates(appSettings)
             val template = StructuredRecordTemplate(
                 id = "r_" + UUID.randomUUID().toString().take(8),
-                name = name.ifBlank { field?.name ?: "记录" },
+                name = name.ifBlank { "记录" },
                 segments = segments,
                 sortOrder = templates.size,
             )
