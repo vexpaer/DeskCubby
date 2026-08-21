@@ -8,6 +8,7 @@ data class StructuredDraftField(
     val start: Int,
     val endExclusive: Int,
     val value: String?,
+    val templateBinding: Boolean = false,
 )
 
 data class StructuredRecordDraft(
@@ -26,11 +27,16 @@ fun createStructuredRecordDraft(
 fun createStructuredTemplateDraft(
     template: StructuredRecordTemplate,
     fieldsById: Map<String, StructuredField>,
-): StructuredRecordDraft = buildDraft(template, fieldsById) { it.name }
+): StructuredRecordDraft = buildDraft(
+    template = template,
+    fieldsById = fieldsById,
+    templateBindings = true,
+) { it.name }
 
 private fun buildDraft(
     template: StructuredRecordTemplate,
     fieldsById: Map<String, StructuredField>,
+    templateBindings: Boolean = false,
     display: (StructuredField) -> String,
 ): StructuredRecordDraft {
     val text = StringBuilder()
@@ -50,6 +56,7 @@ private fun buildDraft(
                     start = start,
                     endExclusive = text.length,
                     value = if (field.type == StructuredFieldType.TIME && rendered != field.name) rendered else null,
+                    templateBinding = templateBindings,
                 )
             }
         }
@@ -68,6 +75,10 @@ fun isStructuredDraftReady(draft: StructuredRecordDraft): Boolean =
  * Applies one text edit while preserving field bindings. Edits wholly inside one field replace that
  * field value; edits outside fields shift later ranges. A change crossing a field boundary or
  * touching multiple fields is rejected rather than silently unbinding persisted markers.
+ *
+ * Template drafts are the one exception: deleting exactly one whole inline field removes that
+ * binding from the template. Record-entry drafts keep rejecting the same edit so a required field
+ * cannot become an invisible zero-length binding.
  */
 fun applyStructuredDraftEdit(
     draft: StructuredRecordDraft,
@@ -113,9 +124,27 @@ fun applyStructuredDraftEdit(
     val target = touched.single()
     if (start < target.start || oldSuffix > target.endExclusive) return null
     val newTargetEnd = target.endExclusive + delta
-    // A required inline field must always retain a visible/editable range. Replacing a selected
-    // field with new text is fine; deleting it to zero characters is ignored instead of leaving an
-    // invisible zero-length binding that can never be selected again.
+    if (
+        target.templateBinding &&
+        start == target.start &&
+        oldSuffix == target.endExclusive &&
+        newSuffix == start
+    ) {
+        val remaining = draft.fields
+            .filterNot { it.occurrenceIndex == target.occurrenceIndex }
+            .map { field ->
+                if (field.start >= oldSuffix) {
+                    field.copy(
+                        start = field.start + delta,
+                        endExclusive = field.endExclusive + delta,
+                    )
+                } else {
+                    field
+                }
+            }
+        return StructuredRecordDraft(candidate, remaining)
+    }
+    // A required inline field in record entry must always retain a visible/editable range.
     if (newTargetEnd <= target.start || newTargetEnd > candidate.length) return null
     val newValue = candidate.substring(target.start, newTargetEnd).takeIf(String::isNotBlank)
         ?: return null
@@ -184,6 +213,7 @@ fun insertStructuredTemplateField(
         start = safeOffset,
         endExclusive = safeOffset + label.length,
         value = null,
+        templateBinding = true,
     )
     return StructuredRecordDraft(text, shifted.sortedBy { it.start })
 }

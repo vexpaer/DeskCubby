@@ -80,7 +80,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.deskcubby.app.data.local.DateRecordEntity
 import com.deskcubby.app.data.local.DiaryIndexEntity
@@ -93,12 +96,14 @@ import com.deskcubby.app.data.model.LayoutMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.DailyPoem
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
+import com.deskcubby.app.data.sync.CloudSyncItemOutcome
 import com.deskcubby.app.data.sync.CloudSyncManualScheduler
 import com.deskcubby.app.data.sync.CloudSyncRunMode
 import com.deskcubby.app.ui.components.LocalLayoutMode
+import com.deskcubby.app.ui.structuredrecords.StructuredRecordRecorder
+import com.deskcubby.app.ui.structuredrecords.StructuredRecordsViewModel
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalCompactMode
-import com.deskcubby.app.ui.daily.DailyEventRecorder
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.tr
@@ -376,59 +381,59 @@ fun HomeScreen(
             )
         } else {
             LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(inner),
-            contentPadding = PaddingValues(if (compact) 10.dp else 16.dp),
-            verticalArrangement = Arrangement.spacedBy(
-                when {
-                    !settings.homeWidgetBordersEnabled -> 0.dp
-                    compact -> 6.dp
-                    else -> 12.dp
-                },
-            ),
-        ) {
-            items(settings.homeWidgets, key = { it }) { id ->
-                HomeWidget(
-                    id = id,
-                    settings = settings,
-                    diaries = diaries,
-                    thoughts = thoughts,
-                    thoughtCategories = thoughtCategories,
-                    dateRecords = dateRecords,
-                    poem = poem,
-                    onOpenDiary = onOpenDiary,
-                    onOpenThoughts = onOpenThoughts,
-                    onOpenDateRecords = onOpenDateRecords,
-                    onOpenWebsite = onOpenWebsite,
-                    onQuickThought = viewModel::addThought,
-                    poemRefreshing = poemRefreshing,
-                    onRefreshPoem = {
-                        viewModel.refreshPoem(settings.appLanguage)
+                modifier = Modifier.fillMaxSize().padding(inner),
+                contentPadding = PaddingValues(if (compact) 10.dp else 16.dp),
+                verticalArrangement = Arrangement.spacedBy(
+                    when {
+                        !settings.homeWidgetBordersEnabled -> 0.dp
+                        compact -> 6.dp
+                        else -> 12.dp
                     },
-                    onSavePoem = { viewModel.savePoem(poem, settings.appLanguage) },
-                    mealUploadInProgress = mealInteractionBusy,
-                    onChooseMealPhoto = chooseMealPhoto,
-                    onCaptureMealPhoto = captureMealPhoto,
-                    dailyRecordInProgress = dailyRecordInProgress,
-                    onAddDailyRecord = { templateId, entry, onDone ->
-                        viewModel.addDailyRecordToToday(templateId, entry, settings, onDone)
-                    },
-                    onOpenDailyRecords = onOpenDailyRecords,
-                    onOpenNotes = onOpenNotes,
-                    onOpenGame = onOpenGame,
-                    onOpenStatistics = onOpenStatistics,
-                    cloudSyncStatus = cloudSyncStatus,
-                    cloudSyncActionState = cloudSyncActionState,
-                    cloudSyncUndoAvailable = cloudSyncUndoAvailable,
-                    onRunCloudSync = { mode ->
-                        val accepted = CloudSyncManualScheduler.enqueue(context, mode)
-                        viewModel.recordCloudSyncEnqueue(mode, accepted)
-                        accepted
-                    },
-                    onUndoCloudSync = { viewModel.undoLastCloudSync() },
-                )
+                ),
+            ) {
+                items(settings.homeWidgets, key = { it }) { id ->
+                    HomeWidget(
+                        id = id,
+                        settings = settings,
+                        diaries = diaries,
+                        thoughts = thoughts,
+                        thoughtCategories = thoughtCategories,
+                        dateRecords = dateRecords,
+                        poem = poem,
+                        onOpenDiary = onOpenDiary,
+                        onOpenThoughts = onOpenThoughts,
+                        onOpenDateRecords = onOpenDateRecords,
+                        onOpenWebsite = onOpenWebsite,
+                        onQuickThought = viewModel::addThought,
+                        poemRefreshing = poemRefreshing,
+                        onRefreshPoem = {
+                            viewModel.refreshPoem(settings.appLanguage)
+                        },
+                        onSavePoem = { viewModel.savePoem(poem, settings.appLanguage) },
+                        mealUploadInProgress = mealInteractionBusy,
+                        onChooseMealPhoto = chooseMealPhoto,
+                        onCaptureMealPhoto = captureMealPhoto,
+                        dailyRecordInProgress = dailyRecordInProgress,
+                        onAddDailyRecord = { templateId, entry, onDone ->
+                            viewModel.addDailyRecordToToday(templateId, entry, settings, onDone)
+                        },
+                        onOpenDailyRecords = onOpenDailyRecords,
+                        onOpenNotes = onOpenNotes,
+                        onOpenGame = onOpenGame,
+                        onOpenStatistics = onOpenStatistics,
+                        cloudSyncStatus = cloudSyncStatus,
+                        cloudSyncActionState = cloudSyncActionState,
+                        cloudSyncUndoAvailable = cloudSyncUndoAvailable,
+                        onRunCloudSync = { mode ->
+                            val accepted = CloudSyncManualScheduler.enqueue(context, mode)
+                            viewModel.recordCloudSyncEnqueue(mode, accepted)
+                            accepted
+                        },
+                        onUndoCloudSync = { viewModel.undoLastCloudSync() },
+                    )
+                }
+                item { Spacer(Modifier.height(20.dp)) }
             }
-            item { Spacer(Modifier.height(20.dp)) }
-        }
         }
     }
 }
@@ -568,7 +573,7 @@ private fun HomeWidget(
             diaries.take(3).forEach { item ->
                 TextButton(onClick = { onOpenDiary(item.uri) }, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.fillMaxWidth()) {
-                            Text(item.name.removeSuffix(".md"), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(item.name.removeSuffix(".md"), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(item.dateIso, style = MaterialTheme.typography.bodySmall)
                     }
                 }
@@ -719,6 +724,10 @@ private fun CloudSyncHomeWidget(
     val enabledSourceCount = settings.cloudSyncConfigs.count { it.enabled }
     val canRun = settings.cloudSyncEnabled && enabledSourceCount > 0 && !status.running
     var confirmationMode by remember { mutableStateOf<CloudSyncRunMode?>(null) }
+    var showLastRunDetails by remember { mutableStateOf(false) }
+    val uploaded = status.lastUploadedCount
+    val downloaded = status.lastDownloadedCount
+    val conflicts = status.lastConflictCount
 
     WidgetCard(
         if (forceActions) tr("强制上传 / 下载", "Force upload / download")
@@ -798,18 +807,19 @@ private fun CloudSyncHomeWidget(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        val uploaded = status.lastUploadedCount
-        val downloaded = status.lastDownloadedCount
-        val conflicts = status.lastConflictCount
         if (uploaded != null && downloaded != null && conflicts != null) {
-            Text(
-                tr(
-                    "上次：上传 $uploaded，下载 $downloaded，冲突 $conflicts",
-                    "Last: $uploaded uploaded, $downloaded downloaded, $conflicts conflicts",
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            TextButton(
+                onClick = { showLastRunDetails = true },
+                contentPadding = PaddingValues(0.dp),
+            ) {
+                Text(
+                    tr(
+                        "上次：上传 $uploaded，下载 $downloaded，冲突 $conflicts",
+                        "Last: $uploaded uploaded, $downloaded downloaded, $conflicts conflicts",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -901,6 +911,100 @@ private fun CloudSyncHomeWidget(
             },
         )
     }
+
+    if (showLastRunDetails) {
+        Dialog(
+            onDismissRequest = { showLastRunDetails = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(tr("上次同步详情", "Last sync details"), style = MaterialTheme.typography.headlineSmall)
+                        TextButton(onClick = { showLastRunDetails = false }) {
+                            Text(tr("关闭", "Close"))
+                        }
+                    }
+                    status.lastFinishedAt?.let { finishedAt ->
+                        val locale = if (settings.appLanguage == AppLanguage.ENGLISH) Locale.ENGLISH else Locale.SIMPLIFIED_CHINESE
+                        val formatted = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.MEDIUM, locale)
+                            .format(java.util.Date(finishedAt))
+                        Text(tr("完成时间：$formatted", "Finished: $formatted"))
+                    }
+                    if (uploaded != null && downloaded != null && conflicts != null) {
+                        Text(
+                            tr(
+                                "合计：上传 $uploaded，下载 $downloaded，冲突 $conflicts",
+                                "Total: $uploaded uploaded, $downloaded downloaded, $conflicts conflicts",
+                            ),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                    }
+                    if (status.lastRuns.isEmpty()) {
+                        Text(
+                            tr(
+                                "本机重启后只保留上次同步的时间和汇总数量；下一次同步完成后，这里会显示各来源和逐项结果。",
+                                "After an app restart only the last time and totals are persisted. The next completed sync will show per-source and per-item results here.",
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        status.lastRuns.forEachIndexed { index, run ->
+                            GlassPanel(modifier = Modifier.fillMaxWidth(), padding = PaddingValues(14.dp)) {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(
+                                        tr("同步来源 ${index + 1}", "Sync source ${index + 1}"),
+                                        style = MaterialTheme.typography.titleMedium,
+                                    )
+                                    Text(run.configId, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    run.errorMessage?.let { error ->
+                                        Text(
+                                            localizedCloudSyncStatus(error, settings.appLanguage),
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+                                    run.result?.let { result ->
+                                        Text(
+                                            tr(
+                                                "上传 ${result.uploadedCount} · 下载 ${result.downloadedCount} · 冲突 ${result.conflictCount} · 传输 ${result.transferredBytes} B",
+                                                "${result.uploadedCount} uploaded · ${result.downloadedCount} downloaded · ${result.conflictCount} conflicts · ${result.transferredBytes} B transferred",
+                                            ),
+                                        )
+                                        result.reports.forEach { report ->
+                                            Text(
+                                                "${cloudSyncOutcomeLabel(report.outcome)}  ${report.key}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun cloudSyncOutcomeLabel(outcome: CloudSyncItemOutcome): String = when (outcome) {
+    CloudSyncItemOutcome.UNCHANGED -> tr("未变化", "Unchanged")
+    CloudSyncItemOutcome.UPLOADED -> tr("上传", "Uploaded")
+    CloudSyncItemOutcome.DOWNLOADED -> tr("下载", "Downloaded")
+    CloudSyncItemOutcome.CONFLICT_COPY_SAVED -> tr("冲突副本", "Conflict copy")
+    CloudSyncItemOutcome.REMOTE_CHANGE_SKIPPED -> tr("跳过远端变化", "Remote change skipped")
 }
 
 @Composable
@@ -1109,6 +1213,7 @@ private fun QuickInputWidget(
     }
 }
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 private fun DailyRecordsWidget(
     showTitle: Boolean,
@@ -1118,8 +1223,22 @@ private fun DailyRecordsWidget(
     onSubmit: (String, String, (Boolean) -> Unit) -> Unit,
     onOpenAll: () -> Unit,
 ) {
+    val viewModel: StructuredRecordsViewModel = hiltViewModel()
+    val structuredTemplates by viewModel.templates.collectAsStateWithLifecycle()
+    val fields by viewModel.fields.collectAsStateWithLifecycle()
+    val structuredSendingIds by viewModel.sendingTemplateIds.collectAsStateWithLifecycle()
+    val feedback by viewModel.feedback.collectAsStateWithLifecycle()
+    val now by viewModel.now.collectAsStateWithLifecycle()
+    val fieldsById = remember(fields) { fields.associateBy { it.id } }
+    val visibleTemplates = structuredTemplates.filterNot { it.archived }
+
+    LaunchedEffect(Unit) {
+        viewModel.touchNow()
+        viewModel.refreshWorkspaceFromUi()
+    }
+
     WidgetCard(tr("结构化记录", "Structured records"), showTitle, showBorder) {
-        if (templates.isEmpty()) {
+        if (visibleTemplates.isEmpty()) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.EventNote, contentDescription = null)
                 Spacer(Modifier.width(10.dp))
@@ -1133,22 +1252,23 @@ private fun DailyRecordsWidget(
             return@WidgetCard
         }
 
-        templates.take(HOME_DAILY_EVENT_LIMIT).forEach { template ->
-            var clearKey by rememberSaveable(template.id) { mutableStateOf(0L) }
-            DailyEventRecorder(
+        visibleTemplates.take(HOME_DAILY_EVENT_LIMIT).forEach { template ->
+            StructuredRecordRecorder(
                 template = template,
-                isSending = template.id in sendingIds,
-                clearInputsKey = clearKey,
-                onRecord = { entry ->
-                    onSubmit(template.id, entry) { success ->
-                        if (success) clearKey += 1
-                    }
-                },
+                fieldsById = fieldsById,
+                now = now,
+                isSending = template.id in structuredSendingIds,
+                clearInputsKey = feedback
+                    ?.takeIf { !it.isError && it.recordedTemplateId == template.id }
+                    ?.key,
+                onRecord = { draft -> viewModel.record(template, draft) },
+                onEdit = null,
+                onDelete = null,
             )
         }
         TextButton(onClick = onOpenAll, modifier = Modifier.align(Alignment.End)) {
             Text(
-                if (templates.size > HOME_DAILY_EVENT_LIMIT) tr("查看全部", "View all")
+                if (visibleTemplates.size > HOME_DAILY_EVENT_LIMIT) tr("查看全部", "View all")
                 else tr("管理结构化记录", "Manage structured records"),
             )
         }
@@ -1266,6 +1386,7 @@ private fun streakDays(diaries: List<DiaryIndexEntity>, today: LocalDate): Int {
 
 private const val CAMERA_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L
 private const val HOME_DAILY_EVENT_LIMIT = 4
+
 @Composable
 private fun HomeWorkspaceContent(
     padding: PaddingValues,
@@ -1372,4 +1493,3 @@ private fun HomeWorkspaceContent(
         }
     }
 }
-

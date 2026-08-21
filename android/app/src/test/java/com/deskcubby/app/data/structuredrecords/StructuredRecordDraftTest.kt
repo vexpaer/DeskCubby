@@ -68,6 +68,27 @@ class StructuredRecordDraftTest {
     }
 
     @Test
+    fun templateDraftCanRemoveWholeFieldBinding() {
+        val draft = createStructuredTemplateDraft(template, fields)
+        val first = draft.fields.first()
+        val second = draft.fields.last()
+        val removedLength = first.endExclusive - first.start
+        val edited = applyStructuredDraftEdit(
+            draft,
+            draft.text.removeRange(first.start, first.endExclusive),
+        )!!
+
+        assertEquals(1, edited.fields.size)
+        assertEquals(food.id, edited.fields.single().fieldId)
+        assertEquals(second.start - removedLength, edited.fields.single().start)
+        assertTrue(
+            structuredDraftToSegments(edited).none { segment ->
+                segment is StructuredRecordSegment.Field && segment.fieldId == count.id
+            },
+        )
+    }
+
+    @Test
     fun blankAssistedReplacementKeepsVisibleBinding() {
         val draft = createStructuredRecordDraft(template, fields, LocalTime.NOON)
         val unchanged = replaceStructuredDraftField(draft, draft.fields.first().occurrenceIndex, "   ")

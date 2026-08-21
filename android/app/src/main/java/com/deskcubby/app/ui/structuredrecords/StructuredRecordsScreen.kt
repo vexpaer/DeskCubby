@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.Delete
@@ -282,7 +283,7 @@ private fun SystemSleepWakeCard(
 }
 
 @Composable
-private fun StructuredRecordRecorder(
+internal fun StructuredRecordRecorder(
     template: StructuredRecordTemplate,
     fieldsById: Map<String, StructuredField>,
     now: java.time.LocalTime,
@@ -357,7 +358,10 @@ private fun StructuredRecordRecorder(
                     if (isSending) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                     } else {
-                        Text(tr("记录", "Record"), modifier = Modifier.padding(horizontal = 6.dp))
+                        Icon(
+                            Icons.AutoMirrored.Outlined.Send,
+                            contentDescription = tr("记录 ${template.name}", "Record ${template.name}"),
+                        )
                     }
                 }
             }
