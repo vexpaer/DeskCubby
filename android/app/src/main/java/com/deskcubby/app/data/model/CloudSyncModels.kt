@@ -31,8 +31,10 @@ data class CloudSyncConfig(
         CloudSyncContent.NOTES,
         CloudSyncContent.MEDIA,
         CloudSyncContent.THOUGHTS,
+        CloudSyncContent.THOUGHT_CATEGORIES,
         CloudSyncContent.DATE_RECORDS,
         CloudSyncContent.POEMS,
+        CloudSyncContent.POETRY_CATEGORIES,
         CloudSyncContent.FAVORITES,
         CloudSyncContent.READING_PROGRESS,
         CloudSyncContent.READER_PREFERENCES,
@@ -105,6 +107,17 @@ enum class CloudSyncContent(
     VAULT("records/vault", CloudSyncContentKind.RECORD),
     GLOBAL_SETTINGS("records/global-settings", CloudSyncContentKind.RECORD),
 }
+
+internal fun Set<CloudSyncContent>.withRequiredSyncDependencies(): Set<CloudSyncContent> =
+    buildSet {
+        addAll(this@withRequiredSyncDependencies)
+        if (CloudSyncContent.THOUGHTS in this@withRequiredSyncDependencies) {
+            add(CloudSyncContent.THOUGHT_CATEGORIES)
+        }
+        if (CloudSyncContent.POEMS in this@withRequiredSyncDependencies) {
+            add(CloudSyncContent.POETRY_CATEGORIES)
+        }
+    }
 
 enum class CloudSyncContentKind {
     FILE,
