@@ -2,6 +2,7 @@ package com.deskcubby.app.ui.structuredstats
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.structuredrecords.FieldSelector
@@ -14,6 +15,7 @@ import com.deskcubby.app.data.structuredrecords.StructuredWorkspaceRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +24,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class StructuredFieldCard(
     val field: StructuredField,
@@ -61,6 +65,7 @@ class StructuredStatisticsViewModel @Inject constructor(
 
     private val mutableState = MutableStateFlow(StructuredStatisticsUiState())
     val uiState: StateFlow<StructuredStatisticsUiState> = mutableState.asStateFlow()
+    private val reloadMutex = Mutex()
 
     init {
         viewModelScope.launch {
@@ -72,8 +77,23 @@ class StructuredStatisticsViewModel @Inject constructor(
                         message = "请先在设置中选择日记目录",
                     )
                 } else {
+                    mutableState.value = mutableState.value.copy(
+                        loading = true,
+                        available = false,
+                        fields = emptyList(),
+                        metrics = emptyList(),
+                        fieldCards = emptyList(),
+                        metricCards = emptyList(),
+                        message = null,
+                    )
                     reload(stores = settings.value)
                 }
+            }
+        }
+        viewModelScope.launch {
+            workspaceRepository.workspaceChanges.collect {
+                val appSettings = settings.value
+                if (appSettings.diaryTreeUri != null) reload(stores = appSettings)
             }
         }
     }
@@ -97,9 +117,14 @@ class StructuredStatisticsViewModel @Inject constructor(
         viewModelScope.launch {
             val appSettings = settings.value
             if (appSettings.diaryTreeUri == null) return@launch
-            val existing = workspaceRepository.loadMetrics(appSettings)
-            val updated = existing.filterNot { it.id == metric.id } + metric
-            workspaceRepository.saveMetrics(appSettings, updated.sortedBy { it.sortOrder })
+            workspaceRepository.mutateMetrics(appSettings) { existing ->
+                val normalized = if (existing.any { it.id == metric.id }) {
+                    metric
+                } else {
+                    metric.copy(sortOrder = (existing.maxOfOrNull { it.sortOrder } ?: -1) + 1)
+                }
+                (existing.filterNot { it.id == metric.id } + normalized).sortedBy { it.sortOrder }
+            }
             computeCards(appSettings, mutableState.value.startIso, mutableState.value.endIso)
         }
     }
@@ -107,8 +132,8 @@ class StructuredStatisticsViewModel @Inject constructor(
     fun deleteMetric(id: String) {
         viewModelScope.launch {
             val appSettings = settings.value
-            val existing = workspaceRepository.loadMetrics(appSettings)
-            workspaceRepository.saveMetrics(appSettings, existing.filterNot { it.id == id })
+            if (appSettings.diaryTreeUri == null) return@launch
+            workspaceRepository.mutateMetrics(appSettings) { existing -> existing.filterNot { it.id == id } }
             computeCards(appSettings, mutableState.value.startIso, mutableState.value.endIso)
         }
     }
@@ -187,14 +212,36 @@ class StructuredStatisticsViewModel @Inject constructor(
     }
 
     private suspend fun reload(stores: AppSettings) {
-        if (stores.diaryTreeUri == null) {
-            mutableState.value = StructuredStatisticsUiState(loading = false, available = false)
-            return
+        reloadMutex.withLock {
+            if (stores.diaryTreeUri == null) {
+                mutableState.value = StructuredStatisticsUiState(loading = false, available = false)
+                return@withLock
+            }
+            val state = mutableState.value
+            try {
+                workspaceRepository.initializeMissingFiles(stores)
+                workspaceRepository.ensureSystemFields(stores)
+                computeCards(stores, state.startIso, state.endIso)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (settings.value.diaryTreeUri == stores.diaryTreeUri) {
+                    mutableState.value = mutableState.value.copy(
+                        loading = false,
+                        available = false,
+                        fields = emptyList(),
+                        metrics = emptyList(),
+                        fieldCards = emptyList(),
+                        metricCards = emptyList(),
+                        message = if (stores.appLanguage == AppLanguage.ENGLISH) {
+                            "Structured statistics are temporarily unavailable"
+                        } else {
+                            "结构化统计暂时不可用"
+                        },
+                    )
+                }
+            }
         }
-        val state = mutableState.value
-        workspaceRepository.seedExamples(stores)
-        workspaceRepository.ensureSystemFields(stores)
-        computeCards(stores, state.startIso, state.endIso)
     }
 
     private suspend fun computeCards(stores: AppSettings, startIso: String, endIso: String) {
@@ -204,15 +251,23 @@ class StructuredStatisticsViewModel @Inject constructor(
         val metrics = workspaceRepository.loadMetrics(stores)
         val activeFields = fields.filterNot { it.archived }
         val fieldCards = activeFields.mapNotNull { field ->
-            val stats = runCatching {
+            val stats = try {
                 statisticsRepository.autoFieldStats(stores, field, startIso, endIso)
-            }.getOrNull() ?: return@mapNotNull null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            } ?: return@mapNotNull null
             if (stats.count <= 0) null else StructuredFieldCard(field, stats)
         }
         val metricCards = metrics.filterNot { it.archived }.mapNotNull { metric ->
-            val points = runCatching {
+            val points = try {
                 statisticsRepository.metricSeries(stores, metric, startIso, endIso)
-            }.getOrNull() ?: return@mapNotNull null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            } ?: return@mapNotNull null
             if (points.none { it.display != null }) null else StructuredMetricCard(metric, points)
         }
         mutableState.value = StructuredStatisticsUiState(

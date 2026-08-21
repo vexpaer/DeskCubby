@@ -67,6 +67,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -223,6 +226,13 @@ class DiaryFileRepository @Inject constructor(
     private val mealCalendarContentRevision = AtomicLong(0L)
     private val dirtyMealDiaryRevisions = ConcurrentHashMap<String, AtomicLong>()
     private val workspaceMutex = Mutex()
+    private val workspaceChangeRevision = AtomicLong(0L)
+    private val mutableWorkspaceChanges = MutableStateFlow(0L)
+    val workspaceChanges: StateFlow<Long> = mutableWorkspaceChanges.asStateFlow()
+
+    private fun publishWorkspaceChange() {
+        mutableWorkspaceChanges.value = workspaceChangeRevision.incrementAndGet()
+    }
 
     fun currentMealCalendarContentRevision(): Long = mealCalendarContentRevision.get()
 
@@ -243,22 +253,27 @@ class DiaryFileRepository @Inject constructor(
             }
         }
 
-    /** Reads a file from the `.deskcubby` workspace directory, or null when it does not exist. */
+    /**
+     * Reads a file from the `.deskcubby` workspace directory. Null means the file is genuinely
+     * absent; provider/read failures propagate so callers never mistake an unreadable file for a
+     * missing file and overwrite user data with defaults.
+     */
     suspend fun readWorkspaceFile(settings: AppSettings, fileName: String): String? =
         workspaceMutex.withLock {
             withContext(Dispatchers.IO) {
                 val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext null
                 val dir = root.findFile(WORKSPACE_DIRECTORY)?.takeIf { it.isDirectory } ?: return@withContext null
                 val file = dir.findFile(fileName) ?: return@withContext null
-                runCatching { readText(file.uri) }.getOrNull()
+                readText(file.uri)
             }
         }
 
     /**
      * Writes a file into the `.deskcubby` workspace directory, verifying by read-back so a
-     * partial or failed write is never silently accepted as a durable config change.
+     * partial or failed write is never silently accepted as a durable config change. Every
+     * successful write publishes an invalidation, including writes performed by cloud sync.
      */
-    suspend fun writeWorkspaceFile(settings: AppSettings, fileName: String, content: String) =
+    suspend fun writeWorkspaceFile(settings: AppSettings, fileName: String, content: String) {
         workspaceMutex.withLock {
             withContext(Dispatchers.IO) {
                 val root = settings.diaryTreeUri?.let(::tree) ?: error("请先在设置中选择日记目录")
@@ -272,6 +287,44 @@ class DiaryFileRepository @Inject constructor(
                 check(readText(file.uri) == content) { "配置文件写入校验失败" }
             }
         }
+        publishWorkspaceChange()
+    }
+
+    /**
+     * Atomically transforms one workspace file under the same mutex used by normal and cloud-sync
+     * writes. The transform receives null only when the file is genuinely absent. Read failures
+     * propagate and no write occurs.
+     */
+    suspend fun updateWorkspaceFile(
+        settings: AppSettings,
+        fileName: String,
+        transform: (String?) -> String,
+    ): String {
+        var changed = false
+        val result = workspaceMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val root = settings.diaryTreeUri?.let(::tree) ?: error("请先在设置中选择日记目录")
+                val existingDir = root.findFile(WORKSPACE_DIRECTORY)?.takeIf { it.isDirectory }
+                val existingFile = existingDir?.findFile(fileName)
+                val current = existingFile?.let { readText(it.uri) }
+                val updated = transform(current)
+                if (existingFile != null && updated == current) return@withContext requireNotNull(current)
+
+                val dir = existingDir
+                    ?: root.createDirectory(WORKSPACE_DIRECTORY)
+                    ?: error("无法创建 .deskcubby 目录")
+                val file = existingFile
+                    ?: dir.createFile("application/json", fileName)
+                    ?: error("无法在所选目录中创建配置文件")
+                writeText(file.uri, updated)
+                check(readText(file.uri) == updated) { "配置文件写入校验失败" }
+                changed = true
+                updated
+            }
+        }
+        if (changed) publishWorkspaceChange()
+        return result
+    }
 
     /**
      * Creates the conventional folder layout below a user-confirmed SAF tree and returns scoped
