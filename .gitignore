@@ -39,11 +39,6 @@ android/app/build/
 /.android-release-notes-v*.md
 
 # Local AI context
-/AGENTS.md
 /note.md
 
 .omo
-
-DeskCubby_Structured_Records_System_Prompt_and_Design.md
-
-.guide
