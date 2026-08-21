@@ -83,7 +83,7 @@ jobs:
           profile: pixel_5
           disable-animations: true
           script: |
-            set -euo pipefail
+            bash -euo pipefail <<'BASH'
             exec > >(tee "$UPGRADE_REPORT") 2>&1
 
             OLD_APK="$(find "$OLD_WORKTREE/android/app/build/outputs/apk/debug" -type f -name '*.apk' -print -quit)"
@@ -115,6 +115,7 @@ jobs:
               "$INSTRUMENTATION" | tee "$RUNNER_TEMP/deskcubby-instrumentation.txt"
             grep -q 'INSTRUMENTATION_CODE: -1' "$RUNNER_TEMP/deskcubby-instrumentation.txt"
             ! grep -q 'INSTRUMENTATION_FAILED' "$RUNNER_TEMP/deskcubby-instrumentation.txt"
+            BASH
 
       - name: Upload real-upgrade report on failure
         if: failure()
