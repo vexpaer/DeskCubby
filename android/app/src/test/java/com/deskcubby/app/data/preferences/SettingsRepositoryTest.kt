@@ -244,6 +244,28 @@ class SettingsRepositoryTest {
     }
 
     @Test
+    fun normalizeCloudSyncConfigsMigratesCategoryOnlySelectionsToParents() {
+        val normalized = normalizeCloudSyncConfigs(
+            listOf(
+                CloudSyncConfig(
+                    id = "legacy-categories",
+                    name = "Legacy categories",
+                    endpointUrl = "https://cloud.example.com/dav",
+                    selectedContents = setOf(
+                        CloudSyncContent.THOUGHT_CATEGORIES,
+                        CloudSyncContent.POETRY_CATEGORIES,
+                    ),
+                ),
+            ),
+        ).single()
+
+        assertEquals(
+            setOf(CloudSyncContent.THOUGHTS, CloudSyncContent.POEMS),
+            normalized.selectedContents,
+        )
+    }
+
+    @Test
     fun normalizeCloudSyncConfigsStripsWebDavSecretAndKeepsS3Credentials() {
         val normalized = normalizeCloudSyncConfigs(
             listOf(

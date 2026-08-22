@@ -104,6 +104,7 @@ import com.deskcubby.app.data.sync.GlobalSettingsSyncCodec
 import com.deskcubby.app.data.model.normalizeMarkdownHeadingSizes
 import com.deskcubby.app.data.model.normalizeMorePageOrder
 import com.deskcubby.app.data.model.normalized
+import com.deskcubby.app.data.model.toUserSelectableSyncContents
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -1890,7 +1891,9 @@ internal fun normalizeCloudSyncConfigs(items: List<CloudSyncConfig>): List<Cloud
                 s3AccessKey = item.s3AccessKey.trim().take(MAX_CLOUD_SYNC_CREDENTIAL_CHARS),
                 s3SecretKey = item.s3SecretKey.take(MAX_CLOUD_SYNC_CREDENTIAL_CHARS),
                 s3SessionToken = item.s3SessionToken.take(MAX_CLOUD_SYNC_CREDENTIAL_CHARS),
-                selectedContents = item.selectedContents.intersect(CloudSyncContent.entries.toSet()),
+                selectedContents = item.selectedContents
+                    .intersect(CloudSyncContent.entries.toSet())
+                    .toUserSelectableSyncContents(),
             )
         }
         .filter { item ->
