@@ -10,9 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
+  contents: read
 
 concurrency:
   group: codegraph-ai-context-${{ github.ref }}
@@ -20,29 +18,31 @@ concurrency:
 
 jobs:
   build-context:
+    name: Build temporary graph and text exports
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       CODEGRAPH_TELEMETRY: '0'
+      CODEGRAPH_NO_DAEMON: '1'
       DO_NOT_TRACK: '1'
+      NO_COLOR: '1'
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: windows/package-lock.json
+          package-manager-cache: false
 
-      - name: Install CodeGraph
+      - name: Install pinned CodeGraph
         run: npm install --global @colbymchenry/codegraph@1.5.0
 
-      - name: Generate bounded AI context
+      - name: Generate bounded Markdown and JSON
         run: bash .github/scripts/build-codegraph-ai-context.sh
 
       - name: Build PR impact report
@@ -53,7 +53,9 @@ jobs:
         run: |
           set -euo pipefail
           git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/codegraph-changed-files.txt
-          codegraph affected --stdin --json < /tmp/codegraph-changed-files.txt > /tmp/codegraph-affected.json || echo '{"error":"CodeGraph affected query failed"}' > /tmp/codegraph-affected.json
+          if ! codegraph affected --stdin --json < /tmp/codegraph-changed-files.txt > /tmp/codegraph-affected.json; then
+            echo '{"error":"CodeGraph affected query failed"}' > /tmp/codegraph-affected.json
+          fi
 
           {
             echo '<!-- deskcubby-codegraph-report -->'
@@ -72,43 +74,91 @@ jobs:
             echo
             echo '```'
             echo
-            echo '> Generated from a temporary CodeGraph index. No SQLite/binary graph is committed.'
+            echo '> Built from a temporary CodeGraph index. No SQLite/binary graph is retained.'
           } > /tmp/codegraph-pr-report.md
 
           cat /tmp/codegraph-pr-report.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish/update PR impact comment
+      - name: Upload AI context snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: codegraph-ai-context-${{ github.run_id }}
+          path: ai-code-context/generated/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload PR impact report
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        uses: actions/upload-artifact@v4
+        with:
+          name: codegraph-pr-report-${{ github.run_id }}
+          path: /tmp/codegraph-pr-report.md
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-pr-report:
+    name: Publish PR impact comment
+    if: github.event_name == 'pull_request'
+    needs: build-context
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Download PR impact report
+        uses: actions/download-artifact@v4
+        with:
+          name: codegraph-pr-report-${{ github.run_id }}
+          path: /tmp/codegraph-pr-report
+
+      - name: Publish or update comment
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
             const marker = '<!-- deskcubby-codegraph-report -->';
-            const body = fs.readFileSync('/tmp/codegraph-pr-report.md', 'utf8');
+            const body = fs.readFileSync('/tmp/codegraph-pr-report/codegraph-pr-report.md', 'utf8');
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number, per_page: 100
             });
-            const previous = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
+            const previous = comments.find(
+              comment => comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
             if (previous) {
-              await github.rest.issues.updateComment({ owner, repo, comment_id: previous.id, body });
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: previous.id, body
+              });
             } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body
+              });
             }
 
-      - name: Upload text context artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: codegraph-ai-context-${{ github.sha }}
-          path: |
-            ai-code-context/generated/
-            /tmp/codegraph-pr-report.md
-          if-no-files-found: ignore
-          retention-days: 14
+  refresh-main-snapshot:
+    name: Commit text snapshot to main
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-context
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
-      - name: Commit refreshed context to main
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Download generated snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: codegraph-ai-context-${{ github.run_id }}
+          path: ai-code-context/generated
+
+      - name: Commit generated text only
         run: |
           set -euo pipefail
           git add ai-code-context/generated

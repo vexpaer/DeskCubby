@@ -1,34 +1,43 @@
 # DeskCubby AI Code Context
 
-This directory is the stable, GitHub-visible handoff between CodeGraph and web-based coding agents.
+This directory is the GitHub-readable handoff between CodeGraph and web-based coding agents.
 
-## For AI agents
+CodeGraph builds its SQLite knowledge graph temporarily inside GitHub Actions. The database and all other files under `.codegraph/` are discarded with the runner and ignored by git. Only bounded Markdown and JSON exports are retained.
 
-Before making a non-trivial change, read the relevant files under `ai-code-context/generated/`:
+## Reading order for web agents
 
-- `overview.md` — graph/index metadata and freshness.
-- `files.json` — machine-readable project structure.
-- `architecture.md` — high-level architecture and important relationships.
-- `android.md` — Android architecture and dependencies.
-- `windows.md` — Windows/Tauri architecture and dependencies.
-- `sync-data.md` — persistence, sync, diary, structured-record, note/poem/category flows.
-- `agent-ai.md` — Agent/AI context, permissions and background execution.
-- `symbols-*.json` — bounded symbol-search results for frequently changed areas.
+1. Read `generated/overview.md` and compare its source commit with the branch being inspected.
+2. Read the relevant area snapshot: `architecture.md`, `android.md`, `windows.md`, `sync-data.md`, or `agent-ai.md`.
+3. Use `files.json` and `symbols-*.json` to locate likely source files and symbols.
+4. Verify conclusions against the current source and PR diff before changing code.
 
-Treat these files as navigation aids, not as a replacement for reading the current source and PR diff. If generated context conflicts with source code, the source code wins.
+The snapshot is a navigation layer, not an authority. It can lag one commit behind `main` while the refresh workflow is running, and a PR may differ from the committed main-branch snapshot.
 
-For pull requests, the `CodeGraph AI Context` workflow also posts/updates a PR comment containing changed files and CodeGraph's dependency/test impact result.
+## Generated outputs
 
-## Storage policy
+- `overview.md`: source commit, pinned CodeGraph version, and graph status.
+- `files.json`: machine-readable repository structure.
+- `symbols-*.json`: bounded symbol searches for frequently changed domains.
+- Area Markdown files: bounded `codegraph explore` results containing relevant source, relationships, and impact context.
 
-The local `.codegraph/` directory contains CodeGraph's SQLite index and other transient data. It is intentionally gitignored and never committed. GitHub Actions creates the index only inside the temporary runner, exports bounded Markdown/JSON context, then discards the index.
+Do not edit `generated/` by hand.
 
-Generated context is capped at roughly 1.5 MB total so this helper cannot quietly turn into a large generated-data store.
+## Workflow behavior
 
-## Refresh behavior
+### Pull requests
 
-- Pull request: build a temporary graph, upload the text snapshot as an artifact, and update the PR impact comment.
-- Push to `main`: rebuild the text snapshot and commit only changes under `ai-code-context/generated/`.
-- Changes made by that refresh commit do not trigger another refresh, preventing workflow loops.
+The workflow builds a temporary graph for the PR merge commit, uploads the Markdown/JSON snapshot as a 14-day artifact, and posts one updatable PR comment containing the changed-file list and CodeGraph's affected-test/dependency result. The artifact is intentionally not committed to the PR branch.
 
-The workflow currently pins CodeGraph `1.5.0` for reproducible output. Upgrade the pin deliberately after checking the upstream changelog/CLI behavior.
+### Pushes to main
+
+The workflow rebuilds the snapshot, downloads it into a separate least-privilege job, and commits only `ai-code-context/generated/` to `main`. Generated-only commits are excluded by the workflow path filter, preventing refresh loops.
+
+## Safety and size limits
+
+- CodeGraph is pinned to `@colbymchenry/codegraph@1.5.0`.
+- Telemetry and the background daemon are disabled in CI.
+- `CODEGRAPH_MAX_SYMBOLS` defaults to 60 results per symbol query.
+- `CODEGRAPH_MAX_CONTEXT_BYTES` defaults to 120,000 bytes per area Markdown file.
+- `CODEGRAPH_MAX_OUTPUT_BYTES` caps the entire snapshot at 1,500,000 bytes.
+- Indexing and size-cap failures fail the workflow instead of committing partial or unexpectedly large output.
+- An individual `explore` failure produces a small fallback Markdown file while the JSON navigation exports remain available.
