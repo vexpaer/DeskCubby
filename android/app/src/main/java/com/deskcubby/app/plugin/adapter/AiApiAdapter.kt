@@ -9,6 +9,7 @@ import com.deskcubby.app.data.repository.AiChatMessage
 import com.deskcubby.app.data.repository.AiChatRepository
 import com.deskcubby.app.data.repository.AiChatRole
 import com.deskcubby.plugin.api.core.PluginApiException
+import com.deskcubby.plugin.api.core.api.AIAgentMessageRole
 import com.deskcubby.plugin.api.core.api.AIAPI
 import com.deskcubby.plugin.api.core.api.AICompletion
 import com.deskcubby.plugin.api.core.api.AICompletionRequest
@@ -87,14 +88,58 @@ class AiApiAdapter @Inject constructor(
             code = "AI_MODEL_UNAVAILABLE",
             message = "The requested AI text model is not available.",
         )
-        if (!config.supportsToolCalling) {
-            throw PluginApiException(
-                code = "AI_TOOLS_UNSUPPORTED",
-                message = "The selected provider configuration does not support native tool calling.",
-            )
-        }
+
         return try {
-            repository.completeWithTools(config, request)
+            if (config.supportsToolCalling) {
+                repository.completeWithTools(config, request)
+            } else {
+                // Configurations created before Agent support commonly have tool calling disabled.
+                // Preserve ordinary chat instead of turning those providers into a hard upgrade
+                // failure. AgentRuntime sees zero tool calls and completes in one model round.
+                val fallbackMessages = buildList {
+                    var nextId = 1L
+                    request.messages.forEach { message ->
+                        if (message.role == AIAgentMessageRole.TOOL) return@forEach
+                        val role = when (message.role) {
+                            AIAgentMessageRole.USER -> AiChatRole.USER
+                            AIAgentMessageRole.ASSISTANT -> AiChatRole.ASSISTANT
+                            AIAgentMessageRole.TOOL -> return@forEach
+                        }
+                        if (message.images.isEmpty()) {
+                            add(AiChatMessage(id = nextId++, role = role, content = message.content))
+                        } else {
+                            message.images.forEachIndexed { imageIndex, image ->
+                                add(
+                                    AiChatMessage(
+                                        id = nextId++,
+                                        role = role,
+                                        content = if (imageIndex == 0) message.content else "",
+                                        image = AiChatImage(image.contentUri, image.mimeType),
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+                val fallbackSettings = current.copy(
+                    aiChatConfigId = config.id,
+                    aiSystemPrompt = request.systemPrompt,
+                    aiConfigs = current.aiConfigs.map { candidate ->
+                        if (candidate.id == config.id) candidate.copy(systemPrompt = request.systemPrompt)
+                        else candidate
+                    },
+                )
+                repository.completeWithReasoning(
+                    settings = fallbackSettings,
+                    messages = fallbackMessages,
+                ).let { completion ->
+                    AIToolCompletion(
+                        content = completion.content,
+                        reasoning = completion.reasoning,
+                        toolCalls = emptyList(),
+                    )
+                }
+            }
         } catch (error: AiChatException) {
             throw PluginApiException(
                 code = "AI_${error.failure.name}",

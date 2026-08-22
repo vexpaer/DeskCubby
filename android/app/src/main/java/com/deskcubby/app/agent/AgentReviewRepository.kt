@@ -47,6 +47,7 @@ data class AgentReviewMutation(
 
 data class AgentReviewToolEvent(
     val id: Long,
+    val toolCallId: String,
     val toolName: String,
     val classification: String,
     val status: String,
@@ -325,6 +326,7 @@ private fun AgentMutationEntity.toReviewMutation() = AgentReviewMutation(
 
 private fun AgentToolEventEntity.toReviewEvent() = AgentReviewToolEvent(
     id,
+    toolCallId,
     toolName,
     classification,
     status,

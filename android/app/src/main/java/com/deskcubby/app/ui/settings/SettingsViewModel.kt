@@ -40,7 +40,7 @@ import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.preferences.normalizeS3EndpointScheme
-import com.deskcubby.app.data.repository.LegacyAiKeyMigrationStore
+import com.deskcubby.app.data.repository.LegacyAiKeyMigrator
 import com.deskcubby.app.data.repository.DownloadedUpdate
 import com.deskcubby.app.data.repository.UpdateCheckResult
 import com.deskcubby.app.data.repository.UpdateDownloadFailure
@@ -62,8 +62,8 @@ import com.deskcubby.app.data.sync.validateForSync
 import com.deskcubby.app.widget.DeskCubbyWidgetProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import javax.inject.Inject
 import java.net.URL
+import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
@@ -137,7 +137,7 @@ class SettingsViewModel @Inject constructor(
     private val repository: SettingsRepository,
     private val backupRepository: AppBackupRepository,
     private val exportManager: ExportManager,
-    private val legacyAiKeyMigrationStore: LegacyAiKeyMigrationStore,
+    private val legacyAiKeyMigrator: LegacyAiKeyMigrator,
     private val cloudSyncService: AppCloudSyncService,
     private val cloudSyncSecretStore: CloudSyncSecretStore,
     private val cloudSyncUndoStore: CloudSyncUndoStore,
@@ -159,7 +159,7 @@ class SettingsViewModel @Inject constructor(
     val settings: StateFlow<AppSettings> = repository.settings.map { current ->
         if (legacyAiKeyMigrationAttempted) current else {
             legacyAiKeyMigrationAttempted = true
-            migrateLegacyAiKeys(current)
+            legacyAiKeyMigrator.migrateIfNeeded()
         }
     }.onEach { _ready.value = true }.stateIn(
         viewModelScope,
@@ -1054,39 +1054,6 @@ class SettingsViewModel @Inject constructor(
         if (textId != snapshot.calorieTextConfigId || imageId != snapshot.calorieImageConfigId) {
             repository.setCalorieEstimationSettings(false, textId, imageId,
                 snapshot.calorieVisionPrompt, snapshot.calorieTextPrompt)
-        }
-    }
-
-    private suspend fun migrateLegacyAiKeys(current: AppSettings): AppSettings {
-        var allCurrentKeysReadable = true
-        val migrated = withContext(Dispatchers.IO) {
-            current.aiConfigs.map { config ->
-                if (config.apiKey.isNotEmpty()) return@map config
-                if (!legacyAiKeyMigrationStore.containsApiKey(config.id)) return@map config
-                val endpoint = runCatching { URL(config.endpointUrl) }.getOrNull() ?: run {
-                    allCurrentKeysReadable = false
-                    return@map config
-                }
-                val legacyKey = legacyAiKeyMigrationStore.readApiKey(config.id, endpoint)
-                    ?.take(8_192)
-                    .orEmpty()
-                if (legacyKey.isEmpty()) {
-                    allCurrentKeysReadable = false
-                    config
-                } else {
-                    config.copy(apiKey = legacyKey)
-                }
-            }
-        }
-        return try {
-            if (migrated != current.aiConfigs) repository.setAiConfigs(migrated)
-            if (allCurrentKeysReadable) {
-                withContext(Dispatchers.IO) { legacyAiKeyMigrationStore.discardLegacyStore() }
-            }
-            current.copy(aiConfigs = migrated)
-        } catch (_: Exception) {
-            // Keep the obsolete store intact so migration can be retried on the next launch.
-            current
         }
     }
 

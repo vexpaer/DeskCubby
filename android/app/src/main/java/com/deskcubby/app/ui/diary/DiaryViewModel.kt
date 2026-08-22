@@ -3,16 +3,18 @@ package com.deskcubby.app.ui.diary
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.deskcubby.app.data.model.AppSettings
-import com.deskcubby.app.data.model.AppLanguage
+import com.deskcubby.app.data.local.AiTaskQueueEntity
+import com.deskcubby.app.data.local.AiTaskStateEntity
+import com.deskcubby.app.data.local.AiTaskTypeEntity
+import com.deskcubby.app.data.local.AppDatabase
+import com.deskcubby.app.data.local.DiaryIndexEntity
 import com.deskcubby.app.data.model.AiModelType
+import com.deskcubby.app.data.model.AppLanguage
+import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.DiaryDocument
 import com.deskcubby.app.data.model.DiaryEditorDocument
 import com.deskcubby.app.data.model.DiaryTrashItem
 import com.deskcubby.app.data.model.MealCategory
-import com.deskcubby.app.data.local.AiTaskQueueEntity
-import com.deskcubby.app.data.local.AiTaskStateEntity
-import com.deskcubby.app.data.local.AiTaskTypeEntity
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.DiaryPreviewMedia
@@ -22,6 +24,7 @@ import com.deskcubby.app.data.repository.MealCalendarDay
 import com.deskcubby.app.data.repository.MealDayDetails
 import com.deskcubby.app.data.repository.MAX_MEAL_ENERGY_KJ
 import com.deskcubby.app.data.repository.MAX_MEAL_NOTE_CHARS
+import com.deskcubby.app.data.structuredrecords.StructuredRecordsRepository
 import com.deskcubby.app.data.structuredrecords.StructuredWorkspaceRepository
 import com.deskcubby.app.data.taskqueue.AiTaskQueue
 import com.deskcubby.app.data.taskqueue.CalorieDayTaskPayload
@@ -94,9 +97,7 @@ internal suspend fun <T, R> mapConcurrentOrdered(
 ): List<R> = coroutineScope {
     require(maxConcurrency > 0) { "maxConcurrency must be positive" }
     val semaphore = Semaphore(minOf(maxConcurrency, items.size).coerceAtLeast(1))
-    items.map { item ->
-        async { semaphore.withPermit { transform(item) } }
-    }.awaitAll()
+    items.map { item -> async { semaphore.withPermit { transform(item) } } }.awaitAll()
 }
 
 @OptIn(FlowPreview::class)
@@ -105,8 +106,12 @@ class DiaryViewModel @Inject constructor(
     private val repository: DiaryFileRepository,
     private val settingsRepository: SettingsRepository,
     private val workspaceRepository: StructuredWorkspaceRepository,
+    private val structuredRecordsRepository: StructuredRecordsRepository,
     private val aiTaskQueue: AiTaskQueue,
+    database: AppDatabase,
 ) : ViewModel() {
+    private val diaryIndexDao = database.diaryIndexDao()
+
     val settings: StateFlow<AppSettings> = settingsRepository.settings.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
@@ -124,9 +129,7 @@ class DiaryViewModel @Inject constructor(
 
     val calorieEstimationQueueState: StateFlow<CalorieEstimationQueueState> =
         aiTaskQueue.observeTasks().map { tasks ->
-            CalorieEstimationQueueState(
-                items = tasks.mapNotNull { it.toCalorieDayProgress() },
-            )
+            CalorieEstimationQueueState(items = tasks.mapNotNull { it.toCalorieDayProgress() })
         }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.Eagerly,
@@ -146,8 +149,7 @@ class DiaryViewModel @Inject constructor(
     val message: StateFlow<String?> = _message.asStateFlow()
 
     private val _defaultFolderSetupInProgress = MutableStateFlow(false)
-    val defaultFolderSetupInProgress: StateFlow<Boolean> =
-        _defaultFolderSetupInProgress.asStateFlow()
+    val defaultFolderSetupInProgress: StateFlow<Boolean> = _defaultFolderSetupInProgress.asStateFlow()
 
     private val saveRequests = MutableSharedFlow<Unit>(
         extraBufferCapacity = 1,
@@ -161,32 +163,78 @@ class DiaryViewModel @Inject constructor(
     private var mealCalendarRefreshJob: Job? = null
     private var loadedMealCalendarSource: MealCalendarSource? = null
     private var mealCalendarDirty: Boolean = true
+    private var observedDiaryTreeUri: String? = null
+    private var hasObservedDiaryTreeUri = false
+    private var suppressCachedIndexUntilScan = false
 
     init {
         viewModelScope.launch {
             saveRequests.debounce(1_200).collect { saveNow() }
         }
+
         viewModelScope.launch {
-            settings.map { it.diaryTreeUri }.distinctUntilChanged().collect {
-                _expandedMonth.value = null
-                if (it != null) refresh() else _listState.value = DiaryListState()
+            diaryIndexDao.observeAll().collect { cached ->
+                if (
+                    settings.value.diaryTreeUri != null &&
+                    !suppressCachedIndexUntilScan &&
+                    cached.isNotEmpty()
+                ) {
+                    publishDiaryList(cached.map(DiaryIndexEntity::toDiaryDocument), loading = _listState.value.loading)
+                }
             }
         }
+
+        viewModelScope.launch {
+            settingsRepository.settings.map { it.diaryTreeUri }.distinctUntilChanged().collect { uri ->
+                _expandedMonth.value = null
+                val previous = observedDiaryTreeUri
+                val switchedRoot = hasObservedDiaryTreeUri && previous != uri
+                observedDiaryTreeUri = uri
+                hasObservedDiaryTreeUri = true
+                suppressCachedIndexUntilScan = switchedRoot
+                if (uri == null) {
+                    _listState.value = DiaryListState()
+                } else {
+                    if (!switchedRoot) {
+                        val cached = runCatching { diaryIndexDao.getAll() }.getOrDefault(emptyList())
+                        if (cached.isNotEmpty()) {
+                            publishDiaryList(cached.map(DiaryIndexEntity::toDiaryDocument), loading = true)
+                        }
+                    } else {
+                        _listState.value = DiaryListState(loading = true)
+                    }
+                    refresh()
+                }
+            }
+        }
+    }
+
+    private fun publishDiaryList(items: List<DiaryDocument>, loading: Boolean = false, error: String? = null) {
+        _listState.value = DiaryListState(loading = loading, items = items, error = error)
+        if (_expandedMonth.value !in items.map(DiaryDocument::monthKey)) _expandedMonth.value = null
     }
 
     fun refresh() {
         refreshJob?.cancel()
         refreshJob = viewModelScope.launch {
-            _listState.value = _listState.value.copy(loading = true, error = null)
-            runCatching { repository.scan(settings.value) }
-                .onSuccess { items ->
-                    _listState.value = DiaryListState(items = items)
-                    if (_expandedMonth.value !in items.map(DiaryDocument::monthKey)) {
-                        _expandedMonth.value = null
-                    }
-                }
-                .onFailure { _listState.value = DiaryListState(error = it.userMessage()) }
+            _listState.update { it.copy(loading = true, error = null) }
+            try {
+                val items = repository.scan(settings.value)
+                suppressCachedIndexUntilScan = false
+                publishDiaryList(items)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _listState.update { it.copy(loading = false, error = error.userMessage()) }
+            }
         }
+    }
+
+    fun currentEditorDiaryDate(): LocalDate? {
+        val document = _editorState.value.document ?: return null
+        return runCatching {
+            repository.extractDate(document.name, document.lastModified, settings.value.fileNamePattern)
+        }.getOrNull()
     }
 
     fun initializeDefaultFolders(selectedTreeUri: Uri) {
@@ -204,10 +252,7 @@ class DiaryViewModel @Inject constructor(
                     diaryTreeUri = current.diaryTreeUri ?: initialized.diaryTreeUri.toString(),
                     mediaTreeUri = current.mediaTreeUri ?: initialized.mediaTreeUri.toString(),
                 )
-                _message.value = localized(
-                    "默认日记与媒体目录已设置",
-                    "Default diary and media folders are ready",
-                )
+                _message.value = localized("默认日记与媒体目录已设置", "Default diary and media folders are ready")
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -317,9 +362,7 @@ class DiaryViewModel @Inject constructor(
                         .mapNotNull { day ->
                             val seenInDay = seenPhotoKeys ?: mutableSetOf()
                             val selectedPhotos = day.photos.mapNotNull { photo ->
-                                if (photoFileName != null &&
-                                    !photo.fileName.equals(photoFileName, ignoreCase = true)
-                                ) return@mapNotNull null
+                                if (photoFileName != null && !photo.fileName.equals(photoFileName, ignoreCase = true)) return@mapNotNull null
                                 if (!force && photo.energyKj != null) return@mapNotNull null
                                 val key = photo.fileName.lowercase(Locale.ROOT).ifBlank { photo.uri.toString() }
                                 if (!seenInDay.add(key)) return@mapNotNull null
@@ -411,9 +454,7 @@ class DiaryViewModel @Inject constructor(
                 _mealCalendarState.value = current.copy(
                     loading = false,
                     error = null,
-                    items = current.items.map { day ->
-                        if (day.dateIso == dateIso) day.copy(details = normalizedDetails) else day
-                    },
+                    items = current.items.map { day -> if (day.dateIso == dateIso) day.copy(details = normalizedDetails) else day },
                 )
                 acceptIncrementalMealCalendarMutation(sourceBeforeWrite, cacheWasCurrent)
                 _message.value = localized("热量详情已保存", "Energy details saved")
@@ -433,17 +474,12 @@ class DiaryViewModel @Inject constructor(
             it.id == settings.calorieImageConfigId && it.type == AiModelType.IMAGE
         }
         if (!hasImage) {
-            return localized(
-                "请先在日记设置中选择图片识别模型",
-                "Choose an image-recognition model in diary settings first",
-            )
+            return localized("请先在日记设置中选择图片识别模型", "Choose an image-recognition model in diary settings first")
         }
         val hasText = settings.aiConfigs.any {
             it.id == settings.calorieTextConfigId && it.type == AiModelType.TEXT
         }
-        return if (!hasText) {
-            localized("请先在日记设置中选择文字模型", "Choose a text model in diary settings first")
-        } else null
+        return if (!hasText) localized("请先在日记设置中选择文字模型", "Choose a text model in diary settings first") else null
     }
 
     fun exportMealCalendar(
@@ -594,7 +630,29 @@ class DiaryViewModel @Inject constructor(
             )
             if (changedDuringSave) saveRequests.tryEmit(Unit)
             markMealCalendarDirty()
-            refresh()
+
+            _listState.update { state ->
+                state.copy(
+                    items = state.items.map { item ->
+                        if (item.uri == doc.uri) {
+                            item.copy(
+                                lastModified = saved.lastModified,
+                                size = saved.size,
+                                wordCount = DiaryTextUtils.wordCount(snapshot.content),
+                            )
+                        } else item
+                    },
+                )
+            }
+            // The exact saved document is already in memory. Parse its structured markers now so
+            // editing/deleting an existing record is visible immediately, without a SAF rescan.
+            try {
+                structuredRecordsRepository.indexDocument(settings.value, saved)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Markdown remains canonical; startup/manual reconciliation can repair the cache.
+            }
             true
         } catch (error: Exception) {
             if (error is CancellationException) throw error
@@ -624,11 +682,8 @@ class DiaryViewModel @Inject constructor(
             runCatching { repository.importImage(uri, category, settings.value) }
                 .onSuccess { media ->
                     val state = _editorState.value
-                    val lineBreak = if (state.content.isEmpty() || state.content.endsWith('\n') || state.content.endsWith('\r')) {
-                        ""
-                    } else {
-                        DiaryTextUtils.preferredLineEnding(state.content)
-                    }
+                    val lineBreak = if (state.content.isEmpty() || state.content.endsWith('\n') || state.content.endsWith('\r')) ""
+                    else DiaryTextUtils.preferredLineEnding(state.content)
                     onContentChanged(state.content + lineBreak + media.markdown)
                     if (category != null && settings.value.calorieEstimationEnabled) {
                         runCatching {
@@ -677,10 +732,7 @@ class DiaryViewModel @Inject constructor(
                         settings = settings.value,
                     )
                     val latest = _editorState.value
-                    val latestWithoutReferences = DiaryTextUtils.removeMediaReferences(
-                        latest.content,
-                        markdownTarget,
-                    )
+                    val latestWithoutReferences = DiaryTextUtils.removeMediaReferences(latest.content, markdownTarget)
                     val changedDuringDelete = latestWithoutReferences != result.document.content
                     undoStack.clear()
                     redoStack.clear()
@@ -699,7 +751,22 @@ class DiaryViewModel @Inject constructor(
                         localized("媒体文件已不存在，日记引用已删除", "The media file was already missing; diary references deleted")
                     }
                     markMealCalendarDirty()
-                    refresh()
+                    _listState.update { state ->
+                        state.copy(items = state.items.map { item ->
+                            if (item.uri == document.uri) item.copy(
+                                lastModified = result.document.lastModified,
+                                size = result.document.size,
+                                wordCount = DiaryTextUtils.wordCount(result.document.content),
+                            ) else item
+                        })
+                    }
+                    try {
+                        structuredRecordsRepository.indexDocument(settings.value, result.document)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // The next startup/manual reconciliation can repair a derived-cache failure.
+                    }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: ExternalFileConflictException) {
@@ -719,32 +786,47 @@ class DiaryViewModel @Inject constructor(
 
     fun rename(uri: String, fileName: String) {
         viewModelScope.launch {
-            runCatching { repository.rename(uri, fileName, settings.value) }
-                .onSuccess { renamed ->
-                    val editor = _editorState.value
-                    if (editor.document?.uri == uri) {
-                        _editorState.value = editor.copy(document = renamed.copy(content = editor.content))
-                    }
-                    _message.value = localized("已重命名为 ${renamed.name}", "Renamed to ${renamed.name}")
-                    markMealCalendarDirty()
-                    refresh()
+            try {
+                val renamed = repository.rename(uri, fileName, settings.value)
+                structuredRecordsRepository.removeOccurrencesForFile(uri)
+                try {
+                    structuredRecordsRepository.indexDocument(settings.value, renamed)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // A later reconciliation can repair the derived cache.
                 }
-                .onFailure { _message.value = it.userMessage() }
+                val editor = _editorState.value
+                if (editor.document?.uri == uri) {
+                    _editorState.value = editor.copy(document = renamed.copy(content = editor.content))
+                }
+                _message.value = localized("已重命名为 ${renamed.name}", "Renamed to ${renamed.name}")
+                markMealCalendarDirty()
+                refresh()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _message.value = error.userMessage()
+            }
         }
     }
 
     fun delete(uri: String) {
         viewModelScope.launch {
-            runCatching {
+            try {
                 require(repository.delete(uri, settings.value)) {
                     localized("无法移入回收站", "Could not move diary to trash")
                 }
-            }.onSuccess {
+                structuredRecordsRepository.removeOccurrencesForFile(uri)
                 _message.value = localized("已移入日记回收站", "Moved to diary trash")
                 markMealCalendarDirty()
                 refresh()
                 refreshTrash()
-            }.onFailure { _message.value = it.userMessage() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _message.value = error.userMessage()
+            }
         }
     }
 
@@ -794,6 +876,17 @@ class DiaryViewModel @Inject constructor(
     private fun Throwable.userMessage(): String = message ?: "操作失败，请检查目录授权"
 }
 
+private fun DiaryIndexEntity.toDiaryDocument() = DiaryDocument(
+    uri = uri,
+    name = name,
+    title = title,
+    dateIso = dateIso,
+    monthKey = monthKey,
+    lastModified = lastModified,
+    size = size,
+    wordCount = wordCount,
+)
+
 private fun AiTaskQueueEntity.toCalorieDayProgress(): CalorieEstimationDayProgress? {
     if (type != AiTaskTypeEntity.CALORIE_DAY) return null
     val payload = runCatching { CalorieDayTaskPayload.decode(payloadJson) }.getOrNull()
@@ -823,9 +916,10 @@ private fun AiTaskQueueEntity.toCalorieDayProgress(): CalorieEstimationDayProgre
             "SAVING" -> CalorieEstimationQueueStatus.SAVING
             else -> CalorieEstimationQueueStatus.QUEUED
         }
-        AiTaskStateEntity.WAITING_APPROVAL -> CalorieEstimationQueueStatus.QUEUED
-        AiTaskStateEntity.CANCEL_REQUESTED -> CalorieEstimationQueueStatus.QUEUED
-        AiTaskStateEntity.QUEUED -> CalorieEstimationQueueStatus.QUEUED
+        AiTaskStateEntity.WAITING_APPROVAL,
+        AiTaskStateEntity.CANCEL_REQUESTED,
+        AiTaskStateEntity.QUEUED,
+        -> CalorieEstimationQueueStatus.QUEUED
     }
     return CalorieEstimationDayProgress(
         id = id,
@@ -835,10 +929,7 @@ private fun AiTaskQueueEntity.toCalorieDayProgress(): CalorieEstimationDayProgre
         dayPhotoCount = payload.dayPhotoCount,
         completedPhotoCount = progress?.completedPhotoCount ?: 0,
         activePhotoCount = progress?.activePhotoCount ?: 0,
-        currentPhotoLabel = when (status) {
-            CalorieEstimationQueueStatus.TEXT_ESTIMATION -> null
-            else -> null
-        },
+        currentPhotoLabel = null,
         forceRecalculation = payload.force,
         failedAtStatus = if (status == CalorieEstimationQueueStatus.FAILED && progress != null) {
             when (progress.stage) {

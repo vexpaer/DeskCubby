@@ -1,12 +1,13 @@
 package com.deskcubby.app
 
 import android.app.Application
-import com.deskcubby.app.data.repository.PoetryRepository
-import com.deskcubby.app.data.repository.PoetryRefreshResult
 import com.deskcubby.app.data.preferences.SettingsRepository
-import com.deskcubby.app.data.statistics.UsageStatisticsRepository
+import com.deskcubby.app.data.repository.LegacyAiKeyMigrator
+import com.deskcubby.app.data.repository.PoetryRefreshResult
+import com.deskcubby.app.data.repository.PoetryRepository
 import com.deskcubby.app.data.statistics.StatisticsRefreshOutcome
 import com.deskcubby.app.data.statistics.StatisticsScheduler
+import com.deskcubby.app.data.statistics.UsageStatisticsRepository
 import com.deskcubby.app.data.sync.CloudSyncScheduler
 import com.deskcubby.app.data.taskqueue.AiTaskQueue
 import com.deskcubby.app.plugin.PluginRuntime
@@ -17,8 +18,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 @HiltAndroidApp
 class DeskCubbyApplication : Application() {
@@ -29,6 +30,7 @@ class DeskCubbyApplication : Application() {
     @Inject lateinit var usageStatisticsRepository: UsageStatisticsRepository
     @Inject lateinit var pluginRuntime: PluginRuntime
     @Inject lateinit var aiTaskQueue: AiTaskQueue
+    @Inject lateinit var legacyAiKeyMigrator: LegacyAiKeyMigrator
     @Inject lateinit var structuredRecordsRepository: com.deskcubby.app.data.structuredrecords.StructuredRecordsRepository
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -38,12 +40,14 @@ class DeskCubbyApplication : Application() {
         statisticsScheduler.start()
         applicationScope.launch {
             try {
+                // Old releases kept AI keys in AndroidKeyStore-backed preferences. Background work
+                // can start before SettingsViewModel exists, so migrate credentials first.
+                legacyAiKeyMigrator.migrateIfNeeded()
                 aiTaskQueue.start()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                // Startup must continue even if the queue recovery fails; the next enqueue
-                // reschedules it.
+                // Startup must continue even if queue recovery fails; the next enqueue reschedules it.
             }
         }
         DeskCubbyWidgetProvider.requestUpdate(this)
@@ -89,8 +93,8 @@ class DeskCubbyApplication : Application() {
             try {
                 val stored = settingsRepository.settings.first()
                 if (stored.diaryTreeUri != null) {
-                    // Keep the structured-records index fresh and settle any complete past
-                    // sleep/wake estimates into Markdown. Failures are non-fatal at startup.
+                    // This scan is startup-only background reconciliation. User record writes use
+                    // direct one-file index updates and never wait for this full-directory pass.
                     structuredRecordsRepository.refreshIncremental(stored)
                     structuredRecordsRepository.settleAutomaticSleepWake(stored)
                 }
