@@ -41,4 +41,19 @@ android/app/build/
 # Local AI context
 /note.md
 
+# Web client (web/) — generated & local-only artifacts
+/web/frontend/node_modules/
+/web/frontend/dist/
+/web/frontend/*.tsbuildinfo
+/web/frontend/.vite/
+/web/backend/**/__pycache__/
+/web/backend/.venv/
+/web/backend/.pytest_cache/
+/web/backend/data/
+/web/data/
+/web/*.log
+**/__pycache__/
+*.pyc
+.venv/
+
 .omo

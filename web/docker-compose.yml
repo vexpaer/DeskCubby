@@ -1,0 +1,14 @@
+services:
+  deskcubby-web:
+    build: .
+    image: deskcubby-web:latest
+    container_name: deskcubby-web
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/data # 日记、媒体、笔记、数据库、备份全部持久化在此目录，直接备份/迁移即可
+    environment:
+      - TZ=Asia/Shanghai
+      # 如需反代子路径部署，请在 Caddy/Nginx 中代理到 8787 并保留 /api 前缀
+# 一条命令启动： docker compose up -d --build

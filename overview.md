@@ -2,9 +2,9 @@
 
 ## 1. 项目定位
 
-DeskCubby 是一个本地优先、可高度定制的个人记录应用，仓库同时包含 Android 原生客户端和 Windows 桌面客户端。两个客户端都把 Markdown 日记与媒体目录视为用户数据的 source of truth；数据库保存结构化记录、设置和可重建索引，不替代真实文件。
+DeskCubby 是一个本地优先、可高度定制的个人记录应用，仓库同时包含 Android 原生客户端、Windows 桌面客户端和可自托管的 Web 端（`web/`）。各端都把 Markdown 日记与媒体目录视为用户数据的 source of truth；数据库保存结构化记录、设置和可重建索引，不替代真实文件。
 
-Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room 保存小巧思、分类、浏览记录、日期记录、诗词、AI 对话等数据。Windows 通过受限 Tauri IPC 让 Rust 后端访问用户选择的普通目录，并用 SQLite 保存核心结构化数据；React 前端不获得任意文件系统权限。
+Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room 保存小巧思、分类、浏览记录、日期记录、诗词、AI 对话等数据。Windows 通过受限 Tauri IPC 让 Rust 后端访问用户选择的普通目录，并用 SQLite 保存核心结构化数据；React 前端不获得任意文件系统权限。Web 端以 FastAPI + SQLite 复刻 Android 的数据与业务语义：所有文件、AI 调用与敏感配置都留在服务端，浏览器只通过 `/api` 访问，API Key 与云凭据永不下发前端。
 
 两个客户端都提供 Material、Liquid Glass 和 Organic Future 三套预设视觉风格；Android 另有只映射到 Compose 主题角色的受控 Custom 风格。两端均支持简体中文/繁体中文/英文/韩语/日语、深浅色模式和字号缩放（Android 0.16.0 起支持五种语言；首次启动会先让用户选择语言）。当前版本为 Android **0.20.1**、Windows **0.8.0**。Android 当前应用备份格式为 v34（0.20.0 起：手动备份不再包含 AI API Key、SAF URI 与云凭据，新增 URI-free Agent 对话载荷）；Windows **0.8.0** 追赶 Android 数据类型进度：支持导入 Android v1–v33 并统一导出 v33（补齐 v30 Agent 来源授权/权限模式/模型工具能力、v31 AI 页面字号/回复框宽度/Agent 提示词/导航页列数与模块颜色、v32 桌面小卡片使用时间范围、v33 应用模块内容类型与云同步归一映射），Reader 内部状态 schema 升至 v5 并携带与 Android 一致的 0/5/…/95 页内偏移。注意：Windows 0.8.0 尚不支持导入 Android v34 JSON（需等待 Windows 侧跟进）。
 
@@ -41,6 +41,19 @@ Android 工程位于仓库的 `android/` 目录，包含 application module `:ap
 | 构建 | pnpm、Cargo、固定 `stable-x86_64-pc-windows-msvc` 工具链 |
 
 Windows 工程位于 `windows/`，产品标识符为 `com.deskcubby.windows`。前端只提交业务意图；目录选择、文件 I/O、数据库、HTTPS、备份影子和 DPAPI 均由 Rust 完成。
+
+### Web 技术栈
+
+| 层 | 技术 |
+|---|---|
+| 前端 | React 18、TypeScript、Vite、React Router、Zustand、lucide-react、react-markdown、pdfjs-dist；PWA（manifest + service worker） |
+| 主题 | OKLCH `colorScheme.ts` 生成 `--dc-*` CSS 变量，MATERIAL / LIQUID_GLASS / ORGANIC_FUTURE 三风格 |
+| i18n | `tr("中文","English")` + translations.json（由 AppTranslations.kt 转换，五语言） |
+| 后端 | Python FastAPI、Uvicorn、httpx、cryptography、Pillow、python-multipart |
+| 结构化数据 | SQLite（stdlib sqlite3，WAL），表结构与 Room 实体同名同列，时间一律 epoch 毫秒 |
+| 文件 | 与 Android 相同的工作区布局：`diary/*.md`、`media/**` + `dc-media.json` v2、`.deskcubby/*.json`、`reading/v1/progress.json` |
+
+Web 工程位于 `web/`。浏览器仅通过 `/api` 访问后端；日记/媒体/笔记等真实文件、AI 调用与云同步凭据全部留在服务端数据目录（`DESKCUBBY_DATA_DIR`）。可选访问密码只存 PBKDF2 哈希，HttpOnly 会话 Cookie；公网部署建议配合 Caddy/Nginx 启用 HTTPS。备份导入导出沿用 Android v34 JSON 格式（不含 API Key/URI/云凭据），可与 Android 互导迁移。
 
 ## 3. 目录结构
 
@@ -94,6 +107,33 @@ DeskCubby/
    ├─ package.json
    ├─ pnpm-lock.yaml
    └─ rust-toolchain.toml    # stable-x86_64-pc-windows-msvc
+
+web/                         # 自托管 Web 端（复刻 Android 全部功能）
+   ├─ docs/
+   │  ├─ CONVENTIONS.md      # Web 端 API 契约、数据保真规则与文件所有权
+   │  └─ ACCEPTANCE.md       # 与 Android 对照的验收清单
+   ├─ backend/
+   │  ├─ app/
+   │  │  ├─ main.py          # FastAPI 装配、路由自动发现、SPA/PWA 托管、鉴权中间件
+   │  │  ├─ core/            # config/db(SQLite WAL)/errors/fs(路径安全)/http(有界客户端)/security(PBKDF2+会话)
+   │  │  ├─ routers/         # settings/diary/meals/media/thoughts/dates/poetry/rss/blog/notes/ai/agent/
+   │  │  │                   # games/vault/reader/usage/health/calorie/statshub/structured/backup/cloudsync/widgets
+   │  │  ├─ services/        # 各业务实现：diary_files、media_meta(dc-media.json v2)、backup_codec(v34)、
+   │  │  │                   # agent_runtime/tools/review/permissions、cloudsync_engine(webdav/s3)、reader_service 等
+   │  │  └─ assets/          # poetry_presets.json（与 Android assets 同源）
+   │  └─ tests/              # pytest：日记媒体链路、备份往返等
+   ├─ frontend/
+   │  ├─ src/
+   │  │  ├─ api/             # client(fetch 封装)与集中类型定义
+   │  │  ├─ i18n/            # tr() 与 translations.json（自 AppTranslations.kt 转换）
+   │  │  ├─ theme/           # OKLCH colorScheme 与 --dc-* token，MATERIAL/LIQUID_GLASS/ORGANIC_FUTURE
+   │  │  ├─ stores/          # Zustand settings store
+   │  │  ├─ components/      # ui 基础组件、图表、Markdown 预览
+   │  │  └─ pages/           # 21 个功能目录 + registry.tsx 懒加载路由表
+   │  ├─ vite.config.ts
+   │  └─ package.json
+   ├─ Dockerfile / docker-compose.yml
+   └─ README.md              # 本地运行、部署（NAS/VPS）、反向代理与密码保护说明
 ```
 
 ## 4. 总体数据流
@@ -329,6 +369,13 @@ Windows 使用独立的左侧竖栏，不复用 Android 的底部导航配置。
 Windows 设置采用接近 Android 的层级：设置主页为「外观与语言」「子页面设置」「应用数据」「桌面导航」「关于」；子页面设置覆盖主页、日记/媒体/标题字号、小巧思、诗词/吃历、收藏夹、AI、手机使用时间与健康的桌面边界说明；应用数据进入 v29/自动备份与 WebDAV/S3；关于进入检查更新。「桌面导航」允许全部 18 页逐项显隐、同类排序或移动分类，并支持分类中英文名、新建、排序和删除；删除分类时页面迁移到相邻分类，最后一个分类禁止删除。隐藏当前页会回退到首个可见页，全部隐藏仍可进入设置；隐藏页仍能从导航聚合页或相关业务入口打开。搜索结果可直接到目标子页，任一可编辑子页仍遵守本地草稿、右上角保存、恢复本页默认值和 dirty 离开确认。
 
 ## 8. 最近完成的功能
+
+### Web 端（`web/`）：完整复刻 Android 全部功能
+
+- 新增自托管 Web 端，以 Android 现有代码与行为为唯一参照实现全部页面与交互：日记（编辑/冲突三选/回收站/图片插入与长按餐别标记）、吃历、小巧思、日期记录、诗词本（每日诗词预设同源）、RSS、浏览器、笔记、AI 聊天与 Agent（工具调用/来源授权/审批/Review 撤回/Token 用量）、收藏夹（PBKDF2+AES-GCM）、阅读（TXT 分页/PDF 连续滚动/进度指纹）、七个小游戏、结构化记录统计、手机使用时间与健康数据导入、桌面小卡片设计器、设置全部 16 个分区。
+- 数据保真：SQLite 表结构与 Room 实体同名同列；设置以 camelCase AppSettings JSON 存储（102 字段对齐 AppModels.kt）；备份导出为 Android v34 格式并执行同样的脱敏（无 apiKey/URI/云凭据，Go 小游戏不入导出）；`dc-media.json` v2 小写文件名键 + 未知字段保留 + previous/pending 保护；热量估算沿用「图片模型 ≤3 并发 → 单次文本模型汇总」流程；云同步支持 WebDAV/S3 兼容端点、强制上传/下载、冲突副本与一次撤回。
+- 安全边界：API Key 与云凭据只存服务端、任何响应均脱敏回显；可选访问密码仅存 PBKDF2 哈希（24 万迭代）+ HttpOnly 会话 Cookie + 失败锁定；所有路径参数经根目录约束。前端 PWA 可安装，响应式适配桌面/平板/手机。
+- 交付流程：四轮子代理对抗式审查（安全/保真/运行时集成），最终一轮以 8 阶段故障注入验证通过（VERDICT: pass）；pytest 46 项、tsc 零错误、vite build 通过；Dockerfile 与 docker-compose 支持一键部署。
 
 ### Android 0.20.1 构建（启用 R8 代码压缩与资源收缩）
 

@@ -57,14 +57,17 @@ DeskCubby is a **local-first** journal and personal knowledge base for Android a
 | --- | --- |
 | **Android** | Download `DeskCubby.apk` from [Releases](https://github.com/vexpaer/DeskCubby/releases/latest) (Android 8.0+) and install it, allowing “install unknown apps” when prompted. The in-app update check keeps you current. |
 | **Windows** | Download the setup or portable build from [Releases](https://github.com/vexpaer/DeskCubby/releases/latest) (Windows 10/11 x64). |
+| **Self-hosted Web** | Run the `web/` folder on your own server or NAS (`docker compose up` or Python + Node directly) and open it from any browser; see [web/README.md](web/README.md). Data stays in your server's data directory, with optional password protection. |
 | **First run** | Pick a folder for your journals, write your first diary, add a thought, import a book. Every entry is a real Markdown file you own. |
 
-> Platform notes: the built-in browser and home-screen widgets are Android-only. Windows mirrors the core experience and shows Phone Usage / Health data, but never collects it.
+> Platform notes: the built-in browser and home-screen widgets are Android-only. Windows mirrors the core experience and shows Phone Usage / Health data, but never collects it. The Web app replicates the full Android feature set for personal/self-hosted use; system-home widgets still require Android.
 
 ## Documentation
 
 - [README_for_ai.md](README_for_ai.md) — step-by-step user guide (read inline from the in-app About page, and available to the Agent as the read-only "App guide" source)
 - [overview.md](overview.md) — architecture and data flow
+- [web/README.md](web/README.md) — self-hosted web app: local run, Docker deployment, reverse proxy & password setup
+- [web/docs/CONVENTIONS.md](web/docs/CONVENTIONS.md) — web API contract, data-fidelity rules and file ownership
 
 ## License
 
