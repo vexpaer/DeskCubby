@@ -36,11 +36,11 @@ source_commit="$(git rev-parse HEAD)"
   echo "## Index status"
   echo
   echo '```text'
-  codegraph status . || true
+  codegraph status || true
   echo '```'
 } > "$OUT_DIR/overview.md"
 
-codegraph files . --json > "$OUT_DIR/files.json"
+codegraph files --json > "$OUT_DIR/files.json"
 
 for term in sync structured diary agent navigation settings database repository; do
   target="$OUT_DIR/symbols-${term}.json"
