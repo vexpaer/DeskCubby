@@ -31,10 +31,8 @@ data class CloudSyncConfig(
         CloudSyncContent.NOTES,
         CloudSyncContent.MEDIA,
         CloudSyncContent.THOUGHTS,
-        CloudSyncContent.THOUGHT_CATEGORIES,
         CloudSyncContent.DATE_RECORDS,
         CloudSyncContent.POEMS,
-        CloudSyncContent.POETRY_CATEGORIES,
         CloudSyncContent.FAVORITES,
         CloudSyncContent.READING_PROGRESS,
         CloudSyncContent.READER_PREFERENCES,
@@ -107,6 +105,23 @@ enum class CloudSyncContent(
     VAULT("records/vault", CloudSyncContentKind.RECORD),
     GLOBAL_SETTINGS("records/global-settings", CloudSyncContentKind.RECORD),
 }
+
+internal val userSelectableCloudSyncContents: List<CloudSyncContent> =
+    CloudSyncContent.entries.filterNot { content ->
+        content == CloudSyncContent.THOUGHT_CATEGORIES ||
+            content == CloudSyncContent.POETRY_CATEGORIES
+    }
+
+internal fun Set<CloudSyncContent>.toUserSelectableSyncContents(): Set<CloudSyncContent> =
+    buildSet {
+        addAll(this@toUserSelectableSyncContents.intersect(userSelectableCloudSyncContents.toSet()))
+        if (CloudSyncContent.THOUGHT_CATEGORIES in this@toUserSelectableSyncContents) {
+            add(CloudSyncContent.THOUGHTS)
+        }
+        if (CloudSyncContent.POETRY_CATEGORIES in this@toUserSelectableSyncContents) {
+            add(CloudSyncContent.POEMS)
+        }
+    }
 
 internal fun Set<CloudSyncContent>.withRequiredSyncDependencies(): Set<CloudSyncContent> =
     buildSet {

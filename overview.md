@@ -127,7 +127,7 @@ Repository ─────────────→ Room DAO
 - Screen 只负责界面草稿和交互；持久化、并发控制、输入上限和失败恢复应放在 ViewModel/Repository。
 - Android 结构化记录以 `.deskcubby/fields.json` / `records.json` 为共享模板来源；首页、记录页与系统桌面 Widget 使用同一套数据。Widget 渲染只做只读快照，点按后才执行初始化/旧模板迁移并通过 `StructuredRecordsRepository` 写入带稳定字段标记的 Markdown；工作区写入在 `DiaryFileRepository` 的共享 mutex 下原子化并广播失效事件，因此同根目录云同步和多个 ViewModel 不会靠各自缓存互相覆盖。
 - 日记文件是正文 source of truth。`DiaryIndexEntity` 用于首页统计和列表加速，写入文件后应重新扫描更新。笔记库同样以用户选择目录中的真实 Markdown/文件夹为权威，但不进入日记索引，也不按日期分组。
-- 云同步由设置页、应用首页“立即同步”与“强制上传/下载”两个模块、系统桌面同步组件或 `CloudSyncWorker` 触发，经 `data/sync/` 与同一串行 WorkManager 队列协调远端清单和冲突检测；本地日记与媒体仍只通过 `DiaryFileRepository` 访问 SAF。阅读进度使用独立 `reading/v1/progress.json`，经 `ReaderProgressJsonCodec` 与 `ReaderRepository` 的 URI-free 指纹账本合并，不进入日记/媒体文件清单。
+- 云同步由设置页、应用首页“立即同步”与“强制上传/下载”两个模块、系统桌面同步组件或 `CloudSyncWorker` 触发，经 `data/sync/` 与同一串行 WorkManager 队列协调远端清单和冲突检测；同步内容配置只展示正文类型，选择小巧思或诗词时运行层自动加入并优先同步对应分类，旧版分类单选会归一为对应正文选择。本地日记与媒体仍只通过 `DiaryFileRepository` 访问 SAF。阅读进度使用独立 `reading/v1/progress.json`，经 `ReaderProgressJsonCodec` 与 `ReaderRepository` 的 URI-free 指纹账本合并，不进入日记/媒体文件清单。
 - `plugin-api/core` 仍是既有非 AI 功能的旁路扩展层；生产 Hilt 插件集合为空，测试源集中的 `TestPlugin` 只验证生命周期。Android Agent 成为首个直接消费其稳定业务契约的生产子系统：`AgentModule` 绑定接口与 app adapter，Agent Runtime 不注入各业务 Screen、ViewModel、Repository、DAO 或底层存储。
 - Agent 每轮只由 `AgentContextProvider` 取得已授权来源的类型、计数、分类、标题/日期范围等轻量 metadata 与工具说明；正文由模型通过分页、限量的 list/search/read 工具按需取得。`AgentPermissionManager` 在执行每个 mutation 前落实需要批准/全自动策略，`AgentReviewRepository` 在真实修改成功后保存 before/after、Undo token 与工具执行记录。
 
