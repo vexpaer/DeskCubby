@@ -92,6 +92,7 @@ fun StructuredRecordsScreen(
     viewModel: StructuredRecordsViewModel,
     onBack: (() -> Unit)? = null,
     onOpenSettings: () -> Unit = {},
+    targetDate: java.time.LocalDate? = null,
 ) {
     val templates by viewModel.templates.collectAsStateWithLifecycle()
     val fields by viewModel.fields.collectAsStateWithLifecycle()
@@ -159,7 +160,7 @@ fun StructuredRecordsScreen(
                     clearInputsKey = feedback
                         ?.takeIf { !it.isError && it.recordedTemplateId == template.id }
                         ?.key,
-                    onRecord = { draft -> viewModel.record(template, draft) },
+                    onRecord = { draft -> viewModel.record(template, draft, targetDate) },
                     onEdit = { editingTemplate = template },
                     onDelete = { pendingDelete = template },
                 )

@@ -53,6 +53,29 @@ class AiTaskRunner @Inject constructor(
     private val claimMutex = Mutex()
     private val liveLeaseOwners = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
+    /** Claims and executes only the task named by one unique WorkRequest. */
+    suspend fun runTask(taskId: Long) {
+        val leaseOwner = UUID.randomUUID().toString()
+        liveLeaseOwners.add(leaseOwner)
+        try {
+            val claimed = claimMutex.withLock {
+                recoverStaleRunning()
+                val changed = dao.claimById(
+                    id = taskId,
+                    running = AiTaskStateEntity.RUNNING,
+                    startedAt = System.currentTimeMillis(),
+                    leaseOwner = leaseOwner,
+                    queued = AiTaskStateEntity.QUEUED,
+                )
+                if (changed > 0) dao.getById(taskId) else null
+            }
+            if (claimed != null) executeSafely(claimed)
+        } finally {
+            liveLeaseOwners.remove(leaseOwner)
+        }
+    }
+
+    /** Compatibility path for an AiTaskWorker persisted by an older app build without task input. */
     suspend fun drain(shouldContinue: () -> Boolean) {
         val leaseOwner = UUID.randomUUID().toString()
         liveLeaseOwners.add(leaseOwner)
@@ -114,7 +137,7 @@ class AiTaskRunner @Inject constructor(
                 return
             }
             throw cancelled
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             dao.markFailed(
                 id = task.id,
                 failed = AiTaskStateEntity.FAILED,
@@ -288,8 +311,13 @@ class AiTaskRunner @Inject constructor(
     }
 
     private suspend fun hydrateApiKeys(payloadSettings: AppSettings): AppSettings {
-        val live = runCatching { settingsRepository.settings.first() }.getOrNull()
-            ?: return payloadSettings
+        val live = try {
+            settingsRepository.settings.first()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return payloadSettings
+        }
         if (live.aiConfigs.isEmpty()) return payloadSettings
         val liveById = live.aiConfigs.associateBy { it.id }
         val hydratedConfigs = payloadSettings.aiConfigs.map { config ->
@@ -300,9 +328,13 @@ class AiTaskRunner @Inject constructor(
         return payloadSettings.copy(aiConfigs = hydratedConfigs)
     }
 
-    private suspend fun isCancellationRequested(taskId: Long): Boolean =
-        runCatching { dao.getById(taskId)?.state == AiTaskStateEntity.CANCEL_REQUESTED }
-            .getOrDefault(false)
+    private suspend fun isCancellationRequested(taskId: Long): Boolean = try {
+        dao.getById(taskId)?.state == AiTaskStateEntity.CANCEL_REQUESTED
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
+    }
 
     private suspend fun checkTaskCancelled(taskId: Long) {
         if (isCancellationRequested(taskId)) throw CancellationException("Task cancelled by user")

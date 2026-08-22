@@ -523,6 +523,25 @@ class DiaryFileRepository @Inject constructor(
         documents.map { it.first }.sortedWith(compareByDescending<DiaryDocument> { it.dateIso }.thenByDescending { it.name })
     }
 
+    /** Updates only the Room projection for one already-durable diary document. */
+    suspend fun indexDocument(settings: AppSettings, document: DiaryEditorDocument) {
+        val date = extractDate(document.name, document.lastModified, settings.fileNamePattern)
+        indexDao.upsert(
+            DiaryIndexEntity(
+                uri = document.uri,
+                name = document.name,
+                title = markdownStem(document.name),
+                dateIso = date.toString(),
+                monthKey = "%04d.%02d".format(Locale.ROOT, date.year, date.monthValue),
+                lastModified = document.lastModified,
+                size = document.size,
+                wordCount = DiaryTextUtils.wordCount(document.content),
+                sha256 = document.sha256,
+                indexedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
     /**
      * Builds the meal photo wall from Markdown files. Parsed image references are kept in a
      * bounded, rebuildable app-cache index and reused only when a SAF document reports the same
@@ -1869,28 +1888,23 @@ class DiaryFileRepository @Inject constructor(
                     ?: root.listFiles().firstOrNull { it.name.equals(targetName, ignoreCase = true) }
                     ?: error("文件可能已重命名，但存储服务没有返回可访问的新文件")
                 val renamedDocument = load(renamedFile.uri)
-                updateIndexAfterRename(uri, renamedDocument)
+                // The file operation is already committed. A rebuildable Room projection must
+                // not make a successful rename look like a failed filesystem mutation.
+                withContext(NonCancellable) {
+                    runCatching { updateIndexAfterRename(uri, renamedDocument, settings) }
+                }
                 recordMealCalendarContentChange()
                 renamedDocument
             }
         }
 
-    private suspend fun updateIndexAfterRename(oldUri: String, document: DiaryEditorDocument) {
-        val date = extractDate(document.name, document.lastModified)
-        val renamedIndex = DiaryIndexEntity(
-            uri = document.uri,
-            name = document.name,
-            title = markdownStem(document.name),
-            dateIso = date.toString(),
-            monthKey = "%04d.%02d".format(Locale.ROOT, date.year, date.monthValue),
-            lastModified = document.lastModified,
-            size = document.size,
-            wordCount = DiaryTextUtils.wordCount(document.content),
-            sha256 = document.sha256,
-            indexedAt = System.currentTimeMillis(),
-        )
-        val preserved = indexDao.getAll().filterNot { it.uri == oldUri || it.uri == document.uri }
-        indexDao.replaceAfterSuccessfulScan(preserved + renamedIndex)
+    private suspend fun updateIndexAfterRename(
+        oldUri: String,
+        document: DiaryEditorDocument,
+        settings: AppSettings,
+    ) {
+        if (oldUri != document.uri) indexDao.deleteByUri(oldUri)
+        indexDocument(settings, document)
     }
 
     suspend fun delete(uri: String, settings: AppSettings): Boolean = withContext(Dispatchers.IO) {
@@ -1912,7 +1926,11 @@ class DiaryFileRepository @Inject constructor(
             require(document.delete()) { "原日记无法删除，文件已保持不变" }
             true
         }.onFailure { backup.delete() }.getOrThrow().also { deleted ->
-            if (deleted) recordMealCalendarContentChange()
+            if (deleted) {
+                // The durable file is already in trash; derived-index cleanup is best effort.
+                withContext(NonCancellable) { runCatching { indexDao.deleteByUri(uri) } }
+                recordMealCalendarContentChange()
+            }
         }
     }
 

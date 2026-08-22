@@ -29,10 +29,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
@@ -49,6 +49,7 @@ class StructuredRecordsViewModel @Inject constructor(
     private val workspaceRepository: StructuredWorkspaceRepository,
     private val recordsRepository: StructuredRecordsRepository,
     private val phoneInteractionEstimator: PhoneInteractionEstimator,
+    private val uiStore: StructuredRecordsUiStore,
     @ApplicationContext private val applicationContext: Context,
 ) : ViewModel() {
     val settings: StateFlow<AppSettings> = settingsRepository.settings.stateIn(
@@ -57,11 +58,8 @@ class StructuredRecordsViewModel @Inject constructor(
         initialValue = AppSettings(),
     )
 
-    private val mutableFields = MutableStateFlow<List<StructuredField>>(emptyList())
-    val fields: StateFlow<List<StructuredField>> = mutableFields.asStateFlow()
-
-    private val mutableTemplates = MutableStateFlow<List<StructuredRecordTemplate>>(emptyList())
-    val templates: StateFlow<List<StructuredRecordTemplate>> = mutableTemplates.asStateFlow()
+    val fields: StateFlow<List<StructuredField>> = uiStore.fields.asStateFlow()
+    val templates: StateFlow<List<StructuredRecordTemplate>> = uiStore.templates.asStateFlow()
 
     private val mutableSending = MutableStateFlow<Set<String>>(emptySet())
     val sendingTemplateIds: StateFlow<Set<String>> = mutableSending.asStateFlow()
@@ -82,28 +80,31 @@ class StructuredRecordsViewModel @Inject constructor(
     val journalDay: StateFlow<LocalDate?> = mutableJournalDay.asStateFlow()
 
     private var feedbackKey = 0L
-    private val templateMutationMutex = Mutex()
 
     init {
         viewModelScope.launch {
-            settings.map { it.diaryTreeUri }.distinctUntilChanged().collect { uri ->
-                // Root-scoped state must never survive a diary-root switch, even when the new SAF
-                // provider is temporarily unreadable.
-                templateMutationMutex.withLock {
-                    mutableFields.value = emptyList()
-                    mutableTemplates.value = emptyList()
+            settingsRepository.settings.map { it.diaryTreeUri }.distinctUntilChanged().collect { uri ->
+                val rootChanged = uiStore.mutationMutex.withLock {
+                    val changed = !uiStore.rootInitialized || uiStore.rootUri != uri
+                    if (changed) {
+                        uiStore.rootInitialized = true
+                        uiStore.rootUri = uri
+                        uiStore.fields.value = emptyList()
+                        uiStore.templates.value = emptyList()
+                    }
+                    changed
                 }
-                mutableSending.value = emptySet()
+                if (rootChanged) mutableSending.value = emptySet()
                 mutableSystemSnapshot.value = null
                 mutableJournalDay.value = null
                 if (uri != null) {
-                    val appSettings = settings.value
+                    val appSettings = settingsRepository.settings.first()
                     try {
-                        templateMutationMutex.withLock { refreshWorkspace(appSettings) }
+                        uiStore.mutationMutex.withLock { refreshWorkspace(appSettings) }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
-                        // Keep the collector alive; a later workspace write/invalidation retries.
+                        // Keep the collector alive; a later workspace invalidation retries.
                     }
                     refreshSystemSnapshot(appSettings)
                 }
@@ -111,14 +112,14 @@ class StructuredRecordsViewModel @Inject constructor(
         }
         viewModelScope.launch {
             workspaceRepository.workspaceChanges.collect {
-                val appSettings = settings.value
+                val appSettings = settingsRepository.settings.first()
                 if (appSettings.diaryTreeUri != null) {
                     try {
-                        templateMutationMutex.withLock { refreshWorkspace(appSettings) }
+                        uiStore.mutationMutex.withLock { refreshWorkspace(appSettings) }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
-                        // One transient SAF/provider failure must not cancel future invalidations.
+                        // One transient provider failure must not cancel future invalidations.
                     }
                 }
             }
@@ -126,27 +127,26 @@ class StructuredRecordsViewModel @Inject constructor(
     }
 
     private suspend fun refreshWorkspace(appSettings: AppSettings) {
-        if (appSettings.diaryTreeUri == null) return
+        val rootUri = appSettings.diaryTreeUri ?: return
         workspaceRepository.ensureSystemFields(appSettings)
         val loadedTemplates = workspaceRepository.loadTemplates(appSettings)
-        // Legacy xx migration can add fields while templates load, so take the field snapshot last.
         val loadedFields = workspaceRepository.loadFields(appSettings)
-        if (settings.value.diaryTreeUri == appSettings.diaryTreeUri) {
-            mutableFields.value = loadedFields
-            mutableTemplates.value = loadedTemplates
+        if (uiStore.rootInitialized && uiStore.rootUri == rootUri) {
+            uiStore.fields.value = loadedFields
+            uiStore.templates.value = loadedTemplates
         }
         try {
             DeskCubbyWidgetProvider.requestUpdate(applicationContext)
         } catch (_: Exception) {
-            // A durable workspace refresh must not fail because the launcher is unavailable.
+            // Workspace persistence must not depend on launcher availability.
         }
     }
 
     fun refreshWorkspaceFromUi() {
         viewModelScope.launch {
-            val appSettings = settings.value
+            val appSettings = settingsRepository.settings.first()
             try {
-                templateMutationMutex.withLock { refreshWorkspace(appSettings) }
+                uiStore.mutationMutex.withLock { refreshWorkspace(appSettings) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -183,12 +183,20 @@ class StructuredRecordsViewModel @Inject constructor(
         mutableNow.value = LocalTime.now()
     }
 
-    fun record(template: StructuredRecordTemplate, draft: StructuredRecordDraft) {
+    /**
+     * Records to [targetDate] when launched from a diary. A null target intentionally means the
+     * real local date, which is what Home/desktop quick-add uses.
+     */
+    fun record(
+        template: StructuredRecordTemplate,
+        draft: StructuredRecordDraft,
+        targetDate: LocalDate? = null,
+    ) {
         if (template.id in mutableSending.value) return
         mutableSending.value += template.id
         viewModelScope.launch {
             try {
-                val appSettings = settings.value
+                val appSettings = settingsRepository.settings.first()
                 if (appSettings.diaryTreeUri == null) {
                     showFeedback(
                         "请先在设置中选择日记目录",
@@ -203,17 +211,24 @@ class StructuredRecordsViewModel @Inject constructor(
                     return@launch
                 }
                 val editedTemplate = template.copy(segments = structuredDraftToSegments(draft))
-                val result = recordsRepository.insertRecordFromTemplate(appSettings, editedTemplate, values)
+                val result = recordsRepository.insertRecordFromTemplate(
+                    settings = appSettings,
+                    template = editedTemplate,
+                    values = values,
+                    targetDate = targetDate,
+                )
                 if (result.success) {
-                    val warningChinese = result.message
-                    val warningEnglish = result.messageEnglish
                     showFeedback(
-                        warningChinese ?: "已记录到 ${result.journalDay}",
-                        warningEnglish ?: "Recorded on ${result.journalDay}",
+                        result.message ?: "已记录到 ${result.journalDay}",
+                        result.messageEnglish ?: "Recorded on ${result.journalDay}",
                         isError = false,
                         recordedTemplateId = template.id,
                     )
-                    refreshSystemSnapshot(appSettings)
+                    try {
+                        DeskCubbyWidgetProvider.requestUpdate(applicationContext)
+                    } catch (_: Exception) {
+                        // The record and its derived index are already durable.
+                    }
                 } else {
                     showFeedback(
                         result.message ?: "记录失败",
@@ -263,28 +278,29 @@ class StructuredRecordsViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             var persisted = false
-            templateMutationMutex.withLock {
-                val appSettings = settings.value
-                if (appSettings.diaryTreeUri == null) {
+            uiStore.mutationMutex.withLock {
+                val appSettings = settingsRepository.settings.first()
+                val rootUri = appSettings.diaryTreeUri
+                if (rootUri == null || !uiStore.rootInitialized || uiStore.rootUri != rootUri) {
                     showFeedback("请先选择日记目录", "Choose a diary folder first", isError = true)
                     return@withLock
                 }
-                val before = mutableTemplates.value
+                val before = uiStore.templates.value
                 val optimistic = transform(before)
                 if (optimistic == before) return@withLock
-                mutableTemplates.value = optimistic
+                uiStore.templates.value = optimistic
 
                 try {
                     val canonical = workspaceRepository.mutateTemplates(appSettings, transform)
-                    if (settings.value.diaryTreeUri == appSettings.diaryTreeUri) {
-                        mutableTemplates.value = canonical
+                    if (uiStore.rootUri == rootUri) {
+                        uiStore.templates.value = canonical
                     }
                     persisted = true
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    if (settings.value.diaryTreeUri == appSettings.diaryTreeUri) {
-                        mutableTemplates.value = try {
+                    if (uiStore.rootUri == rootUri) {
+                        uiStore.templates.value = try {
                             workspaceRepository.loadTemplatesReadOnly(appSettings)
                         } catch (cancelled: CancellationException) {
                             throw cancelled
@@ -311,7 +327,7 @@ class StructuredRecordsViewModel @Inject constructor(
 
     fun rebuildIndex(onDone: (Boolean, String) -> Unit = { _, _ -> }) {
         viewModelScope.launch {
-            val appSettings = settings.value
+            val appSettings = settingsRepository.settings.first()
             if (appSettings.diaryTreeUri == null) {
                 onDone(false, "请先选择日记目录")
                 return@launch
