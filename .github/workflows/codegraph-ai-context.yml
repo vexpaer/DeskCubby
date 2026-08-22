@@ -1,0 +1,122 @@
+name: CodeGraph AI Context
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'ai-code-context/generated/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: codegraph-ai-context-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-context:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CODEGRAPH_TELEMETRY: '0'
+      DO_NOT_TRACK: '1'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: windows/package-lock.json
+
+      - name: Install CodeGraph
+        run: npm install --global @colbymchenry/codegraph@1.5.0
+
+      - name: Generate bounded AI context
+        run: bash .github/scripts/build-codegraph-ai-context.sh
+
+      - name: Build PR impact report
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/codegraph-changed-files.txt
+          codegraph affected --stdin --json < /tmp/codegraph-changed-files.txt > /tmp/codegraph-affected.json || echo '{"error":"CodeGraph affected query failed"}' > /tmp/codegraph-affected.json
+
+          {
+            echo '<!-- deskcubby-codegraph-report -->'
+            echo '## CodeGraph PR impact report'
+            echo
+            echo "Head: \`${HEAD_SHA}\`"
+            echo
+            echo '### Changed files'
+            echo '```text'
+            head -n 150 /tmp/codegraph-changed-files.txt
+            echo '```'
+            echo
+            echo '### Dependency/test impact'
+            echo '```json'
+            head -c 40000 /tmp/codegraph-affected.json
+            echo
+            echo '```'
+            echo
+            echo '> Generated from a temporary CodeGraph index. No SQLite/binary graph is committed.'
+          } > /tmp/codegraph-pr-report.md
+
+          cat /tmp/codegraph-pr-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish/update PR impact comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- deskcubby-codegraph-report -->';
+            const body = fs.readFileSync('/tmp/codegraph-pr-report.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100
+            });
+            const previous = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Upload text context artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codegraph-ai-context-${{ github.sha }}
+          path: |
+            ai-code-context/generated/
+            /tmp/codegraph-pr-report.md
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Commit refreshed context to main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          git add ai-code-context/generated
+          if git diff --cached --quiet; then
+            echo 'AI context is already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore: refresh CodeGraph AI context [skip ci]'
+          git push
