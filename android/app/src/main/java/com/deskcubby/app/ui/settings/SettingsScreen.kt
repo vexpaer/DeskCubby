@@ -218,6 +218,8 @@ import com.deskcubby.app.data.model.ThoughtDisplayMode
 import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.model.normalized
+import com.deskcubby.app.data.model.toUserSelectableSyncContents
+import com.deskcubby.app.data.model.userSelectableCloudSyncContents
 import com.deskcubby.app.data.repository.UpdateCheckResult
 import com.deskcubby.app.data.repository.UpdateDownloadFailure
 import com.deskcubby.app.data.repository.buildAiRequestPreviewJson
@@ -1937,6 +1939,9 @@ private fun CloudSyncConfigDetailPage(
     saveCoordinator: SettingsSaveCoordinator,
     onSave: (CloudSyncConfig, Boolean) -> Unit,
 ) {
+    val normalizedInitial = remember(initial) {
+        initial.copy(selectedContents = initial.selectedContents.toUserSelectableSyncContents())
+    }
     var name by remember(initial.id) { mutableStateOf(initial.name) }
     var enabled by remember(initial.id) { mutableStateOf(initial.enabled) }
     var serviceType by remember(initial.id) { mutableStateOf(initial.serviceType) }
@@ -1955,12 +1960,12 @@ private fun CloudSyncConfigDetailPage(
         mutableStateOf(initial.allowInsecureHttp)
     }
     var selectedContents by remember(initial.id) {
-        mutableStateOf(initial.selectedContents)
+        mutableStateOf(normalizedInitial.selectedContents)
     }
     var direction by remember(initial.id) { mutableStateOf(initial.direction) }
     var clearCredentials by remember(initial.id) { mutableStateOf(false) }
 
-    val draft = initial.copy(
+    val draft = normalizedInitial.copy(
         name = name,
         enabled = enabled,
         serviceType = serviceType,
@@ -1979,7 +1984,7 @@ private fun CloudSyncConfigDetailPage(
         selectedContents = selectedContents,
         direction = direction,
     )
-    val dirty = draft != initial || clearCredentials
+    val dirty = draft != normalizedInitial || clearCredentials
     val canSave = name.isNotBlank() && endpointUrl.isNotBlank() && userAgent.isNotBlank() &&
         userAgent.none(Char::isISOControl) &&
         selectedContents.isNotEmpty() &&
@@ -2160,7 +2165,7 @@ private fun CloudSyncConfigDetailPage(
         }
         item {
             SettingsSection(tr("同步内容", "Sync contents")) {
-                CloudSyncContent.entries.forEach { content ->
+                userSelectableCloudSyncContents.forEach { content ->
                     Row(
                         Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -2411,7 +2416,8 @@ private fun syncContentLabel(content: CloudSyncContent): String = when (content)
 
 @Composable
 private fun syncContentsLabel(contents: Set<CloudSyncContent>): String {
-    val labels = CloudSyncContent.entries.filter(contents::contains).map { content ->
+    val selectableContents = contents.toUserSelectableSyncContents()
+    val labels = userSelectableCloudSyncContents.filter(selectableContents::contains).map { content ->
         if (LocalAppLanguage.current == AppLanguage.ENGLISH) {
             when (content) {
                 CloudSyncContent.DIARIES -> "Diaries"

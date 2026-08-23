@@ -43,7 +43,7 @@ class AgentPermissionManager(
     val pending: StateFlow<AgentApprovalRequest?> = mutablePending.asStateFlow()
     private val taskIdByRunId = ConcurrentHashMap<String, Long>()
     private val resolutionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var resolutionScheduler: (() -> Unit)? = null
+    private var resolutionScheduler: ((Long) -> Unit)? = null
 
     companion object {
         const val STATUS_PENDING = "PENDING"
@@ -51,7 +51,7 @@ class AgentPermissionManager(
         const val STATUS_REJECTED = "REJECTED"
     }
 
-    fun attachResolutionScheduler(scheduler: () -> Unit) {
+    fun attachResolutionScheduler(scheduler: (Long) -> Unit) {
         resolutionScheduler = scheduler
     }
 
@@ -283,7 +283,7 @@ class AgentPermissionManager(
                         queued = AiTaskStateEntity.QUEUED,
                         waitingApproval = AiTaskStateEntity.WAITING_APPROVAL,
                     )
-                    resolutionScheduler?.invoke()
+                    resolutionScheduler?.invoke(taskId)
                 }
             }
         }

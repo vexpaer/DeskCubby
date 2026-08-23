@@ -18,7 +18,7 @@ Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room
 | 结构化数据 | Room，数据库版本 13；手机使用时间、其他设备缓存、健康每日统计、小游戏特色累计统计、Agent 会话/运行/用量/Review 以 Room 为运行时权威 |
 | 设置 | Preferences DataStore |
 | 文件 | Storage Access Framework、DocumentFile |
-| 后台任务 | WorkManager（自动备份、可选云端周期同步、可选本机统计补采） |
+| 后台任务 | WorkManager（逐任务持久 AI 队列、自动备份、可选云端周期同步、可选本机统计补采） |
 | 系统统计 | UsageStatsManager（应用使用时间）、Health Connect（每日步数、距离与活动热量） |
 | 图片 | Coil 3 |
 | Markdown | CommonMark |
@@ -165,8 +165,9 @@ Repository ─────────────→ Room DAO
 
 - `Navigation.kt` 在应用根部创建主要 ViewModel，因此从嵌套页面返回时可继续使用当前日记编辑状态等共享状态。
 - Screen 只负责界面草稿和交互；持久化、并发控制、输入上限和失败恢复应放在 ViewModel/Repository。
+- Android 结构化记录以 `.deskcubby/fields.json` / `records.json` 为共享模板来源；首页、记录页与系统桌面 Widget 使用同一套数据。Widget 渲染只做只读快照，点按后才执行初始化/旧模板迁移并通过 `StructuredRecordsRepository` 写入带稳定字段标记的 Markdown；工作区写入在 `DiaryFileRepository` 的共享 mutex 下原子化并广播失效事件，因此同根目录云同步和多个 ViewModel 不会靠各自缓存互相覆盖。
 - 日记文件是正文 source of truth。`DiaryIndexEntity` 用于首页统计和列表加速，写入文件后应重新扫描更新。笔记库同样以用户选择目录中的真实 Markdown/文件夹为权威，但不进入日记索引，也不按日期分组。
-- 云同步由设置页、应用首页“立即同步”与“强制上传/下载”两个模块、系统桌面同步组件或 `CloudSyncWorker` 触发，经 `data/sync/` 与同一串行 WorkManager 队列协调远端清单和冲突检测；本地日记与媒体仍只通过 `DiaryFileRepository` 访问 SAF。阅读进度使用独立 `reading/v1/progress.json`，经 `ReaderProgressJsonCodec` 与 `ReaderRepository` 的 URI-free 指纹账本合并，不进入日记/媒体文件清单。
+- 云同步由设置页、应用首页“立即同步”与“强制上传/下载”两个模块、系统桌面同步组件或 `CloudSyncWorker` 触发，经 `data/sync/` 与同一串行 WorkManager 队列协调远端清单和冲突检测；同步内容配置只展示正文类型，选择小巧思或诗词时运行层自动加入并优先同步对应分类，旧版分类单选会归一为对应正文选择。本地日记与媒体仍只通过 `DiaryFileRepository` 访问 SAF。阅读进度使用独立 `reading/v1/progress.json`，经 `ReaderProgressJsonCodec` 与 `ReaderRepository` 的 URI-free 指纹账本合并，不进入日记/媒体文件清单。
 - `plugin-api/core` 仍是既有非 AI 功能的旁路扩展层；生产 Hilt 插件集合为空，测试源集中的 `TestPlugin` 只验证生命周期。Android Agent 成为首个直接消费其稳定业务契约的生产子系统：`AgentModule` 绑定接口与 app adapter，Agent Runtime 不注入各业务 Screen、ViewModel、Repository、DAO 或底层存储。
 - Agent 每轮只由 `AgentContextProvider` 取得已授权来源的类型、计数、分类、标题/日期范围等轻量 metadata 与工具说明；正文由模型通过分页、限量的 list/search/read 工具按需取得。`AgentPermissionManager` 在执行每个 mutation 前落实需要批准/全自动策略，`AgentReviewRepository` 在真实修改成功后保存 before/after、Undo token 与工具执行记录。
 
@@ -207,7 +208,7 @@ Rust command boundary
 | 笔记 | `ui/notes/`、`data/repository/NotesRepository.kt`、`ui/components/MarkdownPreview.kt` | SAF 直接打开用户选择的 Obsidian 笔记库，文件夹优先、按名称顺序列出 Markdown；支持新建/重命名/删除文件夹和笔记、自动保存、SHA-256 外部修改冲突的加载/覆盖/另存副本；兼容标准 Markdown 图片与 `![[Wiki 嵌入]]`，每次上传媒体都由用户重新选择当前笔记库内的目标文件夹并写入可移植相对链接；不复用日记媒体目录、不建立日期索引 |
 | 阅读 | `ui/reader/`、`data/repository/ReaderRepository.kt`、`data/sync/ReaderProgressJsonCodec.kt`、`data/statistics/EngagementTimeRepository.kt` | SAF 持久读取 TXT/PDF；增强视图使用 PDFium（`io.legere:pdfiumandroid:1.0.35`），通过 SAF 文件描述符直接打开且不复制原书，提供连续纵向按需渲染、缩放、页码、双色映射、文字搜索跳页与文本目录扫描，失败时安全切换系统 `PdfRenderer` 连续兼容视图。0.13.1 将 TXT、增强 PDF 与兼容 PDF 的本机恢复位置细化为页内 5%，约 600ms 防抖并在离开时检查点保存；0.13.2 让纯净模式控件悬浮覆盖固定正文平面，并把 engagement 私有文件升至 schema v2，为已有时长的书保留最后书名。0.15.0 把 PDF 双指缩放改为矩阵实时变换：手势期间内容围绕捏合中心实时跟随手指且不重新渲染，手势结束后才提交最终比例并重新渲染页面。0.16.0 让提交后按捏合中心锚定滚动位置，重载后的页面与松手时大小、位置一致；缩放滑杆按 1% 步进。0.16.3 用共享 `ReaderPdfContinuousViewport` 彻底替换增强/兼容视图各自的 nested-scroll 补丁：在方向锁定前读取原始 X 并独立结算横移，Y 继续交给 `LazyColumn` 以保留纵向惯性，单指斜向或画圈仍会同时移动两轴，任一轴到边界不吞另一轴；双指接管同一二维移动并增加围绕质心的即时缩放。专用 `ReaderPdfPageViewport` 继续以非约束测量让 100% 以上按目标像素宽度真实渲染，缩到视口内则居中并清除旧横向偏移。PDF 自动封面先取已验证缓存/提供方缩略图，缺失时再串行受限渲染第一页；封面文字可独立编辑、隐藏或恢复书名。Reader schema-v8 兼容 v1–v7；封面文字、更细偏移、书名和时长只留在 Android 私有状态，v33 与可选 `reading/v1/progress.json` 继续按原有页/段字段和完整文件 SHA-256+类型合并，不携带书名、URI、封面、正文或时长 |
 | 吃历滤镜 | `ui/diary/filter/`、`data/model/MealPhotoFilterSettings.kt` | 统一亮度、对比度、饱和度、色温和色调；仅改变 Compose 显示，不改原图 |
-| 结构化记录 | `ui/daily/`（原日常记录） | 由「日常记录」升级：在 Markdown 日记中嵌入五类类型化字段值（今日一句话 word / 俯卧撑次数 number / 今天衣服颜色 type / 午饭时间 time / 午睡时长 duration），以稳定字段 ID 写入 HTML 注释（如 `<!--dc:f_pushups-->20<!--dc:/f_pushups-->`），正文仍可读；本地 Room 索引可从 Markdown 重建，统计不扫描原文。`.deskcubby/` 工作区存放 `settings.json`（日界线，默认 05:00）、`fields.json`、`records.json`、`statistics.json`；日界线划分日记日，改动从下一日记日生效并保留历史。设置 → 子页面设置 → 日记与媒体 →「结构化记录」管理日界线、自动睡眠/醒来估算（UsageStatsManager，非 Health Connect）、字段管理与重建索引；统计 →「结构化记录统计」提供字段自动统计与公式构造的派生指标 |
+| 结构化记录 | `ui/structuredrecords/`（原日常记录） | 在 Markdown 日记中嵌入 word / number / type / time / duration 五类字段，以稳定字段 ID 写入 HTML 注释，正文仍可读。首页和 Widget 明确写入设备真实本地日期；从日记编辑器进入则写入当前打开日记的日期，不受“今日日记切换时间”影响。写入、编辑、媒体删除和重命名后只更新对应 Markdown 的通用日记索引与结构化索引，不做全目录扫描；Room 投影仍可从 Markdown 重建。`.deskcubby/` 保存 fields/records/statistics 等工作区文件；设置页管理自动睡眠/醒来估算、字段与索引重建，统计页提供自动统计和派生指标 |
 | 小巧思 | `ui/thought/` | `ThoughtRepository` + Room；分类、排序、回收站、页面恢复；首次进入全部/分类页自动定位到列表底部的新内容，新增条目继续精确滚动；顶栏可立即切换一行/完整显示 |
 | 浏览器 | `ui/blog/` | `BrowserRepository` + WebView；多标签、收藏、历史、上传下载 |
 | 日期记录 | `ui/date/` | `DateRecordRepository` + Room |
@@ -221,7 +222,7 @@ Rust command boundary
 | 桌面小卡片与同步组件 | `ui/widgets/`、`widget/`、`DesktopWidgetInstanceStore.kt`、`DesktopWidgetUpdateWorker.kt`、`DesktopWidgetActionWorker.kt`、`DesktopWidgetInteractionActivity.kt` | 每个 App Widget ID 保存“绑定模板 ID + 最后有效完整快照”；音乐服务也优先读取该精确实例快照，切换模板后不会被旧模板回写覆盖。编辑器用下拉菜单选择“主页模块 / 应用模块 / 应用按钮”，主页与应用模块使用彼此独立的白名单。0.16.2 将音乐重写为占满卡片、无文字/自身背景的频谱、波形或曲线，并按实际小组件尺寸有界绘制；使用时间提供无背景/坐标/文字的纯色块、纯折线、纯柱状三种图表，范围为 7/30/90 天，采集成功后主动刷新。饮食图片只显示无底色、整体垂直居中的 emoji。快速输入按实例保存设备本机草稿，点纸飞机加入未分类，长按私有编辑器主操作可选已有分类；受 `RemoteViews` 限制，真实键盘输入仍由非导出 Activity 承载。2048 只保留上/下/左/右四个透明触控区，没有任何新局入口；渲染器也拒绝旧 `NEW` PendingIntent，避免启动器缓存旧视图时覆盖存档。`RemoteViews` 不提供任意四向滑动回调，因此系统桌面不能实现等同 Compose 页面的原生滑动。实例快照 schema 升至 2 并继续读取 schema 1；草稿与实例状态不进 Android 备份或设备迁移 |
 | 更新检查与安装 | `data/repository/UpdateRepository.kt`、设置 About 页 | GitHub Releases latest API；检测到新版后下载精确匹配 APK 到私有缓存，限制 HTTPS 重定向/大小并校验包名、版本与当前签名，再交给系统安装器 |
 | 取色器/缩放查看 | `ui/components/ColorPickerDialog.kt`、`ZoomableImageDialog.kt` | HSV 同行滑杆 + Compose 蜂窝色盘 + hex 取色（强制不透明）；吃历照片全屏缩放查看复用滤镜 |
-| AI Agent | `ui/ai/`、`agent/`、`data/repository/AiChatRepository.kt`、`AiAgentRequestJson.kt`、`AiAttachmentService.kt` | 真正的 User→LLM→Tool Call→Execution→Result→LLM 循环；模型访问、Runtime、Registry、Executor、Permission Manager、Context Provider、Review 分层。四方块入口提供最多 5 个图片/文档附件、8 类持久数据源授权、需要批准/全自动；工具执行过程可展开且可中止。统一 Data/File/Web/App 工具带参数校验、分页/上限、12 轮保护、未授权拒绝、untrusted-data system prompt；不支持原生 tool calling 的配置明确失败关闭。0.15.0 让 Agent 回复渲染 CommonMark（标题、列表、代码、引用、链接），请求 JSON 对工具轮次做规范序列化（assistant 空内容省略 content 键、tool 消息不带非标准 name 字段）以兼容严格 OpenAI 兼容端点；AI 设置改为独立子页结构，新增 AI 页面字体大小、回复框宽度与可恢复默认的 Agent 提示词 |
+| AI Agent | `ui/ai/`、`agent/`、`data/taskqueue/`、`data/repository/AiChatRepository.kt` | User→LLM→Tool Call→Execution→Result→LLM 循环由持久 Room 任务和每任务唯一 WorkRequest 驱动；Agent 与热量/图片 AI 可并行，页面切换、旋转或进程重建后从任务、工具事件与用量账本恢复状态。工具模型继续使用审批、Review/Undo、参数上限和 12 轮保护；旧 `supportsToolCalling=false` 配置退化为不调用工具的普通聊天，不解析文字冒充工具。四方块入口提供最多 5 个附件、8 类数据源授权和需要批准/全自动模式 |
 | Agent Review / Undo | `ui/ai/AgentReview*`、`agent/AgentReviewRepository.kt`、Room `agent_*` 表 | 按 Run/会话记录全部工具事件和每项实际 mutation 的目标、摘要、before/after、状态与 Undo token；需要批准逐项弹窗，全自动仍完整记录。Undo 在当前内容仍匹配 Agent 结果时执行对应数据/SAF 文件/设置恢复，不以删除日志冒充恢复 |
 | AI 密钥 | 设置页 | Key 是 `AiModelConfig` 的明文字段，随 DataStore 与 v30 JSON 备份保存；旧加密值仅做一次性迁移。`supportsToolCalling` 是显式能力字段，旧配置默认 false |
 | 云端同步 | `ui/settings/`、`ui/home/HomeScreen.kt`、`data/sync/`、`data/model/CloudSyncModels.kt` | 设置页把立即同步与“撤回一次”组成等宽操作行：首页也显示最近一次完成的上传、下载与冲突文件数。`AppCloudSyncService` 将这些安全计数和完成时间持久化到排除备份的运行时状态，多服务结果聚合后写入，进程重启仍可恢复；撤回快照恢复被覆盖的本地日记并把本轮新建文件移入回收站，仅保留最近一次。既有日记/媒体/应用 JSON/usage/阅读同步边界不变；可选 Agent 会话 `agent/v1/chats.json` 继续以稳定 sync ID、LWW 和 tombstone 合并文字、冻结文档文字、图片占位、完成 Run 与 Provider 用量，不同步本机 URI/图片字节、Review/Undo 载荷或秘密 |

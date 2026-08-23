@@ -65,11 +65,11 @@ private fun buildDraft(
 }
 
 /**
- * A pure-text template has no required typed fields, so it is immediately recordable. Templates
- * with fields become recordable only after every bound occurrence has a non-blank value.
+ * Controls whether the UI may attempt submission. Placeholder labels keep typed fields visible, so
+ * an unfinished draft must remain tappable and let the ViewModel return a precise validation error.
+ * [structuredDraftValues] remains the strict completeness gate before any durable write.
  */
-fun isStructuredDraftReady(draft: StructuredRecordDraft): Boolean =
-    draft.fields.all { !it.value.isNullOrBlank() }
+fun isStructuredDraftReady(draft: StructuredRecordDraft): Boolean = draft.text.isNotBlank()
 
 /**
  * Applies one text edit while preserving field bindings. Edits wholly inside one field replace that

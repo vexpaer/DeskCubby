@@ -645,6 +645,7 @@ fun DeskCubbyRoot(
                             padding = padding,
                             viewModel = structuredRecordsViewModel,
                             onBack = { navController.popBackStack() },
+                            targetDate = diaryViewModel.currentEditorDiaryDate(),
                         )
                     }
                     composable(Routes.DAILY_RECORDS_TODAY) {
@@ -652,6 +653,7 @@ fun DeskCubbyRoot(
                             padding = padding,
                             viewModel = structuredRecordsViewModel,
                             onBack = { navController.popBackStack() },
+                            targetDate = null,
                         )
                     }
                     composable(Routes.MEAL_CALENDAR) {

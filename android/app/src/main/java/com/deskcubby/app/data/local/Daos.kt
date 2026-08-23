@@ -278,6 +278,12 @@ interface DiaryIndexDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<DiaryIndexEntity>)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(item: DiaryIndexEntity)
+
+    @Query("DELETE FROM diary_index WHERE uri = :uri")
+    suspend fun deleteByUri(uri: String)
+
     @Query("DELETE FROM diary_index WHERE uri NOT IN (:activeUris)")
     suspend fun deleteMissing(activeUris: List<String>)
 
@@ -1353,8 +1359,29 @@ interface StructuredRecordDao {
     @Query("DELETE FROM structured_record_occurrences WHERE sourceFile = :sourceFile")
     suspend fun deleteOccurrencesForFile(sourceFile: String)
 
+    @Query("DELETE FROM structured_record_files WHERE sourceFile = :sourceFile")
+    suspend fun deleteFileState(sourceFile: String)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOccurrences(items: List<StructuredRecordOccurrenceEntity>)
+
+    /** Atomically replaces one file's complete derived projection. */
+    @Transaction
+    suspend fun replaceFileParse(
+        state: StructuredRecordFileEntity,
+        occurrences: List<StructuredRecordOccurrenceEntity>,
+    ) {
+        deleteOccurrencesForFile(state.sourceFile)
+        if (occurrences.isNotEmpty()) insertOccurrences(occurrences)
+        upsertFileState(state)
+    }
+
+    /** Removes both halves of one file's derived projection after rename/delete. */
+    @Transaction
+    suspend fun removeFileParse(sourceFile: String) {
+        deleteOccurrencesForFile(sourceFile)
+        deleteFileState(sourceFile)
+    }
 
     @Query("DELETE FROM structured_record_occurrences WHERE sourceFile NOT IN (:activeFiles)")
     suspend fun deleteOccurrencesForMissingFiles(activeFiles: List<String>)

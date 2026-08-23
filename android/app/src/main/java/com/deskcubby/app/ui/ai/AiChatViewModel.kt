@@ -3,14 +3,12 @@ package com.deskcubby.app.ui.ai
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.deskcubby.app.agent.AgentApprovalRequest
-import com.deskcubby.app.agent.AgentConversationMessage
-import com.deskcubby.app.agent.AgentConversationRole
 import com.deskcubby.app.agent.AgentExecutionStatus
 import com.deskcubby.app.agent.AgentExecutionUpdate
 import com.deskcubby.app.agent.AgentPermissionManager
-import com.deskcubby.app.agent.AgentRunRequest
+import com.deskcubby.app.agent.AgentReviewRepository
+import com.deskcubby.app.agent.AgentReviewToolEvent
 import com.deskcubby.app.agent.AgentRunUsage
-import com.deskcubby.app.agent.AgentRuntime
 import com.deskcubby.app.agent.AgentRuntimeException
 import com.deskcubby.app.data.local.AiTaskQueueEntity
 import com.deskcubby.app.data.local.AiTaskStateEntity
@@ -26,12 +24,10 @@ import com.deskcubby.app.data.repository.AiChatAttachment
 import com.deskcubby.app.data.repository.AiChatException
 import com.deskcubby.app.data.repository.AiChatMessage
 import com.deskcubby.app.data.repository.AiChatRepository
-import com.deskcubby.app.data.repository.AiChatRole
 import com.deskcubby.app.data.repository.AiConversation
 import com.deskcubby.app.data.repository.generateConversationTitle
 import com.deskcubby.app.data.taskqueue.AiTaskQueue
 import com.deskcubby.app.data.taskqueue.AgentRunTaskPayload
-import com.deskcubby.plugin.api.core.api.AIImage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
 import javax.inject.Inject
@@ -42,13 +38,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 data class AiChatUiState(
     val activeConversationId: Long? = null,
@@ -66,13 +62,18 @@ data class AiChatUiState(
     val transientMessage: String? = null,
 )
 
+/**
+ * AI UI state is deliberately thin: Room's ai_task_queue is the source of truth for long-running
+ * work. This ViewModel only prepares/persists the user's request and observes the durable task row;
+ * it never waits for a model call in a page-owned coroutine.
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class AiChatViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val chatRepository: AiChatRepository,
-    private val agentRuntime: AgentRuntime,
     private val permissionManager: AgentPermissionManager,
+    private val agentReviewRepository: AgentReviewRepository,
     private val aiTaskQueue: AiTaskQueue,
 ) : ViewModel() {
     val settings: StateFlow<AppSettings> = settingsRepository.settings.stateIn(
@@ -94,17 +95,19 @@ class AiChatViewModel @Inject constructor(
     val uiState: StateFlow<AiChatUiState> = mutableUiState.asStateFlow()
 
     private val activeConversationId = MutableStateFlow<Long?>(null)
+    private val activeRunId = MutableStateFlow<String?>(null)
     private var requestSerial = 0L
-    private var sendJob: Job? = null
+    private var submitJob: Job? = null
     private var activeTaskId: Long? = null
+    private var stopRequestedRunId: String? = null
+    private var lastHandledTerminalTaskId: Long? = null
+    private var localSubmitting = false
     private var initialConversationResolved = false
     private var initialPromptSubmitted = false
 
     init {
-        viewModelScope.launch {
-            // Re-surface an approval persisted before a process death so it can be decided.
-            permissionManager.refreshPendingFromDb()
-        }
+        viewModelScope.launch { permissionManager.refreshPendingFromDb() }
+
         viewModelScope.launch {
             activeConversationId
                 .flatMapLatest { id ->
@@ -114,12 +117,100 @@ class AiChatViewModel @Inject constructor(
                     mutableUiState.update { state -> state.copy(messages = messages) }
                 }
         }
+
+        // Reconnect UI to durable work after navigation, rotation, or process recreation. No
+        // page-owned timer/wait job is needed: a queued/running row alone means "sending".
+        viewModelScope.launch {
+            combine(activeConversationId, aiTaskQueue.observeTasks()) { conversationId, tasks ->
+                if (conversationId == null) return@combine null
+                tasks.asSequence()
+                    .filter { it.type == AiTaskTypeEntity.AGENT_RUN }
+                    .mapNotNull { task ->
+                        val payload = runCatching { AgentRunTaskPayload.decode(task.payloadJson) }.getOrNull()
+                        if (payload?.conversationId == conversationId) task else null
+                    }
+                    .maxByOrNull(AiTaskQueueEntity::id)
+            }.collect { latest ->
+                if (latest == null) {
+                    if (!localSubmitting) {
+                        activeTaskId = null
+                        mutableUiState.update { it.copy(isSending = false) }
+                    }
+                } else {
+                    applyObservedTask(latest)
+                }
+            }
+        }
+
+        // Tool progress and usage already have durable Room ledgers. Project those ledgers back to
+        // the chat instead of relying on an in-memory Worker callback, which is lost on navigation
+        // and process recreation.
+        viewModelScope.launch {
+            activeRunId.flatMapLatest { runId ->
+                if (runId == null) flowOf(emptyList())
+                else agentReviewRepository.observeToolEvents(runId)
+            }.collect { events ->
+                mutableUiState.update { state ->
+                    state.copy(executionUpdates = events.map { it.toExecutionUpdate() })
+                }
+            }
+        }
+        viewModelScope.launch {
+            combine(activeRunId, agentReviewRepository.observeRuns()) { runId, runs ->
+                runs.firstOrNull { it.runId == runId && it.completedAt != null }?.usage
+            }.collect { usage -> mutableUiState.update { it.copy(lastRunUsage = usage) } }
+        }
+
         viewModelScope.launch {
             val latest = chatRepository.observeConversations().first().firstOrNull()
             if (!initialConversationResolved && activeConversationId.value == null && latest != null) {
                 openConversationInternal(latest)
             }
             initialConversationResolved = true
+        }
+    }
+
+    private fun applyObservedTask(task: AiTaskQueueEntity) {
+        val runId = runCatching { AgentRunTaskPayload.decode(task.payloadJson).runId }.getOrNull()
+        runId?.let { activeRunId.value = it }
+        if (task.state !in AiTaskQueue.TERMINAL_STATES) {
+            activeTaskId = task.id
+            lastHandledTerminalTaskId = null
+            if (runId != null && stopRequestedRunId == runId) {
+                stopRequestedRunId = null
+                viewModelScope.launch { aiTaskQueue.cancelTask(task.id) }
+                mutableUiState.update {
+                    it.copy(
+                        isSending = true,
+                        transientMessage = localized("正在中止 Agent…", "Stopping Agent…"),
+                    )
+                }
+            } else {
+                mutableUiState.update { it.copy(isSending = true) }
+            }
+            return
+        }
+
+        activeTaskId = null
+        if (runId != null && stopRequestedRunId == runId) stopRequestedRunId = null
+        if (lastHandledTerminalTaskId == task.id) {
+            mutableUiState.update { it.copy(isSending = localSubmitting) }
+            return
+        }
+        lastHandledTerminalTaskId = task.id
+        mutableUiState.update { state ->
+            when (task.state) {
+                AiTaskStateEntity.FAILED -> state.copy(
+                    isSending = localSubmitting,
+                    errorMessage = task.errorSummary.takeIf(String::isNotBlank)
+                        ?: localized("AI 请求失败。", "AI request failed."),
+                )
+                AiTaskStateEntity.CANCELED -> state.copy(
+                    isSending = localSubmitting,
+                    transientMessage = localized("Agent 已中止。", "Agent stopped."),
+                )
+                else -> state.copy(isSending = localSubmitting)
+            }
         }
     }
 
@@ -174,9 +265,7 @@ class AiChatViewModel @Inject constructor(
     }
 
     fun showContextManager() {
-        if (!mutableUiState.value.isSending) {
-            mutableUiState.update { it.copy(isContextManagerVisible = true) }
-        }
+        if (!mutableUiState.value.isSending) mutableUiState.update { it.copy(isContextManagerVisible = true) }
     }
 
     fun hideContextManager() {
@@ -192,9 +281,7 @@ class AiChatViewModel @Inject constructor(
     }
 
     fun showPermissionMode() {
-        if (!mutableUiState.value.isSending) {
-            mutableUiState.update { it.copy(isPermissionModeVisible = true) }
-        }
+        if (!mutableUiState.value.isSending) mutableUiState.update { it.copy(isPermissionModeVisible = true) }
     }
 
     fun hidePermissionMode() {
@@ -223,6 +310,9 @@ class AiChatViewModel @Inject constructor(
         val draftSnapshot = current.draft
         val attachmentSnapshot = attachments
         val requestId = ++requestSerial
+        localSubmitting = true
+        stopRequestedRunId = null
+        activeRunId.value = null
         mutableUiState.update {
             it.copy(
                 isSending = true,
@@ -231,7 +321,8 @@ class AiChatViewModel @Inject constructor(
                 errorMessage = null,
             )
         }
-        sendJob = viewModelScope.launch {
+
+        submitJob = viewModelScope.launch {
             try {
                 val currentSettings = settingsRepository.settings.first()
                 val textConfig = currentSettings.aiConfigs.firstOrNull { config ->
@@ -241,15 +332,6 @@ class AiChatViewModel @Inject constructor(
                     "AI_MODEL_UNAVAILABLE",
                     localized("请先选择可用的文字模型配置。", "Select an available text-model configuration first."),
                 )
-                if (!textConfig.supportsToolCalling) {
-                    throw AgentRuntimeException(
-                        "AI_TOOLS_UNSUPPORTED",
-                        localized(
-                            "当前 Provider 未启用原生工具调用，无法运行 Agent。请在 AI 设置中确认能力。",
-                            "Native tool calling is disabled for this provider. Enable the capability in AI settings.",
-                        ),
-                    )
-                }
                 val effectiveRequest = content.ifBlank {
                     localized("请分析我附加的内容。", "Please analyze the attached content.")
                 }
@@ -277,15 +359,13 @@ class AiChatViewModel @Inject constructor(
                 mutableUiState.update { state ->
                     state.copy(
                         draft = if (state.draft == draftSnapshot) "" else state.draft,
-                        pendingAttachments = if (state.pendingAttachments == attachmentSnapshot) {
-                            emptyList()
-                        } else {
-                            state.pendingAttachments
-                        },
+                        pendingAttachments = if (state.pendingAttachments == attachmentSnapshot) emptyList()
+                        else state.pendingAttachments,
                     )
                 }
                 val runId = UUID.randomUUID().toString()
-                activeTaskId = aiTaskQueue.enqueueTask(
+                activeRunId.value = runId
+                val taskId = aiTaskQueue.enqueueTask(
                     type = AiTaskTypeEntity.AGENT_RUN,
                     payload = AgentRunTaskPayload(
                         conversationId = conversationId,
@@ -304,33 +384,14 @@ class AiChatViewModel @Inject constructor(
                         english = currentSettings.appLanguage == AppLanguage.ENGLISH,
                     ),
                 )
-                // The worker runs the Agent and appends the assistant message itself. We only need
-                // to wait for a durable terminal state; navigation/backgrounding/force-stop cannot
-                // cancel a queued task. A killed run surfaces as FAILED/CANCELED below.
-                val terminalTask = waitForAgentTerminal()
-                activeTaskId = null
-                if (requestId != requestSerial) return@launch
-                if (terminalTask == null || terminalTask.state == AiTaskStateEntity.FAILED) {
-                    mutableUiState.update {
-                        it.copy(
-                            errorMessage = terminalTask?.errorSummary
-                                ?.takeIf(String::isNotBlank)
-                                ?: localized(
-                                    "本次 Agent 运行被中断，请重新发送。",
-                                    "This Agent run was interrupted; please send it again.",
-                                ),
-                        )
-                    }
-                } else if (terminalTask.state == AiTaskStateEntity.CANCELED) {
-                    mutableUiState.update {
-                        it.copy(transientMessage = localized("Agent 已中止。", "Agent stopped."))
-                    }
-                }
+                activeTaskId = taskId
+                lastHandledTerminalTaskId = null
+                // Room invalidation can race ahead of this assignment for a very fast failure. Read
+                // the just-enqueued row once so a terminal task can never leave the UI spinning.
+                aiTaskQueue.taskById(taskId)?.let(::applyObservedTask)
             } catch (error: CancellationException) {
                 if (requestId == requestSerial) {
-                    mutableUiState.update {
-                        it.copy(transientMessage = localized("Agent 已中止。", "Agent stopped."))
-                    }
+                    mutableUiState.update { it.copy(transientMessage = localized("Agent 已中止。", "Agent stopped.")) }
                 }
                 throw error
             } catch (error: AgentRuntimeException) {
@@ -341,14 +402,18 @@ class AiChatViewModel @Inject constructor(
                 if (requestId == requestSerial) {
                     mutableUiState.update { it.copy(errorMessage = error.message ?: localized("AI 请求失败。", "AI request failed.")) }
                 }
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 if (requestId == requestSerial) {
-                    mutableUiState.update { it.copy(errorMessage = localized("Agent 运行失败，请稍后重试。", "Agent run failed. Try again later.")) }
+                    mutableUiState.update {
+                        it.copy(errorMessage = error.message?.takeIf(String::isNotBlank)
+                            ?: localized("Agent 运行失败，请稍后重试。", "Agent run failed. Try again later."))
+                    }
                 }
             } finally {
-                if (requestId == requestSerial) {
+                localSubmitting = false
+                submitJob = null
+                if (requestId == requestSerial && activeTaskId == null) {
                     mutableUiState.update { it.copy(isSending = false) }
-                    sendJob = null
                 }
             }
         }
@@ -358,25 +423,24 @@ class AiChatViewModel @Inject constructor(
         if (!mutableUiState.value.isSending) return
         requestSerial += 1
         pendingApproval.value?.let { permissionManager.reject(it.requestId) }
-        sendJob?.cancel()
-        sendJob = null
+        submitJob?.cancel()
+        submitJob = null
+        localSubmitting = false
         val taskId = activeTaskId
-        activeTaskId = null
-        if (taskId != null) {
-            viewModelScope.launch { runCatching { aiTaskQueue.cancelTask(taskId) } }
-        }
+        if (taskId == null) stopRequestedRunId = activeRunId.value
+        if (taskId != null) viewModelScope.launch { runCatching { aiTaskQueue.cancelTask(taskId) } }
         mutableUiState.update {
-            it.copy(
-                isSending = false,
-                transientMessage = localized("Agent 已中止。", "Agent stopped."),
-            )
+            if (taskId == null) {
+                it.copy(
+                    isSending = false,
+                    transientMessage = localized("Agent 已中止。", "Agent stopped."),
+                )
+            } else {
+                it.copy(transientMessage = localized("正在中止 Agent…", "Stopping Agent…"))
+            }
         }
     }
 
-    /**
-     * Sends a one-shot initial prompt (e.g. Desk's "总结今天" action) as the user's first message.
-     * The consumed flag keeps rotation/recomposition from re-sending the same prompt.
-     */
     fun submitInitialPrompt(prompt: String?) {
         if (prompt.isNullOrBlank() || initialPromptSubmitted || mutableUiState.value.isSending) return
         initialPromptSubmitted = true
@@ -388,19 +452,19 @@ class AiChatViewModel @Inject constructor(
         if (mutableUiState.value.isSending || mutableUiState.value.isPreparingAttachments) return
         initialConversationResolved = true
         activeConversationId.value = null
+        activeRunId.value = null
+        activeTaskId = null
+        stopRequestedRunId = null
+        lastHandledTerminalTaskId = null
         mutableUiState.value = AiChatUiState()
     }
 
     fun clearConversation() = startNewConversation()
 
     fun openConversation(id: Long) {
-        if (mutableUiState.value.isSending ||
-            mutableUiState.value.isPreparingAttachments ||
-            id == activeConversationId.value
-        ) return
+        if (mutableUiState.value.isSending || mutableUiState.value.isPreparingAttachments || id == activeConversationId.value) return
         initialConversationResolved = true
-        viewModelScope.launch {
-            chatRepository.getConversation(id)?.let { openConversationInternal(it) }
+        viewModelScope.launch { chatRepository.getConversation(id)?.let { openConversationInternal(it) }
         }
     }
 
@@ -420,9 +484,7 @@ class AiChatViewModel @Inject constructor(
     fun deleteConversation(id: Long) {
         if (mutableUiState.value.isSending && activeConversationId.value == id) return
         viewModelScope.launch {
-            if (chatRepository.deleteConversation(id) && activeConversationId.value == id) {
-                startNewConversation()
-            }
+            if (chatRepository.deleteConversation(id) && activeConversationId.value == id) startNewConversation()
         }
     }
 
@@ -442,42 +504,16 @@ class AiChatViewModel @Inject constructor(
         mutableUiState.update { it.copy(transientMessage = null) }
     }
 
-    private fun recordExecutionUpdate(update: AgentExecutionUpdate) {
-        mutableUiState.update { state ->
-            val index = state.executionUpdates.indexOfFirst { it.toolCallId == update.toolCallId }
-            state.copy(
-                executionUpdates = if (index < 0) {
-                    (state.executionUpdates + update).takeLast(MAX_EXECUTION_UPDATES)
-                } else {
-                    state.executionUpdates.toMutableList().apply { this[index] = update }
-                },
-            )
-        }
-    }
-
-    /**
-     * Waits for the active agent task to reach a terminal state, returning the durable row. [first]
-     * completes as soon as the task row transitions to SUCCEEDED/FAILED/CANCELED, or when the row
-     * disappears (defensive). A guard timeout keeps a stale observation from blocking forever.
-     */
-    private suspend fun waitForAgentTerminal(): AiTaskQueueEntity? {
-        val taskId = activeTaskId ?: return null
-        return withTimeoutOrNull(AGENT_WAIT_TIMEOUT_MS) {
-            aiTaskQueue.observeTask(taskId).first { row ->
-                val state = row?.state
-                state == AiTaskStateEntity.SUCCEEDED ||
-                    state == AiTaskStateEntity.FAILED ||
-                    state == AiTaskStateEntity.CANCELED
-            }
-        }
-    }
-
     private suspend fun openConversationInternal(conversation: AiConversation) {
         val persisted = settingsRepository.settings.first()
         val originalAvailable = persisted.aiConfigs.any {
             it.id == conversation.modelConfigId && it.type == AiModelType.TEXT && it.enabled
         }
         if (originalAvailable) settingsRepository.setAiChatConfigId(conversation.modelConfigId)
+        activeRunId.value = null
+        activeTaskId = null
+        stopRequestedRunId = null
+        lastHandledTerminalTaskId = null
         activeConversationId.value = conversation.id
         mutableUiState.update {
             AiChatUiState(
@@ -493,77 +529,33 @@ class AiChatViewModel @Inject constructor(
         }
     }
 
-    private fun buildAgentConversation(messages: List<AiChatMessage>): List<AgentConversationMessage> {
-        var remaining = MAX_HISTORY_CONTENT_CHARS
-        val reversed = mutableListOf<AgentConversationMessage>()
-        messages.asReversed().take(MAX_HISTORY_MESSAGES).forEach { message ->
-            if (remaining <= 0) return@forEach
-            val documentContext = message.attachments
-                .asSequence()
-                .filter { it.kind == AiAttachmentKind.DOCUMENT && !it.extractedText.isNullOrBlank() }
-                .joinToString("\n\n") { attachment ->
-                    "<untrusted_attachment name=\"${attachment.displayName.xmlEscape()}\" " +
-                        "mime=\"${attachment.mimeType.xmlEscape()}\">\n" +
-                        attachment.extractedText.orEmpty() + "\n</untrusted_attachment>"
-                }
-            val syncedImageNotice = message.attachments.any {
-                it.kind == AiAttachmentKind.IMAGE && it.uri.isBlank()
-            }
-            val combined = buildString {
-                append(message.content)
-                if (documentContext.isNotBlank()) append("\n\n").append(documentContext)
-                if (syncedImageNotice) {
-                    append("\n\n[An image attachment exists in synced history but its device-local URI is unavailable.]")
-                }
-            }.takeLast(remaining)
-            remaining -= combined.length
-            val images = buildList {
-                message.image?.takeIf { it.uri.isNotBlank() }?.let { add(AIImage(it.uri, it.mimeType)) }
-                message.attachments.asSequence()
-                    .filter { it.kind == AiAttachmentKind.IMAGE && it.uri.isNotBlank() }
-                    .map { AIImage(it.uri, it.mimeType) }
-                    .filterNot { candidate -> any { it.contentUri == candidate.contentUri } }
-                    .forEach(::add)
-            }
-            reversed += AgentConversationMessage(
-                role = when (message.role) {
-                    AiChatRole.USER -> AgentConversationRole.USER
-                    AiChatRole.ASSISTANT -> AgentConversationRole.ASSISTANT
-                    AiChatRole.CONTEXT -> AgentConversationRole.UNTRUSTED_CONTEXT
-                },
-                content = combined,
-                images = images,
-            )
-        }
-        return reversed.asReversed()
-    }
-
     private fun localized(chinese: String, english: String): String =
         if (settings.value.appLanguage == AppLanguage.ENGLISH) english else chinese
 
-    private fun buildAgentCustomInstructions(
-        globalPrompt: String,
-        configPrompt: String,
-    ): String = buildString {
+    private fun buildAgentCustomInstructions(globalPrompt: String, configPrompt: String): String = buildString {
         globalPrompt.trim().takeIf(String::isNotBlank)?.let { append(it).append("\n") }
         configPrompt.trim().takeIf(String::isNotBlank)?.let { append(it) }
     }.trim().take(MAX_AGENT_INSTRUCTIONS_CHARS)
-
-    private fun String.xmlEscape(): String = replace("&", "&amp;")
-        .replace("\"", "&quot;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .take(500)
 
     private companion object {
         const val MAX_AGENT_INSTRUCTIONS_CHARS = 20_000
         const val MAX_DRAFT_CHARS = 100_000
         const val MAX_ATTACHMENTS = 5
-        const val MAX_HISTORY_MESSAGES = 80
-        const val MAX_HISTORY_CONTENT_CHARS = 1024 * 1024
-        const val MAX_EXECUTION_UPDATES = 200
-        const val AGENT_WAIT_TIMEOUT_MS = 30 * 60_000L
     }
+}
+
+internal fun AgentReviewToolEvent.toExecutionUpdate(): AgentExecutionUpdate {
+    val executionStatus = runCatching { AgentExecutionStatus.valueOf(status) }
+        .getOrDefault(AgentExecutionStatus.FAILED)
+    return AgentExecutionUpdate(
+        toolCallId = toolCallId.ifBlank { "event-$id" },
+        toolName = toolName,
+        status = executionStatus,
+        title = summary.ifBlank { toolName },
+        target = target,
+        argumentsSummary = argumentsSummary,
+        resultSummary = resultSummary,
+    )
 }
 
 internal fun executionStatusIsTerminal(status: AgentExecutionStatus): Boolean = status in setOf(

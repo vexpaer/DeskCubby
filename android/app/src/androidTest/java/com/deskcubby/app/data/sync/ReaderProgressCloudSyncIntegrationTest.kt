@@ -261,6 +261,8 @@ class ReaderProgressCloudSyncIntegrationTest {
         override fun observeAll(): Flow<List<DiaryIndexEntity>> = flowOf(emptyList())
         override suspend fun getAll(): List<DiaryIndexEntity> = emptyList()
         override suspend fun insertAll(items: List<DiaryIndexEntity>) = Unit
+        override suspend fun upsert(item: DiaryIndexEntity) = Unit
+        override suspend fun deleteByUri(uri: String) = Unit
         override suspend fun deleteMissing(activeUris: List<String>) = Unit
         override suspend fun clear() = Unit
     }

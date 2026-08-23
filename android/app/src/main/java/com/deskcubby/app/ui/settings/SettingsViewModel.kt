@@ -40,7 +40,7 @@ import com.deskcubby.app.data.model.ThoughtReopenMode
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.preferences.normalizeS3EndpointScheme
-import com.deskcubby.app.data.repository.LegacyAiKeyMigrationStore
+import com.deskcubby.app.data.repository.LegacyAiKeyMigrator
 import com.deskcubby.app.data.repository.DownloadedUpdate
 import com.deskcubby.app.data.repository.UpdateCheckResult
 import com.deskcubby.app.data.repository.UpdateDownloadFailure
@@ -59,10 +59,11 @@ import com.deskcubby.app.data.sync.CloudSyncUndoStore
 import com.deskcubby.app.data.sync.CloudSyncRunMode
 import com.deskcubby.app.data.sync.formatCloudSyncError
 import com.deskcubby.app.data.sync.validateForSync
+import com.deskcubby.app.widget.DeskCubbyWidgetProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import javax.inject.Inject
 import java.net.URL
+import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
@@ -136,7 +137,7 @@ class SettingsViewModel @Inject constructor(
     private val repository: SettingsRepository,
     private val backupRepository: AppBackupRepository,
     private val exportManager: ExportManager,
-    private val legacyAiKeyMigrationStore: LegacyAiKeyMigrationStore,
+    private val legacyAiKeyMigrator: LegacyAiKeyMigrator,
     private val cloudSyncService: AppCloudSyncService,
     private val cloudSyncSecretStore: CloudSyncSecretStore,
     private val cloudSyncUndoStore: CloudSyncUndoStore,
@@ -158,7 +159,7 @@ class SettingsViewModel @Inject constructor(
     val settings: StateFlow<AppSettings> = repository.settings.map { current ->
         if (legacyAiKeyMigrationAttempted) current else {
             legacyAiKeyMigrationAttempted = true
-            migrateLegacyAiKeys(current)
+            legacyAiKeyMigrator.migrateIfNeeded()
         }
     }.onEach { _ready.value = true }.stateIn(
         viewModelScope,
@@ -184,15 +185,28 @@ class SettingsViewModel @Inject constructor(
                 _structuredFields.value = emptyList()
                 return@launch
             }
-            runCatching {
-                structuredWorkspaceRepository.seedExamples(appSettings)
+            try {
+                structuredWorkspaceRepository.initializeMissingFiles(appSettings)
                 structuredWorkspaceRepository.ensureSystemFields(appSettings)
                 val workspace = structuredWorkspaceRepository.loadSettings(appSettings)
-                _structuredDayBoundary.value = workspace.dayBoundary
-                _structuredFields.value = structuredWorkspaceRepository.loadFields(appSettings)
-                _structuredWorkspaceAvailable.value = true
-            }.onFailure {
-                _structuredWorkspaceAvailable.value = false
+                val fields = structuredWorkspaceRepository.loadFields(appSettings)
+                if (settings.value.diaryTreeUri == appSettings.diaryTreeUri) {
+                    _structuredDayBoundary.value = workspace.dayBoundary
+                    _structuredFields.value = fields
+                    _structuredWorkspaceAvailable.value = true
+                }
+                try {
+                    DeskCubbyWidgetProvider.requestUpdate(context)
+                } catch (_: Exception) {
+                    // Workspace initialization is durable even if launcher refresh is unavailable.
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (settings.value.diaryTreeUri == appSettings.diaryTreeUri) {
+                    _structuredWorkspaceAvailable.value = false
+                    _structuredFields.value = emptyList()
+                }
             }
         }
     }
@@ -208,17 +222,20 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val appSettings = settings.value
             if (appSettings.diaryTreeUri == null) return@launch
-            val fields = structuredWorkspaceRepository.loadFields(appSettings)
-            val field = StructuredField(
-                id = "f_" + java.util.UUID.randomUUID().toString().take(8),
-                name = name.trim().take(com.deskcubby.app.data.structuredrecords.StructuredRecordsCodec.MAX_NAME_CHARS),
-                type = type,
-                source = com.deskcubby.app.data.structuredrecords.StructuredFieldSource.MANUAL,
-                unit = unit?.takeIf(String::isNotBlank),
-                options = options,
-                sortOrder = fields.size,
-            )
-            structuredWorkspaceRepository.saveFields(appSettings, fields + field)
+            val fieldId = "f_" + java.util.UUID.randomUUID().toString().take(8)
+            val updated = structuredWorkspaceRepository.mutateFields(appSettings) { fields ->
+                val field = StructuredField(
+                    id = fieldId,
+                    name = name.trim().take(com.deskcubby.app.data.structuredrecords.StructuredRecordsCodec.MAX_NAME_CHARS),
+                    type = type,
+                    source = com.deskcubby.app.data.structuredrecords.StructuredFieldSource.MANUAL,
+                    unit = unit?.takeIf(String::isNotBlank),
+                    options = options,
+                    sortOrder = (fields.maxOfOrNull { it.sortOrder } ?: -1) + 1,
+                )
+                fields + field
+            }
+            if (settings.value.diaryTreeUri == appSettings.diaryTreeUri) _structuredFields.value = updated
             onDone()
         }
     }
@@ -228,12 +245,10 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val appSettings = settings.value
             if (appSettings.diaryTreeUri == null) return@launch
-            val fields = structuredWorkspaceRepository.loadFields(appSettings)
-            structuredWorkspaceRepository.saveFields(
-                appSettings,
-                fields.map { if (it.id == id) it.copy(archived = true) else it },
-            )
-            _structuredFields.value = structuredWorkspaceRepository.loadFields(appSettings)
+            val updated = structuredWorkspaceRepository.mutateFields(appSettings) { fields ->
+                fields.map { if (it.id == id) it.copy(archived = true) else it }
+            }
+            if (settings.value.diaryTreeUri == appSettings.diaryTreeUri) _structuredFields.value = updated
         }
     }
 
@@ -264,10 +279,22 @@ class SettingsViewModel @Inject constructor(
                 onDone(false, "请先选择日记目录")
                 return@launch
             }
-            runCatching {
+            try {
                 structuredWorkspaceRepository.seedExamples(appSettings)
-            }.onSuccess { onDone(true, "示例已添加") }
-                .onFailure { onDone(false, it.message ?: "添加失败") }
+                if (settings.value.diaryTreeUri == appSettings.diaryTreeUri) {
+                    _structuredFields.value = structuredWorkspaceRepository.loadFields(appSettings)
+                }
+                try {
+                    DeskCubbyWidgetProvider.requestUpdate(context)
+                } catch (_: Exception) {
+                    // Example templates are already durable; launcher refresh is best effort.
+                }
+                onDone(true, "示例已添加")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                onDone(false, error.message ?: "添加失败")
+            }
         }
     }
 
@@ -299,6 +326,31 @@ class SettingsViewModel @Inject constructor(
             cloudSyncService.status.collect { status ->
                 if (!status.running) {
                     _cloudSyncUndoAvailable.value = cloudSyncUndoStore.hasUndo()
+                }
+            }
+        }
+        viewModelScope.launch {
+            structuredWorkspaceRepository.workspaceChanges.collect {
+                val appSettings = settings.value
+                if (appSettings.diaryTreeUri == null) {
+                    _structuredWorkspaceAvailable.value = false
+                    _structuredFields.value = emptyList()
+                } else {
+                    try {
+                        val workspace = structuredWorkspaceRepository.loadSettings(appSettings)
+                        val fields = structuredWorkspaceRepository.loadFieldsReadOnly(appSettings)
+                        if (settings.value.diaryTreeUri == appSettings.diaryTreeUri) {
+                            _structuredDayBoundary.value = workspace.dayBoundary
+                            _structuredFields.value = fields
+                            _structuredWorkspaceAvailable.value = true
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        if (settings.value.diaryTreeUri == appSettings.diaryTreeUri) {
+                            _structuredWorkspaceAvailable.value = false
+                        }
+                    }
                 }
             }
         }
@@ -1002,39 +1054,6 @@ class SettingsViewModel @Inject constructor(
         if (textId != snapshot.calorieTextConfigId || imageId != snapshot.calorieImageConfigId) {
             repository.setCalorieEstimationSettings(false, textId, imageId,
                 snapshot.calorieVisionPrompt, snapshot.calorieTextPrompt)
-        }
-    }
-
-    private suspend fun migrateLegacyAiKeys(current: AppSettings): AppSettings {
-        var allCurrentKeysReadable = true
-        val migrated = withContext(Dispatchers.IO) {
-            current.aiConfigs.map { config ->
-                if (config.apiKey.isNotEmpty()) return@map config
-                if (!legacyAiKeyMigrationStore.containsApiKey(config.id)) return@map config
-                val endpoint = runCatching { URL(config.endpointUrl) }.getOrNull() ?: run {
-                    allCurrentKeysReadable = false
-                    return@map config
-                }
-                val legacyKey = legacyAiKeyMigrationStore.readApiKey(config.id, endpoint)
-                    ?.take(8_192)
-                    .orEmpty()
-                if (legacyKey.isEmpty()) {
-                    allCurrentKeysReadable = false
-                    config
-                } else {
-                    config.copy(apiKey = legacyKey)
-                }
-            }
-        }
-        return try {
-            if (migrated != current.aiConfigs) repository.setAiConfigs(migrated)
-            if (allCurrentKeysReadable) {
-                withContext(Dispatchers.IO) { legacyAiKeyMigrationStore.discardLegacyStore() }
-            }
-            current.copy(aiConfigs = migrated)
-        } catch (_: Exception) {
-            // Keep the obsolete store intact so migration can be retried on the next launch.
-            current
         }
     }
 

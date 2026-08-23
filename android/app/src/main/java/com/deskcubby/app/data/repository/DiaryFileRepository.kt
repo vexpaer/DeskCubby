@@ -67,6 +67,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -223,6 +226,13 @@ class DiaryFileRepository @Inject constructor(
     private val mealCalendarContentRevision = AtomicLong(0L)
     private val dirtyMealDiaryRevisions = ConcurrentHashMap<String, AtomicLong>()
     private val workspaceMutex = Mutex()
+    private val workspaceChangeRevision = AtomicLong(0L)
+    private val mutableWorkspaceChanges = MutableStateFlow(0L)
+    val workspaceChanges: StateFlow<Long> = mutableWorkspaceChanges.asStateFlow()
+
+    private fun publishWorkspaceChange() {
+        mutableWorkspaceChanges.value = workspaceChangeRevision.incrementAndGet()
+    }
 
     fun currentMealCalendarContentRevision(): Long = mealCalendarContentRevision.get()
 
@@ -243,22 +253,27 @@ class DiaryFileRepository @Inject constructor(
             }
         }
 
-    /** Reads a file from the `.deskcubby` workspace directory, or null when it does not exist. */
+    /**
+     * Reads a file from the `.deskcubby` workspace directory. Null means the file is genuinely
+     * absent; provider/read failures propagate so callers never mistake an unreadable file for a
+     * missing file and overwrite user data with defaults.
+     */
     suspend fun readWorkspaceFile(settings: AppSettings, fileName: String): String? =
         workspaceMutex.withLock {
             withContext(Dispatchers.IO) {
                 val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext null
                 val dir = root.findFile(WORKSPACE_DIRECTORY)?.takeIf { it.isDirectory } ?: return@withContext null
                 val file = dir.findFile(fileName) ?: return@withContext null
-                runCatching { readText(file.uri) }.getOrNull()
+                readText(file.uri)
             }
         }
 
     /**
      * Writes a file into the `.deskcubby` workspace directory, verifying by read-back so a
-     * partial or failed write is never silently accepted as a durable config change.
+     * partial or failed write is never silently accepted as a durable config change. Every
+     * successful write publishes an invalidation, including writes performed by cloud sync.
      */
-    suspend fun writeWorkspaceFile(settings: AppSettings, fileName: String, content: String) =
+    suspend fun writeWorkspaceFile(settings: AppSettings, fileName: String, content: String) {
         workspaceMutex.withLock {
             withContext(Dispatchers.IO) {
                 val root = settings.diaryTreeUri?.let(::tree) ?: error("请先在设置中选择日记目录")
@@ -272,6 +287,44 @@ class DiaryFileRepository @Inject constructor(
                 check(readText(file.uri) == content) { "配置文件写入校验失败" }
             }
         }
+        publishWorkspaceChange()
+    }
+
+    /**
+     * Atomically transforms one workspace file under the same mutex used by normal and cloud-sync
+     * writes. The transform receives null only when the file is genuinely absent. Read failures
+     * propagate and no write occurs.
+     */
+    suspend fun updateWorkspaceFile(
+        settings: AppSettings,
+        fileName: String,
+        transform: (String?) -> String,
+    ): String {
+        var changed = false
+        val result = workspaceMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val root = settings.diaryTreeUri?.let(::tree) ?: error("请先在设置中选择日记目录")
+                val existingDir = root.findFile(WORKSPACE_DIRECTORY)?.takeIf { it.isDirectory }
+                val existingFile = existingDir?.findFile(fileName)
+                val current = existingFile?.let { readText(it.uri) }
+                val updated = transform(current)
+                if (existingFile != null && updated == current) return@withContext requireNotNull(current)
+
+                val dir = existingDir
+                    ?: root.createDirectory(WORKSPACE_DIRECTORY)
+                    ?: error("无法创建 .deskcubby 目录")
+                val file = existingFile
+                    ?: dir.createFile("application/json", fileName)
+                    ?: error("无法在所选目录中创建配置文件")
+                writeText(file.uri, updated)
+                check(readText(file.uri) == updated) { "配置文件写入校验失败" }
+                changed = true
+                updated
+            }
+        }
+        if (changed) publishWorkspaceChange()
+        return result
+    }
 
     /**
      * Creates the conventional folder layout below a user-confirmed SAF tree and returns scoped
@@ -468,6 +521,25 @@ class DiaryFileRepository @Inject constructor(
             },
         )
         documents.map { it.first }.sortedWith(compareByDescending<DiaryDocument> { it.dateIso }.thenByDescending { it.name })
+    }
+
+    /** Updates only the Room projection for one already-durable diary document. */
+    suspend fun indexDocument(settings: AppSettings, document: DiaryEditorDocument) {
+        val date = extractDate(document.name, document.lastModified, settings.fileNamePattern)
+        indexDao.upsert(
+            DiaryIndexEntity(
+                uri = document.uri,
+                name = document.name,
+                title = markdownStem(document.name),
+                dateIso = date.toString(),
+                monthKey = "%04d.%02d".format(Locale.ROOT, date.year, date.monthValue),
+                lastModified = document.lastModified,
+                size = document.size,
+                wordCount = DiaryTextUtils.wordCount(document.content),
+                sha256 = document.sha256,
+                indexedAt = System.currentTimeMillis(),
+            ),
+        )
     }
 
     /**
@@ -1816,28 +1888,23 @@ class DiaryFileRepository @Inject constructor(
                     ?: root.listFiles().firstOrNull { it.name.equals(targetName, ignoreCase = true) }
                     ?: error("文件可能已重命名，但存储服务没有返回可访问的新文件")
                 val renamedDocument = load(renamedFile.uri)
-                updateIndexAfterRename(uri, renamedDocument)
+                // The file operation is already committed. A rebuildable Room projection must
+                // not make a successful rename look like a failed filesystem mutation.
+                withContext(NonCancellable) {
+                    runCatching { updateIndexAfterRename(uri, renamedDocument, settings) }
+                }
                 recordMealCalendarContentChange()
                 renamedDocument
             }
         }
 
-    private suspend fun updateIndexAfterRename(oldUri: String, document: DiaryEditorDocument) {
-        val date = extractDate(document.name, document.lastModified)
-        val renamedIndex = DiaryIndexEntity(
-            uri = document.uri,
-            name = document.name,
-            title = markdownStem(document.name),
-            dateIso = date.toString(),
-            monthKey = "%04d.%02d".format(Locale.ROOT, date.year, date.monthValue),
-            lastModified = document.lastModified,
-            size = document.size,
-            wordCount = DiaryTextUtils.wordCount(document.content),
-            sha256 = document.sha256,
-            indexedAt = System.currentTimeMillis(),
-        )
-        val preserved = indexDao.getAll().filterNot { it.uri == oldUri || it.uri == document.uri }
-        indexDao.replaceAfterSuccessfulScan(preserved + renamedIndex)
+    private suspend fun updateIndexAfterRename(
+        oldUri: String,
+        document: DiaryEditorDocument,
+        settings: AppSettings,
+    ) {
+        if (oldUri != document.uri) indexDao.deleteByUri(oldUri)
+        indexDocument(settings, document)
     }
 
     suspend fun delete(uri: String, settings: AppSettings): Boolean = withContext(Dispatchers.IO) {
@@ -1859,7 +1926,11 @@ class DiaryFileRepository @Inject constructor(
             require(document.delete()) { "原日记无法删除，文件已保持不变" }
             true
         }.onFailure { backup.delete() }.getOrThrow().also { deleted ->
-            if (deleted) recordMealCalendarContentChange()
+            if (deleted) {
+                // The durable file is already in trash; derived-index cleanup is best effort.
+                withContext(NonCancellable) { runCatching { indexDao.deleteByUri(uri) } }
+                recordMealCalendarContentChange()
+            }
         }
     }
 

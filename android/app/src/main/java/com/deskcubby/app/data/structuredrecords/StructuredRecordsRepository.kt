@@ -4,6 +4,7 @@ import com.deskcubby.app.data.local.StructuredRecordDao
 import com.deskcubby.app.data.local.StructuredRecordFileEntity
 import com.deskcubby.app.data.local.StructuredRecordOccurrenceEntity
 import com.deskcubby.app.data.model.AppSettings
+import com.deskcubby.app.data.model.DiaryEditorDocument
 import com.deskcubby.app.data.repository.DiaryFileMeta
 import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.DiaryTextUtils
@@ -19,8 +20,9 @@ import kotlinx.coroutines.sync.withLock
 data class StructuredRecordWriteResult(
     val success: Boolean,
     val message: String? = null,
-    /** Legacy property name kept for API/index compatibility; value is the natural Markdown date. */
+    /** Calendar date of the Markdown file that was actually written. */
     val journalDay: LocalDate? = null,
+    val messageEnglish: String? = null,
 )
 
 data class IncrementalIndexResult(
@@ -37,9 +39,24 @@ internal fun shouldVerifyStructuredFile(
 ): Boolean = lastModified <= 0L ||
     nowMillis - lastVerifiedAt >= STRUCTURED_HASH_AUDIT_INTERVAL_MS
 
+private fun normalizationErrorEnglish(reason: String?): String = when (reason) {
+    "内容包含保留标记 <!-- 与 -->" -> "reserved marker tokens are not allowed"
+    "数值无效" -> "invalid number"
+    "时间格式应为 HH:mm" -> "time must use HH:mm format"
+    "时间无效" -> "invalid time"
+    "时长分钟数无效" -> "invalid duration minutes"
+    "时长格式无效" -> "invalid duration format"
+    else -> "invalid format"
+}
+
 /**
- * Markdown-first structured-record orchestration. All new records belong to the natural local
- * calendar date. The “今日日记切换时间” is intentionally unavailable to this repository.
+ * Markdown-first structured-record storage. The caller owns date semantics: a home quick-add passes
+ * today, while a diary-local action passes the opened diary's date. The repository only writes the
+ * requested file and never silently replaces that target with the wall-clock date.
+ *
+ * Normal writes never rescan the diary directory. The exact durable document that changed is used
+ * to update the derived Room index. Full directory reconciliation is reserved for startup/manual
+ * rebuilds and external-file recovery.
  */
 @Singleton
 class StructuredRecordsRepository @Inject constructor(
@@ -50,11 +67,6 @@ class StructuredRecordsRepository @Inject constructor(
 ) {
     private val indexMutex = Mutex()
 
-    /**
-     * Writes completed stop -> next-start sleep sessions. A session is summarized on its natural
-     * wake date, using the real local sleep/wake clock times. No Journal Day or diary switch time is
-     * read. A short bounded backfill window heals days missed while the app was closed.
-     */
     suspend fun settleAutomaticSleepWake(settings: AppSettings, now: Instant = Instant.now()): Int {
         if (!settings.structuredAutoRecordSleepWake) return 0
         workspaceRepository.ensureSystemFields(settings)
@@ -68,20 +80,18 @@ class StructuredRecordsRepository @Inject constructor(
         for (offset in 0..3) {
             val wakeDate = today.minusDays(offset.toLong())
             val session = phoneInteractionEstimator.estimateForWakeDate(wakeDate, now = now) ?: continue
-            val wake = session.wakeLocalTime()
-            val sleep = session.sleepLocalTime()
             val wakeResult = upsertSystemFieldValue(
                 settings,
                 wakeField,
                 wakeDate,
-                JournalDayEngine.formatTime(wake),
+                JournalDayEngine.formatTime(session.wakeLocalTime()),
             )
             if (wakeResult.success) written += 1
             val sleepResult = upsertSystemFieldValue(
                 settings,
                 sleepField,
                 wakeDate,
-                JournalDayEngine.formatTime(sleep),
+                JournalDayEngine.formatTime(session.sleepLocalTime()),
             )
             if (sleepResult.success) written += 1
             session.durationSeconds
@@ -89,7 +99,7 @@ class StructuredRecordsRepository @Inject constructor(
         return written
     }
 
-    /** Legacy API name; returns the natural local date and never reads workspace settings. */
+    /** Compatibility helper for callers that intentionally mean the real local date. */
     suspend fun currentJournalDay(settings: AppSettings, now: Instant = Instant.now()): LocalDate {
         @Suppress("UNUSED_VARIABLE")
         val ignored = settings
@@ -101,35 +111,65 @@ class StructuredRecordsRepository @Inject constructor(
     suspend fun occurrencesForField(fieldId: String, startIso: String, endIso: String) =
         structuredRecordDao.occurrencesForField(fieldId, startIso, endIso)
 
-    /** Inserts one template-driven record into the natural-date Markdown file. */
+    /** Inserts one template-driven record into the explicitly requested date. */
     suspend fun insertRecordFromTemplate(
         settings: AppSettings,
         template: StructuredRecordTemplate,
         values: List<String>,
+        targetDate: LocalDate? = null,
         now: Instant = Instant.now(),
     ): StructuredRecordWriteResult {
-        val fields = workspaceRepository.loadFields(settings).associateBy { it.id }
+        val fields = try {
+            workspaceRepository.loadFields(settings).associateBy { it.id }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return StructuredRecordWriteResult(
+                success = false,
+                message = "无法读取结构化字段",
+                messageEnglish = "Could not load structured fields",
+            )
+        }
         val fieldSegments = template.segments.filterIsInstance<StructuredRecordSegment.Field>()
         if (fieldSegments.size != values.size) {
-            return StructuredRecordWriteResult(false, "字段与填写值数量不一致")
+            return StructuredRecordWriteResult(
+                success = false,
+                message = "字段与填写值数量不一致",
+                messageEnglish = "The number of field values does not match the template",
+            )
         }
         val normalizedTexts = ArrayList<String>(values.size)
         for (index in fieldSegments.indices) {
             val field = fields[fieldSegments[index].fieldId]
-                ?: return StructuredRecordWriteResult(false, "字段不存在")
+                ?: return StructuredRecordWriteResult(
+                    success = false,
+                    message = "字段不存在",
+                    messageEnglish = "A referenced field no longer exists",
+                )
             val normalized = StructuredFieldNormalizer.normalize(field.type, values[index])
             if (normalized.isError) {
-                return StructuredRecordWriteResult(false, "“${field.name}”无效：${normalized.error}")
+                val chineseReason = normalized.error ?: "格式无效"
+                val englishReason = normalizationErrorEnglish(normalized.error)
+                return StructuredRecordWriteResult(
+                    success = false,
+                    message = "“${field.name}”的填写值无效：$chineseReason",
+                    messageEnglish = "The value for “${field.name}” is invalid: $englishReason",
+                )
             }
             if (normalized.value == null) {
-                return StructuredRecordWriteResult(false, "“${field.name}”不能为空")
+                return StructuredRecordWriteResult(
+                    success = false,
+                    message = "“${field.name}”不能为空",
+                    messageEnglish = "“${field.name}” cannot be empty",
+                )
             }
             normalizedTexts += normalized.value.displayText
         }
+
         val block = StructuredMarkdownProtocol.buildRecordText(template.segments, normalizedTexts)
-        val naturalDate = LocalDateTime.ofInstant(now, ZoneId.systemDefault()).toLocalDate()
-        return try {
-            diaryFileRepository.transformDiaryForDate(settings, naturalDate) { content ->
+        val writeDate = targetDate ?: LocalDateTime.ofInstant(now, ZoneId.systemDefault()).toLocalDate()
+        val document = try {
+            diaryFileRepository.transformDiaryForDate(settings, writeDate) { content ->
                 val lineEnding = DiaryTextUtils.preferredLineEnding(content)
                 val normalizedBlock = DiaryTextUtils.normalizeTextBlock(block, lineEnding)
                 val sep = when {
@@ -138,18 +178,20 @@ class StructuredRecordsRepository @Inject constructor(
                 }
                 content + sep + normalizedBlock
             }
-            refreshFileIndex(settings, naturalDate)
-            StructuredRecordWriteResult(true, null, naturalDate)
-        } catch (error: Exception) {
-            if (error is kotlinx.coroutines.CancellationException) throw error
-            StructuredRecordWriteResult(false, error.message ?: "写入日记失败", naturalDate)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return StructuredRecordWriteResult(
+                success = false,
+                message = "写入日记失败",
+                journalDay = writeDate,
+                messageEnglish = "Could not write to the diary",
+            )
         }
+        return indexWrittenDocument(settings, document, writeDate)
     }
 
-    /**
-     * Writes or updates one system field in the supplied natural-date file. The parameter keeps its
-     * old name only to avoid a Room/API migration; it is never resolved through a day boundary.
-     */
+    /** Writes or updates one automatic system field in the supplied natural-date file. */
     suspend fun upsertSystemFieldValue(
         settings: AppSettings,
         field: StructuredField,
@@ -158,10 +200,15 @@ class StructuredRecordsRepository @Inject constructor(
     ): StructuredRecordWriteResult {
         val normalized = StructuredFieldNormalizer.normalize(field.type, rawValue)
         if (normalized.isError || normalized.value == null) {
-            return StructuredRecordWriteResult(false, "系统字段值无效")
+            return StructuredRecordWriteResult(
+                success = false,
+                message = "系统字段值无效",
+                journalDay = journalDay,
+                messageEnglish = "The system field value is invalid",
+            )
         }
         val display = normalized.value.displayText
-        return try {
+        val document = try {
             diaryFileRepository.transformDiaryForDate(settings, journalDay) { content ->
                 val existing = StructuredMarkdownProtocol.parse(content)
                     .firstOrNull { it.fieldId == field.id }
@@ -178,12 +225,72 @@ class StructuredRecordsRepository @Inject constructor(
                     content + sep + normalizedBlock
                 }
             }
-            refreshFileIndex(settings, journalDay)
-            StructuredRecordWriteResult(true, null, journalDay)
-        } catch (error: Exception) {
-            if (error is kotlinx.coroutines.CancellationException) throw error
-            StructuredRecordWriteResult(false, error.message ?: "写入日记失败", journalDay)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return StructuredRecordWriteResult(
+                success = false,
+                message = "写入日记失败",
+                journalDay = journalDay,
+                messageEnglish = "Could not write to the diary",
+            )
         }
+        return indexWrittenDocument(settings, document, journalDay)
+    }
+
+    /**
+     * Re-indexes one already-saved diary document. Diary editor autosave, media edits and rename use
+     * this instead of waiting for startup/full-directory reconciliation.
+     */
+    suspend fun indexDocument(settings: AppSettings, document: DiaryEditorDocument) {
+        val journalDay = diaryFileRepository.extractDate(
+            document.name,
+            document.lastModified,
+            settings.fileNamePattern,
+        )
+        refreshDocumentIndexes(settings, document, journalDay)?.let { throw it }
+    }
+
+    private suspend fun indexWrittenDocument(
+        settings: AppSettings,
+        document: DiaryEditorDocument,
+        journalDay: LocalDate,
+    ): StructuredRecordWriteResult {
+        val indexFailure = refreshDocumentIndexes(settings, document, journalDay)
+        return if (indexFailure == null) {
+            StructuredRecordWriteResult(success = true, journalDay = journalDay)
+        } else {
+            StructuredRecordWriteResult(
+                success = true,
+                message = "记录已写入，但索引刷新失败",
+                journalDay = journalDay,
+                messageEnglish = "The record was saved, but the index refresh failed",
+            )
+        }
+    }
+
+    /** Attempts both rebuildable projections even if either Room update fails. */
+    private suspend fun refreshDocumentIndexes(
+        settings: AppSettings,
+        document: DiaryEditorDocument,
+        journalDay: LocalDate,
+    ): Exception? {
+        var failure: Exception? = null
+        try {
+            diaryFileRepository.indexDocument(settings, document)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            failure = error
+        }
+        try {
+            indexMutex.withLock { parseAndStoreDocument(document, journalDay) }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            failure?.addSuppressed(error) ?: run { failure = error }
+        }
+        return failure
     }
 
     suspend fun rebuildIndex(settings: AppSettings) = indexMutex.withLock {
@@ -192,16 +299,6 @@ class StructuredRecordsRepository @Inject constructor(
 
     suspend fun refreshIncremental(settings: AppSettings): IncrementalIndexResult = indexMutex.withLock {
         refreshIndex(settings, forceAll = false)
-    }
-
-    private suspend fun refreshFileIndex(settings: AppSettings, journalDay: LocalDate) {
-        indexMutex.withLock {
-            val files = diaryFileRepository.listDiaryFileMeta(settings)
-            val target = files.firstOrNull { file ->
-                diaryFileRepository.extractDate(file.name, file.lastModified, settings.fileNamePattern) == journalDay
-            }
-            if (target != null) parseAndStoreFile(settings, target)
-        }
     }
 
     private suspend fun refreshIndex(
@@ -230,7 +327,7 @@ class StructuredRecordsRepository @Inject constructor(
             )
             if (metadataUnchanged && !requiresHashAudit) continue
             if (metadataUnchanged && previous != null) {
-                val document = runCatching { diaryFileRepository.load(file.uri) }.getOrNull()
+                val document = loadDocumentOrNull(file.uri)
                 if (document != null) {
                     val currentHash = DiaryTextUtils.sha256(document.content.toByteArray())
                     if (currentHash == previous.sha256) {
@@ -248,41 +345,54 @@ class StructuredRecordsRepository @Inject constructor(
     }
 
     private suspend fun parseAndStoreFile(settings: AppSettings, file: DiaryFileMeta) {
-        val document = runCatching { diaryFileRepository.load(file.uri) }.getOrNull() ?: return
-        val content = document.content
-        val sha256 = DiaryTextUtils.sha256(content.toByteArray())
+        val document = loadDocumentOrNull(file.uri) ?: return
         val journalDay = diaryFileRepository.extractDate(
             file.name,
             file.lastModified,
             settings.fileNamePattern,
-        ).toString()
-        val occurrences = StructuredMarkdownProtocol.parse(content).mapIndexed { order, occurrence ->
+        )
+        parseAndStoreDocument(document, journalDay)
+    }
+
+    private suspend fun loadDocumentOrNull(uri: String): DiaryEditorDocument? = try {
+        diaryFileRepository.load(uri)
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
+
+    private suspend fun parseAndStoreDocument(
+        document: DiaryEditorDocument,
+        journalDay: LocalDate,
+    ) {
+        val parsedAt = Instant.now().toEpochMilli()
+        val occurrences = StructuredMarkdownProtocol.parse(document.content).mapIndexed { order, occurrence ->
             StructuredRecordOccurrenceEntity(
-                journalDay = journalDay,
-                sourceFile = file.uri,
+                journalDay = journalDay.toString(),
+                sourceFile = document.uri,
                 sourceFileModifiedAt = document.lastModified,
                 fieldId = occurrence.fieldId,
                 rawValue = occurrence.rawValue,
                 normalizedValue = occurrence.rawValue,
                 valueType = "raw",
                 orderInFile = order,
-                parsedAt = Instant.now().toEpochMilli(),
+                parsedAt = parsedAt,
             )
         }
-        structuredRecordDao.deleteOccurrencesForFile(file.uri)
-        if (occurrences.isNotEmpty()) structuredRecordDao.insertOccurrences(occurrences)
-        structuredRecordDao.upsertFileState(
+        structuredRecordDao.replaceFileParse(
             StructuredRecordFileEntity(
-                sourceFile = file.uri,
-                modifiedAt = file.lastModified,
-                fileSize = file.size,
-                sha256 = sha256,
-                parsedAt = Instant.now().toEpochMilli(),
+                sourceFile = document.uri,
+                modifiedAt = document.lastModified,
+                fileSize = document.size,
+                sha256 = document.sha256,
+                parsedAt = parsedAt,
             ),
+            occurrences,
         )
     }
 
     suspend fun removeOccurrencesForFile(uri: String) {
-        structuredRecordDao.deleteOccurrencesForFile(uri)
+        indexMutex.withLock { structuredRecordDao.removeFileParse(uri) }
     }
 }
