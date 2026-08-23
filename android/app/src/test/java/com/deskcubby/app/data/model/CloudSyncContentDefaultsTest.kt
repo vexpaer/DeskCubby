@@ -14,13 +14,36 @@ class CloudSyncContentDefaultsTest {
     }
 
     @Test
-    fun newConfigIncludesCategoriesForThoughtsAndPoems() {
+    fun newConfigStoresOnlyUserSelectableParentsForThoughtsAndPoems() {
         val selected = CloudSyncConfig(id = "new", name = "New").selectedContents
 
         assertTrue(CloudSyncContent.THOUGHTS in selected)
-        assertTrue(CloudSyncContent.THOUGHT_CATEGORIES in selected)
+        assertFalse(CloudSyncContent.THOUGHT_CATEGORIES in selected)
         assertTrue(CloudSyncContent.POEMS in selected)
-        assertTrue(CloudSyncContent.POETRY_CATEGORIES in selected)
+        assertFalse(CloudSyncContent.POETRY_CATEGORIES in selected)
+        assertTrue(CloudSyncContent.THOUGHT_CATEGORIES in selected.withRequiredSyncDependencies())
+        assertTrue(CloudSyncContent.POETRY_CATEGORIES in selected.withRequiredSyncDependencies())
+    }
+
+    @Test
+    fun categoryDependenciesAreNotUserSelectable() {
+        assertTrue(CloudSyncContent.THOUGHTS in userSelectableCloudSyncContents)
+        assertTrue(CloudSyncContent.POEMS in userSelectableCloudSyncContents)
+        assertFalse(CloudSyncContent.THOUGHT_CATEGORIES in userSelectableCloudSyncContents)
+        assertFalse(CloudSyncContent.POETRY_CATEGORIES in userSelectableCloudSyncContents)
+    }
+
+    @Test
+    fun legacyCategorySelectionsBecomeVisibleParentSelections() {
+        val selected = setOf(
+            CloudSyncContent.THOUGHT_CATEGORIES,
+            CloudSyncContent.POETRY_CATEGORIES,
+        ).toUserSelectableSyncContents()
+
+        assertTrue(CloudSyncContent.THOUGHTS in selected)
+        assertTrue(CloudSyncContent.POEMS in selected)
+        assertFalse(CloudSyncContent.THOUGHT_CATEGORIES in selected)
+        assertFalse(CloudSyncContent.POETRY_CATEGORIES in selected)
     }
 
     @Test
