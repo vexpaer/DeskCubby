@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { useBlocker } from "react-router-dom";
 import { tr } from "../i18n/tr";
 
 export function TopBar(props: {
@@ -143,6 +144,7 @@ export function useSnackbar(): [string | null, (m: string) => void] {
 /** Dirty-page guard: confirms navigation away when draft is unsaved. */
 export function useDirtyGuard(dirty: boolean, message?: string): void {
   const msg = message ?? tr("有未保存的修改，确定离开？", "You have unsaved changes. Leave anyway?");
+  const blocker = useBlocker(dirty);
   useEffect(() => {
     if (!dirty) return;
     const handler = (e: BeforeUnloadEvent) => {
@@ -151,6 +153,11 @@ export function useDirtyGuard(dirty: boolean, message?: string): void {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [dirty]);
+  useEffect(() => {
+    if (blocker.state !== "blocked") return;
+    if (window.confirm(msg)) blocker.proceed();
+    else blocker.reset();
+  }, [blocker, msg]);
 }
 
 export function Modal(props: { open: boolean; onClose: () => void; title: React.ReactNode; width?: number; children: React.ReactNode }) {

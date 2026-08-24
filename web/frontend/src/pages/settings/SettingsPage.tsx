@@ -12,11 +12,10 @@ import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "rea
 import type { ComponentType, LazyExoticComponent } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  AlertTriangle, BookOpen, Brain, ChevronRight, Cloud, Columns3, Database, Globe,
-  HeartPulse, Home as IconHome, Info, LayoutGrid, Palette, RotateCcw, Rss, Save,
+  BookOpen, Brain, ChevronRight, Cloud, Columns3, Database, Globe,
+  HeartPulse, Home as IconHome, Info, LayoutGrid, Lock, Palette, RotateCcw, Rss, Save,
   Search, SlidersHorizontal, X, Zap,
 } from "lucide-react";
-import { apiGet } from "../../api/client";
 import type { AppSettings } from "../../api/types";
 import { useSettings } from "../../stores/settings";
 import { tr } from "../../i18n/tr";
@@ -80,7 +79,7 @@ export function Segmented<T extends string>(props: {
   value: T; options: { value: T; label: string }[]; onChange: (v: T) => void; disabled?: boolean;
 }) {
   return (
-    <div role="radiogroup" style={{
+    <div role="radiogroup" className="dc-segmented" style={{
       display: "flex", border: "var(--dc-border-width) solid var(--dc-outline-variant)",
       borderRadius: "calc(var(--dc-radius) * 0.6)", overflow: "hidden",
     }}>
@@ -88,11 +87,10 @@ export function Segmented<T extends string>(props: {
         const active = o.value === props.value;
         return (
           <button key={o.value} type="button" role="radio" aria-checked={active} disabled={props.disabled}
+            className={`dc-segmented-option${active ? " is-selected" : ""}`}
             onClick={() => props.onChange(o.value)}
             style={{
               flex: 1, padding: "8px 4px", border: "none", fontSize: "0.9em", whiteSpace: "nowrap",
-              background: active ? "var(--dc-secondary-container)" : "transparent",
-              color: active ? "var(--dc-on-secondary-container)" : "var(--dc-on-surface)",
               opacity: props.disabled ? 0.5 : 1,
             }}>
             {o.label}
@@ -195,19 +193,26 @@ interface SectionDef {
   icon?: React.ComponentType<{ size?: number | string }>;
   keywords?: string;
   Component?: LazyExoticComponent<ComponentType<SettingsSectionProps>>;
+  /** Android-style parent page. Children return here instead of flattening to the root. */
+  parent?: string;
+  /** Menu-only pages contain child sections and do not edit a draft themselves. */
+  children?: string[];
+  /** Immediate/read-only pages do not show the shell-level Save action. */
+  draftManaged?: boolean;
   /** 恢复默认 restores only these keys of the current section's draft. */
   defaults?: Partial<AppSettings>;
 }
 
 const GENERAL_DEFAULTS: Partial<AppSettings> = {
-  appLanguage: "CHINESE", darkMode: "SYSTEM", fontScale: 1, compactMode: false,
-  userName: "", tutorialModeEnabled: true, defaultPage: "HOME", bottomNavShowLabels: true,
+  visualStyle: "MATERIAL", appLanguage: "CHINESE", darkMode: "SYSTEM",
+  orientationPreference: "AUTO", fontScale: 1, compactMode: false,
   backgroundImageUri: null, backgroundImageOpacity: 0.45, backgroundImageBlurDp: 0,
+  themeColorArgb: 0xFF42664D | 0,
+  themeSecondaryColorsArgb: [0xFFC96F4A | 0, 0xFFD4A72C | 0, 0xFF527F91 | 0],
 };
 
 // 恢复默认 targets (draft only) mirroring the AppModels.kt defaults of the
 // fields each section edits.
-const SUBPAGES_SECTION = lazy(() => import("./sections/SubpagesNavSection"));
 const BROWSER_THOUGHT_POETRY_RSS_SECTION = lazy(() => import("./sections/BrowserThoughtPoetryRssSection"));
 
 const USAGE_DEFAULTS: Partial<AppSettings> = { usageTrackingEnabled: false };
@@ -217,7 +222,7 @@ const BROWSER_DEFAULTS: Partial<AppSettings> = {
 };
 const THOUGHT_DEFAULTS: Partial<AppSettings> = {
   thoughtRowHeightDp: 56, thoughtReopenMode: "ALL", thoughtDisplayMode: "SINGLE_LINE",
-  thoughtHighlightColorArgb: 0xFFF6E3A1, thoughtEditorMaxHeightDp: 168,
+  thoughtHighlightColorArgb: 0xFFF6E3A1 | 0, thoughtEditorMaxHeightDp: 168,
 };
 const POETRY_DEFAULTS: Partial<AppSettings> = {
   poetryFontSizeSp: 18, poetryLineSpacing: 1.45, poetryTextAlignment: "START",
@@ -226,54 +231,52 @@ const POETRY_DEFAULTS: Partial<AppSettings> = {
 const RSS_DEFAULTS: Partial<AppSettings> = {
   rssSubscriptions: [], rssMaxItemsPerFeed: 50, rssShowSummaries: true,
 };
+const VAULT_DEFAULTS: Partial<AppSettings> = { vaultRowHeightDp: 56 };
 
 const SECTIONS: SectionDef[] = [
   {
-    id: "general", zh: "通用与外观", en: "General & appearance",
-    descZh: "语言、明暗、字号、用户名、背景图片与教学模式", descEn: "Language, dark mode, font size, user name, background and tutorial mode",
-    icon: Palette, keywords: "appearance language dark font background compact tutorial 外观 语言 风格 颜色 字号 明暗 背景 紧凑 用户名 教学 启动页 底栏",
+    id: "general", zh: "外观与语言", en: "Appearance & language",
+    descZh: "风格、自定义主题、颜色、字号、明暗与背景", descEn: "Style, custom theme, colors, font size, dark mode, and background",
+    icon: Palette, keywords: "appearance language dark font background compact 外观 语言 风格 颜色 字号 明暗 背景 紧凑",
     Component: lazy(() => import("./sections/GeneralSection")), defaults: GENERAL_DEFAULTS,
   },
   { id: "subpages", zh: "子页面设置", en: "Subpage settings", icon: SlidersHorizontal, keywords: "subpage 子页面 主页 日记 浏览器 小巧思 诗词 rss ai 收藏夹 导航页",
-    Component: SUBPAGES_SECTION },
-  { id: "usage", zh: "手机使用时间设置", en: "Screen time settings", icon: Zap, keywords: "usage screen time 使用 时间 统计 时长",
-    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: USAGE_DEFAULTS },
-  { id: "health", zh: "健康设置", en: "Health settings", icon: HeartPulse, keywords: "health steps 步数 健康 热量 距离",
-    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: HEALTH_DEFAULTS },
-  { id: "home", zh: "主页设置", en: "Home settings", icon: IconHome, keywords: "home widget greeting 主页 模块 问候 饮食按钮 游戏",
-    Component: lazy(() => import("./sections/HomeSection")) },
-  { id: "diary", zh: "日记与媒体", en: "Diary & media", icon: BookOpen, keywords: "diary media image compress meal calorie 日记 媒体 图片 压缩 相册 吃历 热量 结构化",
-    Component: lazy(() => import("./sections/DiarySection")) },
-  { id: "browser", zh: "浏览器设置", en: "Browser settings", icon: Globe, keywords: "browser 浏览器 主页 电脑模式 desktop",
-    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: BROWSER_DEFAULTS },
-  { id: "thought", zh: "小巧思设置", en: "Thoughts settings", icon: Zap, keywords: "thought 小巧思 行高 重点 高亮 输入框",
-    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: THOUGHT_DEFAULTS },
-  { id: "poetry", zh: "诗词本设置", en: "Poetry book settings", icon: BookOpen, keywords: "poetry font 诗词 字体 字号 行距 对齐 出处 引号 七言",
-    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: POETRY_DEFAULTS },
-  { id: "rss", zh: "RSS 订阅设置", en: "RSS settings", icon: Rss, keywords: "rss feed 订阅 摘要",
-    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: RSS_DEFAULTS },
-  { id: "ai", zh: "AI 设置", en: "AI settings", icon: Brain, keywords: "ai agent model api key prompt calorie 模型 密钥 提示词 温度 热量 agent",
-    Component: lazy(() => import("./sections/AiSection")) },
+    children: ["home", "diary", "browser", "thought", "vault", "poetry", "rss", "ai", "morepage", "usage", "health"], draftManaged: false },
+  { id: "usage", zh: "手机使用时间", en: "Screen time", descZh: "导入、追踪开关与按日统计", descEn: "Import, tracking switch, and daily statistics", icon: Zap, keywords: "usage screen time 使用 时间 统计 时长",
+    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: USAGE_DEFAULTS, parent: "subpages" },
+  { id: "health", zh: "健康", en: "Health", descZh: "步数、距离与活动热量", descEn: "Steps, distance, and active calories", icon: HeartPulse, keywords: "health steps 步数 健康 热量 距离",
+    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: HEALTH_DEFAULTS, parent: "subpages" },
+  { id: "home", zh: "主页", en: "Home", descZh: "问候语、模块、标题、排序与饮食按钮", descEn: "Greeting, widgets, titles, order, and meal buttons", icon: IconHome, keywords: "home widget greeting 主页 模块 问候 饮食按钮 游戏",
+    Component: lazy(() => import("./sections/HomeSection")), parent: "subpages" },
+  { id: "diary", zh: "日记与媒体", en: "Diary & media", descZh: "保存文件夹、文件名、图片与吃历规则", descEn: "Storage folders, file names, images, and meal rules", icon: BookOpen, keywords: "diary media image compress meal calorie 日记 媒体 图片 压缩 相册 吃历 热量 结构化",
+    Component: lazy(() => import("./sections/DiarySection")), parent: "subpages" },
+  { id: "browser", zh: "浏览器", en: "Browser", descZh: "默认主页、主题与电脑模式", descEn: "Home page, theme, and desktop mode", icon: Globe, keywords: "browser 浏览器 主页 电脑模式 desktop",
+    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: BROWSER_DEFAULTS, parent: "subpages" },
+  { id: "thought", zh: "小巧思", en: "Thoughts", descZh: "打开位置、内容显示与行高", descEn: "Reopen behavior, content display, and row height", icon: Zap, keywords: "thought 小巧思 行高 重点 高亮 输入框",
+    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: THOUGHT_DEFAULTS, parent: "subpages" },
+  { id: "vault", zh: "收藏夹", en: "Vault", descZh: "调整收藏夹条目高度", descEn: "Adjust vault entry height", icon: Lock, keywords: "vault favorite row height 收藏夹 高度 行高",
+    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: VAULT_DEFAULTS, parent: "subpages" },
+  { id: "poetry", zh: "诗词本", en: "Poetry book", descZh: "字体、字号、行距、对齐与出处", descEn: "Font, size, spacing, alignment, and source", icon: BookOpen, keywords: "poetry font 诗词 字体 字号 行距 对齐 出处 引号 七言",
+    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: POETRY_DEFAULTS, parent: "subpages" },
+  { id: "rss", zh: "RSS 订阅", en: "RSS", descZh: "文章数量与摘要显示", descEn: "Article limits and summary display", icon: Rss, keywords: "rss feed 订阅 摘要",
+    Component: BROWSER_THOUGHT_POETRY_RSS_SECTION, defaults: RSS_DEFAULTS, parent: "subpages" },
+  { id: "ai", zh: "AI 配置", en: "AI configurations", descZh: "模型、接口、提示词与 API 密钥", descEn: "Models, endpoints, prompts, and API keys", icon: Brain, keywords: "ai agent model api key prompt calorie 模型 密钥 提示词 温度 热量 agent",
+    Component: lazy(() => import("./sections/AiSection")), parent: "subpages" },
   { id: "data", zh: "应用数据", en: "App data", icon: Database, keywords: "backup export import storage 备份 导出 导入 存储 占用 自动备份",
-    Component: lazy(() => import("./sections/DataSection")) },
+    Component: lazy(() => import("./sections/DataSection")), draftManaged: false },
   { id: "cloudsync", zh: "云端同步", en: "Cloud sync", icon: Cloud, keywords: "webdav s3 cloud sync 云端 同步 上传 下载 冲突",
-    Component: lazy(() => import("./sections/CloudSyncSection")) },
+    Component: lazy(() => import("./sections/CloudSyncSection")), parent: "data" },
   { id: "navigation", zh: "底部导航", en: "Bottom navigation", icon: Columns3, keywords: "bottom nav bar 底栏 底部导航 图标 默认页 排序 名称",
     Component: lazy(() => import("./sections/SubpagesNavSection").then((m) => ({ default: m.BottomNavSection }))) },
-  { id: "morepage", zh: "导航页设置", en: "Navigation hub settings", icon: LayoutGrid, keywords: "more page columns 导航页 列 一列 两列 三列 收纳 描述 底色",
-    Component: lazy(() => import("./sections/SubpagesNavSection").then((m) => ({ default: m.MorePageSection }))) },
+  { id: "morepage", zh: "导航页", en: "Navigation page", descZh: "收纳页面、列数、名称、描述与颜色", descEn: "Collected pages, columns, names, descriptions, and colors", icon: LayoutGrid, keywords: "more page columns 导航页 列 一列 两列 三列 收纳 描述 底色",
+    Component: lazy(() => import("./sections/SubpagesNavSection").then((m) => ({ default: m.MorePageSection }))), parent: "subpages" },
   { id: "about", zh: "关于", en: "About", icon: Info, keywords: "about version password guide 关于 版本 更新 密码 教学 指南",
-    Component: lazy(() => import("./sections/AboutSection")) },
+    Component: lazy(() => import("./sections/AboutSection")), draftManaged: false },
 ];
 
 const SECTION_BY_ID = new Map(SECTIONS.map((s) => [s.id, s]));
 
-const MENU_GROUPS: { zh: string; en: string; ids: string[] }[] = [
-  { zh: "通用", en: "General", ids: ["general"] },
-  { zh: "子页面设置", en: "Subpage settings", ids: ["subpages", "usage", "health", "home", "diary", "browser", "thought", "poetry", "rss", "ai", "morepage"] },
-  { zh: "数据", en: "Data", ids: ["data", "cloudsync"] },
-  { zh: "导航与关于", en: "Navigation & about", ids: ["navigation", "about"] },
-];
+const PRIMARY_SECTION_IDS = ["general", "subpages", "data", "navigation", "about"];
 
 // ---------------------------------------------------------------------------
 // Draft helpers
@@ -289,20 +292,6 @@ function diffPatch(base: AppSettings, draft: AppSettings): Partial<AppSettings> 
     if (JSON.stringify(base[k]) !== JSON.stringify(draft[k])) out[k] = draft[k];
   });
   return out;
-}
-
-interface DeploymentInfo {
-  scheme?: string;
-  behindProxy?: boolean;
-  publicDeployment?: boolean;
-  suggestPassword?: boolean;
-  suggestHttps?: boolean;
-}
-
-interface SystemInfo {
-  version?: string;
-  platform?: string;
-  deployment?: DeploymentInfo;
 }
 
 type PendingNav = { kind: "close" } | { kind: "open"; id: string } | null;
@@ -325,21 +314,11 @@ export default function SettingsPage() {
   const [sectionInvalid, setSectionInvalid] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [pending, setPending] = useState<PendingNav>(null);
-  const [bannerDismissed, setBannerDismissed] = useState(false);
-  const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
 
   // Validation state belongs to the active section only.
   useEffect(() => {
     setSectionInvalid(false);
   }, [sectionId]);
-
-  useEffect(() => {
-    let alive = true;
-    apiGet<SystemInfo>("/api/system/info")
-      .then((info) => { if (alive) setSystemInfo(info); })
-      .catch(() => undefined);
-    return () => { alive = false; };
-  }, []);
 
   // (Re)initialize the draft whenever the saved settings change while clean.
   const dirtyRef = useRef(false);
@@ -391,9 +370,12 @@ export default function SettingsPage() {
     }
   };
 
+  const parentId = section?.parent ?? "";
+
   const requestClose = () => {
-    if (dirty) setPending({ kind: "close" });
-    else setSearchParams({});
+    const target: PendingNav = parentId ? { kind: "open", id: parentId } : { kind: "close" };
+    if (dirty) setPending(target);
+    else applyPending(target);
   };
 
   const requestSection = (id: string) => {
@@ -407,54 +389,13 @@ export default function SettingsPage() {
     setDraft({ ...draft, ...section.defaults });
   };
 
-  const deploy = systemInfo?.deployment;
-  const showBanner = !!deploy && (!!deploy.suggestPassword || !!deploy.suggestHttps) && !bannerDismissed;
-
-  const sideList = (
-    <nav aria-label={tr("设置分区", "Settings sections")} className="dc-set-side">
-      {SECTIONS.map((s) => {
-        const Icon = s.icon;
-        const active = s.id === sectionId;
-        return (
-          <button key={s.id} className={`dc-set-item${active ? " active" : ""}`} onClick={() => requestSection(s.id)}>
-            {Icon && <Icon size={19} />}
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {tr(s.zh, s.en)}
-            </span>
-          </button>
-        );
-      })}
-    </nav>
-  );
-
-  const mobileSelect = (
-    <select
-      className="dc-input dc-set-mobile"
-      aria-label={tr("设置分区", "Settings sections")}
-      value={sectionId}
-      onChange={(e) => (e.target.value ? requestSection(e.target.value) : requestClose())}
-    >
-      <option value="">{tr("设置主页", "Settings home")}</option>
-      {SECTIONS.map((s) => <option key={s.id} value={s.id}>{tr(s.zh, s.en)}</option>)}
-    </select>
-  );
-
   const Active = section?.Component;
+  const draftManaged = section?.draftManaged !== false && !!Active;
 
   return (
     <div>
       <style>{`
-        .dc-set-grid { display: flex; flex-direction: column; gap: 12px; }
-        .dc-set-side { display: none; flex-direction: column; gap: 2px; }
-        @media (min-width: 900px) {
-          .dc-set-grid { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 20px; align-items: start; }
-          .dc-set-mobile { display: none !important; }
-          .dc-set-side { display: flex; position: sticky; top: 70px; max-height: calc(100vh - 96px); overflow-y: auto; }
-        }
-        .dc-set-item { display: flex; width: 100%; text-align: left; align-items: center; gap: 10px; padding: 10px 12px;
-          border: none; background: transparent; border-radius: calc(var(--dc-radius) * 0.7); color: var(--dc-on-surface); }
-        .dc-set-item.active { background: var(--dc-secondary-container); color: var(--dc-on-secondary-container); }
-        .dc-set-item:hover:not(.active) { background: color-mix(in srgb, var(--dc-on-surface) 6%, transparent); }
+        .dc-settings-content { width: min(100%, 900px); margin-inline: auto; }
       `}</style>
       <TopBar
         title={tr("设置", "Settings")}
@@ -463,48 +404,35 @@ export default function SettingsPage() {
         onBack={requestClose}
         actions={
           <>
-            {section?.defaults && (
+            {draftManaged && section?.defaults && (
               <button className="dc-icon-btn" disabled={saving} title={tr("重置本页所有设置", "Reset this page's settings")}
                 aria-label={tr("重置本页所有设置", "Reset this page's settings")} onClick={resetSection}>
                 <RotateCcw size={20} />
               </button>
             )}
-            {section && (
-              <button className="dc-btn dc-btn-filled" disabled={!dirty || saving || sectionInvalid} onClick={() => void save()}>
+            {draftManaged && (
+              <button className="dc-btn dc-btn-filled" disabled={!dirty || saving || sectionInvalid} onClick={() => {
+                void save().then((ok) => {
+                  if (ok) applyPending(parentId ? { kind: "open", id: parentId } : { kind: "close" });
+                });
+              }}>
                 <Save size={17} />{saving ? tr("保存中…", "Saving…") : tr("保存", "Save")}
               </button>
             )}
           </>
         }
       />
-      {showBanner && (
-        <div className="dc-card dc-row" role="alert"
-          style={{ padding: "10px 12px", borderColor: "var(--dc-error)", alignItems: "flex-start", gap: 10, marginBottom: 12 }}>
-          <AlertTriangle size={18} style={{ color: "var(--dc-error)", flexShrink: 0, marginTop: 2 }} />
-          <div className="dc-grow" style={{ fontSize: "0.9em" }}>
-            {tr(
-              "检测到公网部署：建议开启访问密码并启用 HTTPS（兼容 Caddy/Nginx 反向代理）。",
-              "Public deployment detected: enable an access password and HTTPS (compatible with Caddy/Nginx reverse proxies).",
-            )}
-          </div>
-          <button className="dc-icon-btn" style={{ width: 32, height: 32 }} aria-label={tr("关闭提示", "Dismiss")}
-            onClick={() => setBannerDismissed(true)}>
-            <X size={16} />
-          </button>
-        </div>
-      )}
       <ErrorText error={error} />
-      <div className="dc-set-grid">
-        {sideList}
+      <div className="dc-settings-content">
         <div className="dc-col" style={{ gap: 12, minWidth: 0 }}>
-          {mobileSelect}
           {!section && <SettingsHome settings={storeSettings} onOpen={requestSection} />}
+          {section?.children && <SettingsCategory children={section.children} onOpen={requestSection} />}
           {section && Active && (
             <Suspense fallback={<Spinner />}>
               <Active settings={storeSettings} draft={draft} patch={patch} snackbar={showSnackbar} reportInvalid={setSectionInvalid} />
             </Suspense>
           )}
-          {section && !Active && (
+          {section && !Active && !section.children && (
             <EmptyState title={tr("此设置分区尚未提供", "This settings section is not available yet")} />
           )}
         </div>
@@ -546,7 +474,7 @@ export default function SettingsPage() {
           pageKey="settings"
           title={tr("设置", "Settings")}
           lines={[
-            tr("用搜索或点按分区进入对应设置页。", "Search or tap a section to open its settings."),
+            tr("首页只有五个主要分类；先进入分类，再选择细分设置。", "The home page has five main categories; open one to choose a detailed setting."),
             tr("每个子页右上角可恢复默认并保存修改。", "Each subpage offers reset and save in the top bar."),
           ]}
         />
@@ -592,20 +520,26 @@ function SettingsHome(props: { settings: AppSettings; onOpen: (id: string) => vo
           ? <div className="dc-muted" style={{ padding: "8px 4px" }}>{tr("没有匹配的设置", "No matching settings")}</div>
           : results.map((s) => <MenuEntry key={s.id} def={s} onOpen={props.onOpen} />)
       )}
-      {!q && MENU_GROUPS.map((g) => (
-        <div key={g.zh} className="dc-col" style={{ gap: 8 }}>
-          <div className="dc-muted" style={{ fontSize: "0.85em", padding: "0 4px" }}>{tr(g.zh, g.en)}</div>
-          {g.ids.map((id) => {
-            const def = SECTION_BY_ID.get(id);
-            return def ? <MenuEntry key={id} def={def} onOpen={props.onOpen} /> : null;
-          })}
-        </div>
-      ))}
+      {!q && PRIMARY_SECTION_IDS.map((id) => {
+        const def = SECTION_BY_ID.get(id);
+        return def ? <MenuEntry key={id} def={def} onOpen={props.onOpen} /> : null;
+      })}
     </div>
   );
 }
 
-function MenuEntry(props: { def: SectionDef; onOpen: (id: string) => void }) {
+function SettingsCategory(props: { children: string[]; onOpen: (id: string) => void }) {
+  return (
+    <div className="dc-col" style={{ gap: 8 }}>
+      {props.children.map((id) => {
+        const def = SECTION_BY_ID.get(id);
+        return def ? <MenuEntry key={id} def={def} onOpen={props.onOpen} showDescription /> : null;
+      })}
+    </div>
+  );
+}
+
+function MenuEntry(props: { def: SectionDef; onOpen: (id: string) => void; showDescription?: boolean }) {
   const { def } = props;
   const Icon = def.icon;
   return (
@@ -621,8 +555,8 @@ function MenuEntry(props: { def: SectionDef; onOpen: (id: string) => void }) {
       )}
       <span className="dc-grow dc-col" style={{ gap: 2, minWidth: 0 }}>
         <span style={{ fontWeight: 600 }}>{tr(def.zh, def.en)}</span>
-        {(def.descZh || def.descEn) && (
-          <span className="dc-muted" style={{ fontSize: "0.84em" }}>{def.descZh ? tr(def.descZh, def.descEn ?? def.descZh) : def.descEn}</span>
+        {props.showDescription && (def.descZh || def.descEn) && (
+          <span className="dc-muted" style={{ fontSize: "0.84em" }}>{tr(def.descZh ?? "", def.descEn ?? "")}</span>
         )}
       </span>
       <ChevronRight size={18} className="dc-muted" />

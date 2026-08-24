@@ -10,9 +10,9 @@
  * normalizeHomeGameShortcutIds ordering (canonical order, unknown ids dropped).
  */
 import React from "react";
-import type { HomeGreetingTemplate } from "../../../api/types";
+import { MEAL_CATEGORIES, type HomeGreetingTemplate } from "../../../api/types";
 import { tr } from "../../../i18n/tr";
-import { SectionCard, Toggle } from "../SettingsPage";
+import { SectionCard, Segmented, TextField, Toggle } from "../SettingsPage";
 import type { SettingsSectionProps } from "../SettingsPage";
 
 // ---------------------------------------------------------------------------
@@ -137,6 +137,15 @@ export default function HomeSection({ draft, patch }: SettingsSectionProps) {
   const addGreeting = () =>
     patch({ homeGreetings: [...greetings, { chinese: "", english: "" }] });
 
+  const mealIcons = MEAL_CATEGORIES.map(
+    (category, index) => draft.mealButtonIcons?.[index] ?? category.icon,
+  );
+  const updateMealIcon = (index: number, value: string) => {
+    const next = [...mealIcons];
+    next[index] = Array.from(value).slice(0, 16).join("");
+    patch({ mealButtonIcons: next });
+  };
+
   return (
     <div className="dc-col" style={{ gap: 12 }}>
       <SectionCard title={tr("主页模块", "Home widgets")}>
@@ -193,6 +202,36 @@ export default function HomeSection({ draft, patch }: SettingsSectionProps) {
       </SectionCard>
 
       <SectionCard
+        title={tr("饮食按钮", "Meal buttons")}
+        description={tr(
+          "默认显示 emoji；也可切换为文字，或为六个餐别设置自定义图标。",
+          "Emoji are shown by default; you can switch to text or customize all six meal icons.",
+        )}
+      >
+        <Segmented<"icons" | "text">
+          value={draft.mealButtonsUseIcons ? "icons" : "text"}
+          onChange={(value) => patch({ mealButtonsUseIcons: value === "icons" })}
+          options={[
+            { value: "icons", label: tr("图标", "Icons") },
+            { value: "text", label: tr("文字", "Text") },
+          ]}
+        />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+          {MEAL_CATEGORIES.map((category, index) => (
+            <TextField
+              key={category.key}
+              label={tr(`${category.zh}图标`, `${category.en} icon`)}
+              value={mealIcons[index]}
+              maxLength={32}
+              onChange={(value) => updateMealIcon(index, value)}
+              placeholder={category.icon}
+              hint={tr("可输入 emoji 或简短符号", "Enter an emoji or short symbol")}
+            />
+          ))}
+        </div>
+      </SectionCard>
+
+      <SectionCard
         title={tr("小游戏快捷入口", "Game shortcuts")}
         description={tr(
           "控制主页「小游戏」模块内显示的入口；允许全部取消。",
@@ -224,6 +263,13 @@ export default function HomeSection({ draft, patch }: SettingsSectionProps) {
           "Supports the {name} placeholder; each language is limited to 40 characters and at least one is required.",
         )}
       >
+        <TextField
+          label={tr("用户名", "User name")}
+          value={draft.userName}
+          maxLength={32}
+          onChange={(value) => patch({ userName: value })}
+          hint={tr("问候语中的 {name} 会替换为此名称。", "{name} in a greeting is replaced with this name.")}
+        />
         {greetings.length === 0 && (
           <div className="dc-muted" style={{ fontSize: "0.88em" }}>
             {tr("没有问候语时主页显示「今日概览」。", "With no greetings the home page shows “Today's overview”.")}

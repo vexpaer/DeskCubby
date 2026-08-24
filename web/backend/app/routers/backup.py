@@ -229,6 +229,9 @@ def _replace_core_tables(
     # Agent chats (v34): replaceFromBackupSnapshot semantics — only when the
     # snapshot carries data; otherwise local chats stay untouched.
     if agent_chats_present:
+        # Runs own tool-event/mutation rows through ON DELETE CASCADE and may
+        # refer to the conversation IDs replaced below. Clear them first.
+        con.execute("DELETE FROM agent_runs")
         con.execute("DELETE FROM ai_attachments")
         con.execute("DELETE FROM ai_messages")
         con.execute("DELETE FROM ai_conversations")
@@ -273,6 +276,34 @@ def _replace_core_tables(
                     attachment["extractedText"],
                     0,
                     attachment["syncId"],
+                ),
+            )
+        for run in rows["agent_runs"]:
+            con.execute(
+                "INSERT INTO agent_runs(runId, conversationId, conversationTitle, userRequestSummary, "
+                "modelConfigId, permissionMode, enabledSourcesJson, status, modelCallCount, "
+                "usageReportedCallCount, inputTokens, outputTokens, totalTokens, cachedInputTokens, "
+                "cacheRateInputTokens, reasoningTokens, startedAt, completedAt) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    run["runId"],
+                    conv_ids.get(run["conversationSyncId"]),
+                    run["conversationTitle"],
+                    run["userRequestSummary"],
+                    run["modelConfigId"],
+                    run["permissionMode"],
+                    run["enabledSourcesJson"],
+                    run["status"],
+                    run["modelCallCount"],
+                    run["usageReportedCallCount"],
+                    run["inputTokens"],
+                    run["outputTokens"],
+                    run["totalTokens"],
+                    run["cachedInputTokens"],
+                    run["cacheRateInputTokens"],
+                    run["reasoningTokens"],
+                    run["startedAt"],
+                    run["completedAt"],
                 ),
             )
 
@@ -325,40 +356,18 @@ def _restore_vault(con, vault: dict[str, Any]) -> None:
 
 
 def _merge_usage_devices(con, records: list[dict[str, Any]]) -> None:
-    """UsageDeviceRepository.mergeBackup: per-device LWW upsert of days/apps."""
-    if not records:
-        return
-    with write_lock(), con:
-        for record in records:
-            device_id = record["deviceId"]
-            row = con.execute(
-                "SELECT updatedAt FROM usage_devices WHERE deviceId = ?", (device_id,)
-            ).fetchone()
-            if row is not None and int(record.get("updatedAtEpochMillis") or 0) < int(row["updatedAt"] or 0):
-                continue
-            con.execute(
-                "INSERT INTO usage_devices(deviceId, deviceName, isLocal, updatedAt) VALUES(?,?,0,?) "
-                "ON CONFLICT(deviceId) DO UPDATE SET deviceName=excluded.deviceName, "
-                "updatedAt=excluded.updatedAt",
-                (device_id, record.get("deviceName") or device_id, record.get("updatedAtEpochMillis") or 0),
-            )
-            con.execute("DELETE FROM usage_events_daily WHERE deviceId = ?", (device_id,))
-            for day in (record.get("history") or {}).get("days") or []:
-                for app in day.get("apps") or []:
-                    collected = int(day.get("collectedAtEpochMillis") or 0)
-                    con.execute(
-                        "INSERT OR REPLACE INTO usage_events_daily(deviceId, dayIso, packageName, appName, "
-                        "firstSeen, lastSeen, totalTimeMs) VALUES(?,?,?,?,?,?,?)",
-                        (
-                            device_id,
-                            day["date"],
-                            app["packageName"],
-                            app.get("appName") or app["packageName"],
-                            collected,
-                            collected,
-                            int(app.get("foregroundMillis") or 0),
-                        ),
-                    )
+    """UsageDeviceRepository.mergeBackup: metadata LWW plus per-day merge.
+
+    Android never discards a whole device history merely because the incoming
+    device metadata is older.  Histories merge by date; FINAL beats OPEN and,
+    within the same state, the newer collection timestamp wins.  The Web
+    projection has no separate day-state table, so existing rows use the same
+    canonical state derived by ``build_usage_devices`` (today OPEN, older dates
+    FINAL) before applying the Android comparison.
+    """
+    from ..services.usage_service import merge_android_usage_devices
+
+    merge_android_usage_devices(con, records)
 
 
 def _merge_reader_progress(records: list[dict[str, Any]]) -> None:

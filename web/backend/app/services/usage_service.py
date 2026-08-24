@@ -1,8 +1,8 @@
 """手机使用时间 usage service — Android usage import + daily projection.
 
 Mirrors the JSON shapes of `UsageDeviceJsonCodec` / `UsageStatisticsJsonCodec`
-(android `data/statistics/`) and stores them in the Room-mirrored tables
-`usage_devices` + `usage_events_daily`.
+(android `data/statistics/`) and stores device/history metadata in
+`usage_devices` + `usage_days`, with app durations in `usage_events_daily`.
 
 Accepted upload shapes (tolerant, like Windows 0.4.0's importer):
 
@@ -17,30 +17,39 @@ with app entries `packageName`/`foregroundMillis`; the tolerant spellings
 `dayIso`, `totalTimeInMillis` / `totalTimeMs` / `timeInMillis` and an optional
 `appName` are accepted as well.
 
-Upserts are idempotent: `usage_devices` keeps the newest name/timestamp and
-`usage_events_daily` keeps the greatest per-day duration seen per package
-(the table carries no collectedAt/state columns, so Android's
-"FINAL beats OPEN, then newest collectedAt" per-day snapshot merge is
-approximated monotonically — re-imports never shrink stored totals).
+Upserts are idempotent and use Android's exact record merge: device metadata
+is last-write-wins by `updatedAtEpochMillis`; histories merge per date, where
+`FINAL` beats `OPEN` and a newer collection timestamp wins within one state.
 """
 from __future__ import annotations
 
 import json
+import re
 import time
+import uuid
 from datetime import date, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..core.db import write_lock
 from ..core.errors import ApiError
 
 # Limits mirrored from StatisticsJsonCodecs.kt / UsageDeviceRepository.kt.
 MAX_STATISTICS_JSON_BYTES = 10 * 1024 * 1024
+MAX_USAGE_DEVICE_JSON_BYTES = MAX_STATISTICS_JSON_BYTES + 64 * 1024
 MAX_USAGE_DEVICES = 64
 MAX_STATISTICS_DAYS = 36_600
 MAX_APPS_PER_DAY = 4_096
 MAX_PACKAGE_NAME_CHARS = 255
 MAX_DEVICE_NAME_CODE_POINTS = 80
 MAX_FOREGROUND_MILLIS_PER_APP_DAY = 26 * 60 * 60 * 1000
+MAX_ZONE_ID_CHARS = 128
+
+_PLATFORM_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
+_FIXED_ZONE_RE = re.compile(
+    r"(?:Z|(?:UTC|GMT|UT)(?:[+-](?:(?:0\d|1[0-7]):[0-5]\d|18:00))?|"
+    r"[+-](?:(?:0\d|1[0-7]):[0-5]\d|18:00))"
+)
 
 TOP_APPS_PER_DAY = 5
 DEFAULT_OVERVIEW_DAYS = 7
@@ -54,8 +63,8 @@ def now_ms() -> int:
 def parse_usage_document(raw: bytes | str) -> list[dict[str, Any]]:
     """Decode any accepted upload shape into validated device records."""
     if isinstance(raw, bytes):
-        if len(raw) > MAX_STATISTICS_JSON_BYTES:
-            raise ApiError(413, "usage_too_large", "使用时间 JSON 超过 10 MiB 上限")
+        if len(raw) > MAX_USAGE_DEVICE_JSON_BYTES:
+            raise ApiError(413, "usage_too_large", "使用时间 JSON 超过设备记录大小上限")
         raw = raw.decode("utf-8", "replace")
     try:
         root = json.loads(raw)
@@ -87,6 +96,158 @@ def parse_usage_root(root: Any) -> list[dict[str, Any]]:
     return records
 
 
+def merge_android_usage_devices(con, records: list[dict[str, Any]]) -> None:
+    """Merge canonical ``UsageDeviceJsonCodec`` records like Android.
+
+    Device metadata is LWW, while histories merge independently by date:
+    FINAL beats OPEN and then the newer collection timestamp wins. Legacy Web
+    rows without `usage_days` metadata get one deterministic UTC projection.
+    """
+    if not records:
+        return
+    today_iso = date.today().isoformat()
+    with write_lock(), con:
+        for record in records:
+            device_id = record["deviceId"]
+            row = con.execute(
+                "SELECT deviceName,platform,updatedAt,trackingStartedOn,"
+                "backfillCompletedThrough FROM usage_devices WHERE deviceId=?",
+                (device_id,),
+            ).fetchone()
+            incoming_updated = int(record.get("updatedAtEpochMillis") or 0)
+            current_updated = int(row["updatedAt"] or 0) if row is not None else -1
+            incoming_name = record.get("deviceName") or device_id
+            incoming_platform = record.get("platform") or "android"
+            history = record.get("history") or {}
+            if row is None:
+                con.execute(
+                    "INSERT INTO usage_devices(deviceId,deviceName,isLocal,updatedAt,platform,"
+                    "trackingStartedOn,backfillCompletedThrough) VALUES(?,?,0,?,?,?,?)",
+                    (
+                        device_id, incoming_name, incoming_updated, incoming_platform,
+                        history.get("trackingStartedOn"),
+                        history.get("backfillCompletedThrough"),
+                    ),
+                )
+            else:
+                con.execute(
+                    "UPDATE usage_devices SET deviceName=?,platform=?,updatedAt=? WHERE deviceId=?",
+                    (
+                        incoming_name if incoming_updated >= current_updated else row["deviceName"],
+                        incoming_platform if incoming_updated >= current_updated else row["platform"],
+                        max(current_updated, incoming_updated),
+                        device_id,
+                    ),
+                )
+
+            for day in history.get("days") or []:
+                day_iso = day["date"]
+                incoming_collected = int(day.get("collectedAtEpochMillis") or 0)
+                existing = con.execute(
+                    "SELECT zoneId,state,collectedAt FROM usage_days "
+                    "WHERE deviceId=? AND dayIso=?",
+                    (device_id, day_iso),
+                ).fetchone()
+                if existing is None:
+                    legacy = con.execute(
+                        "SELECT MAX(lastSeen) AS collectedAt FROM usage_events_daily "
+                        "WHERE deviceId=? AND dayIso=?",
+                        (device_id, day_iso),
+                    ).fetchone()
+                    if legacy is not None and legacy["collectedAt"] is not None:
+                        existing = {
+                            "zoneId": "UTC",
+                            "state": "OPEN" if day_iso == today_iso else "FINAL",
+                            "collectedAt": int(legacy["collectedAt"]),
+                        }
+                        con.execute(
+                            "INSERT OR IGNORE INTO usage_days(deviceId,dayIso,zoneId,state,collectedAt) "
+                            "VALUES(?,?,?,?,?)",
+                            (
+                                device_id, day_iso, existing["zoneId"], existing["state"],
+                                existing["collectedAt"],
+                            ),
+                        )
+                if existing is not None:
+                    current_rank = (
+                        1 if existing["state"] == "FINAL" else 0,
+                        int(existing["collectedAt"]),
+                    )
+                    incoming_rank = (
+                        1 if day.get("state") == "FINAL" else 0,
+                        incoming_collected,
+                    )
+                    # Kotlin maxWithOrNull selects the incoming (last) value on
+                    # a fully equal comparison, so only a strictly lower rank loses.
+                    if incoming_rank < current_rank:
+                        continue
+
+                con.execute(
+                    "INSERT INTO usage_days(deviceId,dayIso,zoneId,state,collectedAt) "
+                    "VALUES(?,?,?,?,?) ON CONFLICT(deviceId,dayIso) DO UPDATE SET "
+                    "zoneId=excluded.zoneId,state=excluded.state,collectedAt=excluded.collectedAt",
+                    (
+                        device_id, day_iso, day.get("zoneId") or "UTC",
+                        day.get("state") or ("OPEN" if day_iso == today_iso else "FINAL"),
+                        incoming_collected,
+                    ),
+                )
+                con.execute(
+                    "DELETE FROM usage_events_daily WHERE deviceId = ? AND dayIso = ?",
+                    (device_id, day_iso),
+                )
+                for app in day.get("apps") or []:
+                    con.execute(
+                        "INSERT OR REPLACE INTO usage_events_daily(deviceId, dayIso, packageName, appName, "
+                        "firstSeen, lastSeen, totalTimeMs) VALUES(?,?,?,?,?,?,?)",
+                        (
+                            device_id,
+                            day_iso,
+                            app["packageName"],
+                            app.get("appName") or app["packageName"],
+                            incoming_collected,
+                            incoming_collected,
+                            int(app.get("foregroundMillis") or 0),
+                        ),
+                    )
+
+            first_day = con.execute(
+                "SELECT MIN(dayIso) FROM ("
+                "SELECT dayIso FROM usage_days WHERE deviceId=? UNION ALL "
+                "SELECT dayIso FROM usage_events_daily WHERE deviceId=?"
+                ")",
+                (device_id, device_id),
+            ).fetchone()[0]
+            stored = con.execute(
+                "SELECT trackingStartedOn,backfillCompletedThrough FROM usage_devices "
+                "WHERE deviceId=?",
+                (device_id,),
+            ).fetchone()
+            tracking_candidates = [
+                value for value in (
+                    stored["trackingStartedOn"], history.get("trackingStartedOn"), first_day,
+                ) if value
+            ]
+            backfill_candidates = [
+                value for value in (
+                    stored["backfillCompletedThrough"], history.get("backfillCompletedThrough"),
+                ) if value
+            ]
+            newest_day = con.execute(
+                "SELECT MAX(collectedAt) FROM usage_days WHERE deviceId=?", (device_id,)
+            ).fetchone()[0]
+            con.execute(
+                "UPDATE usage_devices SET trackingStartedOn=?,backfillCompletedThrough=?,"
+                "updatedAt=MAX(updatedAt,?) WHERE deviceId=?",
+                (
+                    min(tracking_candidates) if tracking_candidates else None,
+                    max(backfill_candidates) if backfill_candidates else None,
+                    int(newest_day or 0),
+                    device_id,
+                ),
+            )
+
+
 def _looks_like_device(node: dict[str, Any]) -> bool:
     return isinstance(node.get("deviceId"), str) and (
         isinstance(node.get("days"), list) or isinstance(node.get("history"), dict)
@@ -100,21 +261,47 @@ def _parse_device(item: Any) -> dict[str, Any]:
     device_name = _clean_device_name(item.get("deviceName"))
     platform_raw = item.get("platform")
     platform = platform_raw.strip().lower() if isinstance(platform_raw, str) else ""
+    if platform and not _PLATFORM_RE.fullmatch(platform):
+        raise ApiError(400, "invalid_value", "设备平台无效")
     updated_at = _non_negative_int(item.get("updatedAtEpochMillis"), "updatedAtEpochMillis") or 0
     history = item.get("history") if isinstance(item.get("history"), dict) else item
     days_raw = history.get("days") if isinstance(history, dict) else None
     if not isinstance(days_raw, list):
         raise ApiError(400, "invalid_json", "使用时间设备缺少 days 数组")
-    days = [_parse_day(day) for day in days_raw]
+    parsed_days = [_parse_day(day) for day in days_raw]
+    days_by_date: dict[str, dict[str, Any]] = {}
+    for day in parsed_days:
+        current = days_by_date.get(day["date"])
+        incoming_rank = (1 if day["state"] == "FINAL" else 0, day["collectedAtEpochMillis"])
+        current_rank = (
+            (1 if current["state"] == "FINAL" else 0, current["collectedAtEpochMillis"])
+            if current is not None else None
+        )
+        if current_rank is None or incoming_rank >= current_rank:
+            days_by_date[day["date"]] = day
+    days = [days_by_date[key] for key in sorted(days_by_date)]
     for day in days:
         # updatedAt must not precede the newest history row (validateUsageDeviceRecord).
-        updated_at = max(updated_at, day["collectedAt"])
+        updated_at = max(updated_at, day["collectedAtEpochMillis"])
+    tracking = _optional_date(history.get("trackingStartedOn"), "trackingStartedOn")
+    first_day = days[0]["date"] if days else None
+    if first_day is not None and (tracking is None or first_day < tracking):
+        tracking = first_day
+    backfill = _optional_date(
+        history.get("backfillCompletedThrough"), "backfillCompletedThrough"
+    )
     return {
+        "schemaVersion": 1,
         "deviceId": device_id,
         "deviceName": device_name,
         "platform": platform or "android",
-        "updatedAt": updated_at,
-        "days": days,
+        "updatedAtEpochMillis": updated_at,
+        "history": {
+            "schemaVersion": 4,
+            "trackingStartedOn": tracking,
+            "backfillCompletedThrough": backfill,
+            "days": days,
+        },
     }
 
 
@@ -139,7 +326,7 @@ def _parse_day(day: Any) -> dict[str, Any]:
             raise ApiError(400, "invalid_json", "packageName 无效")
         package = package.strip()
         if len(package) > MAX_PACKAGE_NAME_CHARS or any(
-            ch.isspace() or ord(ch) < 0x20 for ch in package
+            ch.isspace() or ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in package
         ):
             raise ApiError(400, "invalid_json", "packageName 无效")
         millis = _first_int(
@@ -149,16 +336,42 @@ def _parse_day(day: Any) -> dict[str, Any]:
         if millis is None or not (0 <= millis <= MAX_FOREGROUND_MILLIS_PER_APP_DAY):
             raise ApiError(400, "invalid_value", "前台时长超出允许范围")
         app_name = entry.get("appName")
-        name = app_name.strip()[:200] if isinstance(app_name, str) else ""
+        name = (
+            "".join(ch for ch in app_name.strip() if not (ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F))[:200]
+            if isinstance(app_name, str) else ""
+        )
         existing = apps.get(package)
         if existing is None or millis > existing["totalTimeMs"]:
             apps[package] = {"packageName": package, "appName": name, "totalTimeMs": millis}
     collected = _non_negative_int(day.get("collectedAtEpochMillis"), "collectedAtEpochMillis") or 0
+    raw_zone = day.get("zoneId")
+    zone_id = raw_zone.strip() if isinstance(raw_zone, str) and raw_zone.strip() else "UTC"
+    if len(zone_id) > MAX_ZONE_ID_CHARS:
+        raise ApiError(400, "invalid_value", "使用时间时区无效")
+    try:
+        ZoneInfo(zone_id)
+    except (ZoneInfoNotFoundError, ValueError):
+        if not _FIXED_ZONE_RE.fullmatch(zone_id):
+            raise ApiError(400, "invalid_value", "使用时间时区无效")
+    raw_state = day.get("state")
+    state = raw_state.strip().upper() if isinstance(raw_state, str) else ""
+    if not state:
+        state = "OPEN" if date_iso == date.today().isoformat() else "FINAL"
+    if state not in {"OPEN", "FINAL"}:
+        raise ApiError(400, "invalid_value", "使用时间日期状态无效")
     return {
-        "dayIso": date_iso,
-        "state": str(day.get("state") or ""),
-        "collectedAt": collected,
-        "apps": sorted(apps.values(), key=lambda a: a["packageName"]),
+        "date": date_iso,
+        "zoneId": zone_id,
+        "state": state,
+        "collectedAtEpochMillis": collected,
+        "apps": [
+            {
+                "packageName": app["packageName"],
+                "foregroundMillis": app["totalTimeMs"],
+                "appName": app["appName"],
+            }
+            for app in sorted(apps.values(), key=lambda a: a["packageName"])
+        ],
     }
 
 
@@ -197,18 +410,31 @@ def _clean_date(value: Any) -> str:
     return text.strip()
 
 
+def _optional_date(value: Any, field: str) -> str | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        return _clean_date(value)
+    except ApiError as exc:
+        raise ApiError(400, "invalid_date", f"{field} 不是 ISO yyyy-MM-dd 日期") from exc
+
+
 def _clean_device_id(value: Any) -> str:
     text = value.strip() if isinstance(value, str) else ""
-    if not text or len(text) > 128 or any(ch.isspace() or ord(ch) < 0x20 for ch in text):
+    try:
+        normalized = str(uuid.UUID(text))
+    except (ValueError, AttributeError):
         raise ApiError(400, "invalid_value", "设备 ID 无效")
-    return text
+    return normalized
 
 
 def _clean_device_name(value: Any) -> str:
     text = value.strip() if isinstance(value, str) else ""
     if not text:
         raise ApiError(400, "invalid_value", "设备名称不能为空")
-    filtered = "".join(ch for ch in text if ord(ch) >= 0x20)
+    filtered = "".join(
+        ch for ch in text if not (ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F)
+    )
     if len(filtered) > MAX_DEVICE_NAME_CODE_POINTS:
         raise ApiError(400, "invalid_value", "设备名称过长")
     return filtered
@@ -219,52 +445,15 @@ def _clean_device_name(value: Any) -> str:
 # ---------------------------------------------------------------------------
 
 def import_usage(con, records: list[dict[str, Any]]) -> dict[str, int]:
-    """Upsert devices + per-day rows inside one transaction; returns counters.
-
-    Monotonic/idempotent: re-importing the same file is a no-op and stored
-    totals never shrink (see module docstring for the snapshot-merge note).
-    """
-    device_rows = 0
-    day_rows = 0
-    entry_rows = 0
-    stamp = now_ms()
-    with write_lock(), con:
-        for record in records:
-            con.execute(
-                "INSERT INTO usage_devices(deviceId, deviceName, isLocal, updatedAt)"
-                " VALUES(?,?,0,?)"
-                " ON CONFLICT(deviceId) DO UPDATE SET"
-                " deviceName=CASE WHEN excluded.updatedAt >= usage_devices.updatedAt"
-                "   THEN excluded.deviceName ELSE usage_devices.deviceName END,"
-                " updatedAt=MAX(usage_devices.updatedAt, excluded.updatedAt)",
-                (record["deviceId"], record["deviceName"], max(record["updatedAt"], stamp)),
-            )
-            device_rows += 1
-            for day in record["days"]:
-                for app in day["apps"]:
-                    cursor = con.execute(
-                        "INSERT INTO usage_events_daily(deviceId, dayIso, packageName, appName,"
-                        " firstSeen, lastSeen, totalTimeMs) VALUES(?,?,?,?,?,?,?)"
-                        " ON CONFLICT(deviceId, dayIso, packageName) DO UPDATE SET"
-                        " appName=CASE WHEN excluded.appName != ''"
-                        "   THEN excluded.appName ELSE usage_events_daily.appName END,"
-                        " firstSeen=MIN(usage_events_daily.firstSeen, excluded.firstSeen),"
-                        " lastSeen=MAX(usage_events_daily.lastSeen, excluded.lastSeen),"
-                        " totalTimeMs=MAX(usage_events_daily.totalTimeMs, excluded.totalTimeMs)",
-                        (
-                            record["deviceId"],
-                            day["dayIso"],
-                            app["packageName"],
-                            app["appName"],
-                            day["collectedAt"],
-                            day["collectedAt"],
-                            app["totalTimeMs"],
-                        ),
-                    )
-                    entry_rows += max(cursor.rowcount, 0)
-                day_rows += 1
-        con.commit()
-    return {"devices": device_rows, "days": day_rows, "entries": entry_rows}
+    """Merge validated upload records with Android's device/history semantics."""
+    day_rows = sum(len((record.get("history") or {}).get("days") or []) for record in records)
+    entry_rows = sum(
+        len(day.get("apps") or [])
+        for record in records
+        for day in ((record.get("history") or {}).get("days") or [])
+    )
+    merge_android_usage_devices(con, records)
+    return {"devices": len(records), "days": day_rows, "entries": entry_rows}
 
 
 def list_devices(con) -> list[dict[str, Any]]:

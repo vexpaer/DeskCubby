@@ -63,6 +63,7 @@ def get_records(
 
 class RecordBody(BaseModel):
     journalDay: str | None = None
+    documentName: str | None = None
     fieldId: str
     rawValue: str
 
@@ -71,7 +72,7 @@ class RecordBody(BaseModel):
 def post_record(body: RecordBody, con=Depends(get_db)):
     settings = load_settings(con)
     return structured_records.upsert_record(
-        con, settings, body.fieldId, body.rawValue, body.journalDay
+        con, settings, body.fieldId, body.rawValue, body.journalDay, body.documentName
     )
 
 

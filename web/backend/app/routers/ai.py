@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..core.config import UPLOADS_DIR
 from ..core.db import get_db
@@ -38,6 +38,7 @@ MAX_EXTRACT_SOURCE_BYTES = 1024 * 1024
 MAX_EXTRACTED_CHARS = 256 * 1024
 MAX_HISTORY_MESSAGES = 60
 MAX_ATTACHMENT_CONTEXT_CHARS = 100 * 1024
+MAX_MESSAGE_ATTACHMENTS = 5
 
 TEXT_MIME_BY_EXT = {
     "txt": "text/plain",
@@ -83,16 +84,23 @@ def _save_index(index: dict[str, dict[str, Any]]) -> None:
 
 
 def _take_attachments(ids: list[str]) -> list[dict[str, Any]]:
+    """Atomically consume a complete set of staged attachments.
+
+    Returning an empty list for a partial/malformed set deliberately leaves the
+    index untouched.  Both chat entry points compare the returned count with
+    the requested count, so one expired id can never consume the other valid
+    uploads or silently send only part of the user's attachment selection.
+    """
+    if not ids or len(set(ids)) != len(ids):
+        return []
     with _attach_lock:
         index = _load_index()
-        found = [index[i] for i in ids if i in index]
-        changed = False
+        if any(i not in index for i in ids):
+            return []
+        found = [index[i] for i in ids]
         for i in ids:
-            if i in index:
-                del index[i]
-                changed = True
-        if changed:
-            _save_index(index)
+            del index[i]
+        _save_index(index)
     return found
 
 
@@ -335,7 +343,7 @@ async def upload_attachment(file: UploadFile = File(...)):
 class ChatBody(BaseModel):
     conversationId: int | None = None
     content: str = ""
-    attachmentIds: list[str] = []
+    attachmentIds: list[str] = Field(default_factory=list)
     configId: str | None = None
 
 
@@ -371,8 +379,17 @@ async def chat(body: ChatBody, con=Depends(get_db)):
         raise exc.to_api_error()
 
     content = (body.content or "").strip()
-    attachments = _take_attachments([a for a in body.attachmentIds if a]) if body.attachmentIds else []
-    if not content and not attachments:
+    attachment_ids = [str(value or "").strip() for value in body.attachmentIds]
+    if (
+        len(attachment_ids) > MAX_MESSAGE_ATTACHMENTS
+        or any(not value for value in attachment_ids)
+        or len(set(attachment_ids)) != len(attachment_ids)
+    ):
+        raise ApiError(400, "invalid_attachments", "附件列表无效。")
+    attachments = _take_attachments(attachment_ids) if attachment_ids else []
+    if len(attachments) != len(attachment_ids):
+        raise ApiError(400, "attachment_missing", "附件已失效，请重新添加。")
+    if not content and not attachment_ids:
         raise ApiError(400, "empty_message", "消息内容不能为空。")
 
     now = _now(con)

@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from ..core.config import DIARY_DIR, STRUCTURED_DIR
+from ..core.config import DIARY_DIR, PRIVATE_DIR, STRUCTURED_DIR
 from ..core.errors import ApiError
 from . import diary_files
 
@@ -35,6 +35,7 @@ MAX_NAME_CHARS = 80
 MAX_TEXT_CHARS = 500
 
 DEFAULT_DAY_BOUNDARY = "05:00"
+TODAY_DIARY_SWITCH_PATH = PRIVATE_DIR / "today-diary-settings.json"
 SYSTEM_FIELD_SLEEP_TIME = "f_system_sleep_time"
 SYSTEM_FIELD_WAKE_TIME = "f_system_wake_time"
 
@@ -82,7 +83,7 @@ def resolve_today_diary_date(now: datetime | None = None, switch_minutes: int | 
 
 def _read_workspace(file_name: str) -> str | None:
     path = STRUCTURED_DIR / file_name
-    if not path.is_file():
+    if path.is_symlink() or not path.is_file():
         return None
     try:
         return path.read_text(encoding="utf-8")
@@ -98,7 +99,12 @@ def _write_workspace(file_name: str, content: str) -> None:
 
 
 def decode_settings(raw: str | None) -> dict[str, Any]:
-    """Unknown keys (e.g. web-persisted dayBoundary) are tolerated, never dropped here."""
+    """Decode the portable workspace settings.
+
+    Calendar ownership is now the natural local date.  Legacy ``dayBoundary``
+    and ``dayBoundaryHistory`` fields are intentionally ignored; the one
+    switch used by “Open today's diary” is device-local.
+    """
     if raw is None:
         return {"schemaVersion": 1, "markdownProtocolVersion": 1}
     try:
@@ -110,7 +116,6 @@ def decode_settings(raw: str | None) -> dict[str, Any]:
     return {
         "schemaVersion": _opt_int(json_obj, "schemaVersion", 1),
         "markdownProtocolVersion": _opt_int(json_obj, "markdownProtocolVersion", 1),
-        "dayBoundary": str(json_obj.get("dayBoundary") or DEFAULT_DAY_BOUNDARY),
     }
 
 
@@ -131,23 +136,38 @@ def load_settings_doc() -> dict[str, Any]:
 
 def save_settings_doc(doc: dict[str, Any]) -> None:
     with structured_mutex:
-        raw = _read_workspace(FILE_SETTINGS)
-        root: dict[str, Any] = {}
-        if raw:
-            try:
-                parsed = json.loads(raw)
-                if isinstance(parsed, dict):
-                    root = parsed
-            except ValueError:
-                root = {}
-        root["schemaVersion"] = doc.get("schemaVersion", 1)
-        root["markdownProtocolVersion"] = doc.get("markdownProtocolVersion", 1)
-        boundary = doc.get("dayBoundary") or DEFAULT_DAY_BOUNDARY
-        if parse_boundary(boundary) is None:
-            boundary = DEFAULT_DAY_BOUNDARY
-        root["dayBoundary"] = boundary
-        root["dayBoundaryHour"] = int(boundary.split(":")[0])
+        root = {
+            "schemaVersion": doc.get("schemaVersion", 1),
+            "markdownProtocolVersion": doc.get("markdownProtocolVersion", 1),
+        }
         _write_workspace(FILE_SETTINGS, json.dumps(root, ensure_ascii=False))
+
+
+def load_today_diary_switch_time() -> str:
+    if not TODAY_DIARY_SWITCH_PATH.is_file() or TODAY_DIARY_SWITCH_PATH.stat().st_size > 4 * 1024:
+        return DEFAULT_DAY_BOUNDARY
+    try:
+        root = json.loads(TODAY_DIARY_SWITCH_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return DEFAULT_DAY_BOUNDARY
+    value = root.get("todayDiarySwitchTime") if isinstance(root, dict) else None
+    minutes = parse_boundary(value if isinstance(value, str) else None)
+    return format_boundary(minutes) if minutes is not None else DEFAULT_DAY_BOUNDARY
+
+
+def save_today_diary_switch_time(value: str) -> str:
+    minutes = parse_boundary(value)
+    if minutes is None:
+        raise ApiError(400, "invalid_value", "today diary switch time is invalid")
+    normalized = format_boundary(minutes)
+    from ..core.fs import safe_write_text
+
+    TODAY_DIARY_SWITCH_PATH.parent.mkdir(parents=True, exist_ok=True)
+    safe_write_text(
+        TODAY_DIARY_SWITCH_PATH,
+        json.dumps({"todayDiarySwitchTime": normalized}, ensure_ascii=False, separators=(",", ":")),
+    )
+    return normalized
 
 
 def decode_fields(raw: str | None) -> list[dict[str, Any]]:
@@ -705,9 +725,7 @@ def apply_selector(values: list[NormalizedValue], selector: str) -> NormalizedVa
 
 def get_config() -> dict[str, Any]:
     doc = load_settings_doc()
-    boundary = doc.get("dayBoundary") or DEFAULT_DAY_BOUNDARY
-    if parse_boundary(boundary) is None:
-        boundary = DEFAULT_DAY_BOUNDARY
+    boundary = load_today_diary_switch_time()
     fields = load_fields()
     templates = load_templates()
     return {
@@ -715,6 +733,7 @@ def get_config() -> dict[str, Any]:
         "markdownProtocolVersion": doc["markdownProtocolVersion"],
         "dayBoundary": boundary,
         "dayBoundaryHour": int(boundary.split(":")[0]),
+        "todayDiarySwitchTime": boundary,
         "fields": fields,
         "templates": templates,
     }
@@ -733,10 +752,7 @@ def set_day_boundary(hours: Any) -> dict[str, Any]:
         minutes = hours_int * 60
     if minutes is None:
         raise ApiError(400, "invalid_value", "day boundary 无效")
-    with structured_mutex:
-        doc = load_settings_doc()
-        doc["dayBoundary"] = format_boundary(minutes)
-        save_settings_doc(doc)
+    save_today_diary_switch_time(format_boundary(minutes))
     return get_config()
 
 
@@ -762,7 +778,7 @@ def put_fields(fields: Any) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def upsert_record(con, settings: dict[str, Any], field_id: str, raw_value: str,
-                  journal_day: str | None) -> dict[str, Any]:
+                  journal_day: str | None, document_name: str | None = None) -> dict[str, Any]:
     fields = {f["id"]: f for f in load_fields()}
     field = fields.get(field_id)
     if field is None:
@@ -773,14 +789,23 @@ def upsert_record(con, settings: dict[str, Any], field_id: str, raw_value: str,
     if normalized is None:
         raise ApiError(400, "invalid_value", f"“{field['name']}”不能为空")
     display = normalized.display
-    if journal_day:
+    if document_name:
+        # Diary-editor entry owns the exact document currently open, even when
+        # its name does not follow the active filename pattern.
+        current_document = diary_files.load_document(document_name)
+        target_date = diary_files.extract_date(
+            current_document["name"], current_document["lastModified"], settings.get("fileNamePattern")
+        )
+    elif journal_day:
         try:
             target_date = date.fromisoformat(str(journal_day)[:10])
         except ValueError:
             raise ApiError(400, "invalid_date", "journalDay 无效")
     else:
-        boundary_minutes = parse_boundary(get_config()["dayBoundary"])
-        target_date = resolve_today_diary_date(switch_minutes=boundary_minutes)
+        # Structured records belong to the natural calendar date.  The
+        # device-local switch time affects only the explicit “Open today's
+        # diary” action and never moves recorded values between dates.
+        target_date = date.today()
 
     def transform(content: str) -> str:
         occurrences = parse_occurrences(content)
@@ -794,7 +819,18 @@ def upsert_record(con, settings: dict[str, Any], field_id: str, raw_value: str,
         return content + separator + block
 
     with structured_mutex:
-        editor = diary_files.transform_diary_for_date(con, settings, target_date, transform)
+        if document_name:
+            current_document = diary_files.load_document(document_name)
+            updated = transform(current_document["content"])
+            editor = (
+                diary_files._editor_view(current_document)
+                if updated == current_document["content"]
+                else diary_files.save_document(
+                    con, settings, current_document["name"], updated, current_document["sha256"]
+                )
+            )
+        else:
+            editor = diary_files.transform_diary_for_date(con, settings, target_date, transform)
         _parse_and_store_file(con, settings, DIARY_DIR / editor["name"])
     return {"success": True, "journalDay": target_date.isoformat(), "document": editor}
 

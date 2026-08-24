@@ -4,7 +4,49 @@
 
 * { box-sizing: border-box; }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 :root {
+  /* Boot/login fallback palette. Runtime settings replace every role. */
+  --dc-primary: rgb(50, 103, 70);
+  --dc-on-primary: rgb(255, 255, 255);
+  --dc-primary-container: rgb(184, 240, 194);
+  --dc-on-primary-container: rgb(0, 33, 14);
+  --dc-secondary: rgb(89, 90, 63);
+  --dc-on-secondary: rgb(255, 255, 255);
+  --dc-secondary-container: rgb(230, 227, 188);
+  --dc-on-secondary-container: rgb(28, 29, 5);
+  --dc-tertiary: rgb(63, 99, 116);
+  --dc-on-tertiary: rgb(255, 255, 255);
+  --dc-tertiary-container: rgb(194, 232, 252);
+  --dc-on-tertiary-container: rgb(0, 30, 41);
+  --dc-error: rgb(186, 26, 26);
+  --dc-on-error: rgb(255, 255, 255);
+  --dc-error-container: rgb(255, 218, 214);
+  --dc-on-error-container: rgb(65, 0, 2);
+  --dc-background: rgb(247, 251, 245);
+  --dc-on-background: rgb(25, 29, 25);
+  --dc-surface: rgb(247, 251, 245);
+  --dc-on-surface: rgb(25, 29, 25);
+  --dc-surface-container: rgb(235, 240, 234);
+  --dc-surface-container-high: rgb(229, 234, 228);
+  --dc-surface-variant: rgb(220, 229, 219);
+  --dc-on-surface-variant: rgb(64, 73, 64);
+  --dc-outline: rgb(112, 121, 112);
+  --dc-outline-variant: rgb(192, 201, 191);
+  --dc-inverse-surface: rgb(46, 49, 45);
+  --dc-inverse-on-surface: rgb(240, 241, 236);
+  --dc-scrim: rgba(0, 0, 0, 0.5);
   --dc-font-scale: 1;
   --dc-spacing: 1;
   --dc-motion-scale: 1;
@@ -37,6 +79,10 @@ button {
   font-size: inherit;
   color: inherit;
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 input, textarea, select {
   font-family: inherit;
@@ -68,9 +114,7 @@ a { color: var(--dc-primary); }
   background: transparent;
   transition: background calc(0.18s / max(var(--dc-motion-scale), 0.01)) ease;
 }
-.dc-btn:hover { background: color-mix(in srgb, var(--dc-on-surface) 8%, transparent); }
 .dc-btn-filled { background: var(--dc-primary); color: var(--dc-on-primary); }
-.dc-btn-filled:hover { background: color-mix(in srgb, var(--dc-primary) 88%, black); }
 .dc-btn-tonal { background: var(--dc-secondary-container); color: var(--dc-on-secondary-container); }
 .dc-btn-danger { background: var(--dc-error-container); color: var(--dc-on-error-container); }
 .dc-icon-btn {
@@ -85,7 +129,28 @@ a { color: var(--dc-primary); }
   color: var(--dc-on-surface);
   transition: background 0.18s ease;
 }
-.dc-icon-btn:hover { background: color-mix(in srgb, var(--dc-on-surface) 10%, transparent); }
+.dc-rail-nav-item {
+  /* This is stronger than any legacy :hover rule that an old PWA stylesheet
+     might briefly retain while the new worker takes control. */
+  background: transparent !important;
+  transition: none;
+}
+.dc-rail-nav-item.is-active {
+  background: var(--dc-secondary-container) !important;
+}
+.dc-rail-nav-item:not(.is-active):active {
+  background: transparent !important;
+}
+.dc-segmented-option {
+  background: transparent !important;
+  color: var(--dc-on-surface) !important;
+  transition: none;
+}
+.dc-segmented-option.is-selected,
+.dc-segmented-option[aria-checked="true"] {
+  background: var(--dc-secondary-container) !important;
+  color: var(--dc-on-secondary-container) !important;
+}
 .dc-input {
   width: 100%;
   border: var(--dc-border-width) solid var(--dc-outline);
@@ -133,6 +198,9 @@ a { color: var(--dc-primary); }
 /* ---------- liquid glass style ---------- */
 [data-style="liquid-glass"] .dc-card,
 [data-style="liquid-glass"] .dc-surface,
+[data-style="liquid-glass"] .dc-dialog,
+[data-style="liquid-glass"] .dc-menu,
+[data-style="liquid-glass"] .dc-input,
 [data-style="liquid-glass"] .glass-bar {
   backdrop-filter: blur(18px) saturate(1.3);
   -webkit-backdrop-filter: blur(18px) saturate(1.3);
@@ -141,6 +209,9 @@ a { color: var(--dc-primary); }
   box-shadow: inset 0 1px 0 color-mix(in srgb, white 30%, transparent), 0 8px 24px rgba(0, 0, 0, 0.12);
 }
 [data-style="liquid-glass"] body { background-image: radial-gradient(circle at 20% 10%, color-mix(in srgb, var(--dc-primary) 22%, transparent), transparent 55%); }
+[data-style="liquid-glass"] .dc-btn,
+[data-style="liquid-glass"] .dc-input { border-radius: 999px; }
+[data-style="liquid-glass"] textarea.dc-input { border-radius: 18px; }
 
 /* ---------- organic future style ---------- */
 [data-style="organic-future"] .dc-card,
@@ -155,6 +226,15 @@ a { color: var(--dc-primary); }
   border-radius: 0;
 }
 [data-style="organic-future"] .dc-chip { border-radius: 14px 4px 14px 4px; }
+[data-style="organic-future"] .dc-input,
+[data-style="organic-future"] .dc-dialog,
+[data-style="organic-future"] .dc-menu {
+  border-radius: 18px 6px 18px 6px;
+}
+[data-style="organic-future"] .dc-title {
+  font-weight: 720;
+  letter-spacing: 0.015em;
+}
 
 /* ---------- layout helpers ---------- */
 .dc-page {
@@ -213,7 +293,9 @@ a { color: var(--dc-primary); }
   padding: 10px 14px;
   border-radius: 8px;
 }
-.dc-menu button:hover { background: color-mix(in srgb, var(--dc-on-surface) 8%, transparent); }
+
+/* Persistent color always represents explicit component state. Browsers that
+   retain :hover/:active after touch input therefore cannot paint a second item. */
 
 /* markdown preview */
 .dc-markdown h1, .dc-markdown h2, .dc-markdown h3, .dc-markdown h4, .dc-markdown h5, .dc-markdown h6 {

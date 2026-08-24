@@ -58,13 +58,21 @@ const CONTENT_LABELS: Record<string, { zh: string; en: string }> = {
   GLOBAL_SETTINGS: { zh: "全局设置", en: "Global settings" },
 };
 
-const ALL_CONTENTS = Object.keys(CONTENT_LABELS);
+const IMPLICIT_CONTENTS = new Set(["THOUGHT_CATEGORIES", "POETRY_CATEGORIES"]);
+const ALL_CONTENTS = Object.keys(CONTENT_LABELS).filter((id) => !IMPLICIT_CONTENTS.has(id));
 
 const DEFAULT_CONTENTS = [
-  "DIARIES", "NOTES", "MEDIA", "THOUGHTS", "THOUGHT_CATEGORIES", "DATE_RECORDS",
-  "POEMS", "POETRY_CATEGORIES", "FAVORITES", "READING_PROGRESS",
+  "DIARIES", "NOTES", "MEDIA", "THOUGHTS", "DATE_RECORDS",
+  "POEMS", "FAVORITES", "READING_PROGRESS",
   "READER_PREFERENCES", "AGENT_CHATS",
 ];
+
+function userSelectableContents(contents: string[] | undefined): string[] {
+  const selected = new Set(contents ?? []);
+  if (selected.has("THOUGHT_CATEGORIES")) selected.add("THOUGHTS");
+  if (selected.has("POETRY_CATEGORIES")) selected.add("POEMS");
+  return ALL_CONTENTS.filter((id) => selected.has(id));
+}
 
 function contentLabel(id: string): string {
   const found = CONTENT_LABELS[id];
@@ -96,16 +104,65 @@ function newForm(): CloudSyncConfig {
 
 /** 从已保存配置进入编辑：秘密字段保持空串（留空=保持不变）。 */
 function editForm(c: CloudSyncConfig): CloudSyncConfig {
-  return { ...newForm(), ...c, selectedContents: c.selectedContents?.length ? [...c.selectedContents] : [] };
+  return { ...newForm(), ...c, selectedContents: userSelectableContents(c.selectedContents) };
 }
 
-function urlValid(url: string): boolean {
+function normalizedEndpointForForm(form: CloudSyncConfig): string {
+  const raw = form.endpointUrl.trim();
+  if (form.serviceType === "S3_COMPATIBLE" && raw && !raw.includes("://")) {
+    return `${form.allowInsecureHttp ? "http" : "https"}://${raw}`;
+  }
+  return raw;
+}
+
+function urlValid(form: CloudSyncConfig): boolean {
   try {
-    const parsed = new URL(url.trim());
-    return !!parsed.hostname && (parsed.protocol === "https:" || parsed.protocol === "http:");
+    const raw = normalizedEndpointForForm(form);
+    if (
+      !raw || raw.length > 4096 || raw.includes("\\") || raw.includes("?") || raw.includes("#") ||
+      /[\s\u0000-\u001f\u007f-\u009f]/.test(raw)
+    ) return false;
+    const authority = raw.slice(raw.indexOf("://") + 3).split("/", 1)[0];
+    if (authority.includes("@")) return false;
+    const parsed = new URL(raw);
+    return !!parsed.hostname &&
+      (parsed.protocol === "https:" || (parsed.protocol === "http:" && !!form.allowInsecureHttp));
   } catch {
     return false;
   }
+}
+
+function remotePathValid(value: string | undefined): boolean {
+  const raw = value ?? "";
+  if (raw.length > 1024 || raw.includes("\\") || /[\u0000-\u001f\u007f-\u009f]/.test(raw)) return false;
+  const normalized = raw.trim().replace(/^\/+|\/+$/g, "");
+  return normalized.split("/").every((segment) => segment !== "." && segment !== "..");
+}
+
+function s3MetadataValid(form: CloudSyncConfig): boolean {
+  if (form.serviceType !== "S3_COMPATIBLE") return true;
+  const bucket = form.s3Bucket?.trim() ?? "";
+  const region = form.s3Region?.trim() ?? "";
+  if (
+    !bucket || bucket.length > 255 || bucket.includes("/") || bucket.includes("\\") ||
+    /[\u0000-\u001f\u007f-\u009f]/.test(bucket) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(region)
+  ) return false;
+  if (!form.s3PathStyle) {
+    if (!/^[a-z0-9](?:[a-z0-9.-]{0,61}[a-z0-9])?$/.test(bucket)) return false;
+    try {
+      if (new URL(normalizedEndpointForForm(form)).hostname.includes(":")) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function s3CredentialsReady(isNew: boolean, form: CloudSyncConfig): boolean {
+  if (form.serviceType !== "S3_COMPATIBLE" || !form.enabled) return true;
+  if (form.s3AccessKey && form.s3SecretKey) return true;
+  return !isNew && !!form.hasCredentials && !form.clearCredentials;
 }
 
 function formatWhen(ms: number | null | undefined): string {
@@ -117,7 +174,7 @@ function formatWhen(ms: number | null | undefined): string {
   }
 }
 
-export default function CloudSyncSection({ settings, patch, snackbar }: SettingsSectionProps) {
+export default function CloudSyncSection({ draft, patch, snackbar }: SettingsSectionProps) {
   const [status, setStatus] = useState<CloudSyncStatusInfo>({});
   const [statusError, setStatusError] = useState<unknown>(null);
   const [syncing, setSyncing] = useState<{ id: string; mode: SyncMode } | null>(null);
@@ -166,8 +223,10 @@ export default function CloudSyncSection({ settings, patch, snackbar }: Settings
   const dialogValid =
     !!dialog &&
     dialog.form.name.trim().length > 0 &&
-    urlValid(dialog.form.endpointUrl) &&
-    (dialog.form.serviceType !== "S3_COMPATIBLE" || !!dialog.form.s3Bucket?.trim()) &&
+    urlValid(dialog.form) &&
+    remotePathValid(dialog.form.remotePath) &&
+    s3MetadataValid(dialog.form) &&
+    s3CredentialsReady(dialog.isNew, dialog.form) &&
     dialog.form.selectedContents.length > 0;
 
   const saveDialog = async () => {
@@ -176,7 +235,10 @@ export default function CloudSyncSection({ settings, patch, snackbar }: Settings
     setActionError(null);
     try {
       // 空秘密字段剔除：后端语义为「留空保持已存值」。
-      const body: Record<string, unknown> = { ...dialog.form };
+      const body: Record<string, unknown> = {
+        ...dialog.form,
+        selectedContents: userSelectableContents(dialog.form.selectedContents),
+      };
       for (const key of SECRET_FIELDS) {
         if (!String(body[key] ?? "").trim()) delete body[key];
       }
@@ -210,6 +272,26 @@ export default function CloudSyncSection({ settings, patch, snackbar }: Settings
     }
   };
 
+  const copyConfig = async (config: CloudSyncConfig) => {
+    setActionError(null);
+    const body: Record<string, unknown> = {
+      ...editForm(config),
+      id: "",
+      name: `${config.name} - ${tr("副本", "Copy")}`.slice(0, 200),
+      enabled: false,
+      hasCredentials: false,
+    };
+    for (const key of SECRET_FIELDS) delete body[key];
+    delete body.hasCredentials;
+    try {
+      await apiSend("/api/cloudsync/configs", "POST", body);
+      snackbar(tr("已复制为停用配置", "Copied as a disabled configuration"));
+      void loadStatus();
+    } catch (e) {
+      setActionError(e);
+    }
+  };
+
   const undoLastSync = async () => {
     setUndoing(true);
     setActionError(null);
@@ -238,7 +320,7 @@ export default function CloudSyncSection({ settings, patch, snackbar }: Settings
         )}
       >
         <Toggle
-          checked={settings.cloudSyncEnabled}
+          checked={draft.cloudSyncEnabled}
           onChange={(v) => patch({ cloudSyncEnabled: v })}
           label={<span>{tr("开启云端同步", "Enable cloud sync")}<div className="dc-muted" style={{ fontSize: "0.82em" }}>{tr("至少保留一个「已启用」的服务后保存，同步才会运行。", "Keep at least one enabled service and save before sync runs.")}</div></span>}
         />
@@ -286,7 +368,7 @@ export default function CloudSyncSection({ settings, patch, snackbar }: Settings
                 <div className="dc-muted" style={{ fontSize: "0.85em", wordBreak: "break-all" }}>
                   {config.endpointUrl}{config.remotePath ? ` / ${config.remotePath}` : ""}
                   {" · "}{config.direction === "UPLOAD_ONLY" ? tr("仅上传", "upload only") : tr("双向", "two-way")}
-                  {" · "}{(config.selectedContents ?? []).length} {tr("类内容", "content kinds")}
+                  {" · "}{userSelectableContents(config.selectedContents).length} {tr("类内容", "content kinds")}
                 </div>
                 <div className="dc-row dc-wrap">
                   <button
@@ -311,6 +393,7 @@ export default function CloudSyncSection({ settings, patch, snackbar }: Settings
                     {busy && syncing?.mode === "force_download" ? tr("正在下载…", "Downloading…") : tr("强制下载", "Force download")}
                   </button>
                   <button className="dc-btn" onClick={() => setDialog({ isNew: false, form: editForm(config) })}>{tr("编辑", "Edit")}</button>
+                  <button className="dc-btn" onClick={() => void copyConfig(config)}>{tr("复制", "Copy")}</button>
                   <button className="dc-btn dc-btn-danger" onClick={() => setDeleting(config)}>{tr("删除", "Delete")}</button>
                   {busy && <Spinner size={18} />}
                 </div>
@@ -370,7 +453,15 @@ export default function CloudSyncSection({ settings, patch, snackbar }: Settings
             <SelectField
               label={tr("服务类型", "Service type")}
               value={dialog.form.serviceType === "S3_COMPATIBLE" ? "S3_COMPATIBLE" : "WEBDAV"}
-              onChange={(v) => setDialog({ ...dialog, form: { ...dialog.form, serviceType: v === "S3_COMPATIBLE" ? "S3_COMPATIBLE" : "WEBDAV" } })}
+              onChange={(v) => setDialog({
+                ...dialog,
+                form: {
+                  ...dialog.form,
+                  serviceType: v === "S3_COMPATIBLE" ? "S3_COMPATIBLE" : "WEBDAV",
+                  hasCredentials: false,
+                  clearCredentials: false,
+                },
+              })}
               options={[
                 { value: "WEBDAV", label: "WebDAV" },
                 { value: "S3_COMPATIBLE", label: tr("S3 兼容", "S3-compatible") },
@@ -379,27 +470,52 @@ export default function CloudSyncSection({ settings, patch, snackbar }: Settings
             <TextField
               label={tr("服务地址", "Service URL")}
               value={dialog.form.endpointUrl}
-              maxLength={2048}
-              error={!urlValid(dialog.form.endpointUrl)}
+              maxLength={4096}
+              error={!urlValid(dialog.form)}
               placeholder="https://dav.example.com/desk-cubby"
-              hint={urlValid(dialog.form.endpointUrl)
-                ? tr("填写完整协议地址；HTTP 仅建议用于可信局域网。", "Full protocol URL; HTTP only for trusted LAN services.")
-                : tr("必须是带主机名的 http(s) 地址。", "Must be an http(s) address with a host.")}
+              hint={urlValid(dialog.form)
+                ? (dialog.form.serviceType === "S3_COMPATIBLE"
+                  ? tr("S3 可省略协议，按下方 SSL/TLS 开关补全。", "S3 may omit the scheme; the SSL/TLS switch below supplies it.")
+                  : tr("填写完整协议地址；HTTP 仅用于可信局域网。", "Use a full URL; HTTP is only for a trusted LAN."))
+                : tr("地址不能包含账号、查询参数或片段。", "The URL must not contain account info, a query, or a fragment.")}
               onChange={(v) => setDialog({ ...dialog, form: { ...dialog.form, endpointUrl: v } })}
+            />
+            <Toggle
+              checked={!!dialog.form.allowInsecureHttp}
+              onChange={(v) => {
+                let endpointUrl = dialog.form.endpointUrl;
+                if (dialog.form.serviceType === "S3_COMPATIBLE") {
+                  if (v && endpointUrl.toLowerCase().startsWith("https://")) endpointUrl = `http://${endpointUrl.slice(8)}`;
+                  if (!v && endpointUrl.toLowerCase().startsWith("http://")) endpointUrl = `https://${endpointUrl.slice(7)}`;
+                }
+                setDialog({ ...dialog, form: { ...dialog.form, allowInsecureHttp: v, endpointUrl } });
+              }}
+              label={<span>{dialog.form.serviceType === "S3_COMPATIBLE"
+                ? tr("关闭 SSL/TLS（仅可信内网）", "Disable SSL/TLS (trusted LAN only)")
+                : tr("允许 HTTP（仅可信内网）", "Allow HTTP (trusted LAN only)")}</span>}
             />
             <TextField
               label={tr("远端目录", "Remote folder")}
               value={dialog.form.remotePath ?? ""}
               maxLength={1024}
-              hint={tr("不能包含 . 或 .. 路径段。", "Must not contain . or .. path segments.")}
+              error={!remotePathValid(dialog.form.remotePath)}
+              hint={tr("使用 / 分隔；不能包含反斜杠、控制字符、. 或 .. 路径段。", "Use / separators; backslashes, controls, . and .. segments are not allowed.")}
               onChange={(v) => setDialog({ ...dialog, form: { ...dialog.form, remotePath: v } })}
+            />
+            <TextField
+              label="User-Agent"
+              value={dialog.form.userAgent ?? "DeskCubby-Sync/1"}
+              maxLength={512}
+              error={!dialog.form.userAgent?.trim() || /[\u0000-\u001f\u007f-\u009f]/.test(dialog.form.userAgent ?? "")}
+              hint={tr("发送到 S3/WebDAV 的客户端标识。", "Client identifier sent to S3/WebDAV.")}
+              onChange={(v) => setDialog({ ...dialog, form: { ...dialog.form, userAgent: v } })}
             />
             {dialog.form.serviceType === "WEBDAV" ? (
               <>
                 <TextField
                   label={tr("用户名", "Username")}
                   value={dialog.form.webDavUsername ?? ""}
-                  maxLength={8192}
+                  maxLength={512}
                   onChange={(v) => setDialog({ ...dialog, form: { ...dialog.form, webDavUsername: v } })}
                 />
                 <TextField
@@ -416,13 +532,14 @@ export default function CloudSyncSection({ settings, patch, snackbar }: Settings
                   label="Bucket"
                   value={dialog.form.s3Bucket ?? ""}
                   maxLength={255}
-                  error={!dialog.form.s3Bucket?.trim()}
+                  error={!s3MetadataValid(dialog.form)}
                   onChange={(v) => setDialog({ ...dialog, form: { ...dialog.form, s3Bucket: v } })}
                 />
                 <TextField
                   label="Region"
                   value={dialog.form.s3Region ?? ""}
                   maxLength={128}
+                  error={!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(dialog.form.s3Region?.trim() ?? "")}
                   placeholder="us-east-1"
                   onChange={(v) => setDialog({ ...dialog, form: { ...dialog.form, s3Region: v } })}
                 />
@@ -453,6 +570,13 @@ export default function CloudSyncSection({ settings, patch, snackbar }: Settings
                   label={<span style={{ fontSize: "0.9em" }}>{tr("路径风格寻址（path-style）", "Path-style addressing")}</span>}
                 />
               </>
+            )}
+            {!dialog.isNew && dialog.form.hasCredentials && (
+              <Toggle
+                checked={!!dialog.form.clearCredentials}
+                onChange={(v) => setDialog({ ...dialog, form: { ...dialog.form, clearCredentials: v } })}
+                label={<span>{tr("清除服务器已保存的凭据", "Clear credentials stored on this server")}</span>}
+              />
             )}
             <SelectField
               label={tr("同步方向", "Direction")}

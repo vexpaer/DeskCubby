@@ -94,6 +94,8 @@ export interface CloudSyncConfig {
   s3AccessKey?: string;
   s3SecretKey?: string;
   s3SessionToken?: string;
+  /** write-only editor action; never persisted in the config */
+  clearCredentials?: boolean;
 }
 
 export interface DesktopWidgetConfig {

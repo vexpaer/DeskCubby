@@ -14,7 +14,7 @@
  * reportInvalid blocks 保存 while any config row fails validation or the calorie
  * toggle lacks its required model selections.
  */
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo } from "react";
 import { Trash2 } from "lucide-react";
 import type { AiModelConfig } from "../../../api/types";
 import { tr } from "../../../i18n/tr";
@@ -75,14 +75,8 @@ function endpointValid(url: string, allowInsecureHttp: boolean): boolean {
 }
 
 export default function AiSection(props: SettingsSectionProps) {
-  const { draft, patch, settings, snackbar, reportInvalid } = props;
+  const { draft, patch, snackbar, reportInvalid } = props;
   const configs = draft.aiConfigs ?? [];
-  // Configs that already exist on the server: their (hidden) keys stay intact
-  // whenever the key field is left empty. New rows start without a key.
-  const persistedIds = useRef<Set<string> | null>(null);
-  if (persistedIds.current === null) {
-    persistedIds.current = new Set(settings.aiConfigs.map((c) => c.id));
-  }
 
   const updateConfig = (index: number, p: Partial<AiModelConfig>) => {
     patch({ aiConfigs: configs.map((c, i) => (i === index ? { ...c, ...p } : c)) });
@@ -147,8 +141,8 @@ export default function AiSection(props: SettingsSectionProps) {
       <SectionCard
         title={tr("AI 配置", "AI configurations")}
         description={tr(
-          "管理文字/图片模型配置；API Key 只写入服务器，读取时不会返回明文。",
-          "Manage text/image model configurations; API keys are write-only and never returned by the server.",
+          "管理文字/图片模型配置；API Key 按 Android 规则明文显示并随配置保存。",
+          "Manage text/image model configurations; API keys are shown in full and saved with the configuration, matching Android.",
         )}
       >
         {configs.length === 0 && (
@@ -161,7 +155,6 @@ export default function AiSection(props: SettingsSectionProps) {
             const epBad = !endpointValid(config.endpointUrl, config.allowInsecureHttp);
             const nameBad = !config.name.trim();
             const modelBad = !config.model.trim();
-            const persisted = persistedIds.current?.has(config.id) ?? false;
             return (
               <div key={config.id} className="dc-card dc-col" style={{ padding: 12, gap: 8 }}>
                 <div className="dc-row" style={{ justifyContent: "space-between", gap: 8 }}>
@@ -209,10 +202,9 @@ export default function AiSection(props: SettingsSectionProps) {
                   label="API Key"
                   value={config.apiKey ?? ""}
                   maxLength={8192}
-                  placeholder={persisted ? tr("已配置（留空保持不变）", "Configured (leave empty to keep)") : ""}
                   hint={tr(
-                    "仅在服务器保存；留空表示保留已保存的值，读取接口不会返回密钥。",
-                    "Stored on the server only; leave empty to keep the saved value, and it is never returned.",
+                    "明文显示并随配置保存；不要在日志、请求预览或错误信息中输出。",
+                    "Shown and stored as plain text; it must never appear in logs, request previews, or errors.",
                   )}
                   onChange={(v) => updateConfig(index, { apiKey: v })}
                 />

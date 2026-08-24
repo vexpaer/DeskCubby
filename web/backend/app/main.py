@@ -30,6 +30,17 @@ async def lifespan(app: FastAPI):
     ensure_dirs()
     init_db()
     con = connect()
+    # A process restart cannot resume an in-flight HTTP/model coroutine. Do
+    # not leave durable review rows stuck in RUNNING forever; completed work
+    # and messages remain intact, while the interrupted run is reported
+    # honestly as failed and can be retried by the user.
+    restart_time = int(time.time() * 1000)
+    with con:
+        con.execute(
+            "UPDATE agent_runs SET status='FAILED', completedAt=? "
+            "WHERE status='RUNNING' AND completedAt IS NULL",
+            (restart_time,),
+        )
     app.state.db = con
     app.state.background_tasks = []
     try:
@@ -122,7 +133,10 @@ def system_info(request: Request):
 
 @app.get("/api/healthz", tags=["system"], include_in_schema=False)
 def healthz():
-    return {"ok": True}
+    # Public and content-free so Docker and the local launcher still work when
+    # the optional access password is enabled.  The marker prevents the CLI
+    # from mistaking an unrelated service already using 8787 for DeskCubby.
+    return {"ok": True, "app": "deskcubby"}
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +240,16 @@ def auth_disable(request: Request, body: PasswordBody):
 
 if FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+    @app.get("/dc-web-sw.js", include_in_schema=False)
+    def service_worker_script():
+        # A same-version bugfix must not be hidden behind the browser's HTTP
+        # cache; the worker itself owns versioned app-shell caches.
+        return FileResponse(
+            FRONTEND_DIST / "dc-web-sw.js",
+            media_type="text/javascript",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def spa_fallback(full_path: str):

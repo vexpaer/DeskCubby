@@ -12,8 +12,9 @@
  *   book sha256 + type) at page + 5% in-page offset, saved debounced 600 ms and
  *   flushed on unmount via PUT /api/reader/progress. Center tap toggles the
  *   top/bottom bars; 目录 sidebar lists 第…章 regex chapters with jump list;
- *   settings popover 字号/行距/主题(羊皮纸/浅色/深色) persisted in localStorage
- *   key "dc-reader-prefs".
+ *   settings popover shares the Android record-sync preference subset through
+ *   GET/PUT /api/reader/preferences, with localStorage kept only as an offline
+ *   cache and one-time migration source.
  * - PDF: pdfjs-dist continuous vertical scroll with lazy canvas rendering for
  *   pages near the viewport, zoom −/+ buttons + range slider (25–400 %, step 1),
  *   page indicator x/y, getTextContent() search jumping to the first hit page,
@@ -85,29 +86,78 @@ interface ProgressDoc {
   records: ProgressRecord[];
 }
 
-type ReaderThemeKey = "parchment" | "light" | "dark";
+type ReaderBackground = "WHITE" | "PAPER" | "SEPIA" | "GREEN" | "NIGHT" | "CUSTOM";
+type ReaderChapterDetectionMode = "SMART" | "CUSTOM" | "SMART_AND_CUSTOM";
 
 interface ReaderPrefs {
-  fontSize: number; // 12–38 (Android sp range)
-  lineHeight: number; // 1.0–2.4
-  theme: ReaderThemeKey;
+  background: ReaderBackground;
+  customBackgroundArgb: number;
+  fontSizeSp: number; // 12–38 (Android sp range)
+  lineHeightMultiplier: number; // 1.0–2.4
+  paragraphSpacingDp: number; // 0–36
+  showProgressPercentage: boolean;
+  chapterDetectionMode: ReaderChapterDetectionMode;
+  /** Device-local, matching Android ReaderPreferences (never record-synced). */
+  customChapterRegex: string;
+  /** Device-local maximum normalized heading length (20–240). */
+  chapterHeadingMaxChars: number;
+}
+
+type ReaderSyncedPrefs = Pick<
+  ReaderPrefs,
+  | "background"
+  | "customBackgroundArgb"
+  | "fontSizeSp"
+  | "lineHeightMultiplier"
+  | "paragraphSpacingDp"
+  | "showProgressPercentage"
+  | "chapterDetectionMode"
+>;
+
+interface ReaderPrefsResponse extends ReaderSyncedPrefs {
+  stored: boolean;
 }
 
 const PREFS_KEY = "dc-reader-prefs";
 
-const DEFAULT_PREFS: ReaderPrefs = { fontSize: 18, lineHeight: 1.6, theme: "parchment" };
+const DEFAULT_PREFS: ReaderPrefs = {
+  background: "PAPER",
+  customBackgroundArgb: -724762, // Android 0xFFF4F0E6.toInt()
+  fontSizeSp: 19,
+  lineHeightMultiplier: 1.6,
+  paragraphSpacingDp: 10,
+  showProgressPercentage: false,
+  chapterDetectionMode: "SMART_AND_CUSTOM",
+  customChapterRegex: "",
+  chapterHeadingMaxChars: 160,
+};
 
 /** Content palettes mirroring the Android reader paper themes (not app chrome). */
-const READER_THEMES: { key: ReaderThemeKey; zh: string; en: string; bg: string; fg: string; faint: string }[] = [
-  { key: "parchment", zh: "羊皮纸", en: "Parchment", bg: "#f4e9cf", fg: "#43301d", faint: "rgba(67, 48, 29, 0.55)" },
-  { key: "light", zh: "浅色", en: "Light", bg: "#ffffff", fg: "#1c1b1f", faint: "rgba(28, 27, 31, 0.5)" },
-  { key: "dark", zh: "深色", en: "Dark", bg: "#151412", fg: "#d9d4c9", faint: "rgba(217, 212, 201, 0.5)" },
+const READER_THEMES: { key: ReaderBackground; zh: string; en: string; bg: string; fg: string }[] = [
+  { key: "WHITE", zh: "白色", en: "White", bg: "#ffffff", fg: "#202124" },
+  { key: "PAPER", zh: "纸张", en: "Paper", bg: "#f4f0e6", fg: "#332e28" },
+  { key: "SEPIA", zh: "羊皮纸", en: "Sepia", bg: "#e8d6b0", fg: "#3b2c1e" },
+  { key: "GREEN", zh: "护眼绿", en: "Green", bg: "#dde8d7", fg: "#203126" },
+  { key: "NIGHT", zh: "夜间", en: "Night", bg: "#171a1c", fg: "#e2e0da" },
+  { key: "CUSTOM", zh: "自定义", en: "Custom", bg: "#f4f0e6", fg: "#332e28" },
 ];
 
-const CHAPTER_RE = /^[ \t　]*第[0-9０-９一二三四五六七八九十百千零两]+[章节卷回幕].{0,52}$/;
+const SMART_CHAPTER_PATTERNS = [
+  /^(?:正文\s*)?[【[〈《（(]?[☆★◎◇◆•·\s]*第\s*[0-9０-９零〇○一二三四五六七八九十百千万两壹贰叁肆伍陆柒捌玖拾佰仟]+\s*[章节卷回部篇集幕]\s*[】\]〉》）)]?(?:\s+|[:：、.．_\-—]?)[^\n]*$/,
+  /^(?:chapter|part|book|section|episode)\s*(?:[0-9０-９]+|[ivxlcdm]+|(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[ -](?:one|two|three|four|five|six|seven|eight|nine))?)(?:\s*[:：.\-—]?\s*.*)?$/i,
+  /^(?:[0-9０-９]{1,5}(?:[.．、]|\s+-\s+)|[一二三四五六七八九十百千万]+、)\s*\S.*$/,
+  /^(?:[【[])?(?:序章|序言|前言|楔子|引子|终章|尾声|后记|番外(?:篇)?|上卷|中卷|下卷|prologue|epilogue|preface|introduction|afterword)(?:[】\]])?(?:\s*[:：.、\-]?\s*.*)?$/i,
+  /^(?:卷|部|篇|集)\s*[0-9０-９零〇○一二三四五六七八九十百千万两]+(?:\s*[:：.、\-]?\s*.*)?$/,
+  /^#{1,6}\s+\S.*$/,
+  /^[【[](?:第[0-9０-９零〇○一二三四五六七八九十百千万两]+[章节卷回部篇集幕]|chapter\s+[^】\]]+)[】\]](?:\s*.*)?$/i,
+];
 
 const PROGRESS_URL = "/api/reader/progress";
 const ENGAGEMENT_URL = "/api/reader/engagement";
+const PREFERENCES_URL = "/api/reader/preferences";
+const MAX_CUSTOM_CHAPTER_REGEX_CHARS = 1024;
+const MIN_CHAPTER_HEADING_CHARS = 20;
+const MAX_CHAPTER_HEADING_CHARS = 240;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -117,16 +167,105 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function signedArgbToCss(argb: number): string {
+  return `#${(argb >>> 0).toString(16).padStart(8, "0").slice(2)}`;
+}
+
+function cssToSignedArgb(css: string): number {
+  const rgb = Number.parseInt(css.replace(/^#/, ""), 16) & 0x00ff_ffff;
+  return (0xff00_0000 | rgb) | 0;
+}
+
+function automaticTextColor(background: string): string {
+  const rgb = Number.parseInt(background.slice(1), 16);
+  const channel = (shift: number) => {
+    const value = ((rgb >> shift) & 0xff) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
+  return luminance > 0.5 ? "#181818" : "#f4f4f4";
+}
+
+function resolveReaderTheme(prefs: ReaderPrefs): { bg: string; fg: string; faint: string } {
+  const preset = READER_THEMES.find((item) => item.key === prefs.background) ?? READER_THEMES[1];
+  const bg = prefs.background === "CUSTOM" ? signedArgbToCss(prefs.customBackgroundArgb) : preset.bg;
+  const fg = prefs.background === "CUSTOM" ? automaticTextColor(bg) : preset.fg;
+  return { bg, fg, faint: `color-mix(in srgb, ${fg} 55%, transparent)` };
+}
+
+function normalizePrefs(parsed: Partial<ReaderPrefs> & { fontSize?: unknown; lineHeight?: unknown; theme?: unknown }): ReaderPrefs {
+  const finiteOr = (raw: unknown, fallback: number): number => {
+    if (raw === null || raw === undefined || raw === "") return fallback;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : fallback;
+  };
+  const legacyBackground: Record<string, ReaderBackground> = {
+    parchment: "PAPER",
+    light: "WHITE",
+    dark: "NIGHT",
+  };
+  const rawBackground = parsed.background ?? legacyBackground[String(parsed.theme)] ?? DEFAULT_PREFS.background;
+  const rawChapterMode = parsed.chapterDetectionMode ?? DEFAULT_PREFS.chapterDetectionMode;
+  const customArgb = Number(parsed.customBackgroundArgb);
+  const customChapterRegex = typeof parsed.customChapterRegex === "string"
+    ? parsed.customChapterRegex.trim().slice(0, MAX_CUSTOM_CHAPTER_REGEX_CHARS)
+    : DEFAULT_PREFS.customChapterRegex;
+  return {
+    background: READER_THEMES.some((item) => item.key === rawBackground)
+      ? (rawBackground as ReaderBackground)
+      : DEFAULT_PREFS.background,
+    customBackgroundArgb: Number.isInteger(customArgb) && customArgb >= -(2 ** 31) && customArgb <= 2 ** 31 - 1
+      ? cssToSignedArgb(signedArgbToCss(customArgb))
+      : DEFAULT_PREFS.customBackgroundArgb,
+    fontSizeSp: clamp(finiteOr(parsed.fontSizeSp ?? parsed.fontSize, DEFAULT_PREFS.fontSizeSp), 12, 38),
+    lineHeightMultiplier: clamp(
+      finiteOr(parsed.lineHeightMultiplier ?? parsed.lineHeight, DEFAULT_PREFS.lineHeightMultiplier),
+      1,
+      2.4
+    ),
+    paragraphSpacingDp: clamp(finiteOr(parsed.paragraphSpacingDp, DEFAULT_PREFS.paragraphSpacingDp), 0, 36),
+    showProgressPercentage:
+      typeof parsed.showProgressPercentage === "boolean"
+        ? parsed.showProgressPercentage
+        : DEFAULT_PREFS.showProgressPercentage,
+    chapterDetectionMode: ["SMART", "CUSTOM", "SMART_AND_CUSTOM"].includes(String(rawChapterMode))
+      ? (rawChapterMode as ReaderChapterDetectionMode)
+      : DEFAULT_PREFS.chapterDetectionMode,
+    customChapterRegex,
+    chapterHeadingMaxChars: Math.round(clamp(
+      finiteOr(parsed.chapterHeadingMaxChars, DEFAULT_PREFS.chapterHeadingMaxChars),
+      MIN_CHAPTER_HEADING_CHARS,
+      MAX_CHAPTER_HEADING_CHARS
+    )),
+  };
+}
+
+/** Explicit record-sync projection: device-local reader fields never cross the API. */
+function syncedPrefs(prefs: ReaderPrefs): ReaderSyncedPrefs {
+  return {
+    background: prefs.background,
+    customBackgroundArgb: prefs.customBackgroundArgb,
+    fontSizeSp: prefs.fontSizeSp,
+    lineHeightMultiplier: prefs.lineHeightMultiplier,
+    paragraphSpacingDp: prefs.paragraphSpacingDp,
+    showProgressPercentage: prefs.showProgressPercentage,
+    chapterDetectionMode: prefs.chapterDetectionMode,
+  };
+}
+
+function hasCachedPrefs(): boolean {
+  try {
+    return localStorage.getItem(PREFS_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function loadPrefs(): ReaderPrefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
     if (!raw) return { ...DEFAULT_PREFS };
-    const parsed = JSON.parse(raw) as Partial<ReaderPrefs>;
-    return {
-      fontSize: clamp(Number(parsed.fontSize) || DEFAULT_PREFS.fontSize, 12, 38),
-      lineHeight: clamp(Number(parsed.lineHeight) || DEFAULT_PREFS.lineHeight, 1, 2.4),
-      theme: READER_THEMES.some((t) => t.key === parsed.theme) ? (parsed.theme as ReaderThemeKey) : DEFAULT_PREFS.theme,
-    };
+    return normalizePrefs(JSON.parse(raw) as Partial<ReaderPrefs>);
   } catch {
     return { ...DEFAULT_PREFS };
   }
@@ -219,16 +358,54 @@ interface TxtChapter {
   charIndex: number;
 }
 
-function scanChapters(text: string): TxtChapter[] {
+function compileCustomChapterRegex(value: string): RegExp | null {
+  const normalized = value.trim();
+  if (!normalized || normalized.length > MAX_CUSTOM_CHAPTER_REGEX_CHARS) return null;
+  try {
+    return new RegExp(normalized);
+  } catch {
+    return null;
+  }
+}
+
+function isCustomChapterRegexValid(value: string): boolean {
+  const normalized = value.trim();
+  return !normalized || (
+    normalized.length <= MAX_CUSTOM_CHAPTER_REGEX_CHARS && compileCustomChapterRegex(normalized) !== null
+  );
+}
+
+function customRegexMatchesWholeLine(pattern: RegExp, value: string): boolean {
+  pattern.lastIndex = 0;
+  const match = pattern.exec(value);
+  return match !== null && match.index === 0 && match[0].length === value.length;
+}
+
+const TOC_ENTRY_PATTERN = /(?:\.{3,}|…{2,}|·{3,}|_{3,})\s*(?:[0-9０-９]+|[ivxlcdm]+)\s*$/i;
+
+function scanChapters(text: string, prefs: ReaderPrefs): TxtChapter[] {
   const chapters: TxtChapter[] = [];
+  const smartEnabled = prefs.chapterDetectionMode !== "CUSTOM";
+  const customEnabled = prefs.chapterDetectionMode !== "SMART";
+  const customPattern = customEnabled ? compileCustomChapterRegex(prefs.customChapterRegex) : null;
   let offset = 0;
-  for (const line of text.split(/\r?\n/)) {
-    if (chapters.length >= 2000) break;
-    const trimmed = line.trim();
-    if (trimmed.length >= 3 && trimmed.length <= 60 && CHAPTER_RE.test(line)) {
-      chapters.push({ title: trimmed, charIndex: offset });
+  while (offset <= text.length) {
+    if (chapters.length >= 20_000) break;
+    const newline = text.indexOf("\n", offset);
+    const lineEnd = newline < 0 ? text.length : newline;
+    const rawLine = text.slice(offset, lineEnd).replace(/\r$/, "");
+    const lineOffset = offset;
+    offset = newline < 0 ? text.length + 1 : newline + 1;
+    const line = rawLine;
+    const trimmed = line.replace(/[\u200b-\u200f\u202a-\u202e\u2060\ufeff]/g, "").trim().replace(/[\t\u00a0\u3000 ]+/g, " ");
+    const eligible = trimmed.length > 0 &&
+      trimmed.length <= prefs.chapterHeadingMaxChars &&
+      !TOC_ENTRY_PATTERN.test(trimmed);
+    const smartMatch = eligible && smartEnabled && SMART_CHAPTER_PATTERNS.some((pattern) => pattern.test(trimmed));
+    const customMatch = eligible && customPattern !== null && customRegexMatchesWholeLine(customPattern, trimmed);
+    if (smartMatch || customMatch) {
+      chapters.push({ title: trimmed.slice(0, MAX_CHAPTER_HEADING_CHARS), charIndex: lineOffset });
     }
-    offset += line.length + 1;
   }
   return chapters;
 }
@@ -321,6 +498,8 @@ const COVER_BACKGROUNDS = [
 function BookTile(props: {
   book: BookDto;
   index: number;
+  showProgress: boolean;
+  progressPercent: number;
   onOpen: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -398,6 +577,12 @@ function BookTile(props: {
             {book.bookType === "PDF" ? tr("PDF 文档", "PDF document") : tr("TXT 文档", "TXT document")}
             {" · "}
             {fmtSize(book.sizeBytes)}
+            {props.showProgress && (
+              <>
+                {" · "}
+                {tr("进度", "Progress")} {props.progressPercent}%
+              </>
+            )}
           </div>
         </div>
         <button
@@ -427,6 +612,8 @@ function BookTile(props: {
 
 export default function ReaderPage() {
   const [books, setBooks] = useState<BookDto[] | null>(null);
+  const [shelfPrefs, setShelfPrefs] = useState<ReaderPrefs>(loadPrefs);
+  const [shelfProgress, setShelfProgress] = useState<ProgressRecord[]>([]);
   const [error, setError] = useState<unknown>(null);
   const [openBook, setOpenBook] = useState<BookDto | null>(null);
   const [renaming, setRenaming] = useState<BookDto | null>(null);
@@ -446,9 +633,39 @@ export default function ReaderPage() {
     }
   }, []);
 
+  const refreshShelfMeta = useCallback(async () => {
+    const cached = loadPrefs();
+    const [preferencesResult, progressResult] = await Promise.allSettled([
+      apiGet<ReaderPrefsResponse>(PREFERENCES_URL),
+      apiGet<ProgressDoc>(PROGRESS_URL),
+    ]);
+    if (preferencesResult.status === "fulfilled") {
+      // Remote owns only the syncable subset; keep this browser's regex and
+      // heading-length fields from local storage.
+      const merged = normalizePrefs({ ...cached, ...preferencesResult.value });
+      savePrefs(merged);
+      setShelfPrefs(merged);
+    } else {
+      setShelfPrefs(cached);
+    }
+    if (progressResult.status === "fulfilled") {
+      setShelfProgress(progressResult.value.records);
+    }
+  }, []);
+
+  const progressPercentFor = useCallback((book: BookDto): number => {
+    const record = shelfProgress.find(
+      (item) => item.fingerprint === book.fingerprint && item.type === book.bookType
+    );
+    if (!record || record.totalPages <= 1) return 0;
+    const page = record.type === "PDF" ? record.pdfPageIndex : record.textPageIndex;
+    return Math.round(clamp(page, 0, record.totalPages - 1) / (record.totalPages - 1) * 100);
+  }, [shelfProgress]);
+
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    void refreshShelfMeta();
+  }, [refresh, refreshShelfMeta]);
 
   const importFiles = useCallback(
     async (files: FileList | null) => {
@@ -546,6 +763,8 @@ export default function ReaderPage() {
               key={book.id}
               book={book}
               index={i}
+              showProgress={shelfPrefs.showProgressPercentage}
+              progressPercent={progressPercentFor(book)}
               onOpen={() => setOpenBook(book)}
               onRename={() => {
                 setRenaming(book);
@@ -608,7 +827,16 @@ export default function ReaderPage() {
         </div>
       )}
 
-      {openBook && <ReaderView key={openBook.id} book={openBook} onClose={() => setOpenBook(null)} />}
+      {openBook && (
+        <ReaderView
+          key={openBook.id}
+          book={openBook}
+          onClose={() => {
+            setOpenBook(null);
+            void refreshShelfMeta();
+          }}
+        />
+      )}
 
       <PageTutorialOverlay
         pageKey="reader"
@@ -640,7 +868,12 @@ function ReaderView(props: { book: BookDto; onClose: () => void }) {
 
   // ----- shared state -----
   const [prefs, setPrefs] = useState<ReaderPrefs>(loadPrefs);
+  const [prefsReady, setPrefsReady] = useState(false);
+  const prefsSaveTimer = useRef<number | null>(null);
+  const prefsLatest = useRef(prefs);
+  const prefsReadyRef = useRef(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsDraft, setSettingsDraft] = useState<ReaderPrefs | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [search, setSearch] = useState<SearchState>(INITIAL_SEARCH);
   const [chromeVisible, setChromeVisible] = useState(true);
@@ -650,11 +883,52 @@ function ReaderView(props: { book: BookDto; onClose: () => void }) {
   const [totalPages, setTotalPages] = useState<number | null>(null);
   const [readingTime, setReadingTime] = useState<number | null>(null);
 
-  const theme = READER_THEMES.find((t) => t.key === prefs.theme) ?? READER_THEMES[0];
+  const theme = resolveReaderTheme(prefs);
 
   useEffect(() => {
+    prefsLatest.current = prefs;
     savePrefs(prefs);
-  }, [prefs]);
+    if (!prefsReady) return;
+    if (prefsSaveTimer.current !== null) window.clearTimeout(prefsSaveTimer.current);
+    prefsSaveTimer.current = window.setTimeout(() => {
+      prefsSaveTimer.current = null;
+      void apiSend<ReaderPrefsResponse>(PREFERENCES_URL, "PUT", syncedPrefs(prefs)).catch(() => {});
+    }, 450);
+    return () => {
+      if (prefsSaveTimer.current !== null) window.clearTimeout(prefsSaveTimer.current);
+    };
+  }, [prefs, prefsReady]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const cached = loadPrefs();
+    const hadCache = hasCachedPrefs();
+    void (async () => {
+      try {
+        const remote = await apiGet<ReaderPrefsResponse>(PREFERENCES_URL);
+        let resolved = normalizePrefs({ ...cached, ...remote });
+        if (!remote.stored && hadCache) {
+          const migrated = await apiSend<ReaderPrefsResponse>(PREFERENCES_URL, "PUT", syncedPrefs(cached));
+          resolved = normalizePrefs({ ...cached, ...migrated });
+        }
+        if (!cancelled) setPrefs(resolved);
+      } catch {
+        // Offline/backend failure: the local cache remains a usable fallback.
+      } finally {
+        if (!cancelled) {
+          prefsReadyRef.current = true;
+          setPrefsReady(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (prefsSaveTimer.current !== null) window.clearTimeout(prefsSaveTimer.current);
+      if (prefsReadyRef.current) flushJson("PUT", PREFERENCES_URL, syncedPrefs(prefsLatest.current));
+    };
+    // Load once for this reader instance; later local edits flow through prefs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ----- progress + engagement plumbing (latest values kept in refs for flush) -----
   const progressFetched = useRef(false);
@@ -848,17 +1122,21 @@ function ReaderView(props: { book: BookDto; onClose: () => void }) {
     const padX = 28;
     const padY = 26;
     const footerH = 26;
-    const avg = measureAvgAdvance(prefs.fontSize);
+    const avg = measureAvgAdvance(prefs.fontSizeSp);
     const charsPerLine = Math.max(8, Math.floor(((viewportSize.w - padX * 2) / avg) * 0.97));
     const usableH = viewportSize.h - padY * 2 - footerH;
-    const lineHeightPx = prefs.fontSize * prefs.lineHeight;
-    const linesPerPage = Math.max(4, Math.floor(usableH / lineHeightPx));
+    const lineHeightPx = prefs.fontSizeSp * prefs.lineHeightMultiplier;
+    const paragraphAllowance = Math.min(prefs.paragraphSpacingDp, lineHeightPx) * 0.2;
+    const linesPerPage = Math.max(4, Math.floor(usableH / (lineHeightPx + paragraphAllowance)));
     const charsPerPage = Math.max(64, charsPerLine * linesPerPage);
     const starts = slicePageStarts(txtText, charsPerPage);
     return { padX, padY, charsPerPage, starts, pageH: viewportSize.h, pageCount: starts.length - 1 };
-  }, [isTxt, txtText, viewportSize, prefs.fontSize, prefs.lineHeight]);
+  }, [isTxt, txtText, viewportSize, prefs.fontSizeSp, prefs.lineHeightMultiplier, prefs.paragraphSpacingDp]);
 
-  const txtChapters = useMemo(() => (txtText ? scanChapters(txtText) : []), [txtText]);
+  const txtChapters = useMemo(
+    () => (txtText ? scanChapters(txtText, prefs) : []),
+    [txtText, prefs]
+  );
 
   useEffect(() => {
     if (isTxt && txtLayout) setTotalPages(txtLayout.pageCount);
@@ -1293,7 +1571,10 @@ function ReaderView(props: { book: BookDto; onClose: () => void }) {
       if (search.open) {
         setSearch(INITIAL_SEARCH);
         searchToken.current += 1;
-      } else if (settingsOpen) setSettingsOpen(false);
+      } else if (settingsOpen) {
+        setSettingsOpen(false);
+        setSettingsDraft(null);
+      }
       else if (sidebarOpen) setSidebarOpen(false);
     };
     window.addEventListener("keydown", onKey);
@@ -1342,6 +1623,8 @@ function ReaderView(props: { book: BookDto; onClose: () => void }) {
 
   const indicator =
     totalPages && totalPages > 0 ? `${clamp(currentPage + (isTxt ? 1 : 0) + (isTxt ? 0 : 1) > 0 ? currentPage + 1 : currentPage, 0, totalPages)} / ${totalPages}` : "–";
+  const displayedSettings = settingsDraft ?? prefs;
+  const customRegexValid = isCustomChapterRegexValid(displayedSettings.customChapterRegex);
 
   // ------------------------------------------------------------------
   // Render
@@ -1417,7 +1700,19 @@ function ReaderView(props: { book: BookDto; onClose: () => void }) {
             <Search size={20} />
           </button>
         )}
-        <button className="dc-icon-btn" aria-label={tr("阅读设置", "Reading settings")} onClick={() => setSettingsOpen((v) => !v)}>
+        <button
+          className="dc-icon-btn"
+          aria-label={tr("阅读设置", "Reading settings")}
+          onClick={() => {
+            if (settingsOpen) {
+              setSettingsOpen(false);
+              setSettingsDraft(null);
+            } else {
+              setSettingsDraft({ ...prefs });
+              setSettingsOpen(true);
+            }
+          }}
+        >
           <Settings size={20} />
         </button>
       </div>
@@ -1489,15 +1784,22 @@ function ReaderView(props: { book: BookDto; onClose: () => void }) {
                           height: txtLayout.pageH,
                           padding: `${txtLayout.padY}px ${txtLayout.padX}px`,
                           color: theme.fg,
-                          fontSize: prefs.fontSize,
-                          lineHeight: prefs.lineHeight,
+                          fontSize: prefs.fontSizeSp,
+                          lineHeight: prefs.lineHeightMultiplier,
                           whiteSpace: "pre-wrap",
                           overflowWrap: "break-word",
                           overflow: "hidden",
                           fontFamily: '"Noto Serif SC", Georgia, "Times New Roman", serif',
                         }}
                       >
-                        {highlightSlice(slice, search.hits.length > 0 ? search.query.trim() : "")}
+                        {slice.split("\n\n").map((paragraph, paragraphIndex, paragraphs) => (
+                          <React.Fragment key={paragraphIndex}>
+                            <span style={{ display: "block", marginBottom: prefs.paragraphSpacingDp }}>
+                              {highlightSlice(paragraph, search.hits.length > 0 ? search.query.trim() : "")}
+                            </span>
+                            {paragraphIndex < paragraphs.length - 1 && <span aria-hidden="true">{"\n"}</span>}
+                          </React.Fragment>
+                        ))}
                         <span
                           style={{
                             position: "absolute",
@@ -1697,6 +1999,8 @@ function ReaderView(props: { book: BookDto; onClose: () => void }) {
             display: "flex",
             flexDirection: "column",
             gap: 12,
+            maxHeight: "calc(100vh - 72px)",
+            overflowY: "auto",
           }}
           role="dialog"
           aria-label={tr("阅读设置", "Reading settings")}
@@ -1704,52 +2008,168 @@ function ReaderView(props: { book: BookDto; onClose: () => void }) {
           <div className="dc-title">{tr("阅读设置", "Reading settings")}</div>
           <label className="dc-col" style={{ gap: 4 }}>
             <span className="dc-muted" style={{ fontSize: "0.88em" }}>
-              {tr("字号", "Font size")} · {prefs.fontSize}
+              {tr("字号", "Font size")} · {displayedSettings.fontSizeSp}
             </span>
             <input
               type="range"
               min={12}
               max={38}
               step={1}
-              value={prefs.fontSize}
-              onChange={(e) => setPrefs((p) => ({ ...p, fontSize: Number(e.target.value) }))}
+              value={displayedSettings.fontSizeSp}
+              onChange={(e) => setSettingsDraft((p) => p ? ({ ...p, fontSizeSp: Number(e.target.value) }) : p)}
             />
           </label>
           <label className="dc-col" style={{ gap: 4 }}>
             <span className="dc-muted" style={{ fontSize: "0.88em" }}>
-              {tr("行距", "Line spacing")} · ×{prefs.lineHeight.toFixed(2)}
+              {tr("行距", "Line spacing")} · ×{displayedSettings.lineHeightMultiplier.toFixed(1)}
             </span>
             <input
               type="range"
               min={1}
               max={2.4}
-              step={0.05}
-              value={prefs.lineHeight}
-              onChange={(e) => setPrefs((p) => ({ ...p, lineHeight: Number(e.target.value) }))}
+              step={0.1}
+              value={displayedSettings.lineHeightMultiplier}
+              onChange={(e) => setSettingsDraft((p) => p ? ({ ...p, lineHeightMultiplier: Number(e.target.value) }) : p)}
             />
           </label>
+          {isTxt && (
+            <label className="dc-col" style={{ gap: 4 }}>
+              <span className="dc-muted" style={{ fontSize: "0.88em" }}>
+                {tr("段间距", "Paragraph spacing")} · {Math.round(displayedSettings.paragraphSpacingDp)} dp
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={36}
+                step={2}
+                value={displayedSettings.paragraphSpacingDp}
+                onChange={(e) => setSettingsDraft((p) => p ? ({ ...p, paragraphSpacingDp: Number(e.target.value) }) : p)}
+              />
+            </label>
+          )}
           <div className="dc-col" style={{ gap: 6 }}>
-            <span className="dc-muted" style={{ fontSize: "0.88em" }}>{tr("主题", "Theme")}</span>
-            <div className="dc-row" style={{ gap: 8 }}>
+            <span className="dc-muted" style={{ fontSize: "0.88em" }}>{tr("背景颜色", "Background")}</span>
+            <div className="dc-row" style={{ gap: 8, flexWrap: "wrap" }}>
               {READER_THEMES.map((t) => (
                 <button
                   key={t.key}
-                  className={`dc-chip ${prefs.theme === t.key ? "active" : ""}`}
-                  onClick={() => setPrefs((p) => ({ ...p, theme: t.key }))}
+                  className={`dc-chip ${displayedSettings.background === t.key ? "active" : ""}`}
+                  onClick={() => setSettingsDraft((p) => p ? ({ ...p, background: t.key }) : p)}
                 >
                   {tr(t.zh, t.en)}
                 </button>
               ))}
             </div>
+            {displayedSettings.background === "CUSTOM" && (
+              <label className="dc-row" style={{ justifyContent: "space-between" }}>
+                <span>{tr("自定义背景", "Custom background")}</span>
+                <input
+                  type="color"
+                  value={signedArgbToCss(displayedSettings.customBackgroundArgb)}
+                  aria-label={tr("自定义背景颜色", "Custom background color")}
+                  onChange={(e) => setSettingsDraft((p) => p ? ({ ...p, customBackgroundArgb: cssToSignedArgb(e.target.value) }) : p)}
+                />
+              </label>
+            )}
           </div>
+          <label className="dc-row" style={{ justifyContent: "space-between", gap: 12 }}>
+            <span>{tr("显示书架进度", "Show shelf progress")}</span>
+            <input
+              type="checkbox"
+              checked={displayedSettings.showProgressPercentage}
+              onChange={(e) => setSettingsDraft((p) => p ? ({ ...p, showProgressPercentage: e.target.checked }) : p)}
+            />
+          </label>
+          {isTxt && (
+            <div className="dc-col" style={{ gap: 6 }}>
+              <span className="dc-muted" style={{ fontSize: "0.88em" }}>{tr("智能章节", "Smart chapters")}</span>
+              <div className="dc-row" style={{ gap: 8, flexWrap: "wrap" }}>
+                {([
+                  ["SMART", tr("仅智能", "Smart only")],
+                  ["CUSTOM", tr("仅自定义", "Custom only")],
+                  ["SMART_AND_CUSTOM", tr("智能 + 自定义", "Smart + custom")],
+                ] as const).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    className={`dc-chip ${displayedSettings.chapterDetectionMode === mode ? "active" : ""}`}
+                    onClick={() => setSettingsDraft((p) => p ? ({ ...p, chapterDetectionMode: mode }) : p)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <span className="dc-muted" style={{ fontSize: "0.8em", lineHeight: 1.4 }}>
+                {tr(
+                  "智能规则支持中文章节/卷/回/幕、英文 Chapter/Part/Book/Section/Episode、Markdown 标题、序章/尾声及多种编号格式。",
+                  "Smart rules cover Chinese chapters/volumes, Chapter/Part/Book/Section/Episode, Markdown headings, prologues/epilogues, and several numbering styles."
+                )}
+              </span>
+              {displayedSettings.chapterDetectionMode !== "SMART" && (
+                <label className="dc-col" style={{ gap: 4 }}>
+                  <span className="dc-muted" style={{ fontSize: "0.88em" }}>
+                    {tr("自定义整行正则", "Custom full-line regex")}
+                  </span>
+                  <textarea
+                    className="dc-input"
+                    rows={3}
+                    maxLength={MAX_CUSTOM_CHAPTER_REGEX_CHARS}
+                    placeholder={"^(第.+章|Chapter\\s+.+)$"}
+                    value={displayedSettings.customChapterRegex}
+                    aria-invalid={!customRegexValid}
+                    onChange={(e) => setSettingsDraft((p) => p ? ({ ...p, customChapterRegex: e.target.value }) : p)}
+                  />
+                  <span
+                    style={{
+                      color: customRegexValid ? "var(--dc-on-surface-variant)" : "var(--dc-error)",
+                      fontSize: "0.78em",
+                    }}
+                  >
+                    {customRegexValid
+                      ? tr("规则匹配整行；留空等于不追加自定义规则。", "The rule matches a whole line; leave blank to add no custom rule.")
+                      : tr("正则格式无效", "Invalid regular expression")}
+                  </span>
+                </label>
+              )}
+              <label className="dc-col" style={{ gap: 4 }}>
+                <span className="dc-muted" style={{ fontSize: "0.88em" }}>
+                  {tr("章节标题最长字符数", "Maximum heading length")} · {displayedSettings.chapterHeadingMaxChars}
+                </span>
+                <input
+                  type="range"
+                  min={MIN_CHAPTER_HEADING_CHARS}
+                  max={MAX_CHAPTER_HEADING_CHARS}
+                  step={1}
+                  value={displayedSettings.chapterHeadingMaxChars}
+                  onChange={(e) => setSettingsDraft((p) => p ? ({ ...p, chapterHeadingMaxChars: Number(e.target.value) }) : p)}
+                />
+              </label>
+            </div>
+          )}
           {readingTime !== null && (
             <div className="dc-muted" style={{ fontSize: "0.85em" }}>
               {tr("累计阅读时间", "Total reading time")}：{fmtDuration(readingTime)}
             </div>
           )}
           <div className="dc-row" style={{ justifyContent: "flex-end" }}>
-            <button className="dc-btn dc-btn-filled" onClick={() => setSettingsOpen(false)}>
-              {tr("完成", "Done")}
+            <button
+              className="dc-btn"
+              onClick={() => {
+                setSettingsOpen(false);
+                setSettingsDraft(null);
+              }}
+            >
+              {tr("取消", "Cancel")}
+            </button>
+            <button
+              className="dc-btn dc-btn-filled"
+              disabled={!customRegexValid}
+              onClick={() => {
+                if (settingsDraft) setPrefs(normalizePrefs(settingsDraft));
+                setSettingsOpen(false);
+                setSettingsDraft(null);
+              }}
+            >
+              {tr("保存", "Save")}
             </button>
           </div>
         </div>

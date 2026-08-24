@@ -178,7 +178,7 @@ def is_authenticated(request: Request) -> bool:
     return session_valid(con, token_from_request(request))
 
 
-PUBLIC_PATH_PREFIXES = ("/api/auth", "/dc-web-sw.js", "/manifest.webmanifest", "/icons/")
+PUBLIC_PATH_PREFIXES = ("/api/auth", "/api/healthz", "/dc-web-sw.js", "/manifest.webmanifest", "/icons/")
 
 
 def is_public_path(path: str) -> bool:

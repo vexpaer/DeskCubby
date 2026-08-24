@@ -35,7 +35,9 @@ export default function LoginPage() {
   return (
     <div className="dc-center" style={{ minHeight: "100vh", padding: 16 }}>
       <div className="dc-surface" style={{ padding: 28, width: "min(420px, 94vw)" }}>
-        <div className="dc-title" style={{ marginBottom: 4 }}>DeskCubby</div>
+        <img src="/icons/icon-192.png" alt="" width={72} height={72}
+          style={{ display: "block", objectFit: "contain", margin: "0 auto 12px" }} />
+        <div className="dc-title" style={{ marginBottom: 4, textAlign: "center" }}>DeskCubby</div>
         <div className="dc-muted" style={{ marginBottom: 18 }}>
           {tr("此实例已开启访问密码，请登录后继续。", "This instance is protected by an access password.")}
         </div>

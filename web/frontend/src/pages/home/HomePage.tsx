@@ -1735,7 +1735,10 @@ export default function HomePage() {
               background: var(--dc-surface-container-high);
               cursor: ${editMode ? "grab" : "pointer"};
             }
-            .home-card:hover .home-grip, .home-card.editing .home-grip { opacity: 1; }
+            .home-card.editing .home-grip { opacity: 1; }
+            @media (hover: hover) and (pointer: fine) {
+              .home-card:hover .home-grip { opacity: 1; }
+            }
           `}</style>
           {order.map((id, index) => (
             <div

@@ -9,7 +9,7 @@ RUN npm run build
 FROM python:3.12-slim AS runtime
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
-COPY backend/requirements.txt ./backend/requirements.txt
+COPY backend/requirements*.txt ./backend/
 RUN pip install --no-cache-dir -r backend/requirements.txt
 COPY backend/ ./backend/
 COPY --from=frontend-build /build/dist/ ./frontend/dist/

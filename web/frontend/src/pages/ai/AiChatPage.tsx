@@ -33,7 +33,8 @@ interface AiConversation {
 }
 
 interface AiAttachmentDto {
-  id: number;
+  /** Staged uploads use an opaque UUID; persisted message attachments use a DB id. */
+  id: string | number;
   displayName: string;
   mimeType: string;
   sizeBytes: number;
@@ -83,6 +84,7 @@ interface ApprovalUi {
 
 interface RunUsageUi {
   modelCallCount?: number;
+  reportedCallCount?: number;
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
@@ -106,6 +108,15 @@ interface UiMessage {
   streaming?: boolean;
   stopped?: boolean;
   error?: string | null;
+}
+
+interface AgentRunDetailDto {
+  run: AgentRunDto;
+  toolEvents: Record<string, unknown>[];
+}
+
+interface PendingApprovalsDto {
+  approvals: Record<string, unknown>[];
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +321,7 @@ function pickUsage(o: Record<string, unknown>): RunUsageUi | null {
   };
   const out: RunUsageUi = {
     modelCallCount: num(["modelCallCount", "model_call_count"]) ?? undefined,
+    reportedCallCount: num(["reportedCallCount", "usageReportedCallCount", "reported_call_count"]) ?? undefined,
     inputTokens: num(["inputTokens", "input_tokens", "promptTokens"]),
     outputTokens: num(["outputTokens", "output_tokens", "completionTokens"]),
     totalTokens: num(["totalTokens", "total_tokens"]),
@@ -377,7 +389,8 @@ export function interpretAgentEvent(ev: SseEvent): AgentStreamAction {
       return text ? { kind: "reasoning", text } : { kind: "ignore" };
     }
     case "run_started":
-    case "run": {
+    case "run":
+    case "started": {
       if (typeof payload === "object") {
         const runId = pickStr(payload, ["runId", "run_id"]);
         if (runId) return { kind: "run", runId };
@@ -389,6 +402,7 @@ export function interpretAgentEvent(ev: SseEvent): AgentStreamAction {
     case "tool_call":
     case "tool_begin":
     case "tool_preparing":
+    case "tool_event":
       if (typeof payload === "object") {
         return { kind: "tool", event: toolEventFromPayload(payload, eff === "tool_preparing" ? "PREPARING" : "RUNNING") };
       }
@@ -473,6 +487,24 @@ function asArray<T>(d: T[] | { items?: T[]; conversations?: T[]; messages?: T[] 
   return [];
 }
 
+function persistedMessages(d: AiMessageDto[] | { messages?: AiMessageDto[] }): UiMessage[] {
+  return asArray<AiMessageDto>(d)
+    .filter((m) => ["USER", "user", "ASSISTANT", "assistant"].includes(m.role))
+    .map<UiMessage>((m) => ({
+      key: `m-${m.id}`,
+      role: m.role === "USER" || m.role === "user" ? "user" : "assistant",
+      content: m.content ?? "",
+      reasoning: m.reasoning || undefined,
+      attachments: m.attachments ?? [],
+    }));
+}
+
+/** A server reload must not erase an in-flight Agent bubble whose final answer is not persisted yet. */
+function mergePersistedWithLiveAgent(persisted: UiMessage[], current: UiMessage[]): UiMessage[] {
+  const liveRuns = current.filter((m) => m.role === "assistant" && m.streaming && !!m.runId);
+  return liveRuns.length > 0 ? [...persisted, ...liveRuns] : persisted;
+}
+
 export default function AiChatPage() {
   const settingsState = useSettings();
   const settings: AppSettings | null = settingsState.settings;
@@ -487,6 +519,7 @@ export default function AiChatPage() {
   const [convLoading, setConvLoading] = useState(true);
   const [convError, setConvError] = useState<unknown>(null);
   const [activeId, setActiveId] = useState<number | null>(null);
+  const initialConversationResolvedRef = useRef(false);
 
   const loadConversations = useCallback(async () => {
     setConvError(null);
@@ -502,6 +535,14 @@ export default function AiChatPage() {
 
   useEffect(() => { void loadConversations(); }, [loadConversations]);
 
+  // Android opens the most recently updated conversation once on entry. Keep an explicit
+  // "new conversation" selection intact after that initial resolution.
+  useEffect(() => {
+    if (convLoading || convError || initialConversationResolvedRef.current) return;
+    initialConversationResolvedRef.current = true;
+    if (activeId == null && conversations.length > 0) setActiveId(conversations[0].id);
+  }, [activeId, conversations, convError, convLoading]);
+
   // Messages of the active conversation --------------------------------------
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [msgsLoading, setMsgsLoading] = useState(false);
@@ -515,17 +556,8 @@ export default function AiChatPage() {
     apiGet<AiMessageDto[]>(`/api/ai/conversations/${activeId}/messages`)
       .then((d) => {
         if (cancelled) return;
-        setMessages(
-          asArray<AiMessageDto>(d)
-            .filter((m) => ["USER", "user", "ASSISTANT", "assistant"].includes(m.role))
-            .map<UiMessage>((m) => ({
-              key: `m-${m.id}`,
-              role: m.role === "USER" || m.role === "user" ? "user" : "assistant",
-              content: m.content ?? "",
-              reasoning: m.reasoning || undefined,
-              attachments: m.attachments ?? [],
-            }))
-        );
+        const persisted = persistedMessages(d);
+        setMessages((current) => mergePersistedWithLiveAgent(persisted, current));
       })
       .catch((e) => { if (!cancelled) setMsgsError(e); })
       .finally(() => { if (!cancelled) setMsgsLoading(false); });
@@ -563,6 +595,10 @@ export default function AiChatPage() {
   };
 
   const deleteConversation = async (id: number) => {
+    if (streaming && activeId === id) {
+      show(tr("请先中止当前任务", "Stop the current task first"));
+      return;
+    }
     try {
       await apiSend(`/api/ai/conversations/${id}`, "DELETE");
       if (activeId === id) { setActiveId(null); setMessages([]); }
@@ -589,8 +625,8 @@ export default function AiChatPage() {
   const [toolsInfoOpen, setToolsInfoOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [tokenStatsOpen, setTokenStatsOpen] = useState(false);
-  /** toolCallId -> true(批准)/false(拒绝) for inline approval cards already decided. */
-  const [decidedApprovals, setDecidedApprovals] = useState<Record<string, boolean>>({});
+  const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(null);
+  const decidingApprovalRef = useRef<string | null>(null);
 
   // Desk 深链：/ai_chat?prompt=... 预填输入框
   const [searchParams, setSearchParams] = useSearchParams();
@@ -618,6 +654,9 @@ export default function AiChatPage() {
 
   // Revoke pending image preview URLs when leaving the page.
   useEffect(() => () => {
+    // Closing the page detaches the transport only. Agent runs continue on the server and are
+    // recovered from their durable ledger when this page is opened again.
+    abortRef.current?.abort();
     for (const a of attachmentsRef.current) if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
   }, []);
   const attachmentsRef = useRef<PendingAttachment[]>([]);
@@ -654,7 +693,7 @@ export default function AiChatPage() {
     }
   };
 
-  const removeAttachment = (id: number) => {
+  const removeAttachment = (id: string | number) => {
     setAttachments((a) => {
       const target = a.find((x) => x.id === id);
       if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
@@ -684,6 +723,7 @@ export default function AiChatPage() {
     ]);
     setDraft("");
     setAttachments([]);
+    streamingRef.current = true;
     setStreaming(true);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -742,6 +782,7 @@ export default function AiChatPage() {
         });
       }
     } finally {
+      streamingRef.current = false;
       setStreaming(false);
       abortRef.current = null;
       void loadConversations();
@@ -753,6 +794,139 @@ export default function AiChatPage() {
 
   /** Live run id for the cancel endpoint while an Agent run streams. */
   const currentRunIdRef = useRef<string>("");
+  const stoppingRunIdRef = useRef<string>("");
+  /** Run currently projected back into the page from the durable review ledger. */
+  const recoveredRunIdRef = useRef<string>("");
+
+  // Reconnect the page to a server-side Agent run after navigation/reload. The SSE stream is an
+  // optimization for live deltas; run state and tool events remain authoritative in SQLite.
+  useEffect(() => {
+    if (activeId == null) return;
+    const conversationId = activeId;
+    let disposed = false;
+    let pollTimer: number | undefined;
+
+    const schedule = (delay = 800) => {
+      if (!disposed) pollTimer = window.setTimeout(() => void poll(), delay);
+    };
+
+    const finishRecoveredRun = async (run: AgentRunDto, tools: ToolEventUi[]) => {
+      const runId = String(run.runId || "");
+      const status = String(run.status || "").toUpperCase();
+      const usage = pickUsage({ usage: run as Record<string, unknown> }) ?? undefined;
+      recoveredRunIdRef.current = "";
+      if (currentRunIdRef.current === runId) currentRunIdRef.current = "";
+      if (stoppingRunIdRef.current === runId) stoppingRunIdRef.current = "";
+      streamingRef.current = false;
+      setStreaming(false);
+      try {
+        const data = await apiGet<AiMessageDto[] | { messages?: AiMessageDto[] }>(
+          `/api/ai/conversations/${conversationId}/messages`
+        );
+        if (disposed || activeIdRef.current !== conversationId) return;
+        const persisted = persistedMessages(data);
+        if (status === "SUCCEEDED") {
+          setMessages(persisted);
+        } else {
+          setMessages([
+            ...persisted,
+            {
+              key: `run-${runId}`,
+              role: "assistant",
+              content: "",
+              runId,
+              toolEvents: tools,
+              usage,
+              stopped: status === "CANCELED" || undefined,
+              error: status === "FAILED" ? tr("Agent 运行失败。", "Agent run failed.") : undefined,
+            },
+          ]);
+        }
+      } catch (e) {
+        if (!disposed && activeIdRef.current === conversationId) setMsgsError(e);
+      }
+      if (!disposed) void loadConversations();
+    };
+
+    const poll = async () => {
+      try {
+        let runId = recoveredRunIdRef.current;
+        if (!runId) {
+          // A locally attached SSE already owns this conversation; it supplies richer token deltas.
+          if (currentRunIdRef.current) return;
+          const listed = await apiGet<{ runs?: AgentRunDto[] }>(
+            `/api/agent/runs?conversationId=${conversationId}&limit=1`
+          );
+          if (disposed || activeIdRef.current !== conversationId) return;
+          const latest = listed.runs?.[0];
+          if (!latest || String(latest.status || "").toUpperCase() !== "RUNNING") return;
+          runId = String(latest.runId || "");
+          if (!runId) return;
+          recoveredRunIdRef.current = runId;
+        }
+
+        const [detail, pending] = await Promise.all([
+          apiGet<AgentRunDetailDto>(`/api/agent/runs/${encodeURIComponent(runId)}`),
+          apiGet<PendingApprovalsDto>("/api/agent/pending-approvals"),
+        ]);
+        if (disposed || activeIdRef.current !== conversationId || recoveredRunIdRef.current !== runId) return;
+        const run = detail.run;
+        let tools = asArray<Record<string, unknown>>(detail.toolEvents).map((event) =>
+          toolEventFromPayload(event, "PREPARING")
+        );
+        const approvalPayload = asArray<Record<string, unknown>>(pending.approvals)
+          .find((item) => pickStr(item, ["runId", "run_id"]) === runId);
+        const approval = approvalPayload ? approvalFromPayload(approvalPayload) : null;
+        if (approval) {
+          tools = mergeToolEvent(tools, {
+            toolCallId: approval.toolCallId,
+            toolName: approval.toolName,
+            status: "WAITING_APPROVAL",
+            target: approval.target,
+            summary: approval.summary,
+            argumentsSummary: approval.argumentsSummary,
+            resultSummary: "",
+          });
+        }
+
+        if (String(run.status || "").toUpperCase() !== "RUNNING") {
+          await finishRecoveredRun(run, tools);
+          return;
+        }
+
+        currentRunIdRef.current = runId;
+        streamingRef.current = true;
+        setAgentMode(true);
+        setStreaming(true);
+        setMessages((current) => {
+          const next: UiMessage = {
+            key: `run-${runId}`,
+            role: "assistant",
+            content: "",
+            reasoning: "",
+            runId,
+            streaming: true,
+            toolEvents: tools,
+            approval,
+          };
+          const index = current.findIndex((message) => message.runId === runId);
+          return index < 0
+            ? [...current, next]
+            : current.map((message, i) => (i === index ? { ...message, ...next } : message));
+        });
+        schedule();
+      } catch {
+        // A transient page/API failure must not turn a live server task into a local failure.
+        schedule(1500);
+      }
+    };
+
+    void poll();
+    return () => {
+      disposed = true;
+      if (pollTimer !== undefined) window.clearTimeout(pollTimer);
+    };
+  }, [activeId, loadConversations]);
 
   /** Agent send: POST /api/agent/run SSE with tool events, approvals and usage. */
   const doAgentSend = async (content: string, atts: PendingAttachment[]) => {
@@ -764,6 +938,7 @@ export default function AiChatPage() {
     }
     lastSendRef.current = { content, atts };
     const assistantKey = `a-${Date.now()}`;
+    const requestedRunId = crypto.randomUUID();
     const dtoAtts: AiAttachmentDto[] = atts.map(({ previewUrl: _p, ...dto }) => dto);
     const previews = atts.map((a) => a.previewUrl).filter((u): u is string => !!u);
     const enabledSources = settings?.agentEnabledSources ?? [];
@@ -775,12 +950,17 @@ export default function AiChatPage() {
         key: `u-${Date.now()}`, role: "user", content,
         attachments: dtoAtts, previews: previews.length ? previews : undefined,
       },
-      { key: assistantKey, role: "assistant", content: "", reasoning: "", streaming: true, toolEvents: [], approval: null },
+      {
+        key: assistantKey, role: "assistant", content: "", reasoning: "", runId: requestedRunId,
+        streaming: true, toolEvents: [], approval: null,
+      },
     ]);
     setDraft("");
     setAttachments([]);
+    streamingRef.current = true;
     setStreaming(true);
-    currentRunIdRef.current = "";
+    currentRunIdRef.current = requestedRunId;
+    stoppingRunIdRef.current = "";
     const controller = new AbortController();
     abortRef.current = controller;
     const patchAssistant = (patch: Partial<UiMessage>) =>
@@ -793,6 +973,7 @@ export default function AiChatPage() {
       const resp = await openSse(
         "/api/agent/run",
         {
+          runId: requestedRunId,
           conversationId: activeIdRef.current ?? undefined,
           content,
           attachmentIds: dtoAtts.map((a) => a.id),
@@ -877,34 +1058,44 @@ export default function AiChatPage() {
         });
       }
     } finally {
+      streamingRef.current = false;
       setStreaming(false);
       abortRef.current = null;
       currentRunIdRef.current = "";
+      stoppingRunIdRef.current = "";
       void loadConversations();
     }
   };
 
   /** 批准 / 拒绝 one pending mutation of the running agent task. */
   const decideApproval = async (toolCallId: string, approve: boolean) => {
-    setDecidedApprovals((d) => ({ ...d, [toolCallId]: approve }));
-    setMessages((m) =>
-      m.map((msg) => {
-        if (msg.role !== "assistant") return msg;
-        const tools = (msg.toolEvents ?? []).map((t) =>
-          t.toolCallId === toolCallId ? { ...t, status: approve ? ("APPROVED" as ToolStatus) : ("REJECTED" as ToolStatus) } : t
-        );
-        return { ...msg, toolEvents: tools };
-      })
-    );
+    if (decidingApprovalRef.current) return;
+    decidingApprovalRef.current = toolCallId;
+    setDecidingApprovalId(toolCallId);
     try {
       await apiSend(`/api/agent/approvals/${encodeURIComponent(toolCallId)}`, "POST", { approve });
+      setMessages((m) =>
+        m.map((msg) => {
+          if (msg.role !== "assistant") return msg;
+          const tools = (msg.toolEvents ?? []).map((t) =>
+            t.toolCallId === toolCallId
+              ? { ...t, status: approve ? ("APPROVED" as ToolStatus) : ("REJECTED" as ToolStatus) }
+              : t
+          );
+          return {
+            ...msg,
+            toolEvents: tools,
+            approval: msg.approval?.toolCallId === toolCallId ? null : msg.approval,
+          };
+        })
+      );
       show(approve ? tr("已批准，Agent 继续执行", "Approved; the Agent continues") : tr("已拒绝", "Rejected"));
     } catch (e) {
       show(e instanceof Error ? e.message : tr("操作失败", "Operation failed"));
+    } finally {
+      decidingApprovalRef.current = null;
+      setDecidingApprovalId(null);
     }
-    setMessages((m) =>
-      m.map((msg) => (msg.approval?.toolCallId === toolCallId && msg.role === "assistant" ? { ...msg, approval: null } : msg))
-    );
   };
 
   const sendFromComposer = () => {
@@ -916,10 +1107,17 @@ export default function AiChatPage() {
 
   /** 中止：Agent 运行时同时请求服务端取消；待审批修改按拒绝处理。 */
   const stopStreaming = () => {
-    if (agentMode && currentRunIdRef.current) {
-      apiSend(`/api/agent/cancel/${encodeURIComponent(currentRunIdRef.current)}`, "POST").catch(() => {
-        /* the aborted stream already ends the run locally */
-      });
+    const runId = currentRunIdRef.current;
+    if (agentMode && runId) {
+      if (stoppingRunIdRef.current === runId) return;
+      stoppingRunIdRef.current = runId;
+      void apiSend(`/api/agent/cancel/${encodeURIComponent(runId)}`, "POST")
+        .then(() => abortRef.current?.abort())
+        .catch((error: unknown) => {
+          stoppingRunIdRef.current = "";
+          show(error instanceof Error ? error.message : tr("中止失败，请重试", "Could not stop; try again"));
+        });
+      return;
     }
     abortRef.current?.abort();
   };
@@ -1049,6 +1247,7 @@ export default function AiChatPage() {
               : undefined
           }
           onDecideApproval={(toolCallId, approve) => void decideApproval(toolCallId, approve)}
+          decidingApprovalId={decidingApprovalId}
         />
 
         <Composer
@@ -1343,7 +1542,12 @@ function ReasoningBlock(props: { reasoning: string }) {
   );
 }
 
-function MessageBubble(props: { msg: UiMessage; retry?: () => void; onDecideApproval?: (toolCallId: string, approve: boolean) => void }) {
+function MessageBubble(props: {
+  msg: UiMessage;
+  retry?: () => void;
+  onDecideApproval?: (toolCallId: string, approve: boolean) => void;
+  decidingApprovalId?: string | null;
+}) {
   const { msg } = props;
   if (msg.role === "user") {
     return (
@@ -1380,6 +1584,7 @@ function MessageBubble(props: { msg: UiMessage; retry?: () => void; onDecideAppr
           msg={msg}
           running={!!msg.streaming && !msg.error}
           onDecideApproval={props.onDecideApproval}
+          decidingApprovalId={props.decidingApprovalId}
         />
       )}
       <div style={{ display: "flex", justifyContent: "flex-start" }}>
@@ -1485,6 +1690,7 @@ function ToolEventRow(props: { event: ToolEventUi; defaultOpen?: boolean }) {
 function ApprovalCard(props: {
   approval: ApprovalUi;
   decided?: boolean;
+  busy?: boolean;
   onDecide: (approve: boolean) => void;
 }) {
   const a = props.approval;
@@ -1522,8 +1728,10 @@ function ApprovalCard(props: {
         </div>
       ) : (
         <div className="dc-row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
-          <button className="dc-btn" onClick={() => props.onDecide(false)}>{tr("拒绝", "Reject")}</button>
-          <button className="dc-btn dc-btn-filled" onClick={() => props.onDecide(true)}>{tr("批准", "Approve")}</button>
+          <button className="dc-btn" disabled={props.busy} onClick={() => props.onDecide(false)}>{tr("拒绝", "Reject")}</button>
+          <button className="dc-btn dc-btn-filled" disabled={props.busy} onClick={() => props.onDecide(true)}>
+            {props.busy ? tr("处理中…", "Working…") : tr("批准", "Approve")}
+          </button>
         </div>
       )}
     </div>
@@ -1534,6 +1742,7 @@ function AgentExecutionPanel(props: {
   msg: UiMessage;
   running: boolean;
   onDecideApproval?: (toolCallId: string, approve: boolean) => void;
+  decidingApprovalId?: string | null;
 }) {
   const [open, setOpen] = useState(true);
   const { msg } = props;
@@ -1559,6 +1768,7 @@ function AgentExecutionPanel(props: {
             <ApprovalCard
               approval={msg.approval}
               decided={undefined}
+              busy={props.decidingApprovalId === msg.approval.toolCallId}
               onDecide={(approve) => props.onDecideApproval!(msg.approval!.toolCallId, approve)}
             />
           )}
@@ -1571,16 +1781,17 @@ function AgentExecutionPanel(props: {
 function UsageLine(props: { usage: RunUsageUi }) {
   const u = props.usage;
   const fmt = (v?: number | null) => (typeof v === "number" && Number.isFinite(v) ? v.toLocaleString() : "—");
-  const rate = typeof u.cacheRateInputTokens === "number" && Number.isFinite(u.cacheRateInputTokens)
-    ? `${(u.cacheRateInputTokens * 100).toFixed(1)}%`
+  const rate = typeof u.cachedInputTokens === "number" && typeof u.cacheRateInputTokens === "number"
+    && Number.isFinite(u.cachedInputTokens) && Number.isFinite(u.cacheRateInputTokens) && u.cacheRateInputTokens > 0
+    ? `${((u.cachedInputTokens / u.cacheRateInputTokens) * 100).toFixed(1)}%`
     : "—";
-  const reported = (u.inputTokens ?? u.outputTokens ?? u.totalTokens) != null;
+  const reported = (u.reportedCallCount ?? 0) > 0;
   return (
     <div className="dc-muted" style={{ fontSize: "0.78em", marginTop: 8 }}>
       {reported
         ? tr(
-          `${fmt(u.modelCallCount)} 次模型调用 · ${fmt(u.totalTokens)} Token · 缓存率 ${rate}`,
-          `${fmt(u.modelCallCount)} model calls · ${fmt(u.totalTokens)} tokens · cache rate ${rate}`,
+          `${fmt(u.totalTokens)} Token · 缓存率 ${rate}`,
+          `${fmt(u.totalTokens)} tokens · cache rate ${rate}`,
         )
         : tr(
           `${fmt(u.modelCallCount)} 次模型调用 · Provider 未报告 Token`,
@@ -1617,6 +1828,7 @@ function ThreadView(props: {
   onRetry: () => void;
   onRetryLast?: () => void;
   onDecideApproval?: (toolCallId: string, approve: boolean) => void;
+  decidingApprovalId?: string | null;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
@@ -1663,6 +1875,7 @@ function ThreadView(props: {
                 : undefined
             }
             onDecideApproval={props.onDecideApproval}
+            decidingApprovalId={props.decidingApprovalId}
           />
         ))
       )}
@@ -1685,7 +1898,7 @@ function Composer(props: {
   attachments: PendingAttachment[];
   uploading: boolean;
   onPickFiles: (files: FileList | null) => void;
-  onRemoveAttachment: (id: number) => void;
+  onRemoveAttachment: (id: string | number) => void;
   fileInputRef: React.RefObject<HTMLInputElement>;
   agentMode?: boolean;
   onOpenAgentMenu?: () => void;
@@ -2049,6 +2262,7 @@ interface TokenStatsDto {
   totalTokens?: number | null;
   cachedInputTokens?: number | null;
   cacheRateInputTokens?: number | null;
+  cacheRate?: number | null;
   reasoningTokens?: number | null;
 }
 
@@ -2072,10 +2286,14 @@ function TokenStatsDialog(props: { open: boolean; onClose: () => void }) {
   if (!props.open) return null;
   const num = (v?: number | null) =>
     typeof v === "number" && Number.isFinite(v) ? v.toLocaleString() : "—";
-  const rate =
-    typeof stats?.cacheRateInputTokens === "number" && Number.isFinite(stats.cacheRateInputTokens)
-      ? `${(stats.cacheRateInputTokens * 100).toFixed(1)}%`
-      : "—";
+  const rawRate = typeof stats?.cacheRate === "number" && Number.isFinite(stats.cacheRate)
+    ? stats.cacheRate
+    : typeof stats?.cachedInputTokens === "number" && typeof stats?.cacheRateInputTokens === "number"
+      && Number.isFinite(stats.cachedInputTokens) && Number.isFinite(stats.cacheRateInputTokens)
+      && stats.cacheRateInputTokens > 0
+      ? stats.cachedInputTokens / stats.cacheRateInputTokens
+      : null;
+  const rate = rawRate == null ? "—" : `${(rawRate * 100).toFixed(1)}%`;
   const rows: [string, string][] = [
     [tr("Agent 运行数", "Agent runs"), num(stats?.totalRuns ?? stats?.runCount)],
     [tr("模型调用数", "Model calls"), num(stats?.modelCallCount)],
@@ -2120,7 +2338,7 @@ function TokenStatsDialog(props: { open: boolean; onClose: () => void }) {
 // Agent Review dialog (runs → tool events + mutations with Undo)
 // ---------------------------------------------------------------------------
 
-interface AgentRunDto {
+interface AgentRunDto extends Record<string, unknown> {
   runId: string;
   conversationId?: number | null;
   conversationTitle?: string;
@@ -2128,6 +2346,7 @@ interface AgentRunDto {
   status?: string;
   permissionMode?: string;
   modelCallCount?: number;
+  usageReportedCallCount?: number;
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
@@ -2219,7 +2438,7 @@ export function AgentReviewDialog(props: {
     setError(null);
     try {
       const q = props.conversationId != null ? `?conversationId=${props.conversationId}` : "";
-      const d = await apiGet<AgentRunDto[]>(`/api/agent/runs${q}`);
+      const d = await apiGet<AgentRunDto[] | { runs?: AgentRunDto[] }>(`/api/agent/runs${q}`);
       setRuns(asArray2<AgentRunDto>(d));
     } catch (e) {
       setError(e);
@@ -2246,14 +2465,15 @@ export function AgentReviewDialog(props: {
     setError(null);
     try {
       const [runD, mutD] = await Promise.all([
-        apiGet<AgentRunDto>(`/api/agent/runs/${encodeURIComponent(runId)}`),
-        apiGet<MutationDto[]>(`/api/agent/mutations?runId=${encodeURIComponent(runId)}`).catch(() => [] as MutationDto[]),
+        apiGet<AgentRunDetailDto>(`/api/agent/runs/${encodeURIComponent(runId)}`),
+        apiGet<MutationDto[] | { mutations?: MutationDto[] }>(
+          `/api/agent/mutations?runId=${encodeURIComponent(runId)}`
+        ).catch(() => [] as MutationDto[]),
       ]);
-      setDetailRun(runD ?? null);
-      const toolEvents = Array.isArray((runD as { toolEvents?: ToolEventDto[] })?.toolEvents)
-        ? (runD as { toolEvents: ToolEventDto[] }).toolEvents
+      const toolEvents = Array.isArray(runD?.toolEvents)
+        ? runD.toolEvents as unknown as ToolEventDto[]
         : [];
-      setDetailRun({ ...(runD ?? {}), toolEvents });
+      setDetailRun(runD?.run ? { ...runD.run, toolEvents } : null);
       setMutations(asArray2<MutationDto>(mutD));
     } catch (e) {
       setError(e);

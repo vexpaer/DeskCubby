@@ -1,7 +1,7 @@
 {
   "name": "deskcubby-web",
   "private": true,
-  "version": "0.20.1",
+  "version": "0.23.5",
   "type": "module",
   "scripts": {
     "dev": "vite",

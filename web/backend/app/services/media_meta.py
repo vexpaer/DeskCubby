@@ -413,7 +413,7 @@ def read_media_meta_raw(media_dir: Path = MEDIA_DIR) -> tuple[str, Path | None]:
     lowered = {p.name.lower(): p for p in media_dir.iterdir()} if media_dir.is_dir() else {}
     for name in candidates:
         path = lowered.get(name.lower())
-        if path is not None and path.is_file():
+        if path is not None and not path.is_symlink() and path.is_file():
             found.append((path, name))
     if not found:
         return "{}", media_dir / MEDIA_META_FILE_NAME
@@ -442,7 +442,7 @@ def current_media_meta_target(media_dir: Path) -> Path:
     if media_dir.is_dir():
         for p in sorted(media_dir.iterdir()):
             try:
-                if p.is_file() and p.name.lower() == MEDIA_META_FILE_NAME.lower():
+                if not p.is_symlink() and p.is_file() and p.name.lower() == MEDIA_META_FILE_NAME.lower():
                     return p
             except OSError:
                 continue

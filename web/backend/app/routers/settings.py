@@ -1,4 +1,4 @@
-"""Settings API: full AppSettings read/update; secrets never leave the server."""
+"""Settings API: full AppSettings read/update with cloud credentials redacted."""
 from __future__ import annotations
 
 import html
@@ -26,8 +26,8 @@ def get_settings(con=Depends(get_db)):
 def put_settings(request: Request, body: dict[str, Any], con=Depends(get_db)):
     _ = request
     update_settings(con, body)
-    # Re-read through the redacting projection so stored secrets (aiConfigs
-    # apiKey, cloud credentials) are never echoed back, even to the writer.
+    # Re-read through the browser projection. Android requires AI keys to be
+    # shown in full; only cloud credentials remain write-only/redacted here.
     return public_settings(con)
 
 

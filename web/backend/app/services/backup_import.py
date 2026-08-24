@@ -16,7 +16,10 @@ from __future__ import annotations
 import base64
 import datetime as _dt
 import json
+import re
+import uuid
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 MAX_JSON_BYTES = 64 * 1024 * 1024
 FORMAT_VERSION = 34
@@ -53,9 +56,26 @@ MAX_GAME_ID_CHARS = 64
 MAX_GAME_SAVE_CHARS = 16 * 1024 * 1024
 MAX_AGENT_CHAT_BYTES = 64 * 1024 * 1024
 MAX_AGENT_CHAT_BASE64_CHARS = (MAX_AGENT_CHAT_BYTES + 2) // 3 * 4
+MAX_AGENT_CONVERSATIONS = 10_000
+MAX_AGENT_MESSAGES = 100_000
+MAX_AGENT_ATTACHMENTS = 200_000
+MAX_AGENT_RUNS = 100_000
+MAX_AGENT_MESSAGE_CHARS = 1_000_000
+MAX_AGENT_EXTRACTED_TEXT_CHARS = 256 * 1024
+MAX_AGENT_ATTACHMENT_BYTES = 64 * 1024 * 1024
+MAX_AGENT_TOKENS = 1_000_000_000_000
+MAX_AGENT_CALLS = 1_000_000
+MAX_AGENT_TIMESTAMP = 253_402_300_799_999
 MAX_READER_TEXT_PAGES = 50_000
 MAX_READER_TEXT_PARAGRAPHS = 250_000
 MAX_READER_PDF_PAGES = 20_000
+MAX_USAGE_STATISTICS_DAYS = 36_600
+MAX_USAGE_APPS_PER_DAY = 4_096
+MAX_USAGE_PACKAGE_NAME_CHARS = 255
+MAX_USAGE_ZONE_ID_CHARS = 128
+MAX_USAGE_DEVICE_NAME_CODE_POINTS = 80
+MAX_USAGE_FOREGROUND_MILLIS_PER_APP_DAY = 26 * 60 * 60 * 1_000
+MAX_USAGE_DEVICE_JSON_BYTES = 10 * 1024 * 1024 + 64 * 1024
 
 VAULT_KEY_MARKER_ENTITY_ID = -(2**63)  # VaultMetadata.kt VAULT_KEY_MARKER_ENTITY_ID
 
@@ -81,6 +101,12 @@ _SUPPORTED_METRICS_BY_GAME_ID = {
 _READER_FINGERPRINT_CHARS = set("0123456789abcdef")
 _READER_TYPES = {"TXT", "PDF"}
 _USAGE_DAY_STATES = {"OPEN", "FINAL"}
+_USAGE_PLATFORM_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
+_USAGE_FIXED_ZONE_RE = re.compile(
+    r"(?:Z|(?:UTC|GMT|UT)(?:[+-](?:(?:0\d|1[0-7]):[0-5]\d|18:00))?|"
+    r"[+-](?:(?:0\d|1[0-7]):[0-5]\d|18:00))"
+)
+_AGENT_SAFE_ID = re.compile(r"[A-Za-z0-9._:-]{1,200}")
 
 
 class BackupDecodeError(ValueError):
@@ -199,6 +225,17 @@ def _valid_date_iso(value: str, field: str) -> str:
         _dt.date.fromisoformat(value)
     except ValueError as exc:
         raise BackupDecodeError(f"{field} must be a valid yyyy-MM-dd date") from exc
+    return value
+
+
+def _valid_usage_zone_id(value: str, field: str) -> str:
+    if not value.strip() or len(value) > MAX_USAGE_ZONE_ID_CHARS:
+        raise BackupDecodeError(f"{field} is invalid")
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError):
+        if not _USAGE_FIXED_ZONE_RE.fullmatch(value):
+            raise BackupDecodeError(f"{field} is invalid")
     return value
 
 
@@ -575,72 +612,142 @@ def _decode_usage_devices(items: list[Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for index, item in enumerate(items):
         record = _array_item(items, index, "usageDevices")
-        device_id = _req_str(record, "deviceId")
-        if not device_id or len(device_id) > 256:
+        if set(record) != {
+            "schemaVersion", "deviceId", "deviceName", "platform",
+            "updatedAtEpochMillis", "history",
+        }:
+            raise BackupDecodeError(f"usageDevices[{index}] contains missing or unknown fields")
+        if _req_int(record, "schemaVersion") != 1:
+            raise BackupDecodeError(f"usageDevices[{index}].schemaVersion is invalid")
+        raw_device_id = _req_str(record, "deviceId").strip()
+        try:
+            device_id = str(uuid.UUID(raw_device_id))
+        except (ValueError, AttributeError):
             raise BackupDecodeError(f"usageDevices[{index}].deviceId is invalid")
         if device_id in seen:
             raise BackupDecodeError(f"Duplicate usage device id: {device_id}")
         seen.add(device_id)
+        device_name = _req_str(record, "deviceName").strip()
+        if (
+            not device_name or len(device_name) > MAX_USAGE_DEVICE_NAME_CODE_POINTS or
+            any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in device_name)
+        ):
+            raise BackupDecodeError(f"usageDevices[{index}].deviceName is invalid")
+        platform = _req_str(record, "platform").strip().lower()
+        if not _USAGE_PLATFORM_RE.fullmatch(platform):
+            raise BackupDecodeError(f"usageDevices[{index}].platform is invalid")
+        updated_at = _req_int(record, "updatedAtEpochMillis", lo=0)
+
         history = _req_object(record, "history")
+        history_schema = _req_int(history, "schemaVersion")
+        if history_schema == 1:
+            expected_history_keys = {"schemaVersion", "trackingStartedOn", "days"}
+        elif history_schema in {2, 3, 4}:
+            expected_history_keys = {
+                "schemaVersion", "trackingStartedOn", "backfillCompletedThrough", "days",
+            }
+        else:
+            raise BackupDecodeError(f"usageDevices[{index}].history.schemaVersion is invalid")
+        if set(history) != expected_history_keys:
+            raise BackupDecodeError(f"usageDevices[{index}].history contains missing or unknown fields")
         days_json = history.get("days")
-        if not isinstance(days_json, list) or len(days_json) > 100_000:
+        if not isinstance(days_json, list) or len(days_json) > MAX_USAGE_STATISTICS_DAYS:
             raise BackupDecodeError(f"usageDevices[{index}].history.days is invalid")
         days: list[dict[str, Any]] = []
         seen_days: set[str] = set()
         for day_index, day_value in enumerate(days_json):
             if not isinstance(day_value, dict):
                 raise BackupDecodeError(f"usageDevices[{index}].days[{day_index}] must be an object")
+            if set(day_value) != {"date", "zoneId", "state", "collectedAtEpochMillis", "apps"}:
+                raise BackupDecodeError(
+                    f"usageDevices[{index}].days[{day_index}] contains missing or unknown fields"
+                )
             date = _valid_date_iso(_req_str(day_value, "date"), f"usageDevices[{index}].days[{day_index}].date")
             if date in seen_days:
                 raise BackupDecodeError(f"usageDevices[{index}] contains a duplicate day: {date}")
             seen_days.add(date)
+            zone_id = _valid_usage_zone_id(
+                _req_str(day_value, "zoneId"),
+                f"usageDevices[{index}].days[{day_index}].zoneId",
+            )
             state = _req_str(day_value, "state")
             if state not in _USAGE_DAY_STATES:
                 raise BackupDecodeError(f"usageDevices[{index}].days[{day_index}].state is invalid")
             apps_json = day_value.get("apps")
-            if not isinstance(apps_json, list) or len(apps_json) > 10_000:
+            if not isinstance(apps_json, list) or len(apps_json) > MAX_USAGE_APPS_PER_DAY:
                 raise BackupDecodeError(f"usageDevices[{index}].days[{day_index}].apps is invalid")
             apps: list[dict[str, Any]] = []
+            seen_packages: set[str] = set()
             for app_index, app_value in enumerate(apps_json):
                 if not isinstance(app_value, dict):
                     raise BackupDecodeError(
                         f"usageDevices[{index}].days[{day_index}].apps[{app_index}] must be an object"
                     )
+                if set(app_value) != {"packageName", "foregroundMillis"}:
+                    raise BackupDecodeError(
+                        f"usageDevices[{index}].days[{day_index}].apps[{app_index}] "
+                        "contains missing or unknown fields"
+                    )
                 package = _req_str(app_value, "packageName")
-                if not package or len(package) > 512:
+                if (
+                    not package.strip() or len(package) > MAX_USAGE_PACKAGE_NAME_CHARS or
+                    any(ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in package)
+                ):
                     raise BackupDecodeError(
                         f"usageDevices[{index}].days[{day_index}].apps[{app_index}].packageName is invalid"
                     )
+                if package in seen_packages:
+                    raise BackupDecodeError(
+                        f"usageDevices[{index}].days[{day_index}] contains a duplicate package"
+                    )
+                seen_packages.add(package)
                 foreground = _req_int(
                     app_value,
                     "foregroundMillis",
                     lo=0,
+                    hi=MAX_USAGE_FOREGROUND_MILLIS_PER_APP_DAY,
                 )
                 apps.append({"packageName": package, "foregroundMillis": foreground})
+            collected_at = _req_int(day_value, "collectedAtEpochMillis", lo=0)
             days.append(
                 {
                     "date": date,
-                    "zoneId": _req_str(day_value, "zoneId"),
+                    "zoneId": zone_id,
                     "state": state,
-                    "collectedAtEpochMillis": _req_int(day_value, "collectedAtEpochMillis", lo=0),
+                    "collectedAtEpochMillis": collected_at,
                     "apps": apps,
                 }
             )
-        tracking_started_on = history.get("trackingStartedOn")
+        tracking_started_on = _req_nullable_str(history, "trackingStartedOn")
         if tracking_started_on is not None:
-            _valid_date_iso(str(tracking_started_on), f"usageDevices[{index}].trackingStartedOn")
-        backfill = history.get("backfillCompletedThrough")
+            tracking_started_on = _valid_date_iso(
+                tracking_started_on, f"usageDevices[{index}].trackingStartedOn",
+            )
+        if days and tracking_started_on is None:
+            raise BackupDecodeError(f"usageDevices[{index}].trackingStartedOn is required")
+        if tracking_started_on is not None and any(day["date"] < tracking_started_on for day in days):
+            raise BackupDecodeError(f"usageDevices[{index}] contains a day before trackingStartedOn")
+        backfill = _req_nullable_str(history, "backfillCompletedThrough") if history_schema >= 2 else None
         if backfill is not None:
-            _valid_date_iso(str(backfill), f"usageDevices[{index}].backfillCompletedThrough")
+            backfill = _valid_date_iso(
+                backfill, f"usageDevices[{index}].backfillCompletedThrough",
+            )
+        # v2/v3 carried a watermark field, but Android deliberately discards it
+        # and forces a bounded rebuild. Only current schema v4 preserves it.
+        if history_schema != 4:
+            backfill = None
+        newest_day = max((day["collectedAtEpochMillis"] for day in days), default=0)
+        if updated_at < newest_day:
+            raise BackupDecodeError(f"usageDevices[{index}].updatedAtEpochMillis precedes history")
         out.append(
             {
-                "schemaVersion": _req_int(record, "schemaVersion"),
+                "schemaVersion": 1,
                 "deviceId": device_id,
-                "deviceName": _req_str(record, "deviceName"),
-                "platform": _req_str(record, "platform"),
-                "updatedAtEpochMillis": _req_int(record, "updatedAtEpochMillis", lo=0),
+                "deviceName": device_name,
+                "platform": platform,
+                "updatedAtEpochMillis": updated_at,
                 "history": {
-                    "schemaVersion": _req_int(history, "schemaVersion"),
+                    "schemaVersion": 4,
                     "trackingStartedOn": tracking_started_on,
                     "backfillCompletedThrough": backfill,
                     "days": days,
@@ -707,47 +814,96 @@ def _decode_agent_chats(raw: str) -> bytes:
         raise BackupDecodeError("Agent chats backup size is invalid")
     try:
         parsed = json.loads(payload.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError) as exc:
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         raise BackupDecodeError("agentChats payload is not valid JSON") from exc
-    if not isinstance(parsed, dict):
-        raise BackupDecodeError("agentChats payload must be a JSON object")
-    for section in ("conversations", "messages", "attachments", "runs"):
-        value = parsed.get(section, [])
+    if (
+        not isinstance(parsed, dict)
+        or parsed.get("format") != "deskcubby-agent-chats"
+        or parsed.get("version") != 1
+    ):
+        raise BackupDecodeError("agentChats payload format is unsupported")
+    limits = {
+        "conversations": MAX_AGENT_CONVERSATIONS,
+        "messages": MAX_AGENT_MESSAGES,
+        "attachments": MAX_AGENT_ATTACHMENTS,
+        "runs": MAX_AGENT_RUNS,
+    }
+    for section, limit in limits.items():
+        value = parsed.get(section)
         if not isinstance(value, list):
             raise BackupDecodeError(f"agentChats.{section} must be an array")
+        if len(value) > limit:
+            raise BackupDecodeError(f"agentChats.{section} contains too many records")
     return payload
 
 
 def _decode_agent_chat_payload(payload: bytes) -> dict[str, list[dict[str, Any]]]:
-    """AgentChatSyncCodec shape → decoded conversation/message/attachment dicts."""
+    """Strict AgentChatSyncCodec shape → decoded table-ready dictionaries."""
     if not payload:
-        return {"conversations": [], "messages": [], "attachments": []}
+        return {"conversations": [], "messages": [], "attachments": [], "runs": []}
     parsed = json.loads(payload.decode("utf-8"))
-    conversations_raw = parsed.get("conversations") or []
-    messages_raw = parsed.get("messages") or []
-    attachments_raw = parsed.get("attachments") or []
+    conversations_raw = parsed["conversations"]
+    messages_raw = parsed["messages"]
+    attachments_raw = parsed["attachments"]
+    runs_raw = parsed["runs"]
+
+    def safe_id(item: dict[str, Any], key: str, location: str) -> str:
+        value = _req_str(item, key)
+        if not _AGENT_SAFE_ID.fullmatch(value):
+            raise BackupDecodeError(f"{location}.{key} is invalid")
+        return value
+
+    def safe_string(
+        item: dict[str, Any], key: str, maximum: int, location: str, *, allow_empty: bool = False,
+    ) -> str:
+        value = _req_str(item, key)
+        if len(value) > maximum or (not allow_empty and not value.strip()):
+            raise BackupDecodeError(f"{location}.{key} is invalid")
+        return value
+
+    def optional_string(item: dict[str, Any], key: str, maximum: int, location: str) -> str | None:
+        value = _req_nullable_str(item, key)
+        if value is not None and (not value.strip() or len(value) > maximum):
+            raise BackupDecodeError(f"{location}.{key} is invalid")
+        return value
+
+    def safe_time(item: dict[str, Any], key: str, location: str) -> int:
+        try:
+            return _req_int(item, key, lo=0, hi=MAX_AGENT_TIMESTAMP)
+        except BackupDecodeError as exc:
+            raise BackupDecodeError(f"{location}.{key} is invalid") from exc
+
+    def optional_tokens(item: dict[str, Any], key: str, location: str) -> int | None:
+        value = _req_nullable_int(item, key)
+        if value is not None and not 0 <= value <= MAX_AGENT_TOKENS:
+            raise BackupDecodeError(f"{location}.{key} is invalid")
+        return value
 
     conversations: list[dict[str, Any]] = []
     conv_sync_ids: set[str] = set()
     for index, item in enumerate(conversations_raw):
+        location = f"agentChats.conversations[{index}]"
         if not isinstance(item, dict):
-            raise BackupDecodeError(f"agentChats.conversations[{index}] must be an object")
-        sync_id = _req_str(item, "syncId")
-        if not sync_id or sync_id in conv_sync_ids:
-            raise BackupDecodeError(f"agentChats.conversations[{index}].syncId is invalid")
+            raise BackupDecodeError(f"{location} must be an object")
+        sync_id = safe_id(item, "syncId", location)
+        if sync_id in conv_sync_ids:
+            raise BackupDecodeError(f"{location}.syncId is duplicated")
         conv_sync_ids.add(sync_id)
-        title = _req_str(item, "title")
-        model_config_id = _req_str(item, "modelConfigId")
-        created_at = _req_int(item, "createdAt")
-        updated_at = _req_int(item, "updatedAt")
+        title = safe_string(item, "title", 500, location)
+        model_config_id = safe_string(item, "modelConfigId", 200, location, allow_empty=True)
+        created_at = safe_time(item, "createdAt", location)
+        updated_at = safe_time(item, "updatedAt", location)
         deleted_at = _req_nullable_int(item, "deletedAt")
-        if created_at < 0 or updated_at < 0:
-            raise BackupDecodeError(f"agentChats.conversations[{index}] contains a negative timestamp")
+        if (
+            updated_at < created_at
+            or (deleted_at is not None and not created_at <= deleted_at <= MAX_AGENT_TIMESTAMP)
+        ):
+            raise BackupDecodeError(f"{location} contains invalid timestamps")
         conversations.append(
             {
                 "syncId": sync_id,
-                "title": title[:500],
-                "modelConfigId": model_config_id[:200],
+                "title": title,
+                "modelConfigId": model_config_id,
                 "createdAt": created_at,
                 "updatedAt": updated_at,
                 "deletedAt": deleted_at,
@@ -757,52 +913,129 @@ def _decode_agent_chat_payload(payload: bytes) -> dict[str, list[dict[str, Any]]
     messages: list[dict[str, Any]] = []
     msg_sync_ids: set[str] = set()
     for index, item in enumerate(messages_raw):
+        location = f"agentChats.messages[{index}]"
         if not isinstance(item, dict):
-            raise BackupDecodeError(f"agentChats.messages[{index}] must be an object")
-        sync_id = _req_str(item, "syncId")
-        conversation_sync_id = _req_str(item, "conversationSyncId")
-        if not sync_id or sync_id in msg_sync_ids:
-            raise BackupDecodeError(f"agentChats.messages[{index}].syncId is invalid")
+            raise BackupDecodeError(f"{location} must be an object")
+        sync_id = safe_id(item, "syncId", location)
+        conversation_sync_id = safe_id(item, "conversationSyncId", location)
+        if sync_id in msg_sync_ids:
+            raise BackupDecodeError(f"{location}.syncId is duplicated")
         if conversation_sync_id not in conv_sync_ids:
-            raise BackupDecodeError(f"agentChats.messages[{index}] references a missing conversation")
+            raise BackupDecodeError(f"{location} references a missing conversation")
         msg_sync_ids.add(sync_id)
-        role = _req_str(item, "role")
+        role = safe_string(item, "role", 20, location)
+        if role not in {"user", "assistant", "system"}:
+            raise BackupDecodeError(f"{location}.role is invalid")
         messages.append(
             {
                 "syncId": sync_id,
                 "conversationSyncId": conversation_sync_id,
-                "role": role[:40],
-                "content": _req_str(item, "content"),
-                "reasoning": _req_nullable_str(item, "reasoning") or "",
-                "imageMimeType": _req_nullable_str(item, "imageMimeType"),
-                "createdAt": _req_int(item, "createdAt"),
+                "role": role,
+                "content": safe_string(item, "content", MAX_AGENT_MESSAGE_CHARS, location, allow_empty=True),
+                "reasoning": safe_string(item, "reasoning", MAX_AGENT_MESSAGE_CHARS, location, allow_empty=True),
+                "imageMimeType": optional_string(item, "imageMimeType", 200, location),
+                "createdAt": safe_time(item, "createdAt", location),
             }
         )
 
     attachments: list[dict[str, Any]] = []
     att_sync_ids: set[str] = set()
     for index, item in enumerate(attachments_raw):
+        location = f"agentChats.attachments[{index}]"
         if not isinstance(item, dict):
-            raise BackupDecodeError(f"agentChats.attachments[{index}] must be an object")
-        sync_id = _req_str(item, "syncId")
-        message_sync_id = _req_str(item, "messageSyncId")
-        if not sync_id or sync_id in att_sync_ids:
-            raise BackupDecodeError(f"agentChats.attachments[{index}].syncId is invalid")
+            raise BackupDecodeError(f"{location} must be an object")
+        sync_id = safe_id(item, "syncId", location)
+        message_sync_id = safe_id(item, "messageSyncId", location)
+        if sync_id in att_sync_ids:
+            raise BackupDecodeError(f"{location}.syncId is duplicated")
         if message_sync_id not in msg_sync_ids:
-            raise BackupDecodeError(f"agentChats.attachments[{index}] references a missing message")
+            raise BackupDecodeError(f"{location} references a missing message")
         att_sync_ids.add(sync_id)
+        kind = safe_string(item, "kind", 20, location).upper()
+        if kind not in {"IMAGE", "DOCUMENT"}:
+            raise BackupDecodeError(f"{location}.kind is invalid")
         attachments.append(
             {
                 "syncId": sync_id,
                 "messageSyncId": message_sync_id,
-                "mimeType": _req_str(item, "mimeType")[:200],
-                "displayName": _req_str(item, "displayName")[:500],
-                "sizeBytes": _req_int(item, "sizeBytes", lo=0),
-                "kind": _req_str(item, "kind")[:40],
-                "extractedText": _req_nullable_str(item, "extractedText"),
+                "mimeType": safe_string(item, "mimeType", 200, location),
+                "displayName": safe_string(item, "displayName", 500, location),
+                "sizeBytes": _req_int(item, "sizeBytes", lo=0, hi=MAX_AGENT_ATTACHMENT_BYTES),
+                "kind": kind,
+                "extractedText": optional_string(
+                    item, "extractedText", MAX_AGENT_EXTRACTED_TEXT_CHARS, location,
+                ),
             }
         )
-    return {"conversations": conversations, "messages": messages, "attachments": attachments}
+
+    runs: list[dict[str, Any]] = []
+    run_ids: set[str] = set()
+    for index, item in enumerate(runs_raw):
+        location = f"agentChats.runs[{index}]"
+        if not isinstance(item, dict):
+            raise BackupDecodeError(f"{location} must be an object")
+        run_id = safe_id(item, "runId", location)
+        if run_id in run_ids:
+            raise BackupDecodeError(f"{location}.runId is duplicated")
+        run_ids.add(run_id)
+        conversation_sync_id = optional_string(item, "conversationSyncId", 200, location)
+        if conversation_sync_id is not None:
+            if not _AGENT_SAFE_ID.fullmatch(conversation_sync_id):
+                raise BackupDecodeError(f"{location}.conversationSyncId is invalid")
+            if conversation_sync_id not in conv_sync_ids:
+                raise BackupDecodeError(f"{location} references a missing conversation")
+        permission_mode = safe_string(item, "permissionMode", 32, location)
+        if permission_mode not in {"REQUIRE_APPROVAL", "FULL_AUTO"}:
+            raise BackupDecodeError(f"{location}.permissionMode is invalid")
+        enabled_sources_json = safe_string(item, "enabledSourcesJson", 2_048, location)
+        try:
+            if not isinstance(json.loads(enabled_sources_json), list):
+                raise ValueError
+        except (ValueError, RecursionError) as exc:
+            raise BackupDecodeError(f"{location}.enabledSourcesJson is invalid") from exc
+        legacy_status = safe_string(item, "status", 32, location).upper()
+        status = {
+            "COMPLETED": "SUCCEEDED",
+            "ERROR": "FAILED",
+            "CANCELLED": "CANCELED",
+        }.get(legacy_status, legacy_status)
+        if status not in {"SUCCEEDED", "FAILED", "CANCELED"}:
+            raise BackupDecodeError(f"{location}.status is invalid")
+        model_call_count = _req_int(item, "modelCallCount", lo=0, hi=MAX_AGENT_CALLS)
+        usage_call_count = _req_int(item, "usageReportedCallCount", lo=0, hi=MAX_AGENT_CALLS)
+        input_tokens = optional_tokens(item, "inputTokens", location)
+        cached_tokens = optional_tokens(item, "cachedInputTokens", location)
+        cache_rate_input = optional_tokens(item, "cacheRateInputTokens", location)
+        if cache_rate_input is None and cached_tokens is not None:
+            cache_rate_input = input_tokens
+        if cache_rate_input is not None and cached_tokens is not None and cached_tokens > cache_rate_input:
+            raise BackupDecodeError(f"{location} contains invalid cache-token counts")
+        runs.append({
+            "runId": run_id,
+            "conversationSyncId": conversation_sync_id,
+            "conversationTitle": safe_string(item, "conversationTitle", 500, location),
+            "userRequestSummary": safe_string(item, "userRequestSummary", 2_000, location, allow_empty=True),
+            "modelConfigId": safe_string(item, "modelConfigId", 200, location, allow_empty=True),
+            "permissionMode": permission_mode,
+            "enabledSourcesJson": enabled_sources_json,
+            "status": status,
+            "modelCallCount": model_call_count,
+            "usageReportedCallCount": usage_call_count,
+            "inputTokens": input_tokens,
+            "outputTokens": optional_tokens(item, "outputTokens", location),
+            "totalTokens": optional_tokens(item, "totalTokens", location),
+            "cachedInputTokens": cached_tokens,
+            "cacheRateInputTokens": cache_rate_input,
+            "reasoningTokens": optional_tokens(item, "reasoningTokens", location),
+            "startedAt": safe_time(item, "startedAt", location),
+            "completedAt": safe_time(item, "completedAt", location),
+        })
+    return {
+        "conversations": conversations,
+        "messages": messages,
+        "attachments": attachments,
+        "runs": runs,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -940,7 +1173,7 @@ def map_to_rows(parsed: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
 
     Keys: flash_thoughts, thought_categories, browser_records, date_records,
     poetry_categories, saved_poems, vault_items, game_states, game_statistics,
-    ai_conversations, ai_messages, ai_attachments, plus `cloud_sync_configs`
+    ai_conversations, ai_messages, ai_attachments, agent_runs, plus `cloud_sync_configs`
     (secret-free metadata for the settings merge; not a table).
     """
     return {
@@ -1045,6 +1278,7 @@ def map_to_rows(parsed: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         "ai_conversations": parsed["agentChatData"]["conversations"],
         "ai_messages": parsed["agentChatData"]["messages"],
         "ai_attachments": parsed["agentChatData"]["attachments"],
+        "agent_runs": parsed["agentChatData"]["runs"],
         # Metadata only (secrets were already stripped by the encoder); consumed by
         # the commit path to refresh settings.cloudSyncConfigs, never sent to clients.
         "cloud_sync_configs": _cloud_sync_config_metadata(parsed),

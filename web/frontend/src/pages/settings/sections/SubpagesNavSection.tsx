@@ -246,7 +246,9 @@ function NavItemEditor(props: ItemEditorProps) {
 
 function useNavDraft(props: SettingsSectionProps) {
   const { draft, patch } = props;
-  const map = navItemMap(props.settings);
+  // Controls must render from the local draft. Reading the persisted settings
+  // made toggles/colors snap back visually after every click until Save.
+  const map = navItemMap(draft);
   const updateItem = (id: string, p: Partial<NavItemConfig>) => {
     // Base on the current draft list so concurrent edits are preserved.
     const list = draft.navItems.length > 0 ? draft.navItems : [];

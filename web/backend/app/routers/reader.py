@@ -118,7 +118,9 @@ def get_decoded_text(book_id: str, con=Depends(get_db)):
     path = reader_service.book_file_path(row)
     if path.stat().st_size > reader_service.MAX_TEXT_BYTES:
         raise ApiError(413, "file_too_large", "TXT 文件超过 32 MiB 上限")
-    text = reader_service.decode_reader_text(path.read_bytes())
+    text = reader_service.normalize_reader_text_line_breaks(
+        reader_service.decode_reader_text(path.read_bytes())
+    )
     return {"id": row["id"], "title": row["title"], "text": text}
 
 
@@ -136,6 +138,23 @@ def get_progress():
 @router.put("/progress")
 def put_progress(payload: dict | list = Body(...)):
     return reader_service.upsert_progress(payload)
+
+
+# ---------------------------------------------------------------------------
+# Reader preferences (record-syncable; device-only reader fields stay local)
+# ---------------------------------------------------------------------------
+
+@router.get("/preferences")
+def get_preferences():
+    return {
+        **reader_service.read_reader_preferences(),
+        "stored": reader_service.PREFERENCES_PATH.is_file(),
+    }
+
+
+@router.put("/preferences")
+def put_preferences(payload: dict = Body(...)):
+    return {**reader_service.write_reader_preferences(payload), "stored": True}
 
 
 # ---------------------------------------------------------------------------

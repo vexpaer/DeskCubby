@@ -1,5 +1,5 @@
 /**
- * 设置 → 子页面设置：手机使用时间 / 健康 / 浏览器 / 小巧思 / 诗词本 / RSS 订阅
+ * 设置 → 子页面设置：手机使用时间 / 健康 / 浏览器 / 小巧思 / 收藏夹 / 诗词本 / RSS 订阅
  * (README_for_ai §17.4 §17.5 §17.8 §17.9 §17.10 §17.11)。
  *
  * The shell reuses this ONE component across the related section ids
@@ -19,13 +19,14 @@ import { ConfirmDialog, ErrorText } from "../../../components/ui";
 import { SectionCard, Segmented, SliderRow, TextField, Toggle } from "../SettingsPage";
 import type { SettingsSectionProps } from "../SettingsPage";
 
-type CardKey = "usage" | "health" | "browser" | "thought" | "poetry" | "rss";
+type CardKey = "usage" | "health" | "browser" | "thought" | "vault" | "poetry" | "rss";
 
 const SECTION_CARDS: Record<string, CardKey> = {
   usage: "usage",
   health: "health",
   browser: "browser",
   thought: "thought",
+  vault: "vault",
   poetry: "poetry",
   rss: "rss",
 };
@@ -58,9 +59,29 @@ export default function BrowserThoughtPoetryRssSection(props: SettingsSectionPro
       {(active === undefined || active === "health") && <HealthCard {...props} />}
       {(active === undefined || active === "browser") && <BrowserCard {...props} />}
       {(active === undefined || active === "thought") && <ThoughtCard {...props} />}
+      {(active === undefined || active === "vault") && <VaultCard {...props} />}
       {(active === undefined || active === "poetry") && <PoetryCard {...props} />}
       {(active === undefined || active === "rss") && <RssCard {...props} />}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 收藏夹设置
+// ---------------------------------------------------------------------------
+
+function VaultCard({ draft, patch }: SettingsSectionProps) {
+  return (
+    <SectionCard title={tr("收藏夹设置", "Vault settings")}>
+      <SliderRow
+        label={tr("收藏夹条目高度", "Vault entry height")}
+        value={draft.vaultRowHeightDp}
+        min={48} max={120} step={1}
+        format={(v) => `${v} dp`}
+        onChange={(v) => patch({ vaultRowHeightDp: Math.round(v) })}
+        hint={tr("调整收藏夹列表中每一条记录的显示高度。", "Adjusts each row's height in the vault list.")}
+      />
+    </SectionCard>
   );
 }
 

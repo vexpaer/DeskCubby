@@ -39,6 +39,33 @@ _UNRESERVED = frozenset(
 _HEX = "0123456789ABCDEF"
 
 
+def _require_s3_version(raw: str | None) -> str:
+    value = (raw or "").strip()
+    if value.lower().startswith("w/") or any(ch in value for ch in ("\r", "\n", ",")):
+        raise ApiError(502, "s3_remote_validation", "S3 returned an invalid object version")
+    if value and not value.startswith('"') and '"' not in value:
+        value = f'"{value}"'
+    if len(value) < 2 or not (value.startswith('"') and value.endswith('"')):
+        raise ApiError(502, "s3_remote_validation", "S3 returned an invalid object version")
+    opaque = value[1:-1]
+    if any(ord(ch) < 0x21 or ord(ch) > 0x7E or ch == '"' for ch in opaque):
+        raise ApiError(502, "s3_remote_validation", "S3 returned an invalid object version")
+    return value
+
+
+def _s3_version(headers: dict[str, str], data: bytes) -> str:
+    raw = headers.get("etag")
+    if raw:
+        return _require_s3_version(raw)
+    # Standard non-multipart PUT objects use the quoted payload MD5 as ETag.
+    # This is only an opaque conditional version; SHA-256 remains the integrity check.
+    try:
+        digest = hashlib.md5(data, usedforsecurity=False).hexdigest()
+    except TypeError:  # pragma: no cover - older Python without usedforsecurity
+        digest = hashlib.md5(data).hexdigest()
+    return f'"{digest}"'
+
+
 def _uri_encode(value: bytes) -> str:
     out: list[str] = []
     for byte in value:
@@ -198,8 +225,11 @@ def build_collection_url(config: dict[str, Any]) -> str:
     """Endpoint + bucket (+ remotePath) with path-style or virtual-host style."""
     endpoint = str(config.get("endpointUrl") or "").strip().rstrip("/")
     bucket = str(config.get("s3Bucket") or "")
+    remote_value = config.get("remotePath", "DeskCubby")
+    if remote_value is None:
+        remote_value = "DeskCubby"
     remote_path = "/".join(
-        segment for segment in str(config.get("remotePath") or "DeskCubby").split("/") if segment
+        segment for segment in str(remote_value).split("/") if segment
     )
     if not bucket or "/" in bucket or "\\" in bucket or len(bucket) > 255:
         raise ApiError(400, "invalid_bucket", "S3 Bucket name is invalid")
@@ -216,7 +246,11 @@ def build_collection_url(config: dict[str, Any]) -> str:
         authority = host if parts.port is None else f"{host}:{parts.port}"
         endpoint = f"{parts.scheme}://{authority}{parts.path or '/'}".rstrip("/")
         prefix = endpoint
-    return f"{prefix}/" + ("/".join(_uri_encode_segment(s) for s in remote_path.split("/")) if remote_path else "")
+    encoded_remote = "/".join(_uri_encode_segment(s) for s in remote_path.split("/")) if remote_path else ""
+    # This is a collection URI. appendStorageName on Android always receives a
+    # trailing slash; without it Web produced `.../DeskCubby.manifest` instead
+    # of `.../DeskCubby/.manifest` for every non-empty remotePath.
+    return f"{prefix}/{encoded_remote}/" if encoded_remote else f"{prefix}/"
 
 
 def _uri_encode_segment(segment: str) -> str:
@@ -249,6 +283,13 @@ class S3Client:
 
     def _request(self, method: str, url: str, *, payload: bytes = b"",
                  headers: dict[str, str] | None = None) -> tuple[int, bytes]:
+        status, data, _response_headers = self._request_full(
+            method, url, payload=payload, headers=headers,
+        )
+        return status, data
+
+    def _request_full(self, method: str, url: str, *, payload: bytes = b"",
+                      headers: dict[str, str] | None = None) -> tuple[int, bytes, dict[str, str]]:
         signed = self.signer.sign(method, url, headers=headers, payload=payload)
         resp = self.http.request(method, url, headers=signed, content=payload or None)
         declared = resp.headers.get("content-length")
@@ -258,27 +299,76 @@ class S3Client:
         data = resp.content
         if len(data) > cap:
             raise ApiError(413, "response_too_large", "S3 response exceeds the size limit")
-        return resp.status_code, data
+        return resp.status_code, data, {str(k).lower(): str(v) for k, v in resp.headers.items()}
 
     def get_object(self, name: str, max_bytes: int = MAX_RESPONSE_BYTES) -> bytes | None:
-        status, data = self._request("GET", self.object_url(name))
+        blob = self.get_blob(name, max_bytes=max_bytes)
+        return blob[0] if blob is not None else None
+
+    def get_blob(
+        self,
+        name: str,
+        max_bytes: int = MAX_RESPONSE_BYTES,
+        *,
+        expected_version: str | None = None,
+    ) -> tuple[bytes, str] | None:
+        request_headers = {"If-Match": _require_s3_version(expected_version)} if expected_version else None
+        status, data, response_headers = self._request_full(
+            "GET", self.object_url(name), headers=request_headers,
+        )
         if status == 404:
             return None
+        if status in (409, 412):
+            raise ApiError(409, "s3_conflict", "Remote S3 object changed during sync")
         if status != 200:
             raise self._status_error("S3 GET", status, data)
         if len(data) > max_bytes:
             raise ApiError(413, "response_too_large", "S3 object exceeds the size limit")
-        return data
+        # S3-compatible gateways sometimes omit or normalize ETag. Android uses
+        # the requested version for a conditional read, otherwise falls back to
+        # the single-part object MD5 used by ordinary PUT uploads.
+        version = _require_s3_version(expected_version) if expected_version else _s3_version(response_headers, data)
+        return data, version
 
     def put_object(self, name: str, data: bytes, *,
                    content_type: str = "application/octet-stream") -> None:
-        status, body = self._request(
+        self.put_blob(name, data, content_type=content_type)
+
+    def put_blob(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        content_type: str = "application/octet-stream",
+        expected_version: str | None = None,
+        must_not_exist: bool = False,
+    ) -> str:
+        if expected_version is not None and must_not_exist:
+            raise ValueError("expected_version and must_not_exist are mutually exclusive")
+        request_headers = {
+            "Content-Type": content_type,
+            "x-amz-meta-deskcubby-sha256": hashlib.sha256(data).hexdigest(),
+        }
+        if expected_version is not None:
+            request_headers["If-Match"] = _require_s3_version(expected_version)
+        elif must_not_exist:
+            request_headers["If-None-Match"] = "*"
+        status, body, response_headers = self._request_full(
             "PUT", self.object_url(name),
             payload=data,
-            headers={"Content-Type": content_type},
+            headers=request_headers,
         )
+        if status in (409, 412):
+            raise ApiError(409, "s3_conflict", "Remote S3 object changed during sync")
         if status not in (200, 201, 204):
             raise self._status_error("S3 PUT", status, body)
+        raw = response_headers.get("etag")
+        if raw:
+            return _require_s3_version(raw)
+        verified = self.get_blob(name, max_bytes=max(1, len(data)))
+        if verified is None or verified[0] != data:
+            raise ApiError(409, "s3_conflict", "S3 write could not be verified")
+        return verified[1]
 
     def delete_object(self, name: str) -> None:
         status, body = self._request("DELETE", self.object_url(name))

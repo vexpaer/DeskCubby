@@ -377,7 +377,7 @@ def build_vault(con: Any, data_dir: Path | None = None) -> dict[str, Any]:
 
 
 def build_usage_devices(con: Any) -> list[dict[str, Any]]:
-    """usage_devices + usage_events_daily -> UsageDeviceJsonCodec record shape.
+    """Usage tables -> canonical Android UsageDeviceJsonCodec records.
 
     Exact Kotlin keys (StatisticsJsonCodecs.kt): record {schemaVersion, deviceId,
     deviceName, platform, updatedAtEpochMillis, history}; history {schemaVersion,
@@ -388,49 +388,66 @@ def build_usage_devices(con: Any) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     today_iso = _dt.date.today().isoformat()
     for device in devices:
-        day_rows = _rows(
+        metadata_rows = _rows(
             con,
-            "SELECT dayIso, MAX(lastSeen) AS collectedAt FROM usage_events_daily "
-            "WHERE deviceId = ? GROUP BY dayIso ORDER BY dayIso",
+            "SELECT dayIso,zoneId,state,collectedAt FROM usage_days "
+            "WHERE deviceId=? ORDER BY dayIso",
             (device["deviceId"],),
         )
-        if not day_rows:
-            continue
+        metadata = {row["dayIso"]: row for row in metadata_rows}
+        event_rows = _rows(
+            con,
+            "SELECT dayIso,MAX(lastSeen) AS collectedAt FROM usage_events_daily "
+            "WHERE deviceId=? GROUP BY dayIso ORDER BY dayIso",
+            (device["deviceId"],),
+        )
+        events = {row["dayIso"]: row for row in event_rows}
+        day_isos = sorted(set(metadata) | set(events))
         days = []
         max_collected = 0
-        for day in day_rows:
+        for day_iso in day_isos:
+            day = metadata.get(day_iso)
+            fallback = events.get(day_iso)
             apps = [
                 {"packageName": row["packageName"], "foregroundMillis": row["totalTimeMs"]}
                 for row in _rows(
                     con,
                     "SELECT packageName, totalTimeMs FROM usage_events_daily "
                     "WHERE deviceId = ? AND dayIso = ? ORDER BY packageName",
-                    (device["deviceId"], day["dayIso"]),
+                    (device["deviceId"], day_iso),
                 )
             ]
-            collected = int(day["collectedAt"] or 0)
+            collected = int(
+                (day["collectedAt"] if day is not None else fallback["collectedAt"]) or 0
+            )
             max_collected = max(max_collected, collected)
             days.append(
                 {
-                    "date": day["dayIso"],
-                    "zoneId": "UTC",
-                    "state": "OPEN" if day["dayIso"] == today_iso else "FINAL",
+                    "date": day_iso,
+                    "zoneId": day["zoneId"] if day is not None else "UTC",
+                    "state": (
+                        day["state"] if day is not None
+                        else ("OPEN" if day_iso == today_iso else "FINAL")
+                    ),
                     "collectedAtEpochMillis": collected,
                     "apps": apps,
                 }
             )
         updated_at = max(int(device["updatedAt"] or 0), max_collected)
+        tracking_started = device.get("trackingStartedOn")
+        if days and (not tracking_started or days[0]["date"] < tracking_started):
+            tracking_started = days[0]["date"]
         records.append(
             {
                 "schemaVersion": 1,
                 "deviceId": device["deviceId"],
                 "deviceName": device["deviceName"],
-                "platform": "web",
+                "platform": device.get("platform") or "web",
                 "updatedAtEpochMillis": updated_at,
                 "history": {
                     "schemaVersion": 4,
-                    "trackingStartedOn": days[0]["date"] if days else None,
-                    "backfillCompletedThrough": None,
+                    "trackingStartedOn": tracking_started,
+                    "backfillCompletedThrough": device.get("backfillCompletedThrough"),
                     "days": days,
                 },
             }
@@ -532,7 +549,9 @@ def build_agent_chats_b64(con: Any) -> str:
                 "mimeType": row["mimeType"],
                 "displayName": row["displayName"],
                 "sizeBytes": row["sizeBytes"],
-                "kind": row["kind"],
+                # Early Web builds used lowercase attachment kinds; Android's
+                # AgentChatSyncCodec wire enum is uppercase.
+                "kind": str(row["kind"] or "").upper(),
                 "extractedText": row["extractedText"],
             }
         )
@@ -541,6 +560,15 @@ def build_agent_chats_b64(con: Any) -> str:
         con,
         "SELECT * FROM agent_runs WHERE completedAt IS NOT NULL ORDER BY runId",
     ):
+        status = {
+            "COMPLETED": "SUCCEEDED",
+            "ERROR": "FAILED",
+            "CANCELLED": "CANCELED",
+        }.get(str(row["status"] or "").upper(), str(row["status"] or "").upper())
+        # Old Web builds persisted different names. Canonicalize them at the
+        # Android-compatible export boundary without rewriting user history.
+        if status not in {"SUCCEEDED", "FAILED", "CANCELED"}:
+            status = "FAILED"
         runs.append(
             {
                 "runId": row["runId"],
@@ -550,7 +578,7 @@ def build_agent_chats_b64(con: Any) -> str:
                 "modelConfigId": row["modelConfigId"],
                 "permissionMode": row["permissionMode"],
                 "enabledSourcesJson": row["enabledSourcesJson"],
-                "status": row["status"],
+                "status": status,
                 "modelCallCount": row["modelCallCount"],
                 "usageReportedCallCount": row["usageReportedCallCount"],
                 "inputTokens": row["inputTokens"],

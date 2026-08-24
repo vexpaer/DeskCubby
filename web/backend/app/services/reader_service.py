@@ -33,6 +33,7 @@ from ..core.config import BOOKS_DIR, PRIVATE_DIR
 from ..core.db import write_lock
 from ..core.errors import ApiError
 from ..core.fs import safe_write_text
+from .android_json import android_float32, android_json_bytes
 
 READER_FINGERPRINT_DOMAIN = "DeskCubby.ReaderBook.v1"
 FINGERPRINT_REGEX = re.compile(r"[0-9a-f]{64}")
@@ -51,15 +52,138 @@ MAX_PDF_PAGES = 20_000
 
 PROGRESS_PATH = PRIVATE_DIR / "reading" / "v1" / "progress.json"
 ENGAGEMENT_PATH = PRIVATE_DIR / "reading" / "engagement.json"
+PREFERENCES_PATH = PRIVATE_DIR / "reading" / "preferences.json"
 
 _progress_mutex = threading.RLock()
 _engagement_mutex = threading.RLock()
+_preferences_mutex = threading.RLock()
 
 VALID_TYPES = ("TXT", "PDF")
+
+READER_PREFERENCES_DEFAULTS: dict[str, Any] = {
+    "background": "PAPER",
+    "customBackgroundArgb": -724762,  # 0xFFF4F0E6 as a signed Kotlin Int
+    "fontSizeSp": 19.0,
+    "lineHeightMultiplier": 1.6,
+    "paragraphSpacingDp": 10.0,
+    "showProgressPercentage": False,
+    "chapterDetectionMode": "SMART_AND_CUSTOM",
+}
+READER_PREFERENCES_FORMAT = "deskcubby-reader-preferences"
+READER_PREFERENCES_VERSION = 1
+READER_PREFERENCES_MAX_BYTES = 64 * 1024
 
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+
+# ---------------------------------------------------------------------------
+# Reader preferences (the Android record-sync subset)
+# ---------------------------------------------------------------------------
+
+def _normalize_reader_preferences(value: Any, *, remote: bool) -> dict[str, Any]:
+    error_status = 502 if remote else 400
+
+    def invalid() -> ApiError:
+        return ApiError(error_status, "reader_preferences_invalid", "Reader preferences are invalid")
+
+    if not isinstance(value, dict):
+        raise invalid()
+    background = value.get("background")
+    chapter_mode = value.get("chapterDetectionMode")
+    if background not in {"WHITE", "PAPER", "SEPIA", "GREEN", "NIGHT", "CUSTOM"}:
+        raise invalid()
+    if chapter_mode not in {"SMART", "CUSTOM", "SMART_AND_CUSTOM"}:
+        raise invalid()
+    custom = value.get("customBackgroundArgb")
+    if isinstance(custom, bool) or not isinstance(custom, int) or not -(2**31) <= custom <= 2**31 - 1:
+        raise invalid()
+
+    def finite_number(key: str, minimum: float, maximum: float) -> float:
+        raw = value.get(key)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise invalid()
+        number = float(raw)
+        if number != number or number in (float("inf"), float("-inf")):
+            raise invalid()
+        # Android normalizes hostile preference values before persistence.
+        return android_float32(min(maximum, max(minimum, number)))
+
+    show_percentage = value.get("showProgressPercentage")
+    if not isinstance(show_percentage, bool):
+        raise invalid()
+    opaque_custom = (int(custom) & 0x00FF_FFFF) | 0xFF00_0000
+    signed_custom = opaque_custom - (1 << 32) if opaque_custom >= (1 << 31) else opaque_custom
+    return {
+        "background": background,
+        "customBackgroundArgb": signed_custom,
+        "fontSizeSp": finite_number("fontSizeSp", 12.0, 38.0),
+        "lineHeightMultiplier": finite_number("lineHeightMultiplier", 1.0, 2.4),
+        "paragraphSpacingDp": finite_number("paragraphSpacingDp", 0.0, 36.0),
+        "showProgressPercentage": show_percentage,
+        "chapterDetectionMode": chapter_mode,
+    }
+
+
+def read_reader_preferences() -> dict[str, Any]:
+    with _preferences_mutex:
+        if not PREFERENCES_PATH.is_file():
+            return dict(READER_PREFERENCES_DEFAULTS)
+        try:
+            if PREFERENCES_PATH.stat().st_size > READER_PREFERENCES_MAX_BYTES:
+                return dict(READER_PREFERENCES_DEFAULTS)
+            value = json.loads(PREFERENCES_PATH.read_text(encoding="utf-8"))
+            merged = {**READER_PREFERENCES_DEFAULTS, **value} if isinstance(value, dict) else value
+            return _normalize_reader_preferences(merged, remote=False)
+        except (OSError, ValueError, RecursionError, ApiError):
+            return dict(READER_PREFERENCES_DEFAULTS)
+
+
+def write_reader_preferences(value: Any, *, remote: bool = False) -> dict[str, Any]:
+    cleaned = _normalize_reader_preferences(value, remote=remote)
+    encoded = json.dumps(cleaned, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > READER_PREFERENCES_MAX_BYTES:
+        raise ApiError(413, "reader_preferences_too_large", "Reader preferences are too large")
+    with _preferences_mutex:
+        PREFERENCES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        safe_write_text(PREFERENCES_PATH, encoded)
+    return cleaned
+
+
+def encode_reader_preferences() -> bytes:
+    value = read_reader_preferences()
+    # ReaderPreferences stores these three values as Kotlin Float and the
+    # Android codec explicitly calls toDouble(). Reproduce the float32 value
+    # before serialization so the record payload/hash is byte-compatible.
+    wire = {
+        "format": READER_PREFERENCES_FORMAT,
+        "version": READER_PREFERENCES_VERSION,
+        **value,
+        "fontSizeSp": android_float32(value["fontSizeSp"]),
+        "lineHeightMultiplier": android_float32(value["lineHeightMultiplier"]),
+        "paragraphSpacingDp": android_float32(value["paragraphSpacingDp"]),
+    }
+    return android_json_bytes(wire)
+
+
+def apply_reader_preferences_payload(payload: bytes) -> dict[str, Any]:
+    if not payload or len(payload) > READER_PREFERENCES_MAX_BYTES:
+        raise ApiError(502, "reader_preferences_invalid", "Reader preferences payload is invalid")
+    try:
+        root = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+        raise ApiError(502, "reader_preferences_invalid", "Reader preferences payload is invalid") from exc
+    expected = {"format", "version", *READER_PREFERENCES_DEFAULTS}
+    if (
+        not isinstance(root, dict) or set(root) != expected or
+        root.get("format") != READER_PREFERENCES_FORMAT or
+        root.get("version") != READER_PREFERENCES_VERSION
+    ):
+        raise ApiError(502, "reader_preferences_invalid", "Reader preferences payload is invalid")
+    return write_reader_preferences(
+        {key: root[key] for key in READER_PREFERENCES_DEFAULTS}, remote=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +215,11 @@ def decode_reader_text(data: bytes) -> str:
         return data.decode("utf-8")
     except UnicodeDecodeError:
         return data.decode("gb18030", errors="replace")
+
+
+def normalize_reader_text_line_breaks(value: str) -> str:
+    """Mirror ReaderRepository.readText before pagination/chapter scanning."""
+    return value.replace("\r\n", "\n").replace("\r", "\n")
 
 
 # ---------------------------------------------------------------------------

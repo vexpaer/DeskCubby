@@ -202,7 +202,7 @@ def list_diary_file_metas() -> list[dict[str, Any]]:
     metas = []
     for p in sorted(DIARY_DIR.iterdir()):
         try:
-            if p.is_file() and p.suffix.lower() == ".md":
+            if not p.is_symlink() and p.is_file() and p.suffix.lower() == ".md":
                 st = p.stat()
                 metas.append(
                     {"uri": p.name, "name": p.name, "lastModified": int(st.st_mtime * 1000), "size": st.st_size}
@@ -677,7 +677,7 @@ def media_files_by_lower_name() -> dict[str, str]:
     if MEDIA_DIR.is_dir():
         for p in MEDIA_DIR.iterdir():
             try:
-                if p.is_file() and not p.name.lower().endswith(".json"):
+                if not p.is_symlink() and p.is_file() and not p.name.lower().endswith(".json"):
                     result.setdefault(p.name.lower(), p.name)
             except OSError:
                 continue

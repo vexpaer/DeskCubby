@@ -12,11 +12,12 @@ import asyncio
 import base64
 import json
 import time
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..core import fs
 from ..core.config import DIARY_DIR, NOTES_DIR
@@ -44,10 +45,14 @@ def _now_ms() -> int:
 
 
 class AgentRunBody(BaseModel):
+    runId: str | None = Field(default=None, max_length=64)
     conversationId: int | None = None
     content: str = ""
+    attachmentIds: list[str] = Field(default_factory=list)
     configId: str | None = None
-    sourceAuthorizations: list[str] | None = None
+    # Android uses a selected-id list; the Web composer historically sent an
+    # id -> bool map. Accept both, and only grant map entries explicitly true.
+    sourceAuthorizations: list[str] | dict[str, bool] | None = None
     permissionMode: str | None = None
 
 
@@ -55,8 +60,18 @@ class AgentRunBody(BaseModel):
 async def start_run(body: AgentRunBody, request: Request, con=Depends(get_db)):
     # Validate eagerly so request-level problems return HTTP errors; model,
     # tool and network failures stream as `error` events with a persisted run.
-    if not str(body.content or "").strip():
+    attachment_ids = [str(value or "").strip() for value in body.attachmentIds]
+    if len(attachment_ids) > 5 or any(not value for value in attachment_ids) or len(set(attachment_ids)) != len(attachment_ids):
+        raise ApiError(400, "invalid_attachments", "附件列表无效。")
+    if not str(body.content or "").strip() and not attachment_ids:
         raise ApiError(400, "empty_message", "消息内容不能为空。")
+    if body.runId is not None:
+        try:
+            body.runId = str(uuid.UUID(str(body.runId).strip()))
+        except (ValueError, AttributeError, TypeError):
+            raise ApiError(400, "invalid_run_id", "Agent Run ID 无效。") from None
+        if con.execute("SELECT 1 FROM agent_runs WHERE runId=?", (body.runId,)).fetchone() is not None:
+            raise ApiError(409, "run_exists", "Agent Run 已存在。")
     if body.conversationId is not None:
         row = con.execute(
             "SELECT id FROM ai_conversations WHERE id=? AND deletedAt IS NULL", (body.conversationId,)
@@ -65,22 +80,48 @@ async def start_run(body: AgentRunBody, request: Request, con=Depends(get_db)):
             raise ApiError(404, "not_found", "Conversation not found")
 
     queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+    detached = False
 
     async def emit(event: dict[str, Any]) -> None:
-        await queue.put((str(event.get("type") or "event"), event))
+        if not detached:
+            await queue.put((str(event.get("type") or "event"), event))
 
     async def worker() -> None:
         try:
             await run_agent(request.app, body, emit)
         except ApiError as exc:
-            await queue.put(("error", {"code": exc.code, "message": exc.message}))
+            await emit({"type": "error", "code": exc.code, "message": exc.message})
         except Exception:  # noqa: BLE001 - never leak internals to the stream
-            await queue.put(("error", {"code": "agent_error", "message": "Agent 运行失败。"}))
+            await emit({"type": "error", "code": "agent_error", "message": "Agent 运行失败。"})
         finally:
-            await queue.put(None)
+            if not detached:
+                await queue.put(None)
+
+    # Start independently of the response iterator and retain a strong task
+    # reference. Navigating away closes SSE, but it must not cancel a durable
+    # server-side Agent run (Android 0.23.4 semantics).
+    workers: set[asyncio.Task] | None = getattr(request.app.state, "agent_stream_workers", None)
+    if workers is None:
+        workers = set()
+        request.app.state.agent_stream_workers = workers
+    task = asyncio.create_task(worker())
+    workers.add(task)
+    task.add_done_callback(workers.discard)
+    if body.runId:
+        run_tasks: dict[str, asyncio.Task] | None = getattr(request.app.state, "agent_runs_tasks", None)
+        if run_tasks is None:
+            run_tasks = {}
+            request.app.state.agent_runs_tasks = run_tasks
+        run_tasks[body.runId] = task
+
+        def forget_run_task(done: asyncio.Task) -> None:
+            if run_tasks.get(body.runId or "") is done:
+                run_tasks.pop(body.runId or "", None)
+
+        task.add_done_callback(forget_run_task)
 
     async def event_stream():
-        task = asyncio.create_task(worker())
+        nonlocal detached
         try:
             while True:
                 item = await queue.get()
@@ -89,8 +130,7 @@ async def start_run(body: AgentRunBody, request: Request, con=Depends(get_db)):
                 event_type, payload = item
                 yield _sse(event_type, payload)
         finally:
-            if not task.done():
-                task.cancel()
+            detached = True
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -254,6 +294,8 @@ def pending_approvals():
             "target": req.target,
             "summary": req.summary,
             "argumentsSummary": req.arguments_summary,
+            "before": req.before,
+            "after": req.after,
         }
         for req in get_permission_manager().pending()
     ]
@@ -298,7 +340,7 @@ async def cancel_run(run_id: str, request: Request, con=Depends(get_db)):
         get_review_store().finish_run(
             con,
             run_id,
-            "CANCELLED",
+            "CANCELED",
             {
                 "modelCallCount": run.get("modelCallCount") or 0,
                 "reportedCallCount": run.get("usageReportedCallCount") or 0,

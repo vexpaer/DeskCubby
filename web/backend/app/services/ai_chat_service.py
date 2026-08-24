@@ -554,7 +554,10 @@ async def stream_chat_completion(
     if not request["model"]:
         raise AiChatError("CONFIGURATION", "请先在 AI 设置中填写模型名称。")
     body = json.dumps(request, ensure_ascii=False).encode("utf-8")
-    if len(body) > MAX_BODY_BYTES:
+    request_cap = MAX_IMAGE_REQUEST_BODY_BYTES if any(
+        isinstance(item.get("content"), list) for item in wire_messages
+    ) else MAX_BODY_BYTES
+    if len(body) > request_cap:
         raise AiChatError("CONFIGURATION", "当前对话内容过长，请清空对话后重试。")
 
     response, client = await _post_bounded(

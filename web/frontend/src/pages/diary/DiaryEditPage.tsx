@@ -13,6 +13,7 @@ import {
 import { ApiClientError, apiGet, apiSend, apiUpload } from "../../api/client";
 import { MEAL_CATEGORIES } from "../../api/types";
 import { tr } from "../../i18n/tr";
+import { loadTodayDiaryIso } from "./todayDiary";
 import {
   ConfirmDialog, ErrorText, Modal, PageTutorialOverlay, PopupMenu,
   Snackbar, Spinner, TopBar, useDirtyGuard, useSnackbar,
@@ -205,21 +206,16 @@ export default function DiaryEditPage() {
       setLoading(true);
       try {
         let name: string | undefined;
+        const targetDate = await loadTodayDiaryIso();
         try {
-          const d = new Date();
-          const p = (n: number) => String(n).padStart(2, "0");
-          const today = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-          const created = await apiSend<Partial<{ name: string }>>("/api/diary/documents", "POST", { dateIso: today });
+          const created = await apiSend<Partial<{ name: string }>>("/api/diary/documents", "POST", { dateIso: targetDate });
           name = created?.name;
         } catch {
           /* maybe exists already */
         }
         if (!name) {
           const list = await apiGet<Array<{ name: string; dateIso: string }>>("/api/diary/documents");
-          const d = new Date();
-          const p = (n: number) => String(n).padStart(2, "0");
-          const today = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-          name = (Array.isArray(list) ? list : []).find((x) => x.dateIso === today)?.name;
+          name = (Array.isArray(list) ? list : []).find((x) => x.dateIso === targetDate)?.name;
         }
         if (cancelled) return;
         if (!name) {
@@ -545,7 +541,7 @@ export default function DiaryEditPage() {
           <Code2 size={19} />
         </button>
         <span className="dc-grow" />
-        <button className="dc-btn" onClick={() => navigate("/daily")}>
+        <button className="dc-btn" onClick={() => navigate(`/daily?document=${encodeURIComponent(docName)}`)}>
           <NotebookPen size={16} /> {tr("日常记录", "Daily records")}
         </button>
         <span className="dc-muted" style={{ fontSize: "0.82em", whiteSpace: "nowrap" }}>

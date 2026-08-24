@@ -15,7 +15,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..core.db import get_db
 from ..core.errors import ApiError
@@ -35,13 +35,19 @@ CONTENT_VALUES = (
     "USAGE_STATISTICS", "READING_PROGRESS", "READER_PREFERENCES", "AGENT_CHATS",
     "VAULT", "GLOBAL_SETTINGS",
 )
+IMPLICIT_CONTENTS = ("THOUGHT_CATEGORIES", "POETRY_CATEGORIES")
 DEFAULT_CONTENTS = [
-    "DIARIES", "NOTES", "MEDIA", "THOUGHTS", "THOUGHT_CATEGORIES", "DATE_RECORDS",
-    "POEMS", "POETRY_CATEGORIES", "FAVORITES", "READING_PROGRESS",
+    "DIARIES", "NOTES", "MEDIA", "THOUGHTS", "DATE_RECORDS",
+    "POEMS", "FAVORITES", "READING_PROGRESS",
     "READER_PREFERENCES", "AGENT_CHATS",
 ]
 MAX_CONFIGS = 20                      # SettingsRepository.MAX_CLOUD_SYNC_CONFIGS
 _S3_REGION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_S3_VIRTUAL_HOST_BUCKET_RE = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,61}[a-z0-9])?")
+
+
+def _has_iso_control(value: str) -> bool:
+    return any(ord(ch) <= 0x1F or 0x7F <= ord(ch) <= 0x9F for ch in value)
 
 
 class ConfigBody(BaseModel):
@@ -61,8 +67,9 @@ class ConfigBody(BaseModel):
     s3SessionToken: str = ""
     s3PathStyle: bool = True
     allowInsecureHttp: bool = False
-    selectedContents: list[str] = []
+    selectedContents: list[str] = Field(default_factory=list)
     direction: str = "TWO_WAY"
+    clearCredentials: bool = False
 
 
 class SyncBody(BaseModel):
@@ -78,7 +85,7 @@ def _validate_config(body: ConfigBody) -> dict[str, Any]:
     """Validate kind + base URL + bounds exactly where Android does
     (CloudSyncValidation.kt)."""
     name = body.name.strip().replace("\r", " ").replace("\n", " ")[:200]
-    if not name:
+    if not name or _has_iso_control(name):
         raise ApiError(400, "invalid_name", "Configuration name is required")
     if body.serviceType not in SERVICE_TYPES:
         raise ApiError(400, "invalid_service", "serviceType must be WEBDAV or S3_COMPATIBLE")
@@ -86,44 +93,83 @@ def _validate_config(body: ConfigBody) -> dict[str, Any]:
         raise ApiError(400, "invalid_direction", "direction must be UPLOAD_ONLY or TWO_WAY")
 
     endpoint = body.endpointUrl.strip()
+    if body.serviceType == "S3_COMPATIBLE" and endpoint and "://" not in endpoint:
+        endpoint = ("http://" if body.allowInsecureHttp else "https://") + endpoint
+    if len(endpoint) > 4_096:
+        raise ApiError(400, "invalid_endpoint", "Cloud service URL is too long")
     from urllib.parse import urlsplit
 
-    parts = urlsplit(endpoint)
+    try:
+        parts = urlsplit(endpoint)
+        hostname = parts.hostname
+    except ValueError as exc:
+        raise ApiError(400, "invalid_endpoint", "Cloud service URL is invalid") from exc
     scheme = (parts.scheme or "").lower()
     if scheme == "http" and not body.allowInsecureHttp:
         raise ApiError(400, "insecure_endpoint",
                        "HTTP sync is off by default; explicitly allow it for trusted LAN services")
     if scheme != "https" and scheme != "http":
         raise ApiError(400, "invalid_endpoint", "Cloud service URL must use HTTPS")
-    if not parts.hostname or parts.username or parts.query or parts.fragment:
+    if (
+        not hostname or _has_iso_control(endpoint) or "\\" in endpoint or
+        any(ch.isspace() for ch in endpoint) or
+        parts.username is not None or parts.password is not None or
+        "?" in endpoint or "#" in endpoint
+    ):
         raise ApiError(400, "invalid_endpoint",
                        "Cloud service URL must be absolute and free of account info or query")
 
+    raw_remote_path = body.remotePath
+    if (
+        len(raw_remote_path) > 1024 or _has_iso_control(raw_remote_path) or
+        "\\" in raw_remote_path
+    ):
+        raise ApiError(400, "invalid_path", "Remote path is invalid")
     remote_path = "/".join(
-        segment for segment in body.remotePath.replace("\\", "/").split("/") if segment.strip("/")
+        segment for segment in raw_remote_path.strip().strip("/").split("/") if segment
     )
     if any(segment in (".", "..") for segment in remote_path.split("/")):
         raise ApiError(400, "invalid_path", "Remote path must not contain . or .. segments")
-    if len(remote_path) > 1024:
-        raise ApiError(400, "invalid_path", "Remote path is too long")
 
-    user_agent = body.userAgent.strip()[:512]
+    user_agent = body.userAgent.strip()
     if not user_agent:
         user_agent = "DeskCubby-Sync/1"
+    if len(user_agent) > 512 or _has_iso_control(user_agent):
+        raise ApiError(400, "invalid_user_agent", "User-Agent is invalid or too long")
 
-    selected = [c for c in dict.fromkeys(body.selectedContents) if c in CONTENT_VALUES]
+    config_id = (body.id or "").strip() or str(uuid.uuid4())
+    if len(config_id) > 128 or _has_iso_control(config_id):
+        raise ApiError(400, "invalid_id", "Configuration id is invalid")
+
+    credentials = (
+        body.webDavUsername, body.webDavPassword, body.s3AccessKey,
+        body.s3SecretKey, body.s3SessionToken,
+    )
+    if any(len(value) > 8192 for value in credentials):
+        raise ApiError(400, "credentials_too_long", "Cloud credentials are too long")
+
+    # 0.23.5 hides relationship categories: selecting the parent always brings
+    # its category records along.  Legacy configurations that selected only a
+    # category are promoted back to the visible parent instead of losing data.
+    raw_selected = [c for c in dict.fromkeys(body.selectedContents) if c in CONTENT_VALUES]
+    selected_set = set(raw_selected)
+    if "THOUGHT_CATEGORIES" in selected_set:
+        selected_set.add("THOUGHTS")
+    if "POETRY_CATEGORIES" in selected_set:
+        selected_set.add("POEMS")
+    selected = [c for c in CONTENT_VALUES if c in selected_set and c not in IMPLICIT_CONTENTS]
     if not selected:
         raise ApiError(400, "no_contents", "Select at least one content category to sync")
 
     config: dict[str, Any] = {
-        "id": (body.id or "").strip()[:128] or str(uuid.uuid4()),
+        "id": config_id,
         "name": name,
         "enabled": bool(body.enabled),
         "serviceType": body.serviceType,
         "endpointUrl": endpoint,
-        "remotePath": remote_path or "DeskCubby",
+        "remotePath": remote_path,
         "userAgent": user_agent,
-        "webDavUsername": body.webDavUsername[:8192],
+        "webDavUsername": body.webDavUsername.strip()[:512],
         "s3Bucket": body.s3Bucket.strip(),
         "s3Region": body.s3Region.strip() or "us-east-1",
         "s3PathStyle": bool(body.s3PathStyle),
@@ -133,10 +179,21 @@ def _validate_config(body: ConfigBody) -> dict[str, Any]:
     }
     if config["serviceType"] == "S3_COMPATIBLE":
         bucket = config["s3Bucket"]
-        if not bucket or len(bucket) > 255 or "/" in bucket or "\\" in bucket:
+        if (
+            not bucket or len(bucket) > 255 or "/" in bucket or "\\" in bucket or
+            _has_iso_control(bucket)
+        ):
             raise ApiError(400, "invalid_bucket", "S3 Bucket name is invalid")
         if not _S3_REGION_RE.fullmatch(config["s3Region"]):
             raise ApiError(400, "invalid_region", "S3 Region is invalid")
+        if (
+            not config["s3PathStyle"] and
+            (not _S3_VIRTUAL_HOST_BUCKET_RE.fullmatch(bucket) or ":" in hostname)
+        ):
+            raise ApiError(
+                400, "invalid_bucket",
+                "Bucket must be a lowercase hostname-safe name without path-style",
+            )
     return config
 
 
@@ -144,7 +201,10 @@ def redact_config(config: dict[str, Any]) -> dict[str, Any]:
     """Browser-safe projection: secret values become empty strings (§3.7),
     presence is flagged via `hasCredentials` like the Android editor."""
     out = dict(config)
-    secrets_present = any(str(out.get(field) or "") for field in SECRET_FIELDS)
+    if out.get("serviceType") == "S3_COMPATIBLE":
+        secrets_present = bool(out.get("s3AccessKey") and out.get("s3SecretKey"))
+    else:
+        secrets_present = bool(out.get("webDavPassword"))
     for field in SECRET_FIELDS:
         out[field] = ""
     out.pop("hasCredentials", None)
@@ -183,22 +243,32 @@ def status(con=Depends(get_db)):
 @router.post("/configs")
 def create_config(body: ConfigBody, con=Depends(get_db)):
     config = _validate_config(body)
+    if config["serviceType"] == "S3_COMPATIBLE" and config["enabled"] and (
+        not body.s3AccessKey.strip() or not body.s3SecretKey
+    ):
+        raise ApiError(400, "missing_credentials", "S3 Access Key and Secret Key are required")
     configs = _stored_configs(con)
     if any(c.get("id") == config["id"] for c in configs):
         raise ApiError(409, "duplicate_id", "A configuration with this id already exists")
     if len(configs) >= MAX_CONFIGS:
         raise ApiError(400, "too_many_configs", f"At most {MAX_CONFIGS} sync configurations are allowed")
     configs.append(config)
-    update_settings(con, {"cloudSyncConfigs": configs})
-    engine.write_secrets(config["id"], {
+    secrets = {
         "webDavPassword": body.webDavPassword,
-        "s3AccessKey": body.s3AccessKey,
+        "s3AccessKey": body.s3AccessKey.strip(),
         "s3SecretKey": body.s3SecretKey,
         "s3SessionToken": body.s3SessionToken,
-    })
+    }
+    previous_secrets = engine.read_secrets(config["id"])
+    engine.write_secrets(config["id"], secrets)
+    try:
+        update_settings(con, {"cloudSyncConfigs": configs})
+    except Exception:
+        engine.write_secrets(config["id"], previous_secrets)
+        raise
     hydrated = {**config,
                 "webDavPassword": body.webDavPassword,
-                "s3AccessKey": body.s3AccessKey,
+                "s3AccessKey": body.s3AccessKey.strip(),
                 "s3SecretKey": body.s3SecretKey,
                 "s3SessionToken": body.s3SessionToken}
     return {"config": redact_config(hydrated)}
@@ -212,17 +282,27 @@ def replace_config(config_id: str, body: ConfigBody, con=Depends(get_db)):
     index = next((i for i, c in enumerate(configs) if c.get("id") == config_id), -1)
     if index < 0:
         raise ApiError(404, "config_not_found", "Sync configuration not found")
-    configs[index] = config
-    update_settings(con, {"cloudSyncConfigs": configs})
     # Blank secret fields keep existing stored credentials (CloudSyncSecretStore.save semantics).
     existing = engine.read_secrets(config_id)
-    merged = {
+    merged = ({field: "" for field in SECRET_FIELDS} if body.clearCredentials else {
         "webDavPassword": body.webDavPassword or existing.get("webDavPassword", ""),
-        "s3AccessKey": body.s3AccessKey or existing.get("s3AccessKey", ""),
+        "s3AccessKey": body.s3AccessKey.strip() or existing.get("s3AccessKey", ""),
         "s3SecretKey": body.s3SecretKey or existing.get("s3SecretKey", ""),
         "s3SessionToken": body.s3SessionToken or existing.get("s3SessionToken", ""),
-    }
+    })
+    if config["serviceType"] == "S3_COMPATIBLE" and config["enabled"] and (
+        not merged["s3AccessKey"] or not merged["s3SecretKey"]
+    ):
+        raise ApiError(400, "missing_credentials", "S3 Access Key and Secret Key are required")
+    # Validate everything before either store is touched, then restore the old
+    # secret entry if the database write fails.
+    configs[index] = config
     engine.write_secrets(config_id, merged)
+    try:
+        update_settings(con, {"cloudSyncConfigs": configs})
+    except Exception:
+        engine.write_secrets(config_id, existing)
+        raise
     return {"config": redact_config(merged | config)}
 
 
@@ -232,8 +312,16 @@ def delete_config(config_id: str, con=Depends(get_db)):
     remaining = [c for c in configs if c.get("id") != config_id]
     if len(remaining) == len(configs):
         raise ApiError(404, "config_not_found", "Sync configuration not found")
-    update_settings(con, {"cloudSyncConfigs": remaining})
-    engine.delete_secrets(config_id)  # purge stored credentials with the config
+    # Keep the two stores failure-atomic: once settings no longer reference a
+    # config its credentials must already be gone, while a failed DB write must
+    # restore the still-referenced config's prior credentials.
+    existing = engine.read_secrets(config_id)
+    engine.delete_secrets(config_id)
+    try:
+        update_settings(con, {"cloudSyncConfigs": remaining})
+    except Exception:
+        engine.write_secrets(config_id, existing)
+        raise
     return {"ok": True}
 
 

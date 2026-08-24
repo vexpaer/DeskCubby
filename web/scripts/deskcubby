@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+INSTALL_ROOT="$(cd -- "$BIN_DIR/../share/deskcubby" && pwd -P)"
+APP_DIR="$INSTALL_ROOT/current"
+VENV_PYTHON="$INSTALL_ROOT/venv/bin/python"
+WEB_HOST="${DESKCUBBY_WEB_HOST:-127.0.0.1}"
+WEB_PORT="${DESKCUBBY_WEB_PORT:-8787}"
+OPEN_BROWSER=1
+
+usage() {
+  printf '%s\n' \
+    '用法：deskcubby [--no-browser] [--host 地址] [--port 端口]' \
+    '' \
+    '默认在 http://127.0.0.1:8787 启动并打开系统浏览器。' \
+    '按 Ctrl+C 停止 DeskCubby。'
+}
+
+while (($# > 0)); do
+  case "$1" in
+    --no-browser)
+      OPEN_BROWSER=0
+      shift
+      ;;
+    --host)
+      (($# >= 2)) || { printf '缺少 --host 的值。\n' >&2; exit 2; }
+      WEB_HOST="$2"
+      shift 2
+      ;;
+    --port)
+      (($# >= 2)) || { printf '缺少 --port 的值。\n' >&2; exit 2; }
+      WEB_PORT="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf '未知参数：%s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ ! "$WEB_PORT" =~ ^[0-9]+$ ]] || ((WEB_PORT < 1 || WEB_PORT > 65535)); then
+  printf '端口无效：%s\n' "$WEB_PORT" >&2
+  exit 2
+fi
+if [[ ! -x "$VENV_PYTHON" || ! -d "$APP_DIR/backend/app" || ! -f "$APP_DIR/frontend/dist/index.html" ]]; then
+  printf 'DeskCubby 安装不完整，请重新运行 web/install.sh。\n' >&2
+  exit 1
+fi
+
+DATA_DIR="${DESKCUBBY_DATA_DIR:-$INSTALL_ROOT/data}"
+FRONTEND_DIST="$APP_DIR/frontend/dist"
+if [[ "$DATA_DIR" != /* || "$DATA_DIR" == "/" ]]; then
+  printf 'DESKCUBBY_DATA_DIR 必须是非根目录的绝对路径：%s\n' "$DATA_DIR" >&2
+  exit 2
+fi
+case "$WEB_HOST" in
+  0.0.0.0|localhost|127.0.0.1) BROWSER_HOST="127.0.0.1" ;;
+  ::|::1) BROWSER_HOST="[::1]" ;;
+  *:*) BROWSER_HOST="[$WEB_HOST]" ;;
+  *) BROWSER_HOST="$WEB_HOST" ;;
+esac
+URL="http://$BROWSER_HOST:$WEB_PORT"
+mkdir -p "$DATA_DIR"
+
+export DESKCUBBY_DATA_DIR="$DATA_DIR"
+export DESKCUBBY_FRONTEND_DIST="$FRONTEND_DIST"
+if [[ "$WEB_HOST" == "127.0.0.1" || "$WEB_HOST" == "localhost" || "$WEB_HOST" == "::1" ]]; then
+  export DESKCUBBY_LOCAL_MODE=1
+else
+  export DESKCUBBY_LOCAL_MODE=0
+fi
+
+health_ready() {
+  "$VENV_PYTHON" -c \
+    'import json,sys,urllib.request; opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); data=json.load(opener.open(sys.argv[1]+"/api/healthz",timeout=.5)); raise SystemExit(0 if data.get("ok") is True and data.get("app")=="deskcubby" else 1)' \
+    "$URL" >/dev/null 2>&1
+}
+
+open_browser() {
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$URL" >/dev/null 2>&1 || true
+  elif command -v gio >/dev/null 2>&1; then
+    gio open "$URL" >/dev/null 2>&1 || true
+  elif command -v wslview >/dev/null 2>&1; then
+    wslview "$URL" >/dev/null 2>&1 || true
+  else
+    printf '请在浏览器打开：%s\n' "$URL"
+  fi
+}
+
+if health_ready; then
+  printf 'DeskCubby 已在 %s 运行。\n' "$URL"
+  if ((OPEN_BROWSER)); then open_browser; fi
+  exit 0
+fi
+
+if ((OPEN_BROWSER)); then
+  (
+    for _attempt in {1..300}; do
+      if health_ready; then
+        open_browser
+        exit 0
+      fi
+      sleep 0.1
+    done
+  ) &
+fi
+
+printf 'DeskCubby：%s\n' "$URL"
+printf '数据目录：%s\n' "$DATA_DIR"
+printf '按 Ctrl+C 停止。\n\n'
+cd "$APP_DIR/backend"
+exec "$VENV_PYTHON" -m uvicorn app.main:app \
+  --host "$WEB_HOST" --port "$WEB_PORT" \
+  --no-access-log --log-level error

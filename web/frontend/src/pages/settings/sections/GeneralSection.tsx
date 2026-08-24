@@ -12,7 +12,6 @@ import { tr } from "../../../i18n/tr";
 import { ErrorText, Spinner } from "../../../components/ui";
 import {
   SectionCard, Segmented, SelectField, SliderRow, TextField, Toggle,
-  navLabel,
 } from "../SettingsPage";
 import type { SettingsSectionProps } from "../SettingsPage";
 import AppearanceSection from "./AppearanceSection";
@@ -29,6 +28,12 @@ const DARK_MODE_OPTIONS: { value: DarkMode; label: string }[] = [
   { value: "SYSTEM", label: tr("跟随", "System") },
   { value: "LIGHT", label: tr("浅色", "Light") },
   { value: "DARK", label: tr("深色", "Dark") },
+];
+
+const ORIENTATION_OPTIONS: { value: "AUTO" | "PORTRAIT" | "LANDSCAPE"; label: string }[] = [
+  { value: "AUTO", label: tr("自动", "Auto") },
+  { value: "PORTRAIT", label: tr("竖屏", "Portrait") },
+  { value: "LANDSCAPE", label: tr("横屏", "Landscape") },
 ];
 
 export default function GeneralSection({ settings, draft, patch, snackbar }: SettingsSectionProps) {
@@ -73,17 +78,6 @@ export default function GeneralSection({ settings, draft, patch, snackbar }: Set
     }
   };
 
-  // 默认启动页面：只列出当前可见的导航项（设置始终可选）；当前值即使隐藏也要出现。
-  const pageOptions: { value: string; label: string }[] = [];
-  settings.navItems.filter((n) => n.visible).forEach((n) =>
-    pageOptions.push({ value: n.id, label: navLabel(settings, n.id) }));
-  if (!pageOptions.some((o) => o.value === "SETTINGS")) {
-    pageOptions.push({ value: "SETTINGS", label: navLabel(settings, "SETTINGS") });
-  }
-  if (!pageOptions.some((o) => o.value === draft.defaultPage)) {
-    pageOptions.unshift({ value: draft.defaultPage, label: navLabel(settings, draft.defaultPage) });
-  }
-
   return (
     <div className="dc-col" style={{ gap: 12 }}>
       <SectionCard title={tr("通用", "General")}>
@@ -109,33 +103,20 @@ export default function GeneralSection({ settings, draft, patch, snackbar }: Set
           format={(v) => `${v}%`}
           onChange={(v) => patch({ fontScale: v / 100 })}
         />
+        <SelectField
+          label={tr("屏幕方向", "Screen orientation")}
+          value={draft.orientationPreference}
+          onChange={(v) => patch({ orientationPreference: v as "AUTO" | "PORTRAIT" | "LANDSCAPE" })}
+          options={ORIENTATION_OPTIONS}
+          hint={tr(
+            "安装为 PWA 后由浏览器尽力应用；普通标签页可能不允许锁定方向。",
+            "Applied when the installed PWA/browser permits it; normal tabs may reject orientation locking.",
+          )}
+        />
         <Toggle
           checked={draft.compactMode}
           onChange={(v) => patch({ compactMode: v })}
           label={<span>{tr("紧凑显示", "Compact layout")}<div className="dc-muted" style={{ fontSize: "0.82em" }}>{tr("开启后缩小列表与卡片间距，一屏显示更多内容。", "Shrinks list and card spacing to fit more content on screen.")}</div></span>}
-        />
-        <TextField
-          label={tr("用户名", "User name")}
-          value={draft.userName}
-          maxLength={32}
-          onChange={(v) => patch({ userName: v })}
-          hint={tr("最多 32 个字符；问候语中的 {name} 会替换为这里的名称。", "Up to 32 characters; greetings replace {name} with this name.")}
-        />
-        <Toggle
-          checked={draft.tutorialModeEnabled}
-          onChange={(v) => patch({ tutorialModeEnabled: v })}
-          label={<span>{tr("软件教学模式", "Tutorial mode")}<div className="dc-muted" style={{ fontSize: "0.82em" }}>{tr("首次进入页面时显示说明蒙版。", "Shows first-visit overlays on each page.")}</div></span>}
-        />
-        <SelectField
-          label={tr("默认启动页面", "Default start page")}
-          value={draft.defaultPage}
-          onChange={(v) => patch({ defaultPage: v })}
-          options={pageOptions}
-        />
-        <Toggle
-          checked={draft.bottomNavShowLabels}
-          onChange={(v) => patch({ bottomNavShowLabels: v })}
-          label={<span>{tr("显示文字", "Show labels")}<div className="dc-muted" style={{ fontSize: "0.82em" }}>{tr("关闭后底栏仅显示图标，导航栏占用高度更低。", "Icons only when off; the bar becomes shorter.")}</div></span>}
         />
       </SectionCard>
 

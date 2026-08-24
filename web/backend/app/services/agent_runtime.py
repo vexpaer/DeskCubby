@@ -32,17 +32,20 @@ thought content, setting value) and writes the `agent_mutations` receipt whose
 undoPayload = {kind = diary_file|thought|note|setting, name/path/id/key,
 previousExisted, previousContent, afterContent}.
 
-Run status values written to `agent_runs.status`: RUNNING -> COMPLETED |
-CANCELLED | ERROR.
+Run status values written to `agent_runs.status` use Android's canonical wire
+enum: RUNNING -> SUCCEEDED | CANCELED | FAILED.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from ..core.config import UPLOADS_DIR
 from ..core.errors import ApiError
 from .agent_permissions import ApprovalRequest, get_permission_manager
 from .agent_review import get_review_store, summarize_arguments
@@ -53,6 +56,7 @@ from .ai_chat_service import (
     MAX_AGENT_TOOL_CALL_ID_CHARS,
     MAX_AGENT_TOOL_CALLS_PER_RESPONSE,
     MAX_BODY_BYTES,
+    MAX_IMAGE_BYTES,
     StreamAccumulator,
     TokenUsage,
     ToolCall,
@@ -63,12 +67,15 @@ from .ai_chat_service import (
     merge_usage,
     parse_tool_completion,
     resolve_config,
+    stream_chat_completion,
     validate_endpoint,
 )
 from .settings_store import load_settings
 
 MAX_MODEL_ROUNDS = 12
-MAX_HISTORY_MESSAGES = 60
+MAX_HISTORY_MESSAGES = 80
+MAX_HISTORY_CONTENT_CHARS = 1024 * 1024
+MAX_AGENT_ATTACHMENTS = 5
 MAX_TOOL_RESULT_CHARS = 200_000
 MAX_SOURCES = 32
 MAX_SOURCE_ID_CHARS = 80
@@ -175,8 +182,46 @@ async def _agent_model_round(
     tools: list[dict[str, Any]],
     emit: EmitFn,
 ) -> ToolCompletion:
-    if not config.get("supportsToolCalling", True):
-        raise AiChatError("CONFIGURATION", "当前模型配置未启用原生工具调用，无法运行 Agent。")
+    if not config.get("supportsToolCalling", False):
+        # Android 0.23.4 keeps older/non-tool configurations usable as ordinary
+        # chat: ignore tool turns/definitions and complete in one round.
+        fallback_messages: list[dict[str, Any]] = []
+        for message in messages:
+            if message.get("role") == "tool":
+                continue
+            images = message.get("images") or []
+            if images and message.get("role") == "user":
+                for index, image in enumerate(images):
+                    fallback_messages.append({
+                        "role": "user",
+                        "content": str(message.get("content") or "") if index == 0 else "",
+                        "imageDataUrl": image,
+                    })
+            else:
+                fallback_messages.append({
+                    "role": "assistant" if message.get("role") == "assistant" else "user",
+                    "content": str(message.get("content") or ""),
+                })
+
+        async def on_delta(value: str) -> None:
+            await emit({"type": "delta", "content": value})
+
+        async def on_reasoning(value: str) -> None:
+            await emit({"type": "reasoning", "content": value})
+
+        result = await stream_chat_completion(
+            config,
+            system_prompt=system_prompt,
+            messages=fallback_messages,
+            on_delta=on_delta,
+            on_reasoning_delta=on_reasoning,
+        )
+        return ToolCompletion(
+            content=result.content,
+            reasoning=result.reasoning,
+            tool_calls=[],
+            usage=result.usage,
+        )
     api_key = str(config.get("apiKey") or "").strip()
     allow_insecure = bool(config.get("allowInsecureHttp"))
     endpoint = validate_endpoint(str(config.get("endpointUrl") or ""), allow_insecure)
@@ -628,12 +673,42 @@ async def _run_single_tool_call(
 # ---------------------------------------------------------------------------
 
 _FALLBACK_SYSTEM_PROMPT = "You are DeskCubby's local-first assistant. Use the provided tools when they help."
+MAX_AGENT_INSTRUCTIONS_CHARS = 20_000
 
-def _build_system_prompt(config: dict[str, Any], settings: dict[str, Any], allowed_sources: list[str]) -> str:
-    custom = str(config.get("systemPrompt") or "").strip() or str(settings.get("aiSystemPrompt") or "").strip()
+
+def final_message_sync_id(run_id: str) -> str:
+    """Stable Android recovery identity for one Agent run's final reply."""
+    return f"agent-final:{run_id}"
+
+
+def _build_system_prompt(
+    con: Any,
+    config: dict[str, Any],
+    settings: dict[str, Any],
+    allowed_sources: list[str],
+) -> str:
+    # Android appends the global Agent prompt first and the selected model's
+    # own instruction second. The legacy ordinary-chat aiSystemPrompt is not
+    # an Agent setting.
+    custom = "\n".join(
+        value for value in (
+            str(settings.get("agentPrompt") or "").strip(),
+            str(config.get("systemPrompt") or "").strip(),
+        ) if value
+    )[:MAX_AGENT_INSTRUCTIONS_CHARS]
     try:
         mod = _tool_module()
-        section = mod.build_system_prompt_section(allowed_sources, custom_instructions=custom)
+        metadata = mod.build_source_metadata(
+            con,
+            settings,
+            allowed_sources,
+            english=settings.get("appLanguage") == "ENGLISH",
+        )
+        section = mod.build_system_prompt_section(
+            allowed_sources,
+            custom_instructions=custom,
+            metadata=metadata,
+        )
         if section and str(section).strip():
             return str(section)
     except Exception:  # noqa: BLE001 - prompt building must not depend on the module
@@ -646,16 +721,110 @@ def _build_system_prompt(config: dict[str, Any], settings: dict[str, Any], allow
 # ---------------------------------------------------------------------------
 
 def normalize_allowed_sources(raw: Any) -> list[str]:
-    if not isinstance(raw, list):
+    if isinstance(raw, dict):
+        values = [key for key, enabled in raw.items() if enabled is True]
+    elif isinstance(raw, list):
+        values = raw
+    else:
         return []
     seen: list[str] = []
-    for item in raw:
+    for item in values:
         value = str(item or "").strip()[:MAX_SOURCE_ID_CHARS]
         if value and value not in seen:
             seen.append(value)
         if len(seen) >= MAX_SOURCES:
             break
     return seen
+
+
+def _xml_escape(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")[:500]
+    )
+
+
+def _attachment_file(uri: str) -> Path | None:
+    prefix = "uploads://"
+    if not uri.startswith(prefix):
+        return None
+    name = uri[len(prefix):]
+    if not name or Path(name).name != name:
+        return None
+    candidate = UPLOADS_DIR / name
+    return candidate if candidate.is_file() else None
+
+
+def _build_agent_history(con: Any, conversation_id: int, up_to_message_id: int) -> list[dict[str, Any]]:
+    """Build Android-equivalent bounded history, including untrusted document
+    extracts and available device-local images from persisted attachments."""
+    rows = con.execute(
+        "SELECT * FROM (SELECT id,role,content,createdAt FROM ai_messages "
+        "WHERE conversationId=? AND id<=? AND role IN ('user','assistant') "
+        "ORDER BY createdAt DESC,id DESC LIMIT ?) ORDER BY createdAt ASC,id ASC",
+        (conversation_id, up_to_message_id, MAX_HISTORY_MESSAGES),
+    ).fetchall()
+    remaining_chars = MAX_HISTORY_CONTENT_CHARS
+    remaining_image_bytes = MAX_IMAGE_BYTES
+    remaining_images = MAX_AGENT_ATTACHMENTS
+    newest_first: list[dict[str, Any]] = []
+    for row in reversed(rows):
+        if remaining_chars <= 0:
+            break
+        attachment_rows = con.execute(
+            "SELECT uri,mimeType,displayName,kind,extractedText FROM ai_attachments "
+            "WHERE messageId=? ORDER BY id ASC",
+            (row["id"],),
+        ).fetchall()
+        documents: list[str] = []
+        has_unavailable_image = False
+        images: list[str] = []
+        for attachment in attachment_rows:
+            kind = str(attachment["kind"] or "").upper()
+            if kind == "DOCUMENT" and str(attachment["extractedText"] or "").strip():
+                documents.append(
+                    f'<untrusted_attachment name="{_xml_escape(str(attachment["displayName"] or ""))}" '
+                    f'mime="{_xml_escape(str(attachment["mimeType"] or ""))}">\n'
+                    f'{attachment["extractedText"]}\n</untrusted_attachment>'
+                )
+            elif kind == "IMAGE":
+                path = _attachment_file(str(attachment["uri"] or ""))
+                if path is None:
+                    has_unavailable_image = True
+                    continue
+                try:
+                    size = path.stat().st_size
+                    if (
+                        str(row["role"]) == "user"
+                        and remaining_images > 0
+                        and 0 < size <= remaining_image_bytes
+                    ):
+                        data = path.read_bytes()
+                        if len(data) == size:
+                            images.append(
+                                f'data:{attachment["mimeType"]};base64,'
+                                + base64.b64encode(data).decode("ascii")
+                            )
+                            remaining_image_bytes -= size
+                            remaining_images -= 1
+                except OSError:
+                    has_unavailable_image = True
+        combined = str(row["content"] or "")
+        if documents:
+            combined += ("\n\n" if combined else "") + "\n\n".join(documents)
+        if has_unavailable_image:
+            combined += ("\n\n" if combined else "") + (
+                "[An image attachment exists in synced history but its device-local file is unavailable.]"
+            )
+        combined = combined[-remaining_chars:]
+        remaining_chars -= len(combined)
+        item: dict[str, Any] = {"role": row["role"], "content": combined}
+        if images:
+            item["images"] = images
+        newest_first.append(item)
+    return list(reversed(newest_first))
 
 
 async def run_agent(app, body, emit: EmitFn) -> dict[str, Any]:
@@ -666,7 +835,10 @@ async def run_agent(app, body, emit: EmitFn) -> dict[str, Any]:
     con = app.state.db
     review = get_review_store()
     settings = load_settings(con)
-    run_id = uuid.uuid4().hex
+    requested_run_id = str(getattr(body, "runId", "") or "").strip()
+    run_id = requested_run_id or str(uuid.uuid4())
+    if con.execute("SELECT 1 FROM agent_runs WHERE runId=?", (run_id,)).fetchone() is not None:
+        raise ApiError(409, "run_exists", "Agent Run 已存在。")
 
     conversation = None
     if getattr(body, "conversationId", None) is not None:
@@ -683,8 +855,49 @@ async def run_agent(app, body, emit: EmitFn) -> dict[str, Any]:
         raise exc.to_api_error()
 
     content = str(getattr(body, "content", "") or "").strip()
-    if not content:
+    attachment_ids = [str(value or "").strip() for value in (getattr(body, "attachmentIds", None) or [])]
+    if (
+        len(attachment_ids) > MAX_AGENT_ATTACHMENTS
+        or any(not value for value in attachment_ids)
+        or len(set(attachment_ids)) != len(attachment_ids)
+    ):
+        raise ApiError(400, "invalid_attachments", "附件列表无效。")
+    if not content and not attachment_ids:
         raise ApiError(400, "empty_message", "消息内容不能为空。")
+
+    # Uploaded attachments are staged by the ordinary chat boundary. Consume
+    # every requested id exactly once, then persist it with the user message.
+    from ..routers.ai import _take_attachments, generate_conversation_title
+
+    attachments = _take_attachments(attachment_ids) if attachment_ids else []
+    if len(attachments) != len(attachment_ids):
+        raise ApiError(400, "attachment_missing", "附件已失效，请重新添加。")
+    if not content:
+        content = "Please analyze the attached content." if settings.get("appLanguage") == "ENGLISH" else "请分析我附加的内容。"
+
+    now_ms = int(time.time() * 1000)
+    if conversation is None:
+        cursor = con.execute(
+            "INSERT INTO ai_conversations(title,modelConfigId,createdAt,updatedAt,syncId) VALUES(?,?,?,?,?)",
+            (
+                generate_conversation_title(content, any(item.get("kind") == "IMAGE" for item in attachments)),
+                str(config.get("id") or ""),
+                now_ms,
+                now_ms,
+                str(uuid.uuid4()),
+            ),
+        )
+        con.commit()
+        row = con.execute("SELECT * FROM ai_conversations WHERE id=?", (cursor.lastrowid,)).fetchone()
+        conversation = dict(row)
+    elif str(config.get("id") or "") and str(config.get("id") or "") != "legacy":
+        with con:
+            con.execute(
+                "UPDATE ai_conversations SET modelConfigId=?,updatedAt=? WHERE id=?",
+                (str(config.get("id") or ""), now_ms, conversation["id"]),
+            )
+        conversation["modelConfigId"] = str(config.get("id") or "")
+        conversation["updatedAt"] = now_ms
 
     allowed_sources = normalize_allowed_sources(getattr(body, "sourceAuthorizations", None))
     requested_mode = str(getattr(body, "permissionMode", "") or "").strip().upper()
@@ -692,11 +905,11 @@ async def run_agent(app, body, emit: EmitFn) -> dict[str, Any]:
         settings.get("agentPermissionMode") or "REQUIRE_APPROVAL"
     )
 
-    conversation_title = str((conversation or {}).get("title") or content)[:40] or "Agent"
+    conversation_title = str(conversation.get("title") or content)[:500] or "Agent"
     review.start_run(
         con,
         run_id=run_id,
-        conversation_id=conversation["id"] if conversation else None,
+        conversation_id=conversation["id"],
         conversation_title=conversation_title,
         user_request=content,
         model_config_id=str(config.get("id") or ""),
@@ -715,36 +928,35 @@ async def run_agent(app, body, emit: EmitFn) -> dict[str, Any]:
     # the agent_runs row on failure, or the run would be stuck RUNNING forever
     # (the task is not yet registered for /cancel cleanup in this window).
     try:
-        now_ms = int(time.time() * 1000)
-        user_message_id: int | None = None
-        if conversation is not None:
-            cur = con.execute(
-                "INSERT INTO ai_messages(conversationId, role, content, reasoning, imageUri, imageMimeType,"
-                " imagePermissionOwned, createdAt, syncId) VALUES(?,?,?,?,?,?,?,?,?)",
-                (conversation["id"], "user", content, "", None, None, 0, now_ms, str(uuid.uuid4())),
+        cur = con.execute(
+            "INSERT INTO ai_messages(conversationId, role, content, reasoning, imageUri, imageMimeType,"
+            " imagePermissionOwned, createdAt, syncId) VALUES(?,?,?,?,?,?,?,?,?)",
+            (conversation["id"], "user", content, "", None, None, 0, now_ms, str(uuid.uuid4())),
+        )
+        user_message_id = int(cur.lastrowid)
+        for attachment in attachments:
+            con.execute(
+                "INSERT INTO ai_attachments(messageId,uri,mimeType,displayName,sizeBytes,kind,"
+                "extractedText,permissionOwned,syncId) VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    user_message_id,
+                    f"uploads://{attachment['fileName']}",
+                    attachment["mimeType"],
+                    attachment["displayName"],
+                    attachment["sizeBytes"],
+                    attachment["kind"],
+                    attachment.get("extractedText"),
+                    0,
+                    str(uuid.uuid4()),
+                ),
             )
-            user_message_id = int(cur.lastrowid)
-            con.commit()
+        con.commit()
 
-        history: list[dict[str, Any]] = []
-        if conversation is not None and user_message_id is not None:
-            rows = con.execute(
-                "SELECT role, content FROM ai_messages WHERE conversationId=? AND id<=?"
-                " ORDER BY createdAt ASC, id ASC LIMIT ?",
-                (conversation["id"], user_message_id, MAX_HISTORY_MESSAGES * 2),
-            ).fetchall()
-            history = [
-                {"role": r["role"], "content": r["content"]}
-                for r in rows
-                if r["role"] == "user" or (r["role"] == "assistant" and str(r["content"] or "").strip())
-            ]
-        else:
-            history = [{"role": "user", "content": content}]
-        messages = history[-MAX_HISTORY_MESSAGES:]
+        messages = _build_agent_history(con, int(conversation["id"]), user_message_id)
 
         specs = await _resolve_tool_specs(allowed_sources)
         classifications = {spec["name"]: spec["classification"] for spec in specs}
-        system_prompt = _build_system_prompt(config, settings, allowed_sources)
+        system_prompt = _build_system_prompt(con, config, settings, allowed_sources)
 
         # Inside the guarded window: a client disconnect/cancel during this
         # emit would otherwise leave the run row RUNNING forever.
@@ -752,16 +964,16 @@ async def run_agent(app, body, emit: EmitFn) -> dict[str, Any]:
             {
                 "type": "started",
                 "runId": run_id,
-                "conversationId": conversation["id"] if conversation else None,
+                "conversationId": conversation["id"],
                 "permissionMode": permission_mode,
                 "enabledSources": allowed_sources,
             }
         )
     except asyncio.CancelledError:
-        get_review_store().finish_run(con, run_id, "CANCELLED", {})
+        get_review_store().finish_run(con, run_id, "CANCELED", {})
         raise
     except Exception:  # noqa: BLE001 - finalize then propagate to the SSE layer
-        get_review_store().finish_run(con, run_id, "ERROR", {})
+        get_review_store().finish_run(con, run_id, "FAILED", {})
         raise
 
     total_usage = TokenUsage()
@@ -780,7 +992,9 @@ async def run_agent(app, body, emit: EmitFn) -> dict[str, Any]:
         }
         return merged
 
-    status = "COMPLETED"
+    # Persist Android's canonical wire values so Agent review rows can move
+    # between Android and Web without translation failures.
+    status = "SUCCEEDED"
     final_content = ""
     final_reasoning = ""
     sequence = 0
@@ -845,25 +1059,25 @@ async def run_agent(app, body, emit: EmitFn) -> dict[str, Any]:
         if not completed:
             raise AiChatError("INVALID_RESPONSE", LOOP_LIMIT_MESSAGE)
     except asyncio.CancelledError:
-        status = "CANCELLED"
+        status = "CANCELED"
         manager.reject_run(run_id)
         review.finish_run(con, run_id, status, usage_dict())
         await emit({"type": "cancelled", "runId": run_id})
         return {"runId": run_id, "status": status}
     except AiChatError as exc:
-        status = "ERROR"
+        status = "FAILED"
         manager.reject_run(run_id)
         review.finish_run(con, run_id, status, usage_dict())
         await emit({"type": "error", "runId": run_id, "code": exc.code, "message": exc.message})
         return {"runId": run_id, "status": status, "code": exc.code}
     except ApiError as exc:
-        status = "ERROR"
+        status = "FAILED"
         manager.reject_run(run_id)
         review.finish_run(con, run_id, status, usage_dict())
         await emit({"type": "error", "runId": run_id, "code": exc.code, "message": exc.message})
         return {"runId": run_id, "status": status, "code": exc.code}
     except Exception:  # noqa: BLE001 - never leak internals to the stream
-        status = "ERROR"
+        status = "FAILED"
         manager.reject_run(run_id)
         review.finish_run(con, run_id, status, usage_dict())
         await emit({"type": "error", "runId": run_id, "code": "agent_error", "message": "Agent 运行失败。"})
@@ -889,7 +1103,7 @@ async def run_agent(app, body, emit: EmitFn) -> dict[str, Any]:
                     None,
                     0,
                     now,
-                    str(uuid.uuid4()),
+                    final_message_sync_id(run_id),
                 ),
             )
             message_id = int(cur.lastrowid)
@@ -898,12 +1112,12 @@ async def run_agent(app, body, emit: EmitFn) -> dict[str, Any]:
                     "UPDATE ai_conversations SET updatedAt=? WHERE id=?", (now, conversation["id"])
                 )
         except asyncio.CancelledError:
-            review.finish_run(con, run_id, "CANCELLED", usage_dict())
+            review.finish_run(con, run_id, "CANCELED", usage_dict())
             raise
         except Exception:  # noqa: BLE001
-            review.finish_run(con, run_id, "ERROR", usage_dict())
+            review.finish_run(con, run_id, "FAILED", usage_dict())
             await emit({"type": "error", "runId": run_id, "code": "agent_error", "message": "Agent 运行失败。"})
-            return {"runId": run_id, "status": "ERROR", "code": "agent_error"}
+            return {"runId": run_id, "status": "FAILED", "code": "agent_error"}
 
     review.finish_run(con, run_id, status, usage_dict())
     done_payload: dict[str, Any] = {"runId": run_id, "status": status}
@@ -919,4 +1133,4 @@ async def run_agent(app, body, emit: EmitFn) -> dict[str, Any]:
 
 
 # Re-exported for router convenience.
-__all__ = ["run_agent", "normalize_allowed_sources", "EMIT_TYPES"]
+__all__ = ["run_agent", "normalize_allowed_sources", "final_message_sync_id", "EMIT_TYPES"]

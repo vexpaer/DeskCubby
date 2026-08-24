@@ -333,11 +333,13 @@ class TestStructured:
         config = client.get("/api/structured/config").json()
         assert config["dayBoundary"] == "05:00"
         assert config["dayBoundaryHour"] == 5
+        assert config["todayDiarySwitchTime"] == "05:00"
         assert {f["id"] for f in config["fields"]} >= {"f_number_pushups", "f_time_lunch"}
 
         updated = client.put("/api/structured/day-boundary", json={"hours": 5})
         assert updated.status_code == 200
         assert updated.json()["dayBoundary"] == "05:00"
+        assert updated.json()["todayDiarySwitchTime"] == "05:00"
         invalid = client.put("/api/structured/day-boundary", json={"hours": 24})
         assert invalid.status_code == 400
 

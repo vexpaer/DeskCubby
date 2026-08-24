@@ -6,8 +6,6 @@
 import React, { Suspense, lazy } from "react";
 
 export const routeTable: Record<string, () => Promise<{ default: React.ComponentType }>> = {
-  "/login": () => import("./login/LoginPage"),
-
   "/home": () => import("./home/HomePage"),
   "/desk": () => import("./desk/DeskPage"),
 

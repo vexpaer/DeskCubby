@@ -10,6 +10,8 @@
  * - 访问密码 talks to /api/auth/*; passwords are only sent, never stored here.
  */
 import React, { useEffect, useRef, useState } from "react";
+import { Cloud, ChevronRight } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { apiGet, apiSend, apiUpload } from "../../../api/client";
 import { useSettings } from "../../../stores/settings";
 import { tr } from "../../../i18n/tr";
@@ -92,6 +94,7 @@ function fmtMb(v: number | undefined): string {
 }
 
 export default function DataSection({ snackbar }: SettingsSectionProps) {
+  const navigate = useNavigate();
   const refresh = useSettings((s) => s.refresh);
 
   // ----- 存储占用 -----------------------------------------------------------
@@ -308,6 +311,19 @@ export default function DataSection({ snackbar }: SettingsSectionProps) {
 
   return (
     <div className="dc-col" style={{ gap: 12 }}>
+      <button className="dc-card dc-row" style={{ width: "100%", padding: "12px 14px", border: "none", textAlign: "left", gap: 12 }}
+        onClick={() => navigate("/settings?section=cloudsync")}>
+        <span className="dc-center" style={{ width: 38, height: 38, borderRadius: 12, background: "var(--dc-surface-container-high)" }}>
+          <Cloud size={19} />
+        </span>
+        <span className="dc-grow dc-col" style={{ gap: 2 }}>
+          <span style={{ fontWeight: 600 }}>{tr("云端同步", "Cloud sync")}</span>
+          <span className="dc-muted" style={{ fontSize: "0.84em" }}>
+            {tr("WebDAV、S3、同步内容与冲突处理", "WebDAV, S3, synced content, and conflicts")}
+          </span>
+        </span>
+        <ChevronRight size={18} className="dc-muted" />
+      </button>
       <SectionCard
         title={tr("存储占用", "Storage usage")}
         description={tr(

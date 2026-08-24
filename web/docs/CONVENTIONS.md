@@ -8,6 +8,7 @@
 - 前端：React 18 + TypeScript + Vite + react-router-dom v6 + zustand + lucide-react + react-markdown。入口 `web/frontend/src/main.tsx`。
 - 开发：`cd web/backend && uvicorn app.main:app --reload --port 8787`；`cd web/frontend && npm install && npm run dev`（dev 代理 `/api` 到 8787）。
 - 校验：后端 `python3 -m compileall app` 与 pytest；前端 `npm run typecheck && npm run build`。
+- 个人电脑安装：`web/install.sh` 构建并安装到用户前缀，`deskcubby` 默认仅监听 `127.0.0.1:8787`、设置 `DESKCUBBY_LOCAL_MODE=1` 并在健康检查成功后打开浏览器。启动器关闭 Uvicorn access log 并把 log level 设为 error，正常 INFO/HTTP 200 不刷屏。数据目录与版本化程序目录分离，重复安装不得覆盖数据。
 
 ## 2. 数据目录布局（默认 `<repo>/web/data`，env `DESKCUBBY_DATA_DIR` 可覆盖）
 
@@ -27,6 +28,8 @@ data/
 └─ uploads/                # Agent/AI 附件暂存
 ```
 
+个人电脑模式可把日记和媒体分别绑定到用户明确选择的绝对目录；路径保存在 `private/storage-roots.json`，不属于 AppSettings、v34 或云同步。选择外部日记目录时 `.trash/` 与 `.deskcubby/` 位于该目录内。切换只改变后续读写根并重建可恢复索引，禁止迁移、覆盖或删除旧目录内容。服务器可用 `DESKCUBBY_DIARY_DIR` / `DESKCUBBY_MEDIA_DIR` 锁定管理员管理的根。
+
 ## 3. 数据保真要求（最高优先级）
 
 1. **设置**：服务端以 DataStore 同构的键值保存（snake_case 键名 = Android `SettingsRepository.Keys`）。对外 API 用 camelCase 的 AppSettings 形状。所有字段名、枚举值、默认值、上下限必须与 `AppModels.kt` / `SettingsRepository.kt` 一致。
@@ -34,8 +37,9 @@ data/
 3. **dc-media.json v2**：键为小写媒体文件名；格式与 `MediaMetaJsonCodec.kt` 一致；读改写加锁、输入上限、回读校验、保留未知字段。
 4. **备份 JSON v34**：导入支持 v1–v34，导出固定 v34；形状以 `BackupJsonCodec.kt` 为准。
 5. **结构化记录**：`<!--dc:f_<id>-->value<!--dc:/f_<id>-->` 写入 Markdown HTML 注释；`.deskcubby/*.json` 格式与 Android 一致；日界线默认 05:00。
-6. **阅读进度**：`private/reading/v1/progress.json`，URI-free 指纹账本（完整文件 SHA-256+类型+页/段位置）。
-7. API Key 等敏感配置只存服务端；任何 GET 响应不得返回 apiKey 明文（写入用专用端点，读取返回空串）。
+6. **阅读进度与偏好**：`private/reading/v1/progress.json` 是 URI-free 指纹账本（完整文件 SHA-256+类型+页/段位置）；`private/reading/preferences.json` 只保存 Android record-sync 子集。`customChapterRegex`、`chapterHeadingMaxChars` 等设备字段只存浏览器 localStorage，禁止发往偏好 API 或云端。
+7. **凭据边界**：AI `apiKey` 按 Android 产品规则作为普通明文字段，在设置详情 GET 中完整返回并随配置保存；不得写入日志、错误或请求 JSON 预览。WebDAV/S3 凭据仍为只写字段，任何 GET 只能返回 `hasCredentials`，不能返回明文。
+8. **Usage**：设备 ID 必须是规范 UUID；`usage_devices` 保存 platform/tracking/backfill，`usage_days` 保存 zoneId/state/collectedAt。合并按设备元数据时间 LWW、逐日 FINAL 优先再比较 collectedAt，空设备与空日期也必须往返。
 
 ## 4. 后端模式
 
@@ -46,6 +50,7 @@ data/
 - 外部网络（RSS、AI、每日诗词、WebDAV）：仅经 `core/http.py` 的受限客户端（超时、重定向限制、响应体上限、HTTPS 默认）。
 - 认证：可选密码。开启后除 `/api/auth/*`、静态资源外的所有端点需会话 Cookie（HttpOnly）。依赖注入 `user=Depends(require_auth)`；中间件已整体拦截，路由无需重复处理。
 - 后台任务：`services/background.py` 中 asyncio 任务（自动备份、RSS 刷新、热量估算队列）。启动时创建，关闭时取消。
+- 本机目录选择：`/api/storage/*` 的修改和系统 GUI 选择器仅在 `DESKCUBBY_LOCAL_MODE=1`、直连 loopback 且无 Forwarded 请求头时开放；NAS/VPS/反代请求一律拒绝。路径需绝对、已存在、可写且不能是文件系统根，错误不回显绝对路径。
 
 ### API 总表（camelCase JSON；未列明的 CRUD 均按 REST 惯例）
 
@@ -53,6 +58,9 @@ data/
 GET  /api/system/info                     # 版本、部署提示(是否检测到反代/https/公网)、数据目录占用统计
 GET/PUT /api/settings                     # AppSettings 全量(camelCase)；PUT 为合并更新；敏感字段见 §3.7
 POST /api/settings/background-image       # multipart 上传全局背景 -> {uri}
+GET  /api/storage/roots                   # 本机模式能力 + 日记/媒体根；服务器模式不返回绝对路径
+POST /api/storage/pick {kind}             # loopback 本机系统文件夹选择器，只返回候选，不立即切换
+PUT  /api/storage/root {kind,path|null}   # 确认切换/恢复默认；日记立即重建索引，旧目录不迁移
 GET  /api/auth/status                     # {enabled, authenticated, deployment:{behindProxy,scheme,suggestPassword,suggestHttps}}
 POST /api/auth/set-password|login|logout|change-password|disable
 # 日记 diary
@@ -110,7 +118,7 @@ POST /api/ai/attachments                  # multipart -> {id, displayName, mimeT
 GET  /api/agent/runs?conversationId=      GET /api/agent/runs/{runId}  # 含 tool events
 GET  /api/agent/mutations?runId=          POST /api/agent/mutations/{id}/undo
 GET  /api/agent/pending-approvals         POST /api/agent/approvals/{toolCallId} {approve}
-POST /api/agent/run                       # SSE；body{conversationId?, content, configId?, sourceAuthorizations{}, permissionMode?}
+POST /api/agent/run                       # SSE；body{runId(UUID), conversationId?, content, attachmentIds[]≤5, configId?, sourceAuthorizations{}, permissionMode?}
 POST /api/agent/cancel/{runId}
 GET  /api/agent/token-stats               POST /api/calorie/estimate {dateIso}  GET /api/calorie/status?dateIso=
 # 收藏夹 vault（服务端加密）
@@ -121,6 +129,7 @@ GET/POST /api/vault/items  PUT/DELETE /api/vault/items/{id}  POST /api/vault/ite
 GET  /api/reader/books  POST /api/reader/books (multipart txt/pdf)
 DELETE /api/reader/books/{id}  GET /api/reader/books/{id}/content?format=
 GET/PUT /api/reader/progress              # reading/v1/progress.json 形状
+GET/PUT /api/reader/preferences           # 仅 record-sync 子集；不接受设备本地章节规则
 GET  /api/reader/engagement  POST /api/reader/engagement {bookId, seconds}
 # 游戏 games / 统计 statshub / 使用 usage / 健康 health
 GET/PUT /api/games/states/{gameId}        # {highScore, saveJson}
@@ -149,7 +158,14 @@ GET/PUT /api/widgets/configs              # desktopWidgetConfigs 存于 settings
 - 文案一律 `tr("中文", "English")`（`src/i18n/tr.ts`）；五语翻译表 `src/i18n/translations.json` 已从 Android `AppTranslations.kt` 自动转换，直接受益；新增文案先写双语，能对上 Android 原文案就逐字使用。
 - 颜色只消费 CSS 变量 token（`src/theme/tokens.css`）：`--dc-primary, --dc-on-primary, --dc-secondary*, --dc-surface, --dc-surface-container, --dc-surface-variant, --dc-on-surface, --dc-on-surface-variant, --dc-outline, --dc-background, --dc-on-background, --dc-error, --dc-radius, --dc-spacing, --dc-font-scale, --dc-motion-scale`。三风格差异由 `[data-style="material|liquid-glass|organic-future"]` 选择器表达；普通组件禁止硬编码颜色。
 - 顶栏用共享 `<TopBar title actions/>`；对话框用共享 `ConfirmDialog`/自建受控 dialog；底部导航栏与「导航」聚合页由 shell 提供（`NavItemId` 驱动，与 Android 默认显隐一致）。
-- 设置子页模式：本地草稿 state + 右上角保存按钮 + dirty 离开确认（shell 已提供 `useDirtyGuard`）。
+- 设置首页严格只有外观与语言、子页面设置、应用数据、底部导航、关于五个一级入口；Android 的页面级设置放在「子页面设置」二级列表。可编辑子页使用本地草稿 + 右上角保存 + dirty 离开确认；保存成功返回父分类。
+- `visualStyle` 的 API 枚举使用下划线，DOM `data-style` 必须转换为 `material|liquid-glass|organic-future`。普通按钮不得用 hover/active 改变背景，因为混合输入浏览器可能把伪状态跨点击保留；分段按钮由单一值驱动并只允许 `.is-selected`/`aria-checked=true` 常驻底色。键盘状态使用 `:focus-visible`。
+- 主页饮食按钮的新默认是 emoji；旧 Web 未触碰的文字默认只迁移一次。文字/图标选择及六个符号仍是 AppSettings，可由「设置 → 子页面设置 → 主页 → 饮食按钮」编辑并正常备份/同步。
+- AI/Agent 附件暂存 ID 是一次性集合：发送前必须先完整校验数量、非空、去重和全部存在，任何一个失效都不得消费其余有效 ID。Agent Run 的 SSE 名为 `started`/`tool_event`，持久状态使用 Android 大写枚举。
+- Agent Run ID 在前端提交前生成并由后端立即绑定任务取消句柄；SSE 只是增量传输，页面重进必须从 `agent_runs`、`agent_tool_events` 与 pending approvals 恢复。浏览器断流不取消 Run；服务进程重启不能安全重放 mutation 时将遗留 RUNNING 明确置为 FAILED。
+- Agent system prompt 顺序固定为内置 hard rules + 已授权来源 metadata（不得预载正文）+ 全局 `agentPrompt` + 当前模型 `systemPrompt`。GLOBAL_SETTINGS 记录同步不得同步或清空本机 AI Key。
+- 云同步使用 Android 0.23.5 的条件发布 manifest + immutable blobs + record-level adapters；WebDAV 必须提供强 ETag，S3 必须保留引号化对象版本，读取/覆盖和首次创建分别使用 `If-Match`/`If-None-Match: *`。
+- 思想/诗词分类是运行期隐式依赖：设置读取时把旧 category-only 选择迁移为对应正文并移除隐藏枚举；云配置删除若设置持久化失败，必须恢复删除前的凭据。
 - 响应式：≥1024px 双栏/侧栏布局可用 CSS grid；600–1024 平板；<600 手机单列。底栏导航 <768 显示。PWA manifest/SW 已就位。
 - API 访问统一 `src/api/client.ts`（fetch 封装，401 时跳登录）；类型定义在各域 `src/api/types.ts`。
 

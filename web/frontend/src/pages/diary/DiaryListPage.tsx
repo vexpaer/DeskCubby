@@ -15,6 +15,7 @@ import {
   ConfirmDialog, EmptyState, ErrorText, Modal, PageTutorialOverlay, PopupMenu,
   Snackbar, Spinner, TopBar, useSnackbar,
 } from "../../components/ui";
+import { loadTodayDiaryIso } from "./todayDiary";
 
 interface DiaryDocument {
   uri: string;
@@ -136,16 +137,17 @@ export default function DiaryListPage() {
     setCreating(true);
     setError(null);
     try {
+      const targetDate = await loadTodayDiaryIso();
       let name: string | undefined;
       try {
-        const created = await apiSend<Partial<DiaryDocument>>("/api/diary/documents", "POST", { dateIso: todayIso() });
+        const created = await apiSend<Partial<DiaryDocument>>("/api/diary/documents", "POST", { dateIso: targetDate });
         name = created?.name;
       } catch {
         // Possibly "already exists" — fall through and look it up.
       }
       if (!name) {
         const list = await apiGet<DiaryDocument[]>("/api/diary/documents");
-        name = (Array.isArray(list) ? list : []).find((d) => d.dateIso === todayIso())?.name;
+        name = (Array.isArray(list) ? list : []).find((d) => d.dateIso === targetDate)?.name;
       }
       if (name) {
         navigate(`/diary/edit?name=${encodeURIComponent(name)}`);

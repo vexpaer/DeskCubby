@@ -15,6 +15,7 @@ Returns parsed href lists for PROPFIND so callers can enumerate collections.
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 import xml.etree.ElementTree as ET
 from typing import Any
@@ -30,6 +31,18 @@ DAV_TIMEOUT = 30.0                             # readTimeoutMillis in CloudSyncL
 
 _STATUS_OK = {200, 201, 204}
 _PROPSTAT_OK = re.compile(r"(?:^|\s)200(?:\s|$)")
+_STRONG_ETAG = re.compile(r'"[\x21\x23-\x7e]*"')
+
+
+def _require_strong_etag(raw: str | None) -> str:
+    value = (raw or "").strip()
+    if not value or value.lower().startswith("w/") or not _STRONG_ETAG.fullmatch(value):
+        raise ApiError(
+            502,
+            "webdav_remote_validation",
+            "WebDAV did not provide one usable strong ETag; sync stopped before writing",
+        )
+    return value
 
 
 class WebDavClient:
@@ -39,8 +52,11 @@ class WebDavClient:
         self.config = config
         self.allow_http = bool(config.get("allowInsecureHttp"))
         self.base_url = self._require_base_url(str(config.get("endpointUrl") or ""))
+        remote_value = config.get("remotePath", "DeskCubby")
+        if remote_value is None:
+            remote_value = "DeskCubby"
         self.remote_path = "/".join(
-            segment for segment in str(config.get("remotePath") or "DeskCubby").split("/")
+            segment for segment in str(remote_value).split("/")
             if segment
         )
         self.user_agent = str(config.get("userAgent") or DEFAULT_USER_AGENT)[:512]
@@ -143,22 +159,130 @@ class WebDavClient:
 
     def get(self, name: str, max_bytes: int = MAX_RESPONSE_BYTES) -> bytes | None:
         """GET one object; returns None on 404."""
-        resp = self.http.request("GET", self.object_url(name), headers=self._headers())
+        blob = self.get_blob(name, max_bytes=max_bytes)
+        return blob[0] if blob is not None else None
+
+    def get_blob(
+        self,
+        name: str,
+        max_bytes: int = MAX_RESPONSE_BYTES,
+        *,
+        expected_version: str | None = None,
+    ) -> tuple[bytes, str] | None:
+        """Read bytes together with a strong remote validator.
+
+        Android's manifest stores the provider's real object version. A content
+        hash is not a substitute for an ETag: using one made every Android read
+        reject Web-created manifests and allowed racing manifest overwrites.
+        """
+        extra: dict[str, str] = {}
+        if expected_version is not None:
+            extra["If-Match"] = _require_strong_etag(expected_version)
+        resp = self.http.request("GET", self.object_url(name), headers=self._headers(extra))
         if resp.status_code == 404:
             return None
+        if resp.status_code in (409, 412):
+            raise ApiError(409, "webdav_conflict", "Remote WebDAV object changed during sync")
         if resp.status_code != 200:
             raise self._status_error("WebDAV GET", resp.status_code)
-        return self._check_size(resp, max_bytes)
+        data = self._check_size(resp, max_bytes)
+        version = (resp.headers.get("etag") or "").strip()
+        if not version:
+            version = self._propfind_strong_etag(name)
+            # Bind the bytes already read to the validator discovered by
+            # PROPFIND. The second conditional read closes the race window.
+            confirm = self.http.request(
+                "GET",
+                self.object_url(name),
+                headers=self._headers({"If-Match": version}),
+            )
+            if confirm.status_code in (404, 409, 412):
+                raise ApiError(409, "webdav_conflict", "Remote WebDAV object changed during validation")
+            if confirm.status_code != 200:
+                raise self._status_error("WebDAV GET", confirm.status_code)
+            confirmed = self._check_size(confirm, max_bytes)
+            if hashlib.sha256(confirmed).digest() != hashlib.sha256(data).digest():
+                raise ApiError(409, "webdav_conflict", "Remote WebDAV object changed during validation")
+            data = confirmed
+            response_etag = (confirm.headers.get("etag") or version).strip()
+            if _require_strong_etag(response_etag) != version:
+                raise ApiError(409, "webdav_conflict", "Remote WebDAV object changed during validation")
+        version = _require_strong_etag(version)
+        if expected_version is not None and version != _require_strong_etag(expected_version):
+            raise ApiError(409, "webdav_conflict", "Remote WebDAV object changed during sync")
+        return data, version
 
     def put(self, name: str, data: bytes, *, content_type: str = "application/octet-stream") -> None:
+        self.put_blob(name, data, content_type=content_type)
+
+    def put_blob(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        content_type: str = "application/octet-stream",
+        expected_version: str | None = None,
+        must_not_exist: bool = False,
+    ) -> str:
+        if expected_version is not None and must_not_exist:
+            raise ValueError("expected_version and must_not_exist are mutually exclusive")
+        conditional: dict[str, str] = {
+            "Content-Type": content_type,
+            "X-DeskCubby-Sha256": hashlib.sha256(data).hexdigest(),
+        }
+        if expected_version is not None:
+            conditional["If-Match"] = _require_strong_etag(expected_version)
+        elif must_not_exist:
+            conditional["If-None-Match"] = "*"
         resp = self.http.request(
             "PUT",
             self.object_url(name),
-            headers=self._headers({"Content-Type": content_type}),
+            headers=self._headers(conditional),
             content=data,
         )
+        if resp.status_code in (409, 412):
+            raise ApiError(409, "webdav_conflict", "Remote WebDAV object changed during sync")
         if resp.status_code not in _STATUS_OK:
             raise self._status_error("WebDAV PUT", resp.status_code)
+        returned = (resp.headers.get("etag") or "").strip()
+        if returned:
+            return _require_strong_etag(returned)
+        verified = self.get_blob(name, max_bytes=max(1, len(data)))
+        if verified is None or verified[0] != data:
+            raise ApiError(409, "webdav_conflict", "WebDAV write could not be verified")
+        return verified[1]
+
+    def _propfind_strong_etag(self, name: str) -> str:
+        body = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<D:propfind xmlns:D="DAV:"><D:prop><D:getetag/></D:prop></D:propfind>'
+        ).encode("utf-8")
+        resp = self.http.request(
+            "PROPFIND",
+            self.object_url(name),
+            headers=self._headers({"Depth": "0", "Content-Type": "application/xml; charset=utf-8"}),
+            content=body,
+        )
+        if resp.status_code in (404, 409, 412):
+            raise ApiError(409, "webdav_conflict", "Remote WebDAV object changed during validation")
+        if resp.status_code not in (200, 207):
+            raise self._status_error("WebDAV PROPFIND", resp.status_code)
+        data = self._check_size(resp, MAX_PROPFIND_BYTES)
+        text_head = data[:4096].decode("utf-8", errors="ignore").lower()
+        if "<!doctype" in text_head or "<!entity" in text_head:
+            raise ApiError(502, "webdav_remote_validation", "WebDAV property response is invalid")
+        try:
+            root = ET.fromstring(data)
+        except ET.ParseError as exc:
+            raise ApiError(502, "webdav_remote_validation", "WebDAV property response is invalid") from exc
+        etags = [
+            (node.text or "").strip()
+            for node in root.iter()
+            if node.tag.rsplit("}", 1)[-1].lower() == "getetag" and (node.text or "").strip()
+        ]
+        if len(set(etags)) != 1:
+            raise ApiError(502, "webdav_remote_validation", "WebDAV returned ambiguous ETag metadata")
+        return _require_strong_etag(etags[0])
 
     def exists(self) -> bool:
         try:

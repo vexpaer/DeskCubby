@@ -6,6 +6,7 @@
  * live inside diary files, so there is no separate delete endpoint here.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Clock, Hash, Info, ListOrdered, Plus, RefreshCw, Type as TypeIcon,
 } from "lucide-react";
@@ -132,9 +133,10 @@ function normalizeRecords(data: unknown): SRecord[] {
 }
 
 export default function DailyRecordsPage() {
+  const [searchParams] = useSearchParams();
+  const targetDocument = searchParams.get("document")?.trim() || null;
   const [snack, showSnack] = useSnackbar();
   const [fields, setFields] = useState<SField[]>([]);
-  const [dayBoundary, setDayBoundary] = useState<string>("");
   const [records, setRecords] = useState<SRecord[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
@@ -149,9 +151,7 @@ export default function DailyRecordsPage() {
     setError(null);
     try {
       const cfg = await apiGet<unknown>("/api/structured/config");
-      const cfgObj = asObj(cfg);
       setFields(normalizeFields(cfg));
-      setDayBoundary(typeof cfgObj.dayBoundary === "string" ? cfgObj.dayBoundary : "");
       const data = await apiGet<unknown>(
         `/api/structured/records?fromDay=${rangeStart}&toDay=${rangeEnd}`,
       );
@@ -190,7 +190,9 @@ export default function DailyRecordsPage() {
     <div className="daily-records-page">
       <TopBar
         title={tr("结构化记录", "Structured records")}
-        subtitle={dayBoundary ? tr(`日界线 ${dayBoundary}`, `Day boundary ${dayBoundary}`) : undefined}
+        subtitle={targetDocument
+          ? tr(`写入当前日记：${targetDocument}`, `Writing to current diary: ${targetDocument}`)
+          : tr("按自然本地日期归档", "Filed by natural local date")}
         actions={
           <button className="dc-icon-btn" aria-label={tr("刷新", "Refresh")} onClick={() => void load()}>
             <RefreshCw size={20} />
@@ -308,6 +310,7 @@ export default function DailyRecordsPage() {
       <AddRecordDialog
         open={addOpen}
         fields={activeFields}
+        targetDocument={targetDocument}
         onClose={() => setAddOpen(false)}
         onSaved={async () => {
           setAddOpen(false);
@@ -334,6 +337,7 @@ export default function DailyRecordsPage() {
 function AddRecordDialog(props: {
   open: boolean;
   fields: SField[];
+  targetDocument: string | null;
   onClose: () => void;
   onSaved: () => Promise<void>;
   onError: (msg: string) => void;
@@ -377,7 +381,8 @@ function AddRecordDialog(props: {
     setSubmitting(true);
     try {
       await apiSend("/api/structured/records", "POST", {
-        journalDay,
+        journalDay: props.targetDocument ? null : journalDay,
+        documentName: props.targetDocument,
         fieldId: field.id,
         rawValue: trimmed,
       });
@@ -409,16 +414,22 @@ function AddRecordDialog(props: {
           </select>
         </label>
 
-        <label className="dc-col" style={{ gap: 4 }}>
-          <span className="dc-muted" style={{ fontSize: "0.84em" }}>{tr("日记日", "Journal day")}</span>
-          <input
-            className="dc-input"
-            type="date"
-            value={journalDay}
-            onChange={(e) => setJournalDay(e.target.value)}
-            aria-label={tr("日记日", "Journal day")}
-          />
-        </label>
+        {props.targetDocument ? (
+          <div className="dc-muted" style={{ fontSize: "0.86em", overflowWrap: "anywhere" }}>
+            {tr(`将写入当前打开的日记：${props.targetDocument}`, `Will write to the open diary: ${props.targetDocument}`)}
+          </div>
+        ) : (
+          <label className="dc-col" style={{ gap: 4 }}>
+            <span className="dc-muted" style={{ fontSize: "0.84em" }}>{tr("自然日期", "Calendar date")}</span>
+            <input
+              className="dc-input"
+              type="date"
+              value={journalDay}
+              onChange={(e) => setJournalDay(e.target.value)}
+              aria-label={tr("自然日期", "Calendar date")}
+            />
+          </label>
+        )}
 
         {field?.type === "type" && (field.options ?? []).length > 0 && !customMode ? (
           <div className="dc-col" style={{ gap: 4 }}>

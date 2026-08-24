@@ -1,6 +1,7 @@
 """AppSettings store. The persisted shape mirrors Android AppSettings (camelCase,
-AppModels.kt) so v34 backup settings round-trip losslessly. API Key values are
-stored but never serialized back to the browser (see `public_settings`).
+AppModels.kt) so v34 backup settings round-trip losslessly. AI API keys are
+ordinary plain-text configuration fields and remain visible in settings detail;
+cloud credentials are still redacted from browser responses.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from typing import Any
 from ..core.db import connect
 
 SETTINGS_KEY = "settings_json_v1"
+MEAL_ICON_DEFAULT_MIGRATION_KEY = "web_migration_meal_icons_default_v1"
 
 DEFAULT_MARKDOWN_HEADING_SIZES_SP = [32.0, 28.0, 24.0, 21.0, 19.0, 17.0]
 DEFAULT_THEME_COLOR_ARGB = -12434355  # 0xFF42664D
@@ -118,6 +120,14 @@ DESKTOP_WIDGET_USAGE_RANGES = (7, 30, 90)
 # MIN/MAX_DESKTOP_WIDGET_* bounds from AppModels.kt.
 MIN_DESKTOP_WIDGET_CELLS, MAX_DESKTOP_WIDGET_CELLS = 1, 6
 
+CLOUD_SYNC_CONTENT_VALUES = (
+    "DIARIES", "NOTES", "MEDIA", "THOUGHTS", "THOUGHT_CATEGORIES", "DATE_RECORDS",
+    "POEMS", "POETRY_CATEGORIES", "FAVORITES", "RSS_SUBSCRIPTIONS", "GAME_STATES",
+    "GAME_STATISTICS", "USAGE_STATISTICS", "READING_PROGRESS", "READER_PREFERENCES",
+    "AGENT_CHATS", "VAULT", "GLOBAL_SETTINGS",
+)
+IMPLICIT_CLOUD_SYNC_CONTENTS = frozenset({"THOUGHT_CATEGORIES", "POETRY_CATEGORIES"})
+
 DEFAULT_CUSTOM_THEME = {
     "baseStyle": "MATERIAL",
     "lightPalette": {
@@ -195,10 +205,10 @@ def default_settings() -> dict[str, Any]:
         "mealCalendarWrapEnabled": False,
         "mealCalendarPhotosPerRow": "SMART",
         "mealPhotoFilter": {
-            "enabled": False, "brightness": 0.0, "contrast": 0.0,
-            "saturation": 0.0, "warmth": 0.0, "tint": 0.0,
+            "enabled": False, "brightness": 0.0, "contrast": 1.0,
+            "saturation": 1.0, "warmth": 0.0, "tint": 0.0,
         },
-        "mealButtonsUseIcons": False,
+        "mealButtonsUseIcons": True,
         "mealButtonIcons": list(DEFAULT_MEAL_BUTTON_ICONS),
         "dailyEventTemplates": [],
         "structuredAutoRecordSleepWake": False,
@@ -253,11 +263,10 @@ def default_settings() -> dict[str, Any]:
     }
 
 
-# Secret-bearing fields: values are stored server-side, never returned to the browser.
-# Beyond AI keys, known cloud-credential fields (canonical + legacy Android names) are
-# stripped wherever they appear, e.g. inside cloudSyncConfigs entries.
+# Cloud secret fields are stored server-side and never returned to the browser.
+# AI `apiKey` is deliberately not in this set: Android exposes the full value in
+# configuration detail and the Web replica must preserve that product behavior.
 SECRET_FIELDS = {
-    "apiKey",
     "password",
     "accessKey",
     "secretKey",
@@ -283,15 +292,45 @@ def _redact(obj: Any) -> Any:
 
 
 def load_settings(con) -> dict[str, Any]:
+    caller_transaction = bool(con.in_transaction)
     row = con.execute("SELECT value FROM app_settings_kv WHERE key = ?", (SETTINGS_KEY,)).fetchone()
     if row is None:
         settings = default_settings()
         _persist(con, settings)
+        con.execute(
+            "INSERT OR IGNORE INTO app_settings_kv(key, value) VALUES(?, ?)",
+            (MEAL_ICON_DEFAULT_MIGRATION_KEY, "1"),
+        )
+        con.commit()
         return copy.deepcopy(settings)
     stored = json.loads(row["value"])
+    migration = con.execute(
+        "SELECT 1 FROM app_settings_kv WHERE key = ?", (MEAL_ICON_DEFAULT_MIGRATION_KEY,)
+    ).fetchone()
+    if migration is None:
+        # Early Web builds persisted the full text-mode default and did not
+        # expose Android's meal-button display control. Upgrade only that exact
+        # untouched default once; imported/custom choices remain reversible.
+        if (
+            stored.get("mealButtonsUseIcons") is False
+            and stored.get("mealButtonIcons") == DEFAULT_MEAL_BUTTON_ICONS
+        ):
+            stored["mealButtonsUseIcons"] = True
+            con.execute(
+                "UPDATE app_settings_kv SET value = ? WHERE key = ?",
+                (json.dumps(stored, ensure_ascii=False), SETTINGS_KEY),
+            )
+        con.execute(
+            "INSERT OR IGNORE INTO app_settings_kv(key, value) VALUES(?, ?)",
+            (MEAL_ICON_DEFAULT_MIGRATION_KEY, "1"),
+        )
+        if not caller_transaction:
+            con.commit()
     merged = default_settings()
     merged.update(stored)
-    return merged
+    # Android normalizes DataStore values while decoding, not only after the
+    # user next saves a setting.  Apply the same migrations to every consumer.
+    return normalize_settings(merged)
 
 
 def _persist(con, settings: dict[str, Any]) -> None:
@@ -304,24 +343,10 @@ def _persist(con, settings: dict[str, Any]) -> None:
 
 
 def update_settings(con, patch: dict[str, Any]) -> dict[str, Any]:
-    """Merge a camelCase AppSettings patch. Secret-preserving: an aiConfigs entry
-    whose apiKey is empty keeps the previously stored key for the same id."""
+    """Merge a camelCase AppSettings patch and apply Android normalization."""
     current = load_settings(con)
     for key, value in patch.items():
         if key not in current:
-            continue
-        if key == "aiConfigs" and isinstance(value, list):
-            old_by_id = {c.get("id"): c for c in current.get("aiConfigs", []) if isinstance(c, dict)}
-            cleaned = []
-            for cfg in value:
-                if not isinstance(cfg, dict):
-                    continue
-                cfg = copy.deepcopy(cfg)
-                old = old_by_id.get(cfg.get("id"))
-                if old and not (cfg.get("apiKey") or "").strip():
-                    cfg["apiKey"] = old.get("apiKey", "")
-                cleaned.append(cfg)
-            current[key] = cleaned
             continue
         current[key] = value
     current = normalize_settings(current)
@@ -384,10 +409,84 @@ def normalize_settings(s: dict[str, Any]) -> dict[str, Any]:
         ct["panelOpacity"] = clamp(ct.get("panelOpacity", 0.94), 0.65, 1.0, 0.94)
         ct["spacingScale"] = clamp(ct.get("spacingScale", 1.0), 0.75, 1.35, 1.0)
         ct["animationScale"] = clamp(ct.get("animationScale", 1.0), 0.0, 2.0, 1.0)
+    meal_filter = s.get("mealPhotoFilter")
+    if isinstance(meal_filter, dict):
+        # Early Web builds accidentally persisted contrast/saturation as zero
+        # for the untouched disabled default. Android defaults both to 1f; fix
+        # only that exact legacy sentinel so deliberate adjustments survive.
+        legacy_zero_default = (
+            not bool(meal_filter.get("enabled")) and
+            all(meal_filter.get(key, 0) == 0 for key in (
+                "brightness", "contrast", "saturation", "warmth", "tint",
+            ))
+        )
+        if legacy_zero_default:
+            meal_filter["contrast"] = 1.0
+            meal_filter["saturation"] = 1.0
+        meal_filter["brightness"] = clamp(meal_filter.get("brightness", 0.0), -1.0, 1.0, 0.0)
+        meal_filter["contrast"] = clamp(meal_filter.get("contrast", 1.0), 0.0, 2.0, 1.0)
+        meal_filter["saturation"] = clamp(meal_filter.get("saturation", 1.0), 0.0, 2.0, 1.0)
+        meal_filter["warmth"] = clamp(meal_filter.get("warmth", 0.0), -1.0, 1.0, 0.0)
+        meal_filter["tint"] = clamp(meal_filter.get("tint", 0.0), -1.0, 1.0, 0.0)
     s["desktopWidgetConfigs"] = _normalize_desktop_widget_configs(
         s.get("desktopWidgetConfigs")
     )
+    subscriptions = s.get("rssSubscriptions")
+    if isinstance(subscriptions, list):
+        normalized_subscriptions: list[dict[str, Any]] = []
+        seen_subscription_ids: set[str] = set()
+        for raw in subscriptions:
+            if not isinstance(raw, dict):
+                continue
+            item_id = str(raw.get("id") or "").strip()[:80]
+            url = str(raw.get("url") or "").strip()[:4_096]
+            if not item_id or not url or item_id in seen_subscription_ids:
+                continue
+            seen_subscription_ids.add(item_id)
+            normalized_subscriptions.append({
+                "id": item_id,
+                "title": str(raw.get("title") or "").strip().replace("\n", " ")[:120],
+                "url": url,
+                "enabled": bool(raw.get("enabled", True)),
+            })
+            if len(normalized_subscriptions) >= 100:
+                break
+        s["rssSubscriptions"] = normalized_subscriptions
+    else:
+        s["rssSubscriptions"] = []
+    s["cloudSyncConfigs"] = _normalize_cloud_sync_configs(s.get("cloudSyncConfigs"))
     return s
+
+
+def _normalize_cloud_sync_configs(value: Any) -> list[dict[str, Any]]:
+    """Apply Android 0.23.5's user-selectable cloud-content migration.
+
+    Relationship categories remain runtime dependencies, but are never stored
+    as independent user switches. Legacy category-only selections promote the
+    matching parent so data is not silently dropped.
+    """
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for raw in value[:20]:
+        if not isinstance(raw, dict):
+            continue
+        config = copy.deepcopy(raw)
+        contents = config.get("selectedContents")
+        selected = {
+            item for item in contents
+            if isinstance(item, str) and item in CLOUD_SYNC_CONTENT_VALUES
+        } if isinstance(contents, list) else set()
+        if "THOUGHT_CATEGORIES" in selected:
+            selected.add("THOUGHTS")
+        if "POETRY_CATEGORIES" in selected:
+            selected.add("POEMS")
+        config["selectedContents"] = [
+            item for item in CLOUD_SYNC_CONTENT_VALUES
+            if item in selected and item not in IMPLICIT_CLOUD_SYNC_CONTENTS
+        ]
+        normalized.append(config)
+    return normalized
 
 
 def _widget_bounded_int(value: Any, lo: int, hi: int, dflt: int) -> int:
@@ -446,5 +545,5 @@ def _normalize_desktop_widget_configs(value: Any) -> list[dict[str, Any]]:
 
 
 def public_settings(con) -> dict[str, Any]:
-    """Settings safe for the browser: secret values stripped."""
+    """Browser settings projection: AI keys visible, cloud credentials stripped."""
     return _redact(load_settings(con))

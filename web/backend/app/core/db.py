@@ -5,8 +5,11 @@ reader registry). Migrations are explicit and additive; destructive resets are f
 """
 from __future__ import annotations
 
+import datetime as _dt
+import re
 import sqlite3
 import threading
+import uuid
 from collections.abc import Iterator
 
 from fastapi import Request
@@ -254,7 +257,19 @@ CREATE TABLE IF NOT EXISTS usage_devices (
   deviceId TEXT PRIMARY KEY,
   deviceName TEXT NOT NULL,
   isLocal INTEGER NOT NULL DEFAULT 0,
-  updatedAt INTEGER NOT NULL
+  updatedAt INTEGER NOT NULL,
+  platform TEXT NOT NULL DEFAULT 'web',
+  trackingStartedOn TEXT,
+  backfillCompletedThrough TEXT
+);
+CREATE TABLE IF NOT EXISTS usage_days (
+  deviceId TEXT NOT NULL,
+  dayIso TEXT NOT NULL,
+  zoneId TEXT NOT NULL DEFAULT 'UTC',
+  state TEXT NOT NULL DEFAULT 'OPEN',
+  collectedAt INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (deviceId, dayIso),
+  FOREIGN KEY (deviceId) REFERENCES usage_devices(deviceId) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS usage_events_daily (
   deviceId TEXT NOT NULL,
@@ -294,6 +309,247 @@ def connect() -> sqlite3.Connection:
 
 _init_done = False
 
+_LEGACY_USAGE_DEVICE_NAMESPACE = uuid.UUID("42f4a6dd-55df-4cd2-8fcf-b346347c9b73")
+_USAGE_PLATFORM_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
+
+
+def _canonical_usage_device_id(raw: str) -> str:
+    value = str(raw).strip()
+    try:
+        return str(uuid.UUID(value))
+    except (ValueError, AttributeError):
+        # Old Web imports accepted arbitrary non-whitespace IDs. Map them to a
+        # stable UUID so Android UsageDeviceJsonCodec can consume the record
+        # without losing or repeatedly duplicating its history.
+        return str(uuid.uuid5(_LEGACY_USAGE_DEVICE_NAMESPACE, value))
+
+
+def _canonical_usage_device_name(raw: str, fallback: str) -> str:
+    value = "".join(
+        ch for ch in str(raw).strip()
+        if not (ord(ch) < 32 or 127 <= ord(ch) <= 159)
+    )[:80]
+    return value or fallback[:80] or "Web device"
+
+
+def _table_exists(con: sqlite3.Connection, table_name: str) -> bool:
+    return con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table_name,)
+    ).fetchone() is not None
+
+
+def _canonical_usage_date(raw: object) -> str | None:
+    value = str(raw).strip() if raw is not None else ""
+    try:
+        parsed = _dt.date.fromisoformat(value)
+    except ValueError:
+        return None
+    return value if parsed.isoformat() == value else None
+
+
+def _ensure_usage_schema(con: sqlite3.Connection) -> None:
+    """Add Android UsageDevice metadata without destructively rebuilding tables."""
+    columns = {str(row["name"]) for row in con.execute("PRAGMA table_info(usage_devices)")}
+    if "platform" not in columns:
+        con.execute("ALTER TABLE usage_devices ADD COLUMN platform TEXT NOT NULL DEFAULT 'web'")
+    if "trackingStartedOn" not in columns:
+        con.execute("ALTER TABLE usage_devices ADD COLUMN trackingStartedOn TEXT")
+    if "backfillCompletedThrough" not in columns:
+        con.execute("ALTER TABLE usage_devices ADD COLUMN backfillCompletedThrough TEXT")
+
+    today_iso = _dt.date.today().isoformat()
+    con.execute(
+        "INSERT OR IGNORE INTO usage_days(deviceId,dayIso,zoneId,state,collectedAt) "
+        "SELECT deviceId,dayIso,'UTC',CASE WHEN dayIso=? THEN 'OPEN' ELSE 'FINAL' END,MAX(lastSeen) "
+        "FROM usage_events_daily GROUP BY deviceId,dayIso",
+        (today_iso,),
+    )
+    for row in con.execute(
+        "SELECT deviceId,deviceName,platform,trackingStartedOn,backfillCompletedThrough "
+        "FROM usage_devices"
+    ).fetchall():
+        device_id = str(row["deviceId"])
+        name = _canonical_usage_device_name(str(row["deviceName"]), device_id)
+        platform = str(row["platform"] or "web").strip().lower()
+        if not _USAGE_PLATFORM_RE.fullmatch(platform):
+            platform = "web"
+        first_day = con.execute(
+            "SELECT MIN(dayIso) FROM usage_days WHERE deviceId=?", (device_id,)
+        ).fetchone()[0]
+        tracking = _canonical_usage_date(row["trackingStartedOn"])
+        if first_day is not None and (tracking is None or str(first_day) < tracking):
+            tracking = str(first_day)
+        backfill = _canonical_usage_date(row["backfillCompletedThrough"])
+        con.execute(
+            "UPDATE usage_devices SET deviceName=?,platform=?,trackingStartedOn=?,"
+            "backfillCompletedThrough=? WHERE deviceId=?",
+            (name, platform, tracking, backfill, device_id),
+        )
+
+
+def _migrate_legacy_usage_device_ids(con: sqlite3.Connection) -> None:
+    """Transactionally canonicalize old Web-only usage IDs and child rows."""
+    device_columns = {
+        str(row["name"]) for row in con.execute("PRAGMA table_info(usage_devices)").fetchall()
+    }
+    has_usage_days = _table_exists(con, "usage_days")
+    select_columns = ["deviceId", "deviceName", "isLocal", "updatedAt"]
+    select_columns.extend(
+        column for column in ("platform", "trackingStartedOn", "backfillCompletedThrough")
+        if column in device_columns
+    )
+    devices = con.execute(
+        f"SELECT {','.join(select_columns)} FROM usage_devices ORDER BY deviceId"
+    ).fetchall()
+    for device in devices:
+        old_id = str(device["deviceId"])
+        new_id = _canonical_usage_device_id(old_id)
+        if new_id == old_id:
+            continue
+
+        old_events = con.execute(
+            "SELECT dayIso,packageName,appName,firstSeen,lastSeen,totalTimeMs "
+            "FROM usage_events_daily WHERE deviceId = ?",
+            (old_id,),
+        ).fetchall()
+        old_days = (
+            con.execute(
+                "SELECT dayIso,zoneId,state,collectedAt FROM usage_days WHERE deviceId=?",
+                (old_id,),
+            ).fetchall()
+            if has_usage_days else []
+        )
+
+        current = con.execute(
+            f"SELECT {','.join(select_columns[1:])} FROM usage_devices WHERE deviceId = ?",
+            (new_id,),
+        ).fetchone()
+        incoming_platform = str(device["platform"] or "web") if "platform" in device_columns else "web"
+        incoming_tracking = (
+            _canonical_usage_date(device["trackingStartedOn"])
+            if "trackingStartedOn" in device_columns else None
+        )
+        incoming_backfill = (
+            _canonical_usage_date(device["backfillCompletedThrough"])
+            if "backfillCompletedThrough" in device_columns else None
+        )
+        if current is None:
+            insert_columns = select_columns
+            values: list[object] = [
+                new_id, device["deviceName"], device["isLocal"], device["updatedAt"]
+            ]
+            if "platform" in device_columns:
+                values.append(incoming_platform)
+            if "trackingStartedOn" in device_columns:
+                values.append(incoming_tracking)
+            if "backfillCompletedThrough" in device_columns:
+                values.append(incoming_backfill)
+            placeholders = ",".join("?" for _ in insert_columns)
+            con.execute(
+                f"INSERT INTO usage_devices({','.join(insert_columns)}) VALUES({placeholders})",
+                values,
+            )
+        else:
+            incoming_is_newer = int(device["updatedAt"]) >= int(current["updatedAt"])
+            assignments = ["deviceName=?", "isLocal=?", "updatedAt=?"]
+            values = [
+                device["deviceName"] if incoming_is_newer else current["deviceName"],
+                max(int(current["isLocal"]), int(device["isLocal"])),
+                max(int(current["updatedAt"]), int(device["updatedAt"])),
+            ]
+            if "platform" in device_columns:
+                assignments.append("platform=?")
+                values.append(incoming_platform if incoming_is_newer else current["platform"])
+            if "trackingStartedOn" in device_columns:
+                assignments.append("trackingStartedOn=?")
+                values.append(min(filter(None, [
+                    _canonical_usage_date(current["trackingStartedOn"]), incoming_tracking,
+                ]), default=None))
+            if "backfillCompletedThrough" in device_columns:
+                assignments.append("backfillCompletedThrough=?")
+                values.append(max(filter(None, [
+                    _canonical_usage_date(current["backfillCompletedThrough"]), incoming_backfill,
+                ]), default=None))
+            values.append(new_id)
+            con.execute(
+                f"UPDATE usage_devices SET {','.join(assignments)} WHERE deviceId=?", values
+            )
+
+        if has_usage_days:
+            old_events_by_day: dict[str, list[sqlite3.Row]] = {}
+            for event in old_events:
+                old_events_by_day.setdefault(str(event["dayIso"]), []).append(event)
+            for day in old_days:
+                day_iso = str(day["dayIso"])
+                existing_day = con.execute(
+                    "SELECT zoneId,state,collectedAt FROM usage_days "
+                    "WHERE deviceId=? AND dayIso=?",
+                    (new_id, day_iso),
+                ).fetchone()
+                incoming_rank = (1 if day["state"] == "FINAL" else 0, int(day["collectedAt"]))
+                current_rank = (
+                    (1 if existing_day["state"] == "FINAL" else 0, int(existing_day["collectedAt"]))
+                    if existing_day is not None else None
+                )
+                if current_rank is None or incoming_rank >= current_rank:
+                    con.execute(
+                        "INSERT INTO usage_days(deviceId,dayIso,zoneId,state,collectedAt) "
+                        "VALUES(?,?,?,?,?) ON CONFLICT(deviceId,dayIso) DO UPDATE SET "
+                        "zoneId=excluded.zoneId,state=excluded.state,collectedAt=excluded.collectedAt",
+                        (new_id, day_iso, day["zoneId"], day["state"], day["collectedAt"]),
+                    )
+                    con.execute(
+                        "DELETE FROM usage_events_daily WHERE deviceId=? AND dayIso=?",
+                        (new_id, day_iso),
+                    )
+                    for event in old_events_by_day.pop(day_iso, []):
+                        con.execute(
+                            "INSERT INTO usage_events_daily(deviceId,dayIso,packageName,appName,"
+                            "firstSeen,lastSeen,totalTimeMs) VALUES(?,?,?,?,?,?,?)",
+                            (
+                                new_id, event["dayIso"], event["packageName"], event["appName"],
+                                event["firstSeen"], event["lastSeen"], event["totalTimeMs"],
+                            ),
+                        )
+                else:
+                    old_events_by_day.pop(day_iso, None)
+            # A partially upgraded database can contain event rows whose day
+            # metadata was never written. Preserve them with the legacy merge.
+            old_events = [event for events in old_events_by_day.values() for event in events]
+
+        for event in old_events:
+            existing = con.execute(
+                "SELECT appName,firstSeen,lastSeen,totalTimeMs FROM usage_events_daily "
+                "WHERE deviceId=? AND dayIso=? AND packageName=?",
+                (new_id, event["dayIso"], event["packageName"]),
+            ).fetchone()
+            if existing is None:
+                con.execute(
+                    "INSERT INTO usage_events_daily(deviceId,dayIso,packageName,appName,"
+                    "firstSeen,lastSeen,totalTimeMs) VALUES(?,?,?,?,?,?,?)",
+                    (
+                        new_id, event["dayIso"], event["packageName"], event["appName"],
+                        event["firstSeen"], event["lastSeen"], event["totalTimeMs"],
+                    ),
+                )
+            else:
+                con.execute(
+                    "UPDATE usage_events_daily SET appName=?,firstSeen=?,lastSeen=?,totalTimeMs=? "
+                    "WHERE deviceId=? AND dayIso=? AND packageName=?",
+                    (
+                        existing["appName"] or event["appName"],
+                        min(int(existing["firstSeen"]), int(event["firstSeen"])),
+                        max(int(existing["lastSeen"]), int(event["lastSeen"])),
+                        max(int(existing["totalTimeMs"]), int(event["totalTimeMs"])),
+                        new_id, event["dayIso"], event["packageName"],
+                    ),
+                )
+
+        con.execute("DELETE FROM usage_events_daily WHERE deviceId = ?", (old_id,))
+        if has_usage_days:
+            con.execute("DELETE FROM usage_days WHERE deviceId = ?", (old_id,))
+        con.execute("DELETE FROM usage_devices WHERE deviceId = ?", (old_id,))
+
 
 def init_db() -> None:
     global _init_done
@@ -301,6 +557,8 @@ def init_db() -> None:
         con = connect()
         try:
             con.executescript(SCHEMA_SQL)
+            _ensure_usage_schema(con)
+            _migrate_legacy_usage_device_ids(con)
             con.commit()
         finally:
             con.close()

@@ -10,11 +10,12 @@
  * 80–320 (step 8), markdownHeadingSizesSp 12–48 sp.
  */
 import React, { useEffect, useState } from "react";
+import { FolderOpen, RotateCcw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { apiGet, apiSend } from "../../../api/client";
 import { MEAL_CATEGORIES } from "../../../api/types";
 import { tr } from "../../../i18n/tr";
-import { ErrorText, Spinner } from "../../../components/ui";
+import { ConfirmDialog, ErrorText, Spinner } from "../../../components/ui";
 import {
   SectionCard, Segmented, SelectField, SliderRow, TextField, Toggle,
 } from "../SettingsPage";
@@ -46,7 +47,192 @@ interface StructuredFieldWire {
 
 interface StructuredConfig {
   dayBoundaryHour?: number;
+  todayDiarySwitchTime?: string;
   fields?: StructuredFieldWire[];
+}
+
+type StorageKind = "diary" | "media";
+
+interface StorageRootInfo {
+  kind: StorageKind;
+  configured: boolean;
+  isDefault: boolean;
+  locked: boolean;
+  path: string;
+  displayName: string;
+}
+
+interface StorageRootsResponse {
+  localDesktopMode: boolean;
+  canConfigure: boolean;
+  pickerAvailable: boolean;
+  roots: Record<StorageKind, StorageRootInfo>;
+}
+
+interface PickedFolder {
+  cancelled: boolean;
+  path?: string;
+  displayName?: string;
+}
+
+function StorageFoldersCard(props: { snackbar: (message: string) => void; onDiaryChanged: () => void }) {
+  const [info, setInfo] = useState<StorageRootsResponse | null>(null);
+  const [paths, setPaths] = useState<Record<StorageKind, string>>({ diary: "", media: "" });
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<StorageKind | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [pending, setPending] = useState<{ kind: StorageKind; path: string | null } | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const next = await apiGet<StorageRootsResponse>("/api/storage/roots");
+      setInfo(next);
+      setPaths({ diary: next.roots.diary.path, media: next.roots.media.path });
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const choose = async (kind: StorageKind) => {
+    setBusy(kind);
+    setError(null);
+    try {
+      const picked = await apiSend<PickedFolder>("/api/storage/pick", "POST", { kind });
+      if (!picked.cancelled && picked.path) {
+        setPaths((current) => ({ ...current, [kind]: picked.path! }));
+      }
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const apply = async () => {
+    if (!pending) return;
+    const { kind, path } = pending;
+    setPending(null);
+    setBusy(kind);
+    setError(null);
+    try {
+      const saved = await apiSend<StorageRootInfo>("/api/storage/root", "PUT", { kind, path });
+      setInfo((current) => current ? {
+        ...current,
+        roots: { ...current.roots, [kind]: saved },
+      } : current);
+      setPaths((current) => ({ ...current, [kind]: saved.path }));
+      props.snackbar(kind === "diary"
+        ? tr("日记文件夹已切换并重新扫描", "Diary folder changed and rescanned")
+        : tr("媒体文件夹已切换", "Media folder changed"));
+      if (kind === "diary") props.onDiaryChanged();
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const labels: Record<StorageKind, { zh: string; en: string }> = {
+    diary: { zh: "日记文件夹", en: "Diary folder" },
+    media: { zh: "媒体文件夹", en: "Media folder" },
+  };
+
+  return (
+    <SectionCard
+      title={tr("保存位置", "Storage folders")}
+      description={tr(
+        "日记 Markdown 和媒体文件直接保存在你选择的真实文件夹中；路径只属于这台电脑，不进入备份或云同步。",
+        "Diary Markdown and media files live directly in folders you choose; these device-local paths are never backed up or synced.",
+      )}
+    >
+      {loading && <Spinner size={20} />}
+      <ErrorText error={error} />
+      {info && !info.canConfigure && (
+        <div className="dc-muted" style={{ fontSize: "0.86em", lineHeight: 1.6 }}>
+          {tr(
+            "当前是服务器部署，浏览器不能选择服务器磁盘目录。使用 install.sh 安装并通过 deskcubby 启动后，这里会开放本机文件夹选择；服务器管理员也可用 DESKCUBBY_DIARY_DIR / DESKCUBBY_MEDIA_DIR 配置。",
+            "This is a server deployment, so the browser cannot choose server disk folders. Install with install.sh and launch with deskcubby to enable the local picker, or configure DESKCUBBY_DIARY_DIR / DESKCUBBY_MEDIA_DIR on the server.",
+          )}
+        </div>
+      )}
+      {info && (["diary", "media"] as StorageKind[]).map((kind) => {
+        const root = info.roots[kind];
+        const changed = paths[kind].trim() !== root.path;
+        return (
+          <div key={kind} className="dc-card dc-col" style={{ padding: 12, gap: 8 }}>
+            <div className="dc-row" style={{ justifyContent: "space-between" }}>
+              <span style={{ fontWeight: 600 }}>{tr(labels[kind].zh, labels[kind].en)}</span>
+              <span className="dc-muted" style={{ fontSize: "0.8em" }}>
+                {root.isDefault ? tr("应用默认", "App default") : tr("已自选", "Custom")}
+              </span>
+            </div>
+            {info.canConfigure ? (
+              <>
+                <input
+                  className="dc-input" value={paths[kind]}
+                  aria-label={tr(labels[kind].zh, labels[kind].en)}
+                  disabled={busy !== null || root.locked}
+                  onChange={(event) => setPaths((current) => ({ ...current, [kind]: event.target.value }))}
+                  placeholder={tr("输入绝对文件夹路径", "Enter an absolute folder path")}
+                />
+                <div className="dc-row dc-wrap">
+                  <button className="dc-btn dc-btn-tonal" disabled={busy !== null || root.locked || !info.pickerAvailable}
+                    onClick={() => void choose(kind)}>
+                    <FolderOpen size={17} />
+                    {busy === kind ? tr("正在选择…", "Choosing…") : tr("选择文件夹", "Choose folder")}
+                  </button>
+                  <button className="dc-btn dc-btn-filled" disabled={busy !== null || root.locked || !paths[kind].trim() || !changed}
+                    onClick={() => setPending({ kind, path: paths[kind].trim() })}>
+                    {tr("使用此文件夹", "Use this folder")}
+                  </button>
+                  <button className="dc-btn" disabled={busy !== null || root.locked || root.isDefault}
+                    onClick={() => setPending({ kind, path: null })}>
+                    <RotateCcw size={16} />{tr("恢复应用默认", "Use app default")}
+                  </button>
+                  {busy === kind && <Spinner size={18} />}
+                </div>
+                {!info.pickerAvailable && (
+                  <span className="dc-muted" style={{ fontSize: "0.82em" }}>
+                    {tr("系统图形文件夹选择器不可用，仍可在上方粘贴绝对路径。", "No graphical folder picker is available; paste an absolute path above instead.")}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="dc-muted" style={{ fontSize: "0.84em" }}>
+                {root.displayName || tr("服务器受管目录", "Server-managed folder")}
+              </span>
+            )}
+          </div>
+        );
+      })}
+      <div className="dc-muted" style={{ fontSize: "0.82em", lineHeight: 1.55 }}>
+        {tr(
+          "切换文件夹不会移动或删除旧文件夹中的内容。日记目录切换成功后会立即重新扫描，新建和保存都写入新目录。",
+          "Changing folders never moves or deletes the old contents. After a diary folder is changed it is rescanned immediately, and new or edited diaries are written there.",
+        )}
+      </div>
+      <ConfirmDialog
+        open={pending !== null}
+        title={tr("切换保存文件夹？", "Change storage folder?")}
+        message={tr(
+          "旧文件夹中的内容会原样保留且不会自动迁移。确认后 DeskCubby 将从新文件夹读取和保存。",
+          "The old folder stays untouched and is not migrated automatically. DeskCubby will read and save in the new folder after confirmation.",
+        )}
+        confirmLabel={tr("确认切换", "Change folder")}
+        onConfirm={() => void apply()}
+        onCancel={() => setPending(null)}
+      />
+    </SectionCard>
+  );
 }
 
 function NumberField(props: {
@@ -128,7 +314,7 @@ export default function DiarySection({ draft, patch, snackbar, reportInvalid }: 
     setBoundary(hours);
     try {
       await apiSend("/api/structured/day-boundary", "PUT", { hours });
-      snackbar(tr("日界线已更新", "Day boundary updated"));
+      snackbar(tr("今日日记切换时间已更新", "Today's-diary switch time updated"));
     } catch (e) {
       setBoundary(prev);
       snackbar(tr("保存失败", "Save failed"));
@@ -183,6 +369,7 @@ export default function DiarySection({ draft, patch, snackbar, reportInvalid }: 
 
   return (
     <div className="dc-col" style={{ gap: 12 }}>
+      <StorageFoldersCard snackbar={snackbar} onDiaryChanged={() => void loadConfig()} />
       <SectionCard title={tr("文件与模板", "Files & templates")}>
         <TextField
           label={tr("今日日记文件名格式", "Diary file name pattern")}
@@ -357,8 +544,8 @@ export default function DiarySection({ draft, patch, snackbar, reportInvalid }: 
       <SectionCard
         title={tr("结构化记录", "Structured records")}
         description={tr(
-          "日界线与字段结构立即保存到服务器工作区，不经过顶栏「保存」。",
-          "The day boundary and field schema save to the server workspace immediately, without the top-bar Save.",
+          "今日日记切换时间保存在本机；字段结构保存到日记工作区。两者均立即生效。",
+          "The today's-diary switch is device-local; field schema lives in the diary workspace. Both apply immediately.",
         )}
       >
         {cfgLoading ? (
@@ -367,14 +554,17 @@ export default function DiarySection({ draft, patch, snackbar, reportInvalid }: 
           <>
             <ErrorText error={cfgError} />
             <SelectField
-              label={tr("日记日界线（小时）", "Journal day boundary (hour)")}
+              label={tr("今日日记切换时间（小时）", "Today's-diary switch time (hour)")}
               value={String(boundary)}
               onChange={(v) => void changeBoundary(Number(v))}
               options={Array.from({ length: 24 }, (_, h) => ({
                 value: String(h),
                 label: `${String(h).padStart(2, "0")}:00`,
               }))}
-              hint={tr("此后的小时计入下一天，默认 05:00。", "Hours after this count toward the next day; default 05:00.")}
+              hint={tr(
+                "默认 05:00；切换前「进入今日日记」打开前一天。结构化记录始终归入真实本地日期。",
+                "Default 05:00; before it, “Open today's diary” opens the previous day. Structured records always use the natural local date.",
+              )}
             />
             <div className="dc-col" style={{ gap: 6 }}>
               <span style={{ fontSize: "0.9em", fontWeight: 600 }}>{tr("字段", "Fields")}</span>

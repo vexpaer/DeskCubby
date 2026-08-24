@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { apiGet } from "../../../api/client";
+import { useSettings } from "../../../stores/settings";
 import { tr } from "../../../i18n/tr";
 import { ErrorText, Spinner } from "../../../components/ui";
 import { SectionCard } from "../SettingsPage";
@@ -47,9 +48,11 @@ function fmtMb(v: number | undefined): string {
   return `${(typeof v === "number" && Number.isFinite(v) ? v : 0).toFixed(2)} MB`;
 }
 
-export default function AboutSection(_props: SettingsSectionProps) {
+export default function AboutSection({ settings, draft, patch, snackbar }: SettingsSectionProps) {
+  const updateSettings = useSettings((state) => state.update);
   const [info, setInfo] = useState<SystemInfoFull | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [tutorialSaving, setTutorialSaving] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -67,6 +70,8 @@ export default function AboutSection(_props: SettingsSectionProps) {
       <SectionCard title={tr("关于", "About")}>
         {!info && !error && <Spinner size={20} />}
         <ErrorText error={error} />
+        <img src="/icons/icon-192.png" alt="" width={64} height={64}
+          style={{ alignSelf: "center", objectFit: "contain" }} />
         <div className="dc-row" style={{ justifyContent: "space-between" }}>
           <span>{tr("应用名称", "App name")}</span>
           <span style={{ fontWeight: 600 }}>DeskCubby</span>
@@ -79,6 +84,56 @@ export default function AboutSection(_props: SettingsSectionProps) {
           <span>{tr("平台", "Platform")}</span>
           <span className="dc-muted">Web</span>
         </div>
+      </SectionCard>
+
+      <SectionCard title={tr("页面教学", "Page tutorials")}>
+        <div className="dc-row" style={{ justifyContent: "space-between", gap: 12 }}>
+          <span className="dc-grow">
+            {tr("软件教学模式", "Tutorial mode")}
+            <div className="dc-muted" style={{ fontSize: "0.82em" }}>
+              {tr("首次进入每个页面时显示一次说明蒙版。", "Shows a walkthrough once on the first visit to each page.")}
+            </div>
+          </span>
+          <button
+            type="button" role="switch" aria-checked={draft.tutorialModeEnabled}
+            onClick={() => patch({ tutorialModeEnabled: !draft.tutorialModeEnabled })}
+            style={{
+              width: 46, height: 26, borderRadius: 999, border: "none", position: "relative", flexShrink: 0, padding: 0,
+              background: draft.tutorialModeEnabled ? "var(--dc-primary)" : "var(--dc-surface-variant)",
+            }}
+          >
+            <span style={{
+              position: "absolute", top: 3, left: draft.tutorialModeEnabled ? 23 : 3, width: 20, height: 20,
+              borderRadius: "50%", background: draft.tutorialModeEnabled ? "var(--dc-on-primary)" : "var(--dc-outline)",
+              transition: "left 0.18s ease",
+            }} />
+          </button>
+        </div>
+        <button className="dc-btn dc-btn-tonal" disabled={(settings.tutorialAcknowledgedPages ?? []).length === 0}
+          onClick={() => {
+            patch({ tutorialAcknowledgedPages: [] });
+            snackbar(tr("保存后将重新显示全部页面教学", "Save to show all page tutorials again"));
+          }}>
+          {tr("重新显示全部页面教学", "Show all page tutorials again")}
+        </button>
+        <button className="dc-btn dc-btn-filled" disabled={tutorialSaving || (
+          draft.tutorialModeEnabled === settings.tutorialModeEnabled &&
+          JSON.stringify(draft.tutorialAcknowledgedPages ?? []) === JSON.stringify(settings.tutorialAcknowledgedPages ?? [])
+        )} onClick={() => {
+          // About is an immediate/read-only shell page, so persist this small
+          // draft through the central settings store directly.
+          setTutorialSaving(true);
+          void updateSettings({
+            tutorialModeEnabled: draft.tutorialModeEnabled,
+            tutorialAcknowledgedPages: draft.tutorialAcknowledgedPages ?? [],
+          }).then(() => {
+            snackbar(tr("已保存", "Saved"));
+          }).catch((reason: unknown) => {
+            setError(reason);
+          }).finally(() => setTutorialSaving(false));
+        }}>
+          {tutorialSaving ? tr("保存中…", "Saving…") : tr("保存页面教学设置", "Save tutorial settings")}
+        </button>
       </SectionCard>
 
       <SectionCard title={tr("数据占用", "Data usage")}>

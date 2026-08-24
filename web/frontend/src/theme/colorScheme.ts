@@ -81,6 +81,13 @@ export interface SchemeRoles {
   scrim: string;
 }
 
+/** CSS uses kebab-case style names while Android persists enum-style names. */
+export function themeStyleAttribute(style: string): "material" | "liquid-glass" | "organic-future" {
+  const normalized = style.trim().toLowerCase().replace(/_/g, "-");
+  if (normalized === "liquid-glass" || normalized === "organic-future") return normalized;
+  return "material";
+}
+
 export function buildScheme(seedArgb: number, secondaryArgb: number[], dark: boolean): SchemeRoles {
   const seed = rgbToOklch(...argbToRgb(seedArgb));
   const secSeed = rgbToOklch(...argbToRgb(secondaryArgb[0] ?? seedArgb));
@@ -188,8 +195,12 @@ export function applyThemeVariables(opts: {
   for (const [k, v] of Object.entries(roles)) {
     root.style.setProperty(`--dc-${k.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase())}`, v);
   }
-  root.dataset.style = opts.style === "CUSTOM" ? (opts.customTheme?.baseStyle ?? "MATERIAL").toLowerCase() : opts.style.toLowerCase();
+  const renderedStyle = opts.style === "CUSTOM"
+    ? (opts.customTheme?.baseStyle ?? "MATERIAL")
+    : opts.style;
+  root.dataset.style = themeStyleAttribute(renderedStyle);
   root.dataset.theme = opts.dark ? "dark" : "light";
+  root.style.colorScheme = opts.dark ? "dark" : "light";
   const spacing = opts.compactMode ? 0.85 : 1;
   root.style.setProperty("--dc-font-scale", String(opts.fontScale));
   root.style.setProperty("--dc-spacing", String(spacing));
