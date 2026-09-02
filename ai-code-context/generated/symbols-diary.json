@@ -16,9 +16,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852028
+      "updatedAt": 1788365770787
     },
-    "score": 102.42617674034092
+    "score": 102.42724729492222
   },
   {
     "node": {
@@ -37,9 +37,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353854045
+      "updatedAt": 1788365772786
     },
-    "score": 89.46165478747224
+    "score": 89.46273581332191
   },
   {
     "node": {
@@ -58,9 +58,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852510
+      "updatedAt": 1788365771276
     },
-    "score": 89.40126047293151
+    "score": 89.40232573096736
   },
   {
     "node": {
@@ -79,9 +79,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353851943
+      "updatedAt": 1788365770701
     },
-    "score": 89.38633788299308
+    "score": 89.38739926149051
   },
   {
     "node": {
@@ -100,9 +100,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353851946
+      "updatedAt": 1788365770704
     },
-    "score": 89.38633788299308
+    "score": 89.38739926149051
   },
   {
     "node": {
@@ -121,9 +121,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353851991
+      "updatedAt": 1788365770745
     },
-    "score": 89.38633788299308
+    "score": 89.38739926149051
   },
   {
     "node": {
@@ -142,9 +142,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853089
+      "updatedAt": 1788365771848
     },
-    "score": 89.38633788299308
+    "score": 89.38739926149051
   },
   {
     "node": {
@@ -163,9 +163,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853250
+      "updatedAt": 1788365772003
     },
-    "score": 89.38633788299308
+    "score": 89.38739926149051
   },
   {
     "node": {
@@ -184,9 +184,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353851906
+      "updatedAt": 1788365770667
     },
-    "score": 89.37148470618959
+    "score": 89.37254222967454
   },
   {
     "node": {
@@ -205,9 +205,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852679
+      "updatedAt": 1788365771446
     },
-    "score": 89.37148470618959
+    "score": 89.37254222967454
   },
   {
     "node": {
@@ -227,9 +227,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353854448
+      "updatedAt": 1788365773135
     },
-    "score": 81.45991224828863
+    "score": 81.4609922806937
   },
   {
     "node": {
@@ -249,9 +249,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353854478
+      "updatedAt": 1788365773165
     },
-    "score": 81.43182598528823
+    "score": 81.43289867769957
   },
   {
     "node": {
@@ -271,9 +271,9 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "DiaryIndexEntity",
-      "updatedAt": 1788353853583
+      "updatedAt": 1788365772334
     },
-    "score": 81.40126047293151
+    "score": 81.40232573096736
   },
   {
     "node": {
@@ -292,9 +292,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853600
+      "updatedAt": 1788365772349
     },
-    "score": 57.40126047293151
+    "score": 57.40232573096736
   },
   {
     "node": {
@@ -314,9 +314,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353854354
+      "updatedAt": 1788365773057
     },
-    "score": 56.49228132439026
+    "score": 56.49337038709451
   },
   {
     "node": {
@@ -337,9 +337,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853726
+      "updatedAt": 1788365772478
     },
-    "score": 54.40126047293151
+    "score": 54.40232573096736
   },
   {
     "node": {
@@ -360,9 +360,9 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "NaiveDate",
-      "updatedAt": 1788353854232
+      "updatedAt": 1788365772922
     },
-    "score": 54.29824326293247
+    "score": 54.299281871776614
   },
   {
     "node": {
@@ -382,9 +382,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853838
+      "updatedAt": 1788365772590
     },
-    "score": 53.49228132439026
+    "score": 53.49337038709451
   },
   {
     "node": {
@@ -404,9 +404,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853860
+      "updatedAt": 1788365772602
     },
-    "score": 53.49228132439026
+    "score": 53.49337038709451
   },
   {
     "node": {
@@ -426,9 +426,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853726
+      "updatedAt": 1788365772478
     },
-    "score": 53.40126047293151
+    "score": 53.40232573096736
   },
   {
     "node": {
@@ -447,9 +447,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853860
+      "updatedAt": 1788365772602
     },
-    "score": 52.49228132439026
+    "score": 52.49337038709451
   },
   {
     "node": {
@@ -469,9 +469,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853860
+      "updatedAt": 1788365772600
     },
-    "score": 52.49228132439026
+    "score": 52.49337038709451
   },
   {
     "node": {
@@ -490,9 +490,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353854232
+      "updatedAt": 1788365772922
     },
-    "score": 52.49228132439026
+    "score": 52.49337038709451
   },
   {
     "node": {
@@ -512,9 +512,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853980
+      "updatedAt": 1788365772713
     },
-    "score": 52.41625296372564
+    "score": 52.417322126044
   },
   {
     "node": {
@@ -533,9 +533,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853600
+      "updatedAt": 1788365772349
     },
-    "score": 52.40126047293151
+    "score": 52.40232573096736
   },
   {
     "node": {
@@ -554,9 +554,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853860
+      "updatedAt": 1788365772602
     },
-    "score": 51.49228132439026
+    "score": 51.49337038709451
   },
   {
     "node": {
@@ -575,9 +575,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853860
+      "updatedAt": 1788365772600
     },
-    "score": 51.49228132439026
+    "score": 51.49337038709451
   },
   {
     "node": {
@@ -596,9 +596,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852687
+      "updatedAt": 1788365771466
     },
-    "score": 51.451398891510586
+    "score": 51.45247602713148
   },
   {
     "node": {
@@ -617,9 +617,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353854232
+      "updatedAt": 1788365772922
     },
-    "score": 50.49228132439026
+    "score": 50.49337038709451
   },
   {
     "node": {
@@ -638,9 +638,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852687
+      "updatedAt": 1788365771466
     },
-    "score": 50.451398891510586
+    "score": 50.45247602713148
   },
   {
     "node": {
@@ -659,9 +659,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852691
+      "updatedAt": 1788365771468
     },
-    "score": 50.451398891510586
+    "score": 50.45247602713148
   },
   {
     "node": {
@@ -680,9 +680,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852691
+      "updatedAt": 1788365771470
     },
-    "score": 50.451398891510586
+    "score": 50.45247602713148
   },
   {
     "node": {
@@ -701,9 +701,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852687
+      "updatedAt": 1788365771466
     },
-    "score": 49.451398891510586
+    "score": 49.45247602713148
   },
   {
     "node": {
@@ -722,9 +722,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852028
+      "updatedAt": 1788365770787
     },
-    "score": 49.41625296372564
+    "score": 49.417322126044
   },
   {
     "node": {
@@ -743,9 +743,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853600
+      "updatedAt": 1788365772349
     },
-    "score": 49.40126047293151
+    "score": 49.40232573096736
   },
   {
     "node": {
@@ -764,9 +764,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853838
+      "updatedAt": 1788365772590
     },
-    "score": 48.49228132439026
+    "score": 48.49337038709451
   },
   {
     "node": {
@@ -785,9 +785,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853860
+      "updatedAt": 1788365772602
     },
-    "score": 48.49228132439026
+    "score": 48.49337038709451
   },
   {
     "node": {
@@ -806,9 +806,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852046
+      "updatedAt": 1788365770804
     },
-    "score": 48.41625296372564
+    "score": 48.417322126044
   },
   {
     "node": {
@@ -827,9 +827,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853635
+      "updatedAt": 1788365772390
     },
-    "score": 48.32733684496992
+    "score": 48.328382948427496
   },
   {
     "node": {
@@ -848,9 +848,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353854232
+      "updatedAt": 1788365772922
     },
-    "score": 48.32733684496992
+    "score": 48.328382948427496
   },
   {
     "node": {
@@ -869,9 +869,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353854232
+      "updatedAt": 1788365772922
     },
-    "score": 47.49228132439026
+    "score": 47.49337038709451
   },
   {
     "node": {
@@ -890,9 +890,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852536
+      "updatedAt": 1788365771303
     },
-    "score": 47.41625296372564
+    "score": 47.417322126044
   },
   {
     "node": {
@@ -911,9 +911,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353854232
+      "updatedAt": 1788365772922
     },
-    "score": 46.49228132439026
+    "score": 46.49337038709451
   },
   {
     "node": {
@@ -932,9 +932,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852691
+      "updatedAt": 1788365771471
     },
-    "score": 46.465820886209116
+    "score": 46.466900928601014
   },
   {
     "node": {
@@ -953,9 +953,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353851904
+      "updatedAt": 1788365770664
     },
-    "score": 46.41625296372564
+    "score": 46.417322126044
   },
   {
     "node": {
@@ -974,9 +974,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852028
+      "updatedAt": 1788365770787
     },
-    "score": 46.41625296372564
+    "score": 46.417322126044
   },
   {
     "node": {
@@ -995,9 +995,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852028
+      "updatedAt": 1788365770787
     },
-    "score": 45.41625296372564
+    "score": 45.417322126044
   },
   {
     "node": {
@@ -1016,9 +1016,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852028
+      "updatedAt": 1788365770787
     },
-    "score": 45.41625296372564
+    "score": 45.417322126044
   },
   {
     "node": {
@@ -1037,9 +1037,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852873
+      "updatedAt": 1788365771632
     },
-    "score": 45.41625296372564
+    "score": 45.417322126044
   },
   {
     "node": {
@@ -1058,9 +1058,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853600
+      "updatedAt": 1788365772349
     },
-    "score": 45.40126047293151
+    "score": 45.40232573096736
   },
   {
     "node": {
@@ -1079,9 +1079,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353851904
+      "updatedAt": 1788365770664
     },
-    "score": 44.41625296372564
+    "score": 44.417322126044
   },
   {
     "node": {
@@ -1100,9 +1100,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353851904
+      "updatedAt": 1788365770664
     },
-    "score": 44.41625296372564
+    "score": 44.417322126044
   },
   {
     "node": {
@@ -1121,9 +1121,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852028
+      "updatedAt": 1788365770787
     },
-    "score": 44.41625296372564
+    "score": 44.417322126044
   },
   {
     "node": {
@@ -1142,9 +1142,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852028
+      "updatedAt": 1788365770787
     },
-    "score": 44.41625296372564
+    "score": 44.417322126044
   },
   {
     "node": {
@@ -1163,9 +1163,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353853600
+      "updatedAt": 1788365772349
     },
-    "score": 44.40126047293151
+    "score": 44.40232573096736
   },
   {
     "node": {
@@ -1184,9 +1184,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353854232
+      "updatedAt": 1788365772922
     },
-    "score": 43.49228132439026
+    "score": 43.49337038709451
   },
   {
     "node": {
@@ -1205,9 +1205,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852350
+      "updatedAt": 1788365771105
     },
-    "score": 43.41625296372564
+    "score": 43.417322126044
   },
   {
     "node": {
@@ -1226,9 +1226,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852873
+      "updatedAt": 1788365771632
     },
-    "score": 43.41625296372564
+    "score": 43.417322126044
   },
   {
     "node": {
@@ -1247,9 +1247,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852028
+      "updatedAt": 1788365770787
     },
-    "score": 42.41625296372564
+    "score": 42.417322126044
   },
   {
     "node": {
@@ -1268,8 +1268,8 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1788353852028
+      "updatedAt": 1788365770787
     },
-    "score": 42.41625296372564
+    "score": 42.417322126044
   }
 ]

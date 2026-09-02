@@ -818,8 +818,8 @@
   {
     "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredRecordDraft.kt",
     "language": "kotlin",
-    "nodeCount": 14,
-    "size": 9212
+    "nodeCount": 17,
+    "size": 11599
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredRecordsCodec.kt",
@@ -837,19 +837,19 @@
     "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredRecordsRepository.kt",
     "language": "kotlin",
     "nodeCount": 41,
-    "size": 17118
+    "size": 17301
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredStatisticsRepository.kt",
     "language": "kotlin",
     "nodeCount": 24,
-    "size": 9617
+    "size": 9800
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredWorkspaceRepository.kt",
     "language": "kotlin",
-    "nodeCount": 40,
-    "size": 19646
+    "nodeCount": 42,
+    "size": 20316
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/SystemFieldSnapshot.kt",
@@ -1628,14 +1628,14 @@
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredrecords/StructuredRecordsUiStore.kt",
     "language": "kotlin",
-    "nodeCount": 14,
-    "size": 1026
+    "nodeCount": 16,
+    "size": 1306
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredrecords/StructuredRecordsViewModel.kt",
     "language": "kotlin",
-    "nodeCount": 68,
-    "size": 15325
+    "nodeCount": 70,
+    "size": 17970
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredstats/StructuredStatisticsScreen.kt",
@@ -1646,8 +1646,8 @@
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredstats/StructuredStatisticsViewModel.kt",
     "language": "kotlin",
-    "nodeCount": 45,
-    "size": 12376
+    "nodeCount": 46,
+    "size": 13402
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/theme/AppTranslations.kt",
@@ -2132,8 +2132,8 @@
   {
     "path": "android/app/src/test/java/com/deskcubby/app/data/structuredrecords/StructuredRecordDraftTest.kt",
     "language": "kotlin",
-    "nodeCount": 22,
-    "size": 5180
+    "nodeCount": 24,
+    "size": 6981
   },
   {
     "path": "android/app/src/test/java/com/deskcubby/app/data/structuredrecords/StructuredWorkspaceRepositoryPolicyTest.kt",
@@ -2144,8 +2144,8 @@
   {
     "path": "android/app/src/test/java/com/deskcubby/app/data/structuredrecords/StructuredWorkspaceRepositoryTest.kt",
     "language": "kotlin",
-    "nodeCount": 21,
-    "size": 5898
+    "nodeCount": 22,
+    "size": 6898
   },
   {
     "path": "android/app/src/test/java/com/deskcubby/app/data/sync/AppCloudSyncStatusTest.kt",

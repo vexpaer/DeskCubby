@@ -75,7 +75,7 @@ Found 4 symbols across 2 files.
 - testPluginCanBeRegisteredLoadedAndUnloaded → register
 - duplicatePluginIdIsRejectedBeforeLifecycleStarts → register
 - failedLoadCleansOwnerContextAndDoesNotBlockOtherPlugins → register
-- ... and 137 more
+- ... and 138 more
 
 **Source Code**
 

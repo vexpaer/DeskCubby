@@ -1,6 +1,6 @@
 # DeskCubby CodeGraph Snapshot
 
-Source commit: `c3f6293fe94f4bcc790a1ae172f5628c65ee6b84`
+Source commit: `ba16b16b801a84beab277136b73bf497938b6cc1`
 
 CodeGraph version: `1.5.0`
 
@@ -17,20 +17,20 @@ Project: /home/runner/work/DeskCubby/DeskCubby
 
 Index Statistics:
   Files:     715
-  Nodes:     26,811
-  Edges:     81,920
-  DB Size:   108.05 MB
+  Nodes:     26,824
+  Edges:     81,949
+  DB Size:   108.13 MB
   Backend:   node:sqlite — built-in (full WAL)
   Journal:   wal
 
 Nodes by Kind:
-  import          9,771
-  function        4,617
-  method          4,615
-  constant        1,802
+  import          9,773
+  function        4,619
+  method          4,618
+  constant        1,806
   class           1,075
   variable        970
-  field           807
+  field           809
   enum_member     778
   file            704
   namespace       426
