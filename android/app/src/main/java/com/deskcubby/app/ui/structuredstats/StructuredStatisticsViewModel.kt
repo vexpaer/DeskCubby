@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -91,7 +92,10 @@ class StructuredStatisticsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            workspaceRepository.workspaceChanges.collect {
+            // workspaceChanges is a StateFlow. Its initial replay is not a change and the settings
+            // collector above already performs the first load. Previously both reloads were queued
+            // behind reloadMutex, effectively doubling the statistics page's startup latency.
+            workspaceRepository.workspaceChanges.drop(1).collect {
                 val appSettings = settings.value
                 if (appSettings.diaryTreeUri != null) reload(stores = appSettings)
             }
@@ -104,15 +108,24 @@ class StructuredStatisticsViewModel @Inject constructor(
 
     fun setRange(startIso: String, endIso: String) {
         viewModelScope.launch {
-            mutableState.value = mutableState.value.copy(
+            val loaded = mutableState.value
+            mutableState.value = loaded.copy(
                 startIso = startIso,
                 endIso = endIso,
             )
-            computeCards(settings.value, startIso, endIso)
+            // Changing 7/30/90-day range only needs Room data. Reuse the already loaded workspace
+            // instead of traversing SAF and decoding fields.json/statistics.json again.
+            computeCards(
+                settings.value,
+                startIso,
+                endIso,
+                workspaceFields = loaded.fields,
+                workspaceMetrics = loaded.metrics,
+            )
         }
     }
 
-    /** Persists a new or updated derived metric and recomputes cards. */
+    /** Persists a new or updated derived metric. workspaceChanges performs the single refresh. */
     fun saveMetric(metric: StructuredMetric) {
         viewModelScope.launch {
             val appSettings = settings.value
@@ -125,7 +138,6 @@ class StructuredStatisticsViewModel @Inject constructor(
                 }
                 (existing.filterNot { it.id == metric.id } + normalized).sortedBy { it.sortOrder }
             }
-            computeCards(appSettings, mutableState.value.startIso, mutableState.value.endIso)
         }
     }
 
@@ -134,7 +146,6 @@ class StructuredStatisticsViewModel @Inject constructor(
             val appSettings = settings.value
             if (appSettings.diaryTreeUri == null) return@launch
             workspaceRepository.mutateMetrics(appSettings) { existing -> existing.filterNot { it.id == id } }
-            computeCards(appSettings, mutableState.value.startIso, mutableState.value.endIso)
         }
     }
 
@@ -174,7 +185,6 @@ class StructuredStatisticsViewModel @Inject constructor(
             saveMetric(metric)
         }
     }
-
 
     fun createSleepDurationMetric() {
         viewModelScope.launch {
@@ -219,8 +229,8 @@ class StructuredStatisticsViewModel @Inject constructor(
             }
             val state = mutableState.value
             try {
-                workspaceRepository.initializeMissingFiles(stores)
-                workspaceRepository.ensureSystemFields(stores)
+                // Statistics is a read surface. It must not initialize or rewrite workspace files on
+                // every visit; those write-capable operations belong to structured-record settings.
                 computeCards(stores, state.startIso, state.endIso)
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -244,12 +254,19 @@ class StructuredStatisticsViewModel @Inject constructor(
         }
     }
 
-    private suspend fun computeCards(stores: AppSettings, startIso: String, endIso: String) {
+    private suspend fun computeCards(
+        stores: AppSettings,
+        startIso: String,
+        endIso: String,
+        workspaceFields: List<StructuredField>? = null,
+        workspaceMetrics: List<StructuredMetric>? = null,
+    ) {
         val state = mutableState.value.copy(loading = true, message = null)
         mutableState.value = state
-        val fields = workspaceRepository.loadFields(stores)
-        val metrics = workspaceRepository.loadMetrics(stores)
+        val fields = workspaceFields ?: workspaceRepository.loadFieldsReadOnly(stores)
+        val metrics = workspaceMetrics ?: workspaceRepository.loadMetrics(stores)
         val activeFields = fields.filterNot { it.archived }
+        val fieldsById = fields.associateBy { it.id }
         val fieldCards = activeFields.mapNotNull { field ->
             val stats = try {
                 statisticsRepository.autoFieldStats(stores, field, startIso, endIso)
@@ -262,7 +279,13 @@ class StructuredStatisticsViewModel @Inject constructor(
         }
         val metricCards = metrics.filterNot { it.archived }.mapNotNull { metric ->
             val points = try {
-                statisticsRepository.metricSeries(stores, metric, startIso, endIso)
+                statisticsRepository.metricSeries(
+                    stores,
+                    metric,
+                    startIso,
+                    endIso,
+                    knownFieldsById = fieldsById,
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
