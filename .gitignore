@@ -41,6 +41,9 @@ android/app/build/
 # Local AI context
 /note.md
 
+# CodeGraph local binary index (AI-readable exports live in ai-code-context/generated/)
+/.codegraph/
+
 # Web client (web/) — generated & local-only artifacts
 /web/frontend/node_modules/
 /web/frontend/dist/

@@ -1,0 +1,172 @@
+name: CodeGraph AI Context
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'ai-code-context/generated/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codegraph-ai-context-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-context:
+    name: Build temporary graph and text exports
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CODEGRAPH_TELEMETRY: '0'
+      CODEGRAPH_NO_DAEMON: '1'
+      DO_NOT_TRACK: '1'
+      NO_COLOR: '1'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install pinned CodeGraph
+        run: npm install --global @colbymchenry/codegraph@1.5.0
+
+      - name: Generate bounded Markdown and JSON
+        run: bash .github/scripts/build-codegraph-ai-context.sh
+
+      - name: Build PR impact report
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/codegraph-changed-files.txt
+          if ! codegraph affected --stdin --json < /tmp/codegraph-changed-files.txt > /tmp/codegraph-affected.json; then
+            echo '{"error":"CodeGraph affected query failed"}' > /tmp/codegraph-affected.json
+          fi
+
+          {
+            echo '<!-- deskcubby-codegraph-report -->'
+            echo '## CodeGraph PR impact report'
+            echo
+            echo "Head: \`${HEAD_SHA}\`"
+            echo
+            echo '### Changed files'
+            echo '```text'
+            head -n 150 /tmp/codegraph-changed-files.txt
+            echo '```'
+            echo
+            echo '### Dependency/test impact'
+            echo '```json'
+            head -c 40000 /tmp/codegraph-affected.json
+            echo
+            echo '```'
+            echo
+            echo '> Built from a temporary CodeGraph index. No SQLite/binary graph is retained.'
+          } > /tmp/codegraph-pr-report.md
+
+          cat /tmp/codegraph-pr-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload AI context snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: codegraph-ai-context-${{ github.run_id }}
+          path: ai-code-context/generated/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload PR impact report
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: codegraph-pr-report-${{ github.run_id }}
+          path: /tmp/codegraph-pr-report.md
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-pr-report:
+    name: Publish PR impact comment
+    if: github.event_name == 'pull_request'
+    needs: build-context
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Download PR impact report
+        uses: actions/download-artifact@v4
+        with:
+          name: codegraph-pr-report-${{ github.run_id }}
+          path: /tmp/codegraph-pr-report
+
+      - name: Publish or update comment
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- deskcubby-codegraph-report -->';
+            const body = fs.readFileSync('/tmp/codegraph-pr-report/codegraph-pr-report.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100
+            });
+            const previous = comments.find(
+              comment => comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: previous.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body
+              });
+            }
+
+  refresh-main-snapshot:
+    name: Commit text snapshot to main
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-context
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Download generated snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: codegraph-ai-context-${{ github.run_id }}
+          path: ai-code-context/generated
+
+      - name: Commit generated text only
+        run: |
+          set -euo pipefail
+          git add ai-code-context/generated
+          if git diff --cached --quiet; then
+            echo 'AI context is already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore: refresh CodeGraph AI context [skip ci]'
+          git push
