@@ -95,6 +95,7 @@ class StructuredRecordsViewModel @Inject constructor(
                         uiStore.fields.value = emptyList()
                         uiStore.templates.value = emptyList()
                         uiStore.lastWorkspaceRefreshAtMillis = 0L
+                        uiStore.lastAppliedWorkspaceRevision = -1L
                     }
                     changed
                 }
@@ -118,11 +119,17 @@ class StructuredRecordsViewModel @Inject constructor(
             // StateFlow immediately replays its current revision. The diary-root collector above
             // already performs the initial load, so consuming that replay used to do the same SAF
             // workspace read twice on every ViewModel creation.
-            workspaceRepository.workspaceChanges.drop(1).collect {
+            workspaceRepository.workspaceChanges.drop(1).collect { revision ->
                 val appSettings = settingsRepository.settings.first()
                 if (appSettings.diaryTreeUri != null) {
                     try {
-                        uiStore.mutationMutex.withLock { refreshWorkspace(appSettings) }
+                        uiStore.mutationMutex.withLock {
+                            // App-side template mutations update uiStore optimistically and then
+                            // publish this same revision. Do not re-read the files we just wrote.
+                            if (revision != uiStore.lastAppliedWorkspaceRevision) {
+                                refreshWorkspace(appSettings)
+                            }
+                        }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
@@ -135,18 +142,23 @@ class StructuredRecordsViewModel @Inject constructor(
 
     private suspend fun refreshWorkspace(appSettings: AppSettings) {
         val rootUri = appSettings.diaryTreeUri ?: return
-        workspaceRepository.ensureSystemFields(appSettings)
+        // ensureSystemFields already returns the canonical field list; loading fields.json again was
+        // a redundant SAF round-trip on every page visit.
+        val loadedFields = workspaceRepository.ensureSystemFields(appSettings)
         val loadedTemplates = workspaceRepository.loadTemplates(appSettings)
-        val loadedFields = workspaceRepository.loadFields(appSettings)
         if (uiStore.rootInitialized && uiStore.rootUri == rootUri) {
             uiStore.fields.value = loadedFields
             uiStore.templates.value = loadedTemplates
             uiStore.lastWorkspaceRefreshAtMillis = System.currentTimeMillis()
+            uiStore.lastAppliedWorkspaceRevision = workspaceRepository.workspaceChanges.value
         }
-        try {
-            DeskCubbyWidgetProvider.requestUpdate(applicationContext)
-        } catch (_: Exception) {
-            // Workspace persistence must not depend on launcher availability.
+        // Refreshing launcher widgets is best effort and should never extend page loading.
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                DeskCubbyWidgetProvider.requestUpdate(applicationContext)
+            } catch (_: Exception) {
+                // Workspace persistence must not depend on launcher availability.
+            }
         }
     }
 
@@ -321,6 +333,8 @@ class StructuredRecordsViewModel @Inject constructor(
                     val canonical = workspaceRepository.mutateTemplates(appSettings, transform)
                     if (uiStore.rootUri == rootUri) {
                         uiStore.templates.value = canonical
+                        uiStore.lastWorkspaceRefreshAtMillis = System.currentTimeMillis()
+                        uiStore.lastAppliedWorkspaceRevision = workspaceRepository.workspaceChanges.value
                     }
                     persisted = true
                 } catch (cancelled: CancellationException) {
