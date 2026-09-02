@@ -118,8 +118,10 @@ class StructuredRecordsRepository @Inject constructor(
         values: List<String>,
         targetDate: LocalDate? = null,
         now: Instant = Instant.now(),
+        /** Optional caller-owned snapshot that avoids another SAF fields.json read on hot paths. */
+        knownFieldsById: Map<String, StructuredField>? = null,
     ): StructuredRecordWriteResult {
-        val fields = try {
+        val fields = knownFieldsById ?: try {
             workspaceRepository.loadFields(settings).associateBy { it.id }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
