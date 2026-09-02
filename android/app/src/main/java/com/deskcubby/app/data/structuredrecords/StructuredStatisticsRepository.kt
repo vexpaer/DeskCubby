@@ -158,8 +158,10 @@ class StructuredStatisticsRepository @Inject constructor(
         metric: StructuredMetric,
         startIso: String,
         endIso: String,
+        /** Optional page-owned field snapshot to avoid one SAF fields.json read per metric card. */
+        knownFieldsById: Map<String, StructuredField>? = null,
     ): List<StructuredSeriesPoint> {
-        val fields = workspaceRepository.loadFields(settings).associateBy { it.id }
+        val fields = knownFieldsById ?: workspaceRepository.loadFields(settings).associateBy { it.id }
         val start = runCatching { LocalDate.parse(startIso) }.getOrDefault(LocalDate.now())
         val end = runCatching { LocalDate.parse(endIso) }.getOrDefault(LocalDate.now())
         if (start.isAfter(end)) return emptyList()
