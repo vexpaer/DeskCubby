@@ -9,12 +9,46 @@ data class StructuredDraftField(
     val endExclusive: Int,
     val value: String?,
     val templateBinding: Boolean = false,
+    /** UI-only legacy placeholder. It is never serialized as a structured field or indexed. */
+    val plainPlaceholder: Boolean = false,
 )
 
 data class StructuredRecordDraft(
     val text: String,
     val fields: List<StructuredDraftField>,
 )
+
+private const val PLAIN_XX_FIELD_ID = "__plain_xx_placeholder__"
+private val PLAIN_XX_PATTERN = Regex("xx", RegexOption.IGNORE_CASE)
+
+/**
+ * Rebuilds UI-only `xx` spans from the current text. They deliberately live in [fields] so the
+ * existing inline editor keeps its original underline + tap-to-select interaction, while every
+ * persistence helper below filters them out before producing structured segments or values.
+ */
+private fun withPlainXxPlaceholders(draft: StructuredRecordDraft): StructuredRecordDraft {
+    val structured = draft.fields.filterNot { it.plainPlaceholder }
+    val placeholders = PLAIN_XX_PATTERN.findAll(draft.text).mapIndexedNotNull { index, match ->
+        val start = match.range.first
+        val endExclusive = match.range.last + 1
+        val overlapsStructuredField = structured.any { field ->
+            start < field.endExclusive && endExclusive > field.start
+        }
+        if (overlapsStructuredField) {
+            null
+        } else {
+            StructuredDraftField(
+                occurrenceIndex = -1 - index,
+                fieldId = PLAIN_XX_FIELD_ID,
+                start = start,
+                endExclusive = endExclusive,
+                value = null,
+                plainPlaceholder = true,
+            )
+        }
+    }.toList()
+    return draft.copy(fields = (structured + placeholders).sortedBy { it.start })
+}
 
 fun createStructuredRecordDraft(
     template: StructuredRecordTemplate,
@@ -61,7 +95,7 @@ private fun buildDraft(
             }
         }
     }
-    return StructuredRecordDraft(text.toString(), spans)
+    return withPlainXxPlaceholders(StructuredRecordDraft(text.toString(), spans))
 }
 
 /**
@@ -72,13 +106,18 @@ private fun buildDraft(
 fun isStructuredDraftReady(draft: StructuredRecordDraft): Boolean = draft.text.isNotBlank()
 
 /**
- * Applies one text edit while preserving field bindings. Edits wholly inside one field replace that
- * field value; edits outside fields shift later ranges. A change crossing a field boundary or
- * touching multiple fields is rejected rather than silently unbinding persisted markers.
+ * Applies one text edit while preserving structured-field bindings. `xx` placeholders are a visual
+ * overlay only: edits treat them exactly like ordinary text, then the overlay is rebuilt from any
+ * literal `xx` that remains. This restores the original replace-on-tap behavior without giving `xx`
+ * a field ID, marker, index entry, statistic, or any other structured-record semantics.
  *
- * Template drafts are the one exception: deleting exactly one whole inline field removes that
- * binding from the template. Record-entry drafts keep rejecting the same edit so a required field
- * cannot become an invisible zero-length binding.
+ * Edits wholly inside one structured field replace that field value; edits outside structured
+ * fields shift later ranges. A change crossing a structured-field boundary or touching multiple
+ * structured fields is rejected rather than silently unbinding persisted markers.
+ *
+ * Template drafts are the one exception: deleting exactly one whole inline structured field removes
+ * that binding from the template. Record-entry drafts keep rejecting the same edit so a required
+ * field cannot become an invisible zero-length binding.
  */
 fun applyStructuredDraftEdit(
     draft: StructuredRecordDraft,
@@ -86,6 +125,7 @@ fun applyStructuredDraftEdit(
 ): StructuredRecordDraft? {
     if (candidate == draft.text) return draft
     val old = draft.text
+    val structuredFields = draft.fields.filterNot { it.plainPlaceholder }
     var start = 0
     val prefixLimit = minOf(old.length, candidate.length)
     while (start < prefixLimit && old[start] == candidate[start]) start++
@@ -97,7 +137,7 @@ fun applyStructuredDraftEdit(
         newSuffix--
     }
 
-    val touched = draft.fields.filter { field ->
+    val touched = structuredFields.filter { field ->
         if (oldSuffix == start) {
             start > field.start && start < field.endExclusive
         } else {
@@ -108,7 +148,7 @@ fun applyStructuredDraftEdit(
     val delta = (newSuffix - start) - (oldSuffix - start)
 
     if (touched.isEmpty()) {
-        val shifted = draft.fields.map { field ->
+        val shifted = structuredFields.map { field ->
             when {
                 field.endExclusive <= start -> field
                 field.start >= oldSuffix -> field.copy(
@@ -118,7 +158,7 @@ fun applyStructuredDraftEdit(
                 else -> return null
             }
         }
-        return StructuredRecordDraft(candidate, shifted)
+        return withPlainXxPlaceholders(StructuredRecordDraft(candidate, shifted))
     }
 
     val target = touched.single()
@@ -130,7 +170,7 @@ fun applyStructuredDraftEdit(
         oldSuffix == target.endExclusive &&
         newSuffix == start
     ) {
-        val remaining = draft.fields
+        val remaining = structuredFields
             .filterNot { it.occurrenceIndex == target.occurrenceIndex }
             .map { field ->
                 if (field.start >= oldSuffix) {
@@ -142,13 +182,13 @@ fun applyStructuredDraftEdit(
                     field
                 }
             }
-        return StructuredRecordDraft(candidate, remaining)
+        return withPlainXxPlaceholders(StructuredRecordDraft(candidate, remaining))
     }
     // A required inline field in record entry must always retain a visible/editable range.
     if (newTargetEnd <= target.start || newTargetEnd > candidate.length) return null
     val newValue = candidate.substring(target.start, newTargetEnd).takeIf(String::isNotBlank)
         ?: return null
-    val updated = draft.fields.map { field ->
+    val updated = structuredFields.map { field ->
         when {
             field.occurrenceIndex == target.occurrenceIndex -> field.copy(
                 endExclusive = newTargetEnd,
@@ -161,7 +201,7 @@ fun applyStructuredDraftEdit(
             else -> field
         }
     }
-    return StructuredRecordDraft(candidate, updated)
+    return withPlainXxPlaceholders(StructuredRecordDraft(candidate, updated))
 }
 
 fun replaceStructuredDraftField(
@@ -169,14 +209,15 @@ fun replaceStructuredDraftField(
     occurrenceIndex: Int,
     replacement: String,
 ): StructuredRecordDraft {
-    val field = draft.fields.firstOrNull { it.occurrenceIndex == occurrenceIndex } ?: return draft
+    val structuredFields = draft.fields.filterNot { it.plainPlaceholder }
+    val field = structuredFields.firstOrNull { it.occurrenceIndex == occurrenceIndex } ?: return draft
     val safe = replacement.trim()
     // Assisted replacements (chips/pickers/quick actions) must obey the same invariant as direct
     // editing: a field binding may never collapse into an invisible zero-length range.
     if (safe.isBlank()) return draft
     val text = draft.text.replaceRange(field.start, field.endExclusive, safe)
     val delta = safe.length - (field.endExclusive - field.start)
-    val updated = draft.fields.map { current ->
+    val updated = structuredFields.map { current ->
         when {
             current.occurrenceIndex == occurrenceIndex -> current.copy(
                 endExclusive = current.start + safe.length,
@@ -189,7 +230,7 @@ fun replaceStructuredDraftField(
             else -> current
         }
     }
-    return StructuredRecordDraft(text, updated)
+    return withPlainXxPlaceholders(StructuredRecordDraft(text, updated))
 }
 
 fun insertStructuredTemplateField(
@@ -197,12 +238,13 @@ fun insertStructuredTemplateField(
     field: StructuredField,
     offset: Int,
 ): StructuredRecordDraft {
+    val structuredFields = draft.fields.filterNot { it.plainPlaceholder }
     val safeOffset = offset.coerceIn(0, draft.text.length)
-    if (draft.fields.any { safeOffset > it.start && safeOffset < it.endExclusive }) return draft
+    if (structuredFields.any { safeOffset > it.start && safeOffset < it.endExclusive }) return draft
     val label = field.name
     val text = draft.text.substring(0, safeOffset) + label + draft.text.substring(safeOffset)
-    val occurrence = (draft.fields.maxOfOrNull { it.occurrenceIndex } ?: -1) + 1
-    val shifted = draft.fields.map { current ->
+    val occurrence = (structuredFields.maxOfOrNull { it.occurrenceIndex } ?: -1) + 1
+    val shifted = structuredFields.map { current ->
         if (current.start >= safeOffset) current.copy(
             start = current.start + label.length,
             endExclusive = current.endExclusive + label.length,
@@ -215,13 +257,13 @@ fun insertStructuredTemplateField(
         value = null,
         templateBinding = true,
     )
-    return StructuredRecordDraft(text, shifted.sortedBy { it.start })
+    return withPlainXxPlaceholders(StructuredRecordDraft(text, shifted.sortedBy { it.start }))
 }
 
 fun structuredDraftToSegments(draft: StructuredRecordDraft): List<StructuredRecordSegment> {
     val segments = mutableListOf<StructuredRecordSegment>()
     var cursor = 0
-    draft.fields.sortedBy { it.start }.forEach { field ->
+    draft.fields.filterNot { it.plainPlaceholder }.sortedBy { it.start }.forEach { field ->
         if (field.start > cursor) {
             segments += StructuredRecordSegment.Text(draft.text.substring(cursor, field.start))
         }
@@ -233,7 +275,7 @@ fun structuredDraftToSegments(draft: StructuredRecordDraft): List<StructuredReco
 }
 
 fun structuredDraftValues(draft: StructuredRecordDraft): List<String>? {
-    val ordered = draft.fields.sortedBy { it.start }
+    val ordered = draft.fields.filterNot { it.plainPlaceholder }.sortedBy { it.start }
     if (ordered.any { it.value.isNullOrBlank() }) return null
     return ordered.map { requireNotNull(it.value) }
 }
