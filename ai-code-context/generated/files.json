@@ -1,0 +1,4292 @@
+[
+  {
+    "path": ".github/workflows/android-ci.yml",
+    "language": "yaml",
+    "nodeCount": 0,
+    "size": 4249
+  },
+  {
+    "path": ".github/workflows/android-real-upgrade.yml",
+    "language": "yaml",
+    "nodeCount": 0,
+    "size": 2913
+  },
+  {
+    "path": ".github/workflows/android-release.yml",
+    "language": "yaml",
+    "nodeCount": 0,
+    "size": 4363
+  },
+  {
+    "path": ".github/workflows/codegraph-ai-context.yml",
+    "language": "yaml",
+    "nodeCount": 0,
+    "size": 5416
+  },
+  {
+    "path": ".github/workflows/windows-ci.yml",
+    "language": "yaml",
+    "nodeCount": 0,
+    "size": 1939
+  },
+  {
+    "path": ".github/workflows/windows-release.yml",
+    "language": "yaml",
+    "nodeCount": 0,
+    "size": 9043
+  },
+  {
+    "path": "android/app/build.gradle.kts",
+    "language": "kotlin",
+    "nodeCount": 19,
+    "size": 7956
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/agent/AgentReviewRepositoryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 36,
+    "size": 7039
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/backup/BackupJsonCodecTest.kt",
+    "language": "kotlin",
+    "nodeCount": 143,
+    "size": 92034
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/local/AiChatDaoTest.kt",
+    "language": "kotlin",
+    "nodeCount": 34,
+    "size": 7801
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/local/AppDatabase15To16MigrationTest.kt",
+    "language": "kotlin",
+    "nodeCount": 15,
+    "size": 3865
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/local/AppDatabaseMigrationTest.kt",
+    "language": "kotlin",
+    "nodeCount": 22,
+    "size": 19891
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/local/AppDatabaseRealUpgradeTest.kt",
+    "language": "kotlin",
+    "nodeCount": 13,
+    "size": 3138
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/local/GameStatisticDaoTest.kt",
+    "language": "kotlin",
+    "nodeCount": 29,
+    "size": 5281
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/local/SavedPoemDaoTest.kt",
+    "language": "kotlin",
+    "nodeCount": 29,
+    "size": 6336
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/local/ThoughtCategoryDaoTest.kt",
+    "language": "kotlin",
+    "nodeCount": 26,
+    "size": 4255
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/preferences/AgentSettingsPersistenceTest.kt",
+    "language": "kotlin",
+    "nodeCount": 21,
+    "size": 3908
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/AiContextCodecTest.kt",
+    "language": "kotlin",
+    "nodeCount": 15,
+    "size": 3341
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/AiRequestJsonTest.kt",
+    "language": "kotlin",
+    "nodeCount": 30,
+    "size": 12607
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/DefaultDiaryChildTreeUriTest.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 1637
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/MealEnergyJsonTest.kt",
+    "language": "kotlin",
+    "nodeCount": 21,
+    "size": 8090
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/PoetryPresetCatalogTest.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 1309
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/PoetryRepositoryParsingTest.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 2159
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/ReaderRepositoryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 47,
+    "size": 29041
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/ReaderStateCodecTest.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 1762
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/VaultItemPayloadTest.kt",
+    "language": "kotlin",
+    "nodeCount": 13,
+    "size": 2625
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/VaultRepositoryFailureBoundaryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 61,
+    "size": 12553
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/VaultRepositoryRecoveryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 69,
+    "size": 16764
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/statistics/EngagementTimeRepositoryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 22,
+    "size": 5953
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/statistics/StatisticsJsonCodecsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 22,
+    "size": 12076
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/statistics/StatisticsRoomMigrationTest.kt",
+    "language": "kotlin",
+    "nodeCount": 30,
+    "size": 8863
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/sync/AgentChatSyncCodecTest.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 5062
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/sync/AgentChatSyncRepositoryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 22,
+    "size": 8818
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/sync/BoundedPropFindHttpClientAndroidTest.kt",
+    "language": "kotlin",
+    "nodeCount": 8,
+    "size": 802
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/sync/CloudSyncJsonCanonicalizationTest.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 1411
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/sync/ReaderProgressCloudSyncIntegrationTest.kt",
+    "language": "kotlin",
+    "nodeCount": 68,
+    "size": 10826
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/sync/ReaderProgressJsonCodecTest.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 4898
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/plugin/adapter/AppApiAdapterTest.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 2101
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/plugin/adapter/FileApiAdapterTest.kt",
+    "language": "kotlin",
+    "nodeCount": 56,
+    "size": 8059
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/ui/NavigationBottomBarTest.kt",
+    "language": "kotlin",
+    "nodeCount": 25,
+    "size": 2855
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/ui/components/MarkdownPreviewAndroidTest.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 1587
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/ui/diary/MarkdownSourceEditorLayoutTest.kt",
+    "language": "kotlin",
+    "nodeCount": 25,
+    "size": 2772
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/ui/games/GoBoardSemanticsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 29,
+    "size": 5121
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/ui/reader/ReaderOverlayLayoutTest.kt",
+    "language": "kotlin",
+    "nodeCount": 26,
+    "size": 2917
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/ui/reader/ReaderPdfContinuousViewportGestureTest.kt",
+    "language": "kotlin",
+    "nodeCount": 25,
+    "size": 3213
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/widget/CloudSyncWidgetManifestTest.kt",
+    "language": "kotlin",
+    "nodeCount": 26,
+    "size": 4967
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/widget/DesktopWidgetAppModuleLayoutTest.kt",
+    "language": "kotlin",
+    "nodeCount": 26,
+    "size": 7444
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/widget/DesktopWidgetAppShortcutLayoutTest.kt",
+    "language": "kotlin",
+    "nodeCount": 19,
+    "size": 1430
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/widget/DesktopWidgetInstanceStoreTest.kt",
+    "language": "kotlin",
+    "nodeCount": 26,
+    "size": 5254
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/widget/DesktopWidgetParityLayoutTest.kt",
+    "language": "kotlin",
+    "nodeCount": 18,
+    "size": 2652
+  },
+  {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/widget/DesktopWidgetThoughtDraftStoreTest.kt",
+    "language": "kotlin",
+    "nodeCount": 18,
+    "size": 2140
+  },
+  {
+    "path": "android/app/src/main/AndroidManifest.xml",
+    "language": "xml",
+    "nodeCount": 1,
+    "size": 10575
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/DeskCubbyApplication.kt",
+    "language": "kotlin",
+    "nodeCount": 34,
+    "size": 4952
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/DeskCubbyFileProvider.kt",
+    "language": "kotlin",
+    "nodeCount": 4,
+    "size": 250
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/HealthPermissionsRationaleActivity.kt",
+    "language": "kotlin",
+    "nodeCount": 29,
+    "size": 3847
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/MainActivity.kt",
+    "language": "kotlin",
+    "nodeCount": 26,
+    "size": 4224
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/UnicodeText.kt",
+    "language": "kotlin",
+    "nodeCount": 4,
+    "size": 335
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/AgentContracts.kt",
+    "language": "kotlin",
+    "nodeCount": 29,
+    "size": 2371
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/AgentModels.kt",
+    "language": "kotlin",
+    "nodeCount": 44,
+    "size": 6630
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/AgentPermissionManager.kt",
+    "language": "kotlin",
+    "nodeCount": 50,
+    "size": 12458
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/AgentRecoveryStore.kt",
+    "language": "kotlin",
+    "nodeCount": 22,
+    "size": 7202
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/AgentReviewRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 49,
+    "size": 12190
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/AgentRuntime.kt",
+    "language": "kotlin",
+    "nodeCount": 15,
+    "size": 5729
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/AgentSystemPrompt.kt",
+    "language": "kotlin",
+    "nodeCount": 6,
+    "size": 2741
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/AgentToolExecutor.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 16954
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/AgentToolRegistry.kt",
+    "language": "kotlin",
+    "nodeCount": 8,
+    "size": 759
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/AgentWebService.kt",
+    "language": "kotlin",
+    "nodeCount": 54,
+    "size": 15031
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/BuiltInAgentTools.kt",
+    "language": "kotlin",
+    "nodeCount": 115,
+    "size": 49348
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/DefaultAgentContextProvider.kt",
+    "language": "kotlin",
+    "nodeCount": 8,
+    "size": 1688
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/agent/OpenAiCompatibleAgentModelClient.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 1077
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/backup/AppBackupRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 88,
+    "size": 31320
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/backup/BackupJsonCodec.kt",
+    "language": "kotlin",
+    "nodeCount": 270,
+    "size": 131012
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/export/DiaryZipRestoreManager.kt",
+    "language": "kotlin",
+    "nodeCount": 52,
+    "size": 12964
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/export/ExportManager.kt",
+    "language": "kotlin",
+    "nodeCount": 75,
+    "size": 21433
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/local/AiTaskQueueEntity.kt",
+    "language": "kotlin",
+    "nodeCount": 20,
+    "size": 3133
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/local/AppDatabase.kt",
+    "language": "kotlin",
+    "nodeCount": 40,
+    "size": 30689
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/local/Daos.kt",
+    "language": "kotlin",
+    "nodeCount": 289,
+    "size": 52953
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/local/Entities.kt",
+    "language": "kotlin",
+    "nodeCount": 29,
+    "size": 10971
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/local/StatisticsDaos.kt",
+    "language": "kotlin",
+    "nodeCount": 31,
+    "size": 8860
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/local/StatisticsEntities.kt",
+    "language": "kotlin",
+    "nodeCount": 15,
+    "size": 4819
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/media/GalleryOriginalCopy.kt",
+    "language": "kotlin",
+    "nodeCount": 34,
+    "size": 6813
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/model/AppModels.kt",
+    "language": "kotlin",
+    "nodeCount": 211,
+    "size": 35633
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/model/CloudSyncModels.kt",
+    "language": "kotlin",
+    "nodeCount": 36,
+    "size": 5501
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/model/MealPhotoFilterSettings.kt",
+    "language": "kotlin",
+    "nodeCount": 21,
+    "size": 2129
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/model/MusicVisualizerFrequencyMode.kt",
+    "language": "kotlin",
+    "nodeCount": 5,
+    "size": 334
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/preferences/SettingsRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 425,
+    "size": 118163
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/preferences/TodayDiarySwitchTimeStore.kt",
+    "language": "kotlin",
+    "nodeCount": 24,
+    "size": 2260
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/AiAgentRequestJson.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 5483
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/AiAttachmentService.kt",
+    "language": "kotlin",
+    "nodeCount": 45,
+    "size": 11688
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/AiChatRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 137,
+    "size": 61010
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/AiContextCodec.kt",
+    "language": "kotlin",
+    "nodeCount": 21,
+    "size": 4584
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/AiContextModels.kt",
+    "language": "kotlin",
+    "nodeCount": 19,
+    "size": 1990
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/AiRequestJson.kt",
+    "language": "kotlin",
+    "nodeCount": 15,
+    "size": 4565
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/AiSecretStore.kt",
+    "language": "kotlin",
+    "nodeCount": 33,
+    "size": 4209
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/AppDataUsageRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 31,
+    "size": 9956
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/BrowserRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 1411
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/CalorieEstimationRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 41,
+    "size": 15908
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/DateRecordRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 22,
+    "size": 2626
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/DefaultDiaryFolderSetup.kt",
+    "language": "kotlin",
+    "nodeCount": 18,
+    "size": 3586
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/DiaryFileRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 267,
+    "size": 140813
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/DiaryTextUtils.kt",
+    "language": "kotlin",
+    "nodeCount": 19,
+    "size": 5865
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/LegacyAiKeyMigrator.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 2835
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/MealEnergyModels.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 1102
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/MediaMetaJsonCodec.kt",
+    "language": "kotlin",
+    "nodeCount": 47,
+    "size": 13151
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/NotesRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 93,
+    "size": 35950
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/PoetryBookRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 40,
+    "size": 9127
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/PoetryPresetCatalog.kt",
+    "language": "kotlin",
+    "nodeCount": 26,
+    "size": 4639
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/PoetryRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 94,
+    "size": 23254
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/ReaderRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 234,
+    "size": 88922
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/RssRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 77,
+    "size": 22639
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/ThoughtRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 30,
+    "size": 3767
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/UpdateRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 121,
+    "size": 39041
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/VaultItemPayload.kt",
+    "language": "kotlin",
+    "nodeCount": 13,
+    "size": 2958
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/VaultMetadata.kt",
+    "language": "kotlin",
+    "nodeCount": 25,
+    "size": 6907
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/repository/VaultRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 111,
+    "size": 32889
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/AgentTokenStatisticsRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 1707
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/EngagementTimeRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 69,
+    "size": 14037
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/GamePersistenceCoordinator.kt",
+    "language": "kotlin",
+    "nodeCount": 29,
+    "size": 4698
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/GameStatisticsRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 66,
+    "size": 7002
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/StatisticsCollectionState.kt",
+    "language": "kotlin",
+    "nodeCount": 16,
+    "size": 508
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/StatisticsFileMigration.kt",
+    "language": "kotlin",
+    "nodeCount": 20,
+    "size": 9000
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/StatisticsJsonCodecs.kt",
+    "language": "kotlin",
+    "nodeCount": 73,
+    "size": 22718
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/StatisticsModels.kt",
+    "language": "kotlin",
+    "nodeCount": 35,
+    "size": 5108
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/StatisticsStores.kt",
+    "language": "kotlin",
+    "nodeCount": 83,
+    "size": 19367
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/StatisticsWorker.kt",
+    "language": "kotlin",
+    "nodeCount": 41,
+    "size": 4274
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/StepHealthConnectAccess.kt",
+    "language": "kotlin",
+    "nodeCount": 33,
+    "size": 5238
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/StepStatisticsRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 47,
+    "size": 10950
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/UsageDailyBucketAggregator.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 5306
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/UsageDeviceRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 111,
+    "size": 29739
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/UsageEventAggregator.kt",
+    "language": "kotlin",
+    "nodeCount": 16,
+    "size": 6702
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/UsageStatisticsRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 53,
+    "size": 12915
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/JournalDayEngine.kt",
+    "language": "kotlin",
+    "nodeCount": 13,
+    "size": 2239
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/MetricEvaluator.kt",
+    "language": "kotlin",
+    "nodeCount": 19,
+    "size": 8165
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/PhoneInteractionEstimator.kt",
+    "language": "kotlin",
+    "nodeCount": 30,
+    "size": 5144
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredFieldNormalizer.kt",
+    "language": "kotlin",
+    "nodeCount": 35,
+    "size": 9303
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredMarkdownProtocol.kt",
+    "language": "kotlin",
+    "nodeCount": 15,
+    "size": 8389
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredRecordDraft.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 9212
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredRecordsCodec.kt",
+    "language": "kotlin",
+    "nodeCount": 32,
+    "size": 13980
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredRecordsModels.kt",
+    "language": "kotlin",
+    "nodeCount": 63,
+    "size": 9525
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredRecordsRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 41,
+    "size": 17118
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredStatisticsRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 24,
+    "size": 9617
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/StructuredWorkspaceRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 40,
+    "size": 19646
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/structuredrecords/SystemFieldSnapshot.kt",
+    "language": "kotlin",
+    "nodeCount": 5,
+    "size": 630
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/AgentChatSyncRepository.kt",
+    "language": "kotlin",
+    "nodeCount": 77,
+    "size": 28637
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/AppCloudSyncService.kt",
+    "language": "kotlin",
+    "nodeCount": 48,
+    "size": 13794
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/BoundedHttpClient.kt",
+    "language": "kotlin",
+    "nodeCount": 28,
+    "size": 8645
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/BoundedPropFindHttpClient.kt",
+    "language": "kotlin",
+    "nodeCount": 35,
+    "size": 10571
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/CloudBlobTransports.kt",
+    "language": "kotlin",
+    "nodeCount": 84,
+    "size": 34981
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/CloudSyncContracts.kt",
+    "language": "kotlin",
+    "nodeCount": 31,
+    "size": 5359
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/CloudSyncCoordinator.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 4855
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/CloudSyncEngine.kt",
+    "language": "kotlin",
+    "nodeCount": 42,
+    "size": 20150
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/CloudSyncSecretStore.kt",
+    "language": "kotlin",
+    "nodeCount": 48,
+    "size": 9611
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/CloudSyncStateStore.kt",
+    "language": "kotlin",
+    "nodeCount": 23,
+    "size": 4222
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/CloudSyncUndoStore.kt",
+    "language": "kotlin",
+    "nodeCount": 38,
+    "size": 7096
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/CloudSyncValidation.kt",
+    "language": "kotlin",
+    "nodeCount": 22,
+    "size": 6816
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/CloudSyncWorker.kt",
+    "language": "kotlin",
+    "nodeCount": 101,
+    "size": 15705
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/DiaryCloudSyncLocalStore.kt",
+    "language": "kotlin",
+    "nodeCount": 27,
+    "size": 12234
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/GlobalSettingsSyncCodec.kt",
+    "language": "kotlin",
+    "nodeCount": 47,
+    "size": 18506
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/LegacyCloudSyncCompat.kt",
+    "language": "kotlin",
+    "nodeCount": 21,
+    "size": 2242
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/NotesCloudSyncLocalStore.kt",
+    "language": "kotlin",
+    "nodeCount": 16,
+    "size": 4588
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/ReaderProgressJsonCodec.kt",
+    "language": "kotlin",
+    "nodeCount": 25,
+    "size": 8014
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/RecordPayloadCodec.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 2632
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/RecordSyncAdapters.kt",
+    "language": "kotlin",
+    "nodeCount": 89,
+    "size": 25475
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/RecordSyncEngine.kt",
+    "language": "kotlin",
+    "nodeCount": 23,
+    "size": 18419
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/RecordSyncModels.kt",
+    "language": "kotlin",
+    "nodeCount": 26,
+    "size": 2899
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/RecordSyncRemoteStore.kt",
+    "language": "kotlin",
+    "nodeCount": 25,
+    "size": 9611
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/RecordSyncStateStore.kt",
+    "language": "kotlin",
+    "nodeCount": 23,
+    "size": 5425
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/RemoteManifestStore.kt",
+    "language": "kotlin",
+    "nodeCount": 44,
+    "size": 13874
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/RepositoryRecordSyncAdapters.kt",
+    "language": "kotlin",
+    "nodeCount": 87,
+    "size": 20223
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/S3SigV4.kt",
+    "language": "kotlin",
+    "nodeCount": 51,
+    "size": 13881
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/sync/SettingSyncScope.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 4333
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/taskqueue/AiTaskPayloads.kt",
+    "language": "kotlin",
+    "nodeCount": 33,
+    "size": 12865
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/taskqueue/AiTaskQueue.kt",
+    "language": "kotlin",
+    "nodeCount": 37,
+    "size": 7726
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/taskqueue/AiTaskRunner.kt",
+    "language": "kotlin",
+    "nodeCount": 64,
+    "size": 19425
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/taskqueue/AiTaskWorker.kt",
+    "language": "kotlin",
+    "nodeCount": 16,
+    "size": 2929
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/data/vault/VaultCrypto.kt",
+    "language": "kotlin",
+    "nodeCount": 27,
+    "size": 5412
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/di/AgentModule.kt",
+    "language": "kotlin",
+    "nodeCount": 48,
+    "size": 3185
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/di/AppModule.kt",
+    "language": "kotlin",
+    "nodeCount": 48,
+    "size": 4203
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/di/PluginModule.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 707
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/games/Game2048.kt",
+    "language": "kotlin",
+    "nodeCount": 58,
+    "size": 20022
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/games/GoGame.kt",
+    "language": "kotlin",
+    "nodeCount": 45,
+    "size": 12364
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/games/MinesweeperGame.kt",
+    "language": "kotlin",
+    "nodeCount": 39,
+    "size": 13222
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/games/SnakeGame.kt",
+    "language": "kotlin",
+    "nodeCount": 39,
+    "size": 9159
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/games/SpiderSolitaireGame.kt",
+    "language": "kotlin",
+    "nodeCount": 57,
+    "size": 16231
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/games/TetrisGame.kt",
+    "language": "kotlin",
+    "nodeCount": 49,
+    "size": 11743
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/AppPluginContextFactory.kt",
+    "language": "kotlin",
+    "nodeCount": 24,
+    "size": 2416
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/PluginRuntime.kt",
+    "language": "kotlin",
+    "nodeCount": 16,
+    "size": 1252
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/adapter/AiApiAdapter.kt",
+    "language": "kotlin",
+    "nodeCount": 28,
+    "size": 7191
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/adapter/AppApiAdapter.kt",
+    "language": "kotlin",
+    "nodeCount": 44,
+    "size": 9918
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/adapter/AppGuideGuide.kt",
+    "language": "kotlin",
+    "nodeCount": 7,
+    "size": 2409
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/adapter/DeskCubbyDataApiAdapter.kt",
+    "language": "kotlin",
+    "nodeCount": 101,
+    "size": 42838
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/adapter/DiaryApiAdapter.kt",
+    "language": "kotlin",
+    "nodeCount": 32,
+    "size": 5161
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/adapter/FileApiAdapter.kt",
+    "language": "kotlin",
+    "nodeCount": 71,
+    "size": 20442
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/adapter/MediaApiAdapter.kt",
+    "language": "kotlin",
+    "nodeCount": 24,
+    "size": 3871
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/adapter/PluginStorageApi.kt",
+    "language": "kotlin",
+    "nodeCount": 27,
+    "size": 3123
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/adapter/PluginUiRegistry.kt",
+    "language": "kotlin",
+    "nodeCount": 31,
+    "size": 4647
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/adapter/SyncApiAdapter.kt",
+    "language": "kotlin",
+    "nodeCount": 28,
+    "size": 4474
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/plugin/adapter/VaultApiAdapter.kt",
+    "language": "kotlin",
+    "nodeCount": 39,
+    "size": 5593
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/FirstLaunchLanguageScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 32,
+    "size": 4215
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/Navigation.kt",
+    "language": "kotlin",
+    "nodeCount": 201,
+    "size": 64214
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/ai/AgentReviewScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 68,
+    "size": 14872
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/ai/AgentReviewViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 33,
+    "size": 3847
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/ai/AiChatScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 136,
+    "size": 51601
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/ai/AiChatViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 95,
+    "size": 25186
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/blog/BlogScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 171,
+    "size": 56823
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/blog/BlogViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 65,
+    "size": 17684
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/components/AdaptiveLayout.kt",
+    "language": "kotlin",
+    "nodeCount": 70,
+    "size": 10801
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/components/AppBackground.kt",
+    "language": "kotlin",
+    "nodeCount": 16,
+    "size": 2025
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/components/AppStates.kt",
+    "language": "kotlin",
+    "nodeCount": 42,
+    "size": 5737
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/components/ColorPickerDialog.kt",
+    "language": "kotlin",
+    "nodeCount": 58,
+    "size": 13105
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/components/FourDotDragHandle.kt",
+    "language": "kotlin",
+    "nodeCount": 30,
+    "size": 6037
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/components/MarkdownPreview.kt",
+    "language": "kotlin",
+    "nodeCount": 78,
+    "size": 18554
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/components/MusicSpectrum.kt",
+    "language": "kotlin",
+    "nodeCount": 37,
+    "size": 11641
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/components/MusicVisualizer.kt",
+    "language": "kotlin",
+    "nodeCount": 50,
+    "size": 12527
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/components/OrganicSplitActionRow.kt",
+    "language": "kotlin",
+    "nodeCount": 61,
+    "size": 10967
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/components/PageTutorialOverlay.kt",
+    "language": "kotlin",
+    "nodeCount": 39,
+    "size": 4954
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/components/ZoomableImageDialog.kt",
+    "language": "kotlin",
+    "nodeCount": 46,
+    "size": 5843
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/daily/DailyRecordScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 77,
+    "size": 18598
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/daily/DailyRecordViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 42,
+    "size": 7762
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/date/DateRecordScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 87,
+    "size": 16739
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/date/DateRecordViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 25,
+    "size": 1995
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/desk/DeskScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 57,
+    "size": 9767
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/desk/DeskViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 60,
+    "size": 13024
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/desk/components/DeskAiOverlay.kt",
+    "language": "kotlin",
+    "nodeCount": 28,
+    "size": 4207
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/desk/components/DeskChrome.kt",
+    "language": "kotlin",
+    "nodeCount": 26,
+    "size": 4017
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/desk/components/DeskDateHeader.kt",
+    "language": "kotlin",
+    "nodeCount": 23,
+    "size": 2981
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/desk/components/DeskObjects.kt",
+    "language": "kotlin",
+    "nodeCount": 34,
+    "size": 6554
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/desk/components/DeskTraces.kt",
+    "language": "kotlin",
+    "nodeCount": 25,
+    "size": 3183
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/desk/model/DeskModels.kt",
+    "language": "kotlin",
+    "nodeCount": 24,
+    "size": 3040
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/diary/CalorieEstimationProgressScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 70,
+    "size": 25106
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/diary/CalorieEstimationQueueModels.kt",
+    "language": "kotlin",
+    "nodeCount": 22,
+    "size": 2499
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/diary/DiaryScreens.kt",
+    "language": "kotlin",
+    "nodeCount": 185,
+    "size": 107508
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/diary/DiaryViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 142,
+    "size": 42001
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/diary/filter/MealCalendarExportLayout.kt",
+    "language": "kotlin",
+    "nodeCount": 23,
+    "size": 4011
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/diary/filter/MealPhotoFilter.kt",
+    "language": "kotlin",
+    "nodeCount": 25,
+    "size": 3940
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/diary/filter/MealPhotoFilterSettingsScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 63,
+    "size": 17994
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/games/AdditionalGames.kt",
+    "language": "kotlin",
+    "nodeCount": 92,
+    "size": 27990
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/games/GamesScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 175,
+    "size": 71521
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/games/GamesViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 61,
+    "size": 10755
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/games/GoGameScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 72,
+    "size": 23144
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/home/HomeGreeting.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 1598
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/home/HomeScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 145,
+    "size": 67720
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/home/HomeViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 76,
+    "size": 16018
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/more/MoreHubScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 89,
+    "size": 25645
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/notes/NotesScreens.kt",
+    "language": "kotlin",
+    "nodeCount": 92,
+    "size": 30232
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/notes/NotesViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 68,
+    "size": 15745
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/poetry/PoetryBookScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 120,
+    "size": 55330
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/poetry/PoetryBookViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 72,
+    "size": 11440
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/poetry/PoetryTypography.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 3951
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/reader/PdfiumPdfReader.kt",
+    "language": "kotlin",
+    "nodeCount": 82,
+    "size": 22171
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/reader/ReaderPageProgress.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 2128
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/reader/ReaderPdfContinuousViewport.kt",
+    "language": "kotlin",
+    "nodeCount": 41,
+    "size": 14463
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/reader/ReaderPdfPageViewport.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 1860
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/reader/ReaderPdfPolicy.kt",
+    "language": "kotlin",
+    "nodeCount": 62,
+    "size": 14330
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/reader/ReaderScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 213,
+    "size": 108875
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/reader/ReaderViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 56,
+    "size": 8338
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/rss/RssArticleUrl.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 1229
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/rss/RssScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 85,
+    "size": 22336
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/rss/RssViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 33,
+    "size": 10073
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/settings/DiaryZipRestoreViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 23,
+    "size": 2560
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/settings/ExportScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 55,
+    "size": 19137
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 408,
+    "size": 391865
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 236,
+    "size": 54578
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/statistics/StatisticsCharts.kt",
+    "language": "kotlin",
+    "nodeCount": 67,
+    "size": 20563
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/statistics/StatisticsScreenComponents.kt",
+    "language": "kotlin",
+    "nodeCount": 27,
+    "size": 5682
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/statshub/StatisticsHubModels.kt",
+    "language": "kotlin",
+    "nodeCount": 31,
+    "size": 8532
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/statshub/StatisticsHubScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 115,
+    "size": 41439
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/statshub/StatisticsHubViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 41,
+    "size": 5466
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/steps/StepStatisticsScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 62,
+    "size": 19164
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/steps/StepStatisticsViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 43,
+    "size": 5067
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredrecords/StructuredRecordsScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 95,
+    "size": 27311
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredrecords/StructuredRecordsUiStore.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 1026
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredrecords/StructuredRecordsViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 68,
+    "size": 15325
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredstats/StructuredStatisticsScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 73,
+    "size": 24180
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredstats/StructuredStatisticsViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 45,
+    "size": 12376
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/theme/AppTranslations.kt",
+    "language": "kotlin",
+    "nodeCount": 6,
+    "size": 267038
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/theme/OrganicFutureTheme.kt",
+    "language": "kotlin",
+    "nodeCount": 58,
+    "size": 18925
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/theme/Theme.kt",
+    "language": "kotlin",
+    "nodeCount": 82,
+    "size": 22466
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/theme/Type.kt",
+    "language": "kotlin",
+    "nodeCount": 4,
+    "size": 115
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/thought/ThoughtCategoryComponents.kt",
+    "language": "kotlin",
+    "nodeCount": 71,
+    "size": 19203
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/thought/ThoughtScreens.kt",
+    "language": "kotlin",
+    "nodeCount": 104,
+    "size": 37591
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/thought/ThoughtViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 59,
+    "size": 9770
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/usage/UsageStatisticsScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 102,
+    "size": 32398
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/usage/UsageStatisticsViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 73,
+    "size": 17310
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/vault/VaultEntryUrl.kt",
+    "language": "kotlin",
+    "nodeCount": 5,
+    "size": 1194
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/vault/VaultScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 103,
+    "size": 35879
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/vault/VaultViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 36,
+    "size": 5002
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/widgets/DesktopWidgetsScreen.kt",
+    "language": "kotlin",
+    "nodeCount": 126,
+    "size": 44454
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/widgets/DesktopWidgetsViewModel.kt",
+    "language": "kotlin",
+    "nodeCount": 53,
+    "size": 10387
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/CloudSyncWidgetProviders.kt",
+    "language": "kotlin",
+    "nodeCount": 78,
+    "size": 19811
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DeskCubbyWidgetConfigureActivity.kt",
+    "language": "kotlin",
+    "nodeCount": 54,
+    "size": 9754
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DeskCubbyWidgetProvider.kt",
+    "language": "kotlin",
+    "nodeCount": 23,
+    "size": 3479
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetActionWorker.kt",
+    "language": "kotlin",
+    "nodeCount": 34,
+    "size": 4002
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetAppPanelRenderer.kt",
+    "language": "kotlin",
+    "nodeCount": 61,
+    "size": 22052
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetAppShortcutPolicy.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 1221
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetGameActionReceiver.kt",
+    "language": "kotlin",
+    "nodeCount": 32,
+    "size": 6240
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetGameRenderer.kt",
+    "language": "kotlin",
+    "nodeCount": 83,
+    "size": 40547
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetInstanceStore.kt",
+    "language": "kotlin",
+    "nodeCount": 38,
+    "size": 9224
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetInteractionActivity.kt",
+    "language": "kotlin",
+    "nodeCount": 107,
+    "size": 46646
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetInteractionPolicy.kt",
+    "language": "kotlin",
+    "nodeCount": 30,
+    "size": 4810
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetMusicVisualizerService.kt",
+    "language": "kotlin",
+    "nodeCount": 77,
+    "size": 14041
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetNavigationTokenStore.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 1144
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetPinResultReceiver.kt",
+    "language": "kotlin",
+    "nodeCount": 19,
+    "size": 2160
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetRenderer.kt",
+    "language": "kotlin",
+    "nodeCount": 87,
+    "size": 69007
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetThoughtDraftStore.kt",
+    "language": "kotlin",
+    "nodeCount": 38,
+    "size": 5799
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetUpdateWorker.kt",
+    "language": "kotlin",
+    "nodeCount": 30,
+    "size": 3404
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetVisualPolicy.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 2789
+  },
+  {
+    "path": "android/app/src/main/java/com/deskcubby/app/widget/WidgetBroadcastTimeoutPolicy.kt",
+    "language": "kotlin",
+    "nodeCount": 16,
+    "size": 1505
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/agent/AgentArgsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 1561
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/agent/AgentContextProviderTest.kt",
+    "language": "kotlin",
+    "nodeCount": 27,
+    "size": 3050
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/agent/AgentPermissionManagerRecoveryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 2539
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/agent/AgentRecoveryStoreTest.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 2303
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/agent/AgentRuntimeTest.kt",
+    "language": "kotlin",
+    "nodeCount": 45,
+    "size": 9253
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/agent/AgentToolExecutorTest.kt",
+    "language": "kotlin",
+    "nodeCount": 49,
+    "size": 12362
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/backup/AgentDataSourceWireCompatibilityTest.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 2102
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/backup/AppBackupKeyMergeTest.kt",
+    "language": "kotlin",
+    "nodeCount": 19,
+    "size": 4931
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/backup/BackupSecurityTest.kt",
+    "language": "kotlin",
+    "nodeCount": 16,
+    "size": 4057
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/backup/GameStateBackupMergeTest.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 4844
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/export/DiaryZipRestoreManagerTest.kt",
+    "language": "kotlin",
+    "nodeCount": 13,
+    "size": 2373
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/local/PoetryOrderTest.kt",
+    "language": "kotlin",
+    "nodeCount": 7,
+    "size": 838
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/model/CloudSyncContentDefaultsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 11,
+    "size": 2246
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/model/CustomThemeSettingsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 3338
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/model/MealPhotoFilterSettingsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 1280
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/model/MealPhotoRowSizesTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 1698
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/model/MorePageOrderModelTest.kt",
+    "language": "kotlin",
+    "nodeCount": 8,
+    "size": 1568
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/preferences/SettingsRepositoryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 67,
+    "size": 26312
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/AppDataUsageRepositoryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 1967
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/DefaultDiaryFolderSetupTest.kt",
+    "language": "kotlin",
+    "nodeCount": 23,
+    "size": 5079
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/DiaryBoundedTextReadTest.kt",
+    "language": "kotlin",
+    "nodeCount": 11,
+    "size": 1258
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/DiaryTextUtilsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 3478
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/ImageCompressionPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 1205
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/MealEnergyModelsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 7,
+    "size": 536
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/MediaMetaLocationTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 1339
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/NotesRepositoryModelsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 8,
+    "size": 959
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/PoetryBookRepositoryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 38,
+    "size": 6700
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/PoetryRepositoryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 13,
+    "size": 5530
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/ReaderCoverPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 1841
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/ReaderTextDecodingTest.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 4952
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/UpdateRepositoryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 30,
+    "size": 9186
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/repository/VaultMetadataTest.kt",
+    "language": "kotlin",
+    "nodeCount": 19,
+    "size": 5789
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/statistics/GameStatisticCatalogTest.kt",
+    "language": "kotlin",
+    "nodeCount": 11,
+    "size": 1903
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/statistics/StatisticsFileMigrationTest.kt",
+    "language": "kotlin",
+    "nodeCount": 20,
+    "size": 4270
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/statistics/StatisticsModelsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 3691
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/statistics/StatisticsStoreEncodingTest.kt",
+    "language": "kotlin",
+    "nodeCount": 19,
+    "size": 5390
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/statistics/StepHealthConnectAccessTest.kt",
+    "language": "kotlin",
+    "nodeCount": 11,
+    "size": 1704
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/statistics/UsageDailyBucketAggregatorTest.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 6429
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/statistics/UsageDeviceMergeTest.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 4064
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/statistics/UsageEventAggregatorTest.kt",
+    "language": "kotlin",
+    "nodeCount": 21,
+    "size": 6607
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/statistics/UsageStatisticsMergeTest.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 4554
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/structuredrecords/JournalDayEngineTest.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 1481
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/structuredrecords/MetricEvaluatorTest.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 4134
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/structuredrecords/PhoneInteractionEstimatorTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 1320
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/structuredrecords/StructuredFieldNormalizerTest.kt",
+    "language": "kotlin",
+    "nodeCount": 16,
+    "size": 4771
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/structuredrecords/StructuredIndexFreshnessTest.kt",
+    "language": "kotlin",
+    "nodeCount": 8,
+    "size": 715
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/structuredrecords/StructuredMarkdownProtocolTest.kt",
+    "language": "kotlin",
+    "nodeCount": 21,
+    "size": 6577
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/structuredrecords/StructuredRecordDraftTest.kt",
+    "language": "kotlin",
+    "nodeCount": 22,
+    "size": 5180
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/structuredrecords/StructuredWorkspaceRepositoryPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 11,
+    "size": 1747
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/structuredrecords/StructuredWorkspaceRepositoryTest.kt",
+    "language": "kotlin",
+    "nodeCount": 21,
+    "size": 5898
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/AppCloudSyncStatusTest.kt",
+    "language": "kotlin",
+    "nodeCount": 7,
+    "size": 1366
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/BoundedPropFindHttpClientTest.kt",
+    "language": "kotlin",
+    "nodeCount": 43,
+    "size": 9953
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/CloudBlobTransportsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 56,
+    "size": 23673
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/CloudSyncEngineTest.kt",
+    "language": "kotlin",
+    "nodeCount": 74,
+    "size": 20962
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/CloudSyncForceDownloadPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 1232
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/CloudSyncMigrationTest.kt",
+    "language": "kotlin",
+    "nodeCount": 14,
+    "size": 2873
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/CloudSyncWorkerModeTest.kt",
+    "language": "kotlin",
+    "nodeCount": 15,
+    "size": 4736
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/ManifestRemoteStoreTest.kt",
+    "language": "kotlin",
+    "nodeCount": 34,
+    "size": 14469
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/RecordPayloadCodecTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 1103
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/RecordSyncEngineTest.kt",
+    "language": "kotlin",
+    "nodeCount": 70,
+    "size": 18224
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/RecordSyncRemoteStoreTest.kt",
+    "language": "kotlin",
+    "nodeCount": 41,
+    "size": 7550
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/S3SigV4Test.kt",
+    "language": "kotlin",
+    "nodeCount": 21,
+    "size": 5945
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/sync/SettingSyncScopeTest.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 1306
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/taskqueue/AiTaskPayloadTest.kt",
+    "language": "kotlin",
+    "nodeCount": 15,
+    "size": 5788
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/vault/VaultCryptoTest.kt",
+    "language": "kotlin",
+    "nodeCount": 21,
+    "size": 4969
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/games/AdditionalGameEnginesTest.kt",
+    "language": "kotlin",
+    "nodeCount": 29,
+    "size": 12733
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/games/ClassicGameStatisticsEventsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 21,
+    "size": 7676
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/games/Game2048TransitionTest.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 3690
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/games/GameEnginesTest.kt",
+    "language": "kotlin",
+    "nodeCount": 30,
+    "size": 11892
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/games/GoGameTest.kt",
+    "language": "kotlin",
+    "nodeCount": 20,
+    "size": 7292
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/plugin/adapter/AppGuideDataApiTest.kt",
+    "language": "kotlin",
+    "nodeCount": 13,
+    "size": 2136
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/plugin/adapter/AppGuideParserTest.kt",
+    "language": "kotlin",
+    "nodeCount": 15,
+    "size": 4192
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/MorePageOrderTest.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 4204
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/ai/AiChatDurableProjectionTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 1817
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/blog/TrustedArticleNavigationPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 15,
+    "size": 4899
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/components/AdaptiveLayoutModeTest.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 1139
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/components/MarkdownPreviewTest.kt",
+    "language": "kotlin",
+    "nodeCount": 7,
+    "size": 698
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/components/MusicVisualizerTest.kt",
+    "language": "kotlin",
+    "nodeCount": 25,
+    "size": 8131
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/daily/DailyRecordViewModelTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 825
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/desk/DeskSelectionTest.kt",
+    "language": "kotlin",
+    "nodeCount": 11,
+    "size": 1525
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/diary/CalorieEstimationQueueModelsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 18,
+    "size": 3793
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/diary/filter/MealCalendarExportLayoutTest.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 4151
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/diary/filter/MealPhotoFilterTest.kt",
+    "language": "kotlin",
+    "nodeCount": 16,
+    "size": 2658
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/games/Game2048AnimationPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 7,
+    "size": 1078
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/games/Game2048StatisticsPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 1212
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/games/Game2048TileTypographyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 7,
+    "size": 1101
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/games/GameLifecyclePolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 8,
+    "size": 1231
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/games/GameSwipeDirectionTest.kt",
+    "language": "kotlin",
+    "nodeCount": 8,
+    "size": 681
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/games/GoBoardInputTest.kt",
+    "language": "kotlin",
+    "nodeCount": 13,
+    "size": 3845
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/home/HomeCloudSyncActionStateTest.kt",
+    "language": "kotlin",
+    "nodeCount": 13,
+    "size": 1969
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/home/HomeGreetingTest.kt",
+    "language": "kotlin",
+    "nodeCount": 13,
+    "size": 2394
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/home/HomeMealPhotoUploadStateTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 1001
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/poetry/PoetryTypographyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 1229
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/reader/ReaderOrientationPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 8,
+    "size": 1152
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/reader/ReaderPageProgressTest.kt",
+    "language": "kotlin",
+    "nodeCount": 7,
+    "size": 1377
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/reader/ReaderPdfPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 36,
+    "size": 9191
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/rss/RssArticleUrlTest.kt",
+    "language": "kotlin",
+    "nodeCount": 11,
+    "size": 1623
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/settings/BackupFileNameTest.kt",
+    "language": "kotlin",
+    "nodeCount": 11,
+    "size": 936
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/settings/SettingsUpdateStateTest.kt",
+    "language": "kotlin",
+    "nodeCount": 12,
+    "size": 1527
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/statshub/StatisticsHubModelsTest.kt",
+    "language": "kotlin",
+    "nodeCount": 25,
+    "size": 6888
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/theme/OrganicFutureThemeTest.kt",
+    "language": "kotlin",
+    "nodeCount": 22,
+    "size": 8887
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/usage/UsageAppRankingTest.kt",
+    "language": "kotlin",
+    "nodeCount": 15,
+    "size": 2982
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/vault/VaultEntryUrlTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 1507
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/widgets/DesktopWidgetLauncherSupportTest.kt",
+    "language": "kotlin",
+    "nodeCount": 7,
+    "size": 975
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/widget/DesktopWidgetAppShortcutPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 1610
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/widget/DesktopWidgetGamePolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 940
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/widget/DesktopWidgetInteractionPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 28,
+    "size": 13398
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/widget/DesktopWidgetResolutionTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 1782
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/widget/DesktopWidgetVisualPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 8,
+    "size": 1263
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/widget/WidgetBroadcastTimeoutPolicyTest.kt",
+    "language": "kotlin",
+    "nodeCount": 7,
+    "size": 685
+  },
+  {
+    "path": "android/build.gradle.kts",
+    "language": "kotlin",
+    "nodeCount": 1,
+    "size": 351
+  },
+  {
+    "path": "android/gradle.properties",
+    "language": "properties",
+    "nodeCount": 0,
+    "size": 201
+  },
+  {
+    "path": "android/gradle/wrapper/gradle-wrapper.properties",
+    "language": "properties",
+    "nodeCount": 0,
+    "size": 253
+  },
+  {
+    "path": "android/plugin-api/core/build.gradle.kts",
+    "language": "kotlin",
+    "nodeCount": 1,
+    "size": 948
+  },
+  {
+    "path": "android/plugin-api/core/src/main/AndroidManifest.xml",
+    "language": "xml",
+    "nodeCount": 1,
+    "size": 52
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/Plugin.kt",
+    "language": "kotlin",
+    "nodeCount": 23,
+    "size": 1012
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/PluginContext.kt",
+    "language": "kotlin",
+    "nodeCount": 20,
+    "size": 1714
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/PluginManager.kt",
+    "language": "kotlin",
+    "nodeCount": 19,
+    "size": 7671
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/api/AIAPI.kt",
+    "language": "kotlin",
+    "nodeCount": 29,
+    "size": 2587
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/api/AppAPI.kt",
+    "language": "kotlin",
+    "nodeCount": 10,
+    "size": 836
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/api/ContentVersion.kt",
+    "language": "kotlin",
+    "nodeCount": 3,
+    "size": 247
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/api/DeskCubbyDataAPI.kt",
+    "language": "kotlin",
+    "nodeCount": 20,
+    "size": 2956
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/api/DiaryAPI.kt",
+    "language": "kotlin",
+    "nodeCount": 17,
+    "size": 1510
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/api/FileAPI.kt",
+    "language": "kotlin",
+    "nodeCount": 22,
+    "size": 2217
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/api/MediaAPI.kt",
+    "language": "kotlin",
+    "nodeCount": 11,
+    "size": 973
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/api/StorageAPI.kt",
+    "language": "kotlin",
+    "nodeCount": 8,
+    "size": 364
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/api/SyncAPI.kt",
+    "language": "kotlin",
+    "nodeCount": 36,
+    "size": 1540
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/api/UIAPI.kt",
+    "language": "kotlin",
+    "nodeCount": 19,
+    "size": 1106
+  },
+  {
+    "path": "android/plugin-api/core/src/main/java/com/deskcubby/plugin/api/core/api/VaultAPI.kt",
+    "language": "kotlin",
+    "nodeCount": 19,
+    "size": 1664
+  },
+  {
+    "path": "android/plugin-api/core/src/test/java/com/deskcubby/plugin/api/core/PluginManagerTest.kt",
+    "language": "kotlin",
+    "nodeCount": 34,
+    "size": 4562
+  },
+  {
+    "path": "android/plugin-api/core/src/test/java/com/deskcubby/plugin/api/core/TestPlugin.kt",
+    "language": "kotlin",
+    "nodeCount": 11,
+    "size": 749
+  },
+  {
+    "path": "android/scripts/create_room15_upgrade_fixture.py",
+    "language": "python",
+    "nodeCount": 7,
+    "size": 4410
+  },
+  {
+    "path": "android/scripts/generate-poetry-presets.mjs",
+    "language": "javascript",
+    "nodeCount": 24,
+    "size": 7836
+  },
+  {
+    "path": "android/settings.gradle.kts",
+    "language": "kotlin",
+    "nodeCount": 1,
+    "size": 357
+  },
+  {
+    "path": "web/backend/app/__init__.py",
+    "language": "python",
+    "nodeCount": 1,
+    "size": 0
+  },
+  {
+    "path": "web/backend/app/core/__init__.py",
+    "language": "python",
+    "nodeCount": 1,
+    "size": 0
+  },
+  {
+    "path": "web/backend/app/core/config.py",
+    "language": "python",
+    "nodeCount": 51,
+    "size": 7012
+  },
+  {
+    "path": "web/backend/app/core/db.py",
+    "language": "python",
+    "nodeCount": 24,
+    "size": 22175
+  },
+  {
+    "path": "web/backend/app/core/errors.py",
+    "language": "python",
+    "nodeCount": 6,
+    "size": 650
+  },
+  {
+    "path": "web/backend/app/core/fs.py",
+    "language": "python",
+    "nodeCount": 19,
+    "size": 3534
+  },
+  {
+    "path": "web/backend/app/core/http.py",
+    "language": "python",
+    "nodeCount": 15,
+    "size": 3473
+  },
+  {
+    "path": "web/backend/app/core/security.py",
+    "language": "python",
+    "nodeCount": 36,
+    "size": 6221
+  },
+  {
+    "path": "web/backend/app/main.py",
+    "language": "python",
+    "nodeCount": 35,
+    "size": 9935
+  },
+  {
+    "path": "web/backend/app/routers/__init__.py",
+    "language": "python",
+    "nodeCount": 1,
+    "size": 0
+  },
+  {
+    "path": "web/backend/app/routers/agent.py",
+    "language": "python",
+    "nodeCount": 39,
+    "size": 14130
+  },
+  {
+    "path": "web/backend/app/routers/ai.py",
+    "language": "python",
+    "nodeCount": 54,
+    "size": 19697
+  },
+  {
+    "path": "web/backend/app/routers/backup.py",
+    "language": "python",
+    "nodeCount": 33,
+    "size": 18044
+  },
+  {
+    "path": "web/backend/app/routers/browser.py",
+    "language": "python",
+    "nodeCount": 18,
+    "size": 4605
+  },
+  {
+    "path": "web/backend/app/routers/calorie.py",
+    "language": "python",
+    "nodeCount": 12,
+    "size": 1516
+  },
+  {
+    "path": "web/backend/app/routers/cloudsync.py",
+    "language": "python",
+    "nodeCount": 32,
+    "size": 14462
+  },
+  {
+    "path": "web/backend/app/routers/dates.py",
+    "language": "python",
+    "nodeCount": 25,
+    "size": 4263
+  },
+  {
+    "path": "web/backend/app/routers/diary.py",
+    "language": "python",
+    "nodeCount": 27,
+    "size": 8097
+  },
+  {
+    "path": "web/backend/app/routers/games.py",
+    "language": "python",
+    "nodeCount": 36,
+    "size": 7907
+  },
+  {
+    "path": "web/backend/app/routers/health.py",
+    "language": "python",
+    "nodeCount": 8,
+    "size": 1186
+  },
+  {
+    "path": "web/backend/app/routers/meals.py",
+    "language": "python",
+    "nodeCount": 11,
+    "size": 2178
+  },
+  {
+    "path": "web/backend/app/routers/media.py",
+    "language": "python",
+    "nodeCount": 34,
+    "size": 8666
+  },
+  {
+    "path": "web/backend/app/routers/notes.py",
+    "language": "python",
+    "nodeCount": 19,
+    "size": 4123
+  },
+  {
+    "path": "web/backend/app/routers/poetry.py",
+    "language": "python",
+    "nodeCount": 57,
+    "size": 19205
+  },
+  {
+    "path": "web/backend/app/routers/reader.py",
+    "language": "python",
+    "nodeCount": 25,
+    "size": 6689
+  },
+  {
+    "path": "web/backend/app/routers/rss.py",
+    "language": "python",
+    "nodeCount": 9,
+    "size": 893
+  },
+  {
+    "path": "web/backend/app/routers/settings.py",
+    "language": "python",
+    "nodeCount": 20,
+    "size": 2311
+  },
+  {
+    "path": "web/backend/app/routers/statshub.py",
+    "language": "python",
+    "nodeCount": 27,
+    "size": 13770
+  },
+  {
+    "path": "web/backend/app/routers/storage.py",
+    "language": "python",
+    "nodeCount": 14,
+    "size": 3349
+  },
+  {
+    "path": "web/backend/app/routers/structured.py",
+    "language": "python",
+    "nodeCount": 21,
+    "size": 3238
+  },
+  {
+    "path": "web/backend/app/routers/thoughts.py",
+    "language": "python",
+    "nodeCount": 57,
+    "size": 19321
+  },
+  {
+    "path": "web/backend/app/routers/usage.py",
+    "language": "python",
+    "nodeCount": 9,
+    "size": 1484
+  },
+  {
+    "path": "web/backend/app/routers/vault.py",
+    "language": "python",
+    "nodeCount": 21,
+    "size": 3053
+  },
+  {
+    "path": "web/backend/app/routers/widgets.py",
+    "language": "python",
+    "nodeCount": 26,
+    "size": 8713
+  },
+  {
+    "path": "web/backend/app/services/__init__.py",
+    "language": "python",
+    "nodeCount": 1,
+    "size": 0
+  },
+  {
+    "path": "web/backend/app/services/agent_permissions.py",
+    "language": "python",
+    "nodeCount": 21,
+    "size": 3715
+  },
+  {
+    "path": "web/backend/app/services/agent_review.py",
+    "language": "python",
+    "nodeCount": 42,
+    "size": 14126
+  },
+  {
+    "path": "web/backend/app/services/agent_runtime.py",
+    "language": "python",
+    "nodeCount": 55,
+    "size": 46256
+  },
+  {
+    "path": "web/backend/app/services/agent_tools.py",
+    "language": "python",
+    "nodeCount": 110,
+    "size": 59873
+  },
+  {
+    "path": "web/backend/app/services/ai_chat_service.py",
+    "language": "python",
+    "nodeCount": 65,
+    "size": 34605
+  },
+  {
+    "path": "web/backend/app/services/android_json.py",
+    "language": "python",
+    "nodeCount": 9,
+    "size": 2538
+  },
+  {
+    "path": "web/backend/app/services/background.py",
+    "language": "python",
+    "nodeCount": 9,
+    "size": 1232
+  },
+  {
+    "path": "web/backend/app/services/backup_codec.py",
+    "language": "python",
+    "nodeCount": 43,
+    "size": 23135
+  },
+  {
+    "path": "web/backend/app/services/backup_import.py",
+    "language": "python",
+    "nodeCount": 116,
+    "size": 58167
+  },
+  {
+    "path": "web/backend/app/services/backup_service.py",
+    "language": "python",
+    "nodeCount": 21,
+    "size": 4999
+  },
+  {
+    "path": "web/backend/app/services/calorie_service.py",
+    "language": "python",
+    "nodeCount": 49,
+    "size": 21698
+  },
+  {
+    "path": "web/backend/app/services/cloudsync_engine.py",
+    "language": "python",
+    "nodeCount": 87,
+    "size": 49656
+  },
+  {
+    "path": "web/backend/app/services/data_usage.py",
+    "language": "python",
+    "nodeCount": 5,
+    "size": 654
+  },
+  {
+    "path": "web/backend/app/services/diary_files.py",
+    "language": "python",
+    "nodeCount": 75,
+    "size": 28081
+  },
+  {
+    "path": "web/backend/app/services/health_service.py",
+    "language": "python",
+    "nodeCount": 23,
+    "size": 7753
+  },
+  {
+    "path": "web/backend/app/services/meal_export.py",
+    "language": "python",
+    "nodeCount": 34,
+    "size": 10794
+  },
+  {
+    "path": "web/backend/app/services/media_meta.py",
+    "language": "python",
+    "nodeCount": 64,
+    "size": 22466
+  },
+  {
+    "path": "web/backend/app/services/notes_repo.py",
+    "language": "python",
+    "nodeCount": 41,
+    "size": 13216
+  },
+  {
+    "path": "web/backend/app/services/poetry_daily.py",
+    "language": "python",
+    "nodeCount": 68,
+    "size": 21066
+  },
+  {
+    "path": "web/backend/app/services/reader_service.py",
+    "language": "python",
+    "nodeCount": 81,
+    "size": 26868
+  },
+  {
+    "path": "web/backend/app/services/record_sync.py",
+    "language": "python",
+    "nodeCount": 117,
+    "size": 89758
+  },
+  {
+    "path": "web/backend/app/services/rss_cache.py",
+    "language": "python",
+    "nodeCount": 9,
+    "size": 1274
+  },
+  {
+    "path": "web/backend/app/services/rss_service.py",
+    "language": "python",
+    "nodeCount": 60,
+    "size": 18874
+  },
+  {
+    "path": "web/backend/app/services/s3_client.py",
+    "language": "python",
+    "nodeCount": 47,
+    "size": 18889
+  },
+  {
+    "path": "web/backend/app/services/settings_store.py",
+    "language": "python",
+    "nodeCount": 45,
+    "size": 28810
+  },
+  {
+    "path": "web/backend/app/services/storage_roots.py",
+    "language": "python",
+    "nodeCount": 24,
+    "size": 7277
+  },
+  {
+    "path": "web/backend/app/services/structured_records.py",
+    "language": "python",
+    "nodeCount": 95,
+    "size": 48183
+  },
+  {
+    "path": "web/backend/app/services/usage_service.py",
+    "language": "python",
+    "nodeCount": 40,
+    "size": 22072
+  },
+  {
+    "path": "web/backend/app/services/vault_service.py",
+    "language": "python",
+    "nodeCount": 72,
+    "size": 26162
+  },
+  {
+    "path": "web/backend/app/services/webdav_client.py",
+    "language": "python",
+    "nodeCount": 36,
+    "size": 14405
+  },
+  {
+    "path": "web/backend/tests/__init__.py",
+    "language": "python",
+    "nodeCount": 1,
+    "size": 0
+  },
+  {
+    "path": "web/backend/tests/test_backup_roundtrip.py",
+    "language": "python",
+    "nodeCount": 87,
+    "size": 71849
+  },
+  {
+    "path": "web/backend/tests/test_diary_media.py",
+    "language": "python",
+    "nodeCount": 36,
+    "size": 20430
+  },
+  {
+    "path": "web/backend/tests/test_settings_defaults.py",
+    "language": "python",
+    "nodeCount": 9,
+    "size": 2988
+  },
+  {
+    "path": "web/backend/tests/test_storage_roots.py",
+    "language": "python",
+    "nodeCount": 16,
+    "size": 5570
+  },
+  {
+    "path": "web/backend/tests/test_verified_fixes.py",
+    "language": "python",
+    "nodeCount": 34,
+    "size": 16439
+  },
+  {
+    "path": "web/docker-compose.yml",
+    "language": "yaml",
+    "nodeCount": 0,
+    "size": 494
+  },
+  {
+    "path": "web/frontend/public/dc-web-sw.js",
+    "language": "javascript",
+    "nodeCount": 3,
+    "size": 1540
+  },
+  {
+    "path": "web/frontend/src/App.tsx",
+    "language": "tsx",
+    "nodeCount": 32,
+    "size": 30572
+  },
+  {
+    "path": "web/frontend/src/api/client.ts",
+    "language": "typescript",
+    "nodeCount": 11,
+    "size": 2277
+  },
+  {
+    "path": "web/frontend/src/api/types.ts",
+    "language": "typescript",
+    "nodeCount": 17,
+    "size": 7792
+  },
+  {
+    "path": "web/frontend/src/components/MarkdownPreview.tsx",
+    "language": "tsx",
+    "nodeCount": 5,
+    "size": 1328
+  },
+  {
+    "path": "web/frontend/src/components/charts.tsx",
+    "language": "tsx",
+    "nodeCount": 10,
+    "size": 6558
+  },
+  {
+    "path": "web/frontend/src/components/ui.tsx",
+    "language": "tsx",
+    "nodeCount": 19,
+    "size": 8864
+  },
+  {
+    "path": "web/frontend/src/i18n/tr.ts",
+    "language": "typescript",
+    "nodeCount": 9,
+    "size": 1493
+  },
+  {
+    "path": "web/frontend/src/main.tsx",
+    "language": "tsx",
+    "nodeCount": 10,
+    "size": 1809
+  },
+  {
+    "path": "web/frontend/src/pages/ai/AiChatPage.tsx",
+    "language": "tsx",
+    "nodeCount": 72,
+    "size": 108195
+  },
+  {
+    "path": "web/frontend/src/pages/blog/BrowserPage.tsx",
+    "language": "tsx",
+    "nodeCount": 20,
+    "size": 28644
+  },
+  {
+    "path": "web/frontend/src/pages/daily/DailyRecordsPage.tsx",
+    "language": "tsx",
+    "nodeCount": 21,
+    "size": 20365
+  },
+  {
+    "path": "web/frontend/src/pages/date/DateRecordsPage.tsx",
+    "language": "tsx",
+    "nodeCount": 20,
+    "size": 13337
+  },
+  {
+    "path": "web/frontend/src/pages/desk/DeskPage.tsx",
+    "language": "tsx",
+    "nodeCount": 30,
+    "size": 31823
+  },
+  {
+    "path": "web/frontend/src/pages/diary/DiaryEditPage.tsx",
+    "language": "tsx",
+    "nodeCount": 20,
+    "size": 26089
+  },
+  {
+    "path": "web/frontend/src/pages/diary/DiaryListPage.tsx",
+    "language": "tsx",
+    "nodeCount": 18,
+    "size": 21432
+  },
+  {
+    "path": "web/frontend/src/pages/diary/DiaryTrashPage.tsx",
+    "language": "tsx",
+    "nodeCount": 12,
+    "size": 6695
+  },
+  {
+    "path": "web/frontend/src/pages/diary/todayDiary.ts",
+    "language": "typescript",
+    "nodeCount": 6,
+    "size": 1333
+  },
+  {
+    "path": "web/frontend/src/pages/games/Game2048Page.tsx",
+    "language": "tsx",
+    "nodeCount": 25,
+    "size": 30799
+  },
+  {
+    "path": "web/frontend/src/pages/games/GamesListPage.tsx",
+    "language": "tsx",
+    "nodeCount": 16,
+    "size": 14166
+  },
+  {
+    "path": "web/frontend/src/pages/games/GoPage.tsx",
+    "language": "tsx",
+    "nodeCount": 23,
+    "size": 23201
+  },
+  {
+    "path": "web/frontend/src/pages/games/MinesweeperPage.tsx",
+    "language": "tsx",
+    "nodeCount": 22,
+    "size": 21195
+  },
+  {
+    "path": "web/frontend/src/pages/games/SnakePage.tsx",
+    "language": "tsx",
+    "nodeCount": 16,
+    "size": 16822
+  },
+  {
+    "path": "web/frontend/src/pages/games/SpiderPage.tsx",
+    "language": "tsx",
+    "nodeCount": 21,
+    "size": 25191
+  },
+  {
+    "path": "web/frontend/src/pages/games/TetrisPage.tsx",
+    "language": "tsx",
+    "nodeCount": 17,
+    "size": 18493
+  },
+  {
+    "path": "web/frontend/src/pages/games/engine2048.ts",
+    "language": "typescript",
+    "nodeCount": 41,
+    "size": 14564
+  },
+  {
+    "path": "web/frontend/src/pages/games/engineGo.ts",
+    "language": "typescript",
+    "nodeCount": 45,
+    "size": 12729
+  },
+  {
+    "path": "web/frontend/src/pages/games/engineMinesweeper.ts",
+    "language": "typescript",
+    "nodeCount": 46,
+    "size": 15711
+  },
+  {
+    "path": "web/frontend/src/pages/games/engineSnake.ts",
+    "language": "typescript",
+    "nodeCount": 40,
+    "size": 10335
+  },
+  {
+    "path": "web/frontend/src/pages/games/engineSpider.ts",
+    "language": "typescript",
+    "nodeCount": 54,
+    "size": 16602
+  },
+  {
+    "path": "web/frontend/src/pages/games/engineTetris.ts",
+    "language": "typescript",
+    "nodeCount": 53,
+    "size": 12516
+  },
+  {
+    "path": "web/frontend/src/pages/home/HomePage.tsx",
+    "language": "tsx",
+    "nodeCount": 70,
+    "size": 68927
+  },
+  {
+    "path": "web/frontend/src/pages/login/LoginPage.tsx",
+    "language": "tsx",
+    "nodeCount": 9,
+    "size": 2722
+  },
+  {
+    "path": "web/frontend/src/pages/meals/MealCalendarPage.tsx",
+    "language": "tsx",
+    "nodeCount": 34,
+    "size": 34375
+  },
+  {
+    "path": "web/frontend/src/pages/meals/MealFilterPage.tsx",
+    "language": "tsx",
+    "nodeCount": 19,
+    "size": 14284
+  },
+  {
+    "path": "web/frontend/src/pages/notes/NotesPage.tsx",
+    "language": "tsx",
+    "nodeCount": 36,
+    "size": 51745
+  },
+  {
+    "path": "web/frontend/src/pages/poetry/PoetryBookPage.tsx",
+    "language": "tsx",
+    "nodeCount": 32,
+    "size": 46939
+  },
+  {
+    "path": "web/frontend/src/pages/reader/ReaderPage.tsx",
+    "language": "tsx",
+    "nodeCount": 69,
+    "size": 83910
+  },
+  {
+    "path": "web/frontend/src/pages/registry.tsx",
+    "language": "tsx",
+    "nodeCount": 34,
+    "size": 2270
+  },
+  {
+    "path": "web/frontend/src/pages/rss/RssPage.tsx",
+    "language": "tsx",
+    "nodeCount": 21,
+    "size": 20342
+  },
+  {
+    "path": "web/frontend/src/pages/settings/SettingsPage.tsx",
+    "language": "tsx",
+    "nodeCount": 39,
+    "size": 27666
+  },
+  {
+    "path": "web/frontend/src/pages/settings/sections/AboutSection.tsx",
+    "language": "tsx",
+    "nodeCount": 15,
+    "size": 7980
+  },
+  {
+    "path": "web/frontend/src/pages/settings/sections/AiSection.tsx",
+    "language": "tsx",
+    "nodeCount": 17,
+    "size": 21901
+  },
+  {
+    "path": "web/frontend/src/pages/settings/sections/AppearanceSection.tsx",
+    "language": "tsx",
+    "nodeCount": 22,
+    "size": 13768
+  },
+  {
+    "path": "web/frontend/src/pages/settings/sections/BrowserThoughtPoetryRssSection.tsx",
+    "language": "tsx",
+    "nodeCount": 24,
+    "size": 20433
+  },
+  {
+    "path": "web/frontend/src/pages/settings/sections/CloudSyncSection.tsx",
+    "language": "tsx",
+    "nodeCount": 28,
+    "size": 30962
+  },
+  {
+    "path": "web/frontend/src/pages/settings/sections/DataSection.tsx",
+    "language": "tsx",
+    "nodeCount": 19,
+    "size": 22364
+  },
+  {
+    "path": "web/frontend/src/pages/settings/sections/DiarySection.tsx",
+    "language": "tsx",
+    "nodeCount": 27,
+    "size": 27990
+  },
+  {
+    "path": "web/frontend/src/pages/settings/sections/GeneralSection.tsx",
+    "language": "tsx",
+    "nodeCount": 15,
+    "size": 7367
+  },
+  {
+    "path": "web/frontend/src/pages/settings/sections/HomeSection.tsx",
+    "language": "tsx",
+    "nodeCount": 16,
+    "size": 15728
+  },
+  {
+    "path": "web/frontend/src/pages/settings/sections/SubpagesNavSection.tsx",
+    "language": "tsx",
+    "nodeCount": 26,
+    "size": 25398
+  },
+  {
+    "path": "web/frontend/src/pages/statshub/StatsHubPage.tsx",
+    "language": "tsx",
+    "nodeCount": 22,
+    "size": 17578
+  },
+  {
+    "path": "web/frontend/src/pages/steps/HealthPage.tsx",
+    "language": "tsx",
+    "nodeCount": 24,
+    "size": 15721
+  },
+  {
+    "path": "web/frontend/src/pages/thought/ThoughtPage.tsx",
+    "language": "tsx",
+    "nodeCount": 30,
+    "size": 49633
+  },
+  {
+    "path": "web/frontend/src/pages/thought/ThoughtTrashPage.tsx",
+    "language": "tsx",
+    "nodeCount": 11,
+    "size": 4784
+  },
+  {
+    "path": "web/frontend/src/pages/usage/UsagePage.tsx",
+    "language": "tsx",
+    "nodeCount": 24,
+    "size": 15728
+  },
+  {
+    "path": "web/frontend/src/pages/vault/VaultPage.tsx",
+    "language": "tsx",
+    "nodeCount": 24,
+    "size": 32849
+  },
+  {
+    "path": "web/frontend/src/pages/widgets/WidgetsPage.tsx",
+    "language": "tsx",
+    "nodeCount": 18,
+    "size": 20247
+  },
+  {
+    "path": "web/frontend/src/stores/settings.ts",
+    "language": "typescript",
+    "nodeCount": 20,
+    "size": 3874
+  },
+  {
+    "path": "web/frontend/src/theme/colorScheme.ts",
+    "language": "typescript",
+    "nodeCount": 10,
+    "size": 9879
+  },
+  {
+    "path": "web/frontend/src/vite-env.d.ts",
+    "language": "typescript",
+    "nodeCount": 1,
+    "size": 38
+  },
+  {
+    "path": "web/frontend/vite.config.ts",
+    "language": "typescript",
+    "nodeCount": 3,
+    "size": 336
+  },
+  {
+    "path": "web/scripts/convert_translations.py",
+    "language": "python",
+    "nodeCount": 11,
+    "size": 1904
+  },
+  {
+    "path": "windows/eslint.config.js",
+    "language": "javascript",
+    "nodeCount": 6,
+    "size": 869
+  },
+  {
+    "path": "windows/pnpm-lock.yaml",
+    "language": "yaml",
+    "nodeCount": 0,
+    "size": 188897
+  },
+  {
+    "path": "windows/pnpm-workspace.yaml",
+    "language": "yaml",
+    "nodeCount": 0,
+    "size": 67
+  },
+  {
+    "path": "windows/scripts/copy-portable.mjs",
+    "language": "javascript",
+    "nodeCount": 19,
+    "size": 2208
+  },
+  {
+    "path": "windows/src-tauri/build.rs",
+    "language": "rust",
+    "nodeCount": 2,
+    "size": 40
+  },
+  {
+    "path": "windows/src-tauri/examples/verify_updater_signature.rs",
+    "language": "rust",
+    "nodeCount": 13,
+    "size": 3698
+  },
+  {
+    "path": "windows/src-tauri/src/ai.rs",
+    "language": "rust",
+    "nodeCount": 192,
+    "size": 94729
+  },
+  {
+    "path": "windows/src-tauri/src/background_protocol.rs",
+    "language": "rust",
+    "nodeCount": 24,
+    "size": 8940
+  },
+  {
+    "path": "windows/src-tauri/src/backup.rs",
+    "language": "rust",
+    "nodeCount": 257,
+    "size": 232085
+  },
+  {
+    "path": "windows/src-tauri/src/cloud_sync/commands.rs",
+    "language": "rust",
+    "nodeCount": 116,
+    "size": 68307
+  },
+  {
+    "path": "windows/src-tauri/src/cloud_sync/encoding.rs",
+    "language": "rust",
+    "nodeCount": 12,
+    "size": 4665
+  },
+  {
+    "path": "windows/src-tauri/src/cloud_sync/engine.rs",
+    "language": "rust",
+    "nodeCount": 52,
+    "size": 34868
+  },
+  {
+    "path": "windows/src-tauri/src/cloud_sync/local.rs",
+    "language": "rust",
+    "nodeCount": 76,
+    "size": 44700
+  },
+  {
+    "path": "windows/src-tauri/src/cloud_sync/manifest.rs",
+    "language": "rust",
+    "nodeCount": 32,
+    "size": 19380
+  },
+  {
+    "path": "windows/src-tauri/src/cloud_sync/mod.rs",
+    "language": "rust",
+    "nodeCount": 9,
+    "size": 1919
+  },
+  {
+    "path": "windows/src-tauri/src/cloud_sync/secrets.rs",
+    "language": "rust",
+    "nodeCount": 36,
+    "size": 13848
+  },
+  {
+    "path": "windows/src-tauri/src/cloud_sync/sigv4.rs",
+    "language": "rust",
+    "nodeCount": 28,
+    "size": 12401
+  },
+  {
+    "path": "windows/src-tauri/src/cloud_sync/transport.rs",
+    "language": "rust",
+    "nodeCount": 90,
+    "size": 60487
+  },
+  {
+    "path": "windows/src-tauri/src/cloud_sync/types.rs",
+    "language": "rust",
+    "nodeCount": 102,
+    "size": 17249
+  },
+  {
+    "path": "windows/src-tauri/src/cloud_sync/validation.rs",
+    "language": "rust",
+    "nodeCount": 35,
+    "size": 14232
+  },
+  {
+    "path": "windows/src-tauri/src/commands.rs",
+    "language": "rust",
+    "nodeCount": 329,
+    "size": 165682
+  },
+  {
+    "path": "windows/src-tauri/src/db.rs",
+    "language": "rust",
+    "nodeCount": 225,
+    "size": 181770
+  },
+  {
+    "path": "windows/src-tauri/src/diary.rs",
+    "language": "rust",
+    "nodeCount": 100,
+    "size": 46856
+  },
+  {
+    "path": "windows/src-tauri/src/games.rs",
+    "language": "rust",
+    "nodeCount": 64,
+    "size": 41460
+  },
+  {
+    "path": "windows/src-tauri/src/health.rs",
+    "language": "rust",
+    "nodeCount": 134,
+    "size": 51677
+  },
+  {
+    "path": "windows/src-tauri/src/lib.rs",
+    "language": "rust",
+    "nodeCount": 10,
+    "size": 5266
+  },
+  {
+    "path": "windows/src-tauri/src/main.rs",
+    "language": "rust",
+    "nodeCount": 2,
+    "size": 116
+  },
+  {
+    "path": "windows/src-tauri/src/media.rs",
+    "language": "rust",
+    "nodeCount": 171,
+    "size": 87696
+  },
+  {
+    "path": "windows/src-tauri/src/media_protocol.rs",
+    "language": "rust",
+    "nodeCount": 24,
+    "size": 8849
+  },
+  {
+    "path": "windows/src-tauri/src/models.rs",
+    "language": "rust",
+    "nodeCount": 41,
+    "size": 37812
+  },
+  {
+    "path": "windows/src-tauri/src/notes.rs",
+    "language": "rust",
+    "nodeCount": 155,
+    "size": 62321
+  },
+  {
+    "path": "windows/src-tauri/src/poetry.rs",
+    "language": "rust",
+    "nodeCount": 72,
+    "size": 25981
+  },
+  {
+    "path": "windows/src-tauri/src/reader.rs",
+    "language": "rust",
+    "nodeCount": 226,
+    "size": 107440
+  },
+  {
+    "path": "windows/src-tauri/src/rss.rs",
+    "language": "rust",
+    "nodeCount": 142,
+    "size": 50762
+  },
+  {
+    "path": "windows/src-tauri/src/security.rs",
+    "language": "rust",
+    "nodeCount": 70,
+    "size": 22658
+  },
+  {
+    "path": "windows/src-tauri/src/updater.rs",
+    "language": "rust",
+    "nodeCount": 66,
+    "size": 23719
+  },
+  {
+    "path": "windows/src-tauri/src/usage.rs",
+    "language": "rust",
+    "nodeCount": 215,
+    "size": 122951
+  },
+  {
+    "path": "windows/src-tauri/src/vault.rs",
+    "language": "rust",
+    "nodeCount": 150,
+    "size": 55253
+  },
+  {
+    "path": "windows/src-tauri/src/vault_persistence.rs",
+    "language": "rust",
+    "nodeCount": 31,
+    "size": 12262
+  },
+  {
+    "path": "windows/src-tauri/src/watcher.rs",
+    "language": "rust",
+    "nodeCount": 15,
+    "size": 3431
+  },
+  {
+    "path": "windows/src/App.tsx",
+    "language": "tsx",
+    "nodeCount": 57,
+    "size": 4666
+  },
+  {
+    "path": "windows/src/components/AppShell.test.tsx",
+    "language": "tsx",
+    "nodeCount": 12,
+    "size": 10466
+  },
+  {
+    "path": "windows/src/components/AppShell.tsx",
+    "language": "tsx",
+    "nodeCount": 15,
+    "size": 13461
+  },
+  {
+    "path": "windows/src/components/AsyncState.test.tsx",
+    "language": "tsx",
+    "nodeCount": 6,
+    "size": 1634
+  },
+  {
+    "path": "windows/src/components/AsyncState.tsx",
+    "language": "tsx",
+    "nodeCount": 11,
+    "size": 2550
+  },
+  {
+    "path": "windows/src/components/ConfirmDialog.tsx",
+    "language": "tsx",
+    "nodeCount": 8,
+    "size": 2421
+  },
+  {
+    "path": "windows/src/components/ErrorBoundary.tsx",
+    "language": "tsx",
+    "nodeCount": 9,
+    "size": 1002
+  },
+  {
+    "path": "windows/src/components/ExternalMarkdownLink.tsx",
+    "language": "tsx",
+    "nodeCount": 6,
+    "size": 1230
+  },
+  {
+    "path": "windows/src/components/PageFrame.tsx",
+    "language": "tsx",
+    "nodeCount": 4,
+    "size": 783
+  },
+  {
+    "path": "windows/src/components/ThemeRuntime.test.tsx",
+    "language": "tsx",
+    "nodeCount": 6,
+    "size": 8741
+  },
+  {
+    "path": "windows/src/components/ThemeRuntime.tsx",
+    "language": "tsx",
+    "nodeCount": 13,
+    "size": 6710
+  },
+  {
+    "path": "windows/src/components/ToastViewport.tsx",
+    "language": "tsx",
+    "nodeCount": 9,
+    "size": 2304
+  },
+  {
+    "path": "windows/src/components/UnsavedChangesGuard.test.tsx",
+    "language": "tsx",
+    "nodeCount": 6,
+    "size": 1728
+  },
+  {
+    "path": "windows/src/components/UnsavedChangesGuard.tsx",
+    "language": "tsx",
+    "nodeCount": 8,
+    "size": 1657
+  },
+  {
+    "path": "windows/src/components/desktopNavigation.ts",
+    "language": "typescript",
+    "nodeCount": 15,
+    "size": 4524
+  },
+  {
+    "path": "windows/src/components/desktopNavigationModel.test.ts",
+    "language": "typescript",
+    "nodeCount": 3,
+    "size": 3147
+  },
+  {
+    "path": "windows/src/components/desktopNavigationModel.ts",
+    "language": "typescript",
+    "nodeCount": 19,
+    "size": 7043
+  },
+  {
+    "path": "windows/src/components/index.ts",
+    "language": "typescript",
+    "nodeCount": 1,
+    "size": 334
+  },
+  {
+    "path": "windows/src/i18n/index.ts",
+    "language": "typescript",
+    "nodeCount": 6,
+    "size": 4782
+  },
+  {
+    "path": "windows/src/lib/aiApi.test.ts",
+    "language": "typescript",
+    "nodeCount": 6,
+    "size": 2410
+  },
+  {
+    "path": "windows/src/lib/aiApi.ts",
+    "language": "typescript",
+    "nodeCount": 44,
+    "size": 9012
+  },
+  {
+    "path": "windows/src/lib/cloudApi.ts",
+    "language": "typescript",
+    "nodeCount": 26,
+    "size": 4348
+  },
+  {
+    "path": "windows/src/lib/externalLinkApi.test.ts",
+    "language": "typescript",
+    "nodeCount": 4,
+    "size": 1207
+  },
+  {
+    "path": "windows/src/lib/externalLinkApi.ts",
+    "language": "typescript",
+    "nodeCount": 5,
+    "size": 1051
+  },
+  {
+    "path": "windows/src/lib/gameApi.ts",
+    "language": "typescript",
+    "nodeCount": 18,
+    "size": 2550
+  },
+  {
+    "path": "windows/src/lib/healthApi.ts",
+    "language": "typescript",
+    "nodeCount": 16,
+    "size": 1961
+  },
+  {
+    "path": "windows/src/lib/ipc.test.ts",
+    "language": "typescript",
+    "nodeCount": 3,
+    "size": 3564
+  },
+  {
+    "path": "windows/src/lib/ipc.ts",
+    "language": "typescript",
+    "nodeCount": 136,
+    "size": 30684
+  },
+  {
+    "path": "windows/src/lib/notesApi.ts",
+    "language": "typescript",
+    "nodeCount": 28,
+    "size": 3854
+  },
+  {
+    "path": "windows/src/lib/readerApi.ts",
+    "language": "typescript",
+    "nodeCount": 29,
+    "size": 3960
+  },
+  {
+    "path": "windows/src/lib/readerAppearance.test.ts",
+    "language": "typescript",
+    "nodeCount": 5,
+    "size": 1664
+  },
+  {
+    "path": "windows/src/lib/readerAppearance.ts",
+    "language": "typescript",
+    "nodeCount": 15,
+    "size": 4835
+  },
+  {
+    "path": "windows/src/lib/rssApi.ts",
+    "language": "typescript",
+    "nodeCount": 16,
+    "size": 2057
+  },
+  {
+    "path": "windows/src/lib/updateApi.ts",
+    "language": "typescript",
+    "nodeCount": 22,
+    "size": 4503
+  },
+  {
+    "path": "windows/src/lib/usageApi.ts",
+    "language": "typescript",
+    "nodeCount": 19,
+    "size": 2556
+  },
+  {
+    "path": "windows/src/lib/vaultApi.ts",
+    "language": "typescript",
+    "nodeCount": 21,
+    "size": 2556
+  },
+  {
+    "path": "windows/src/main.tsx",
+    "language": "tsx",
+    "nodeCount": 12,
+    "size": 605
+  },
+  {
+    "path": "windows/src/pages/AboutPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 8,
+    "size": 6491
+  },
+  {
+    "path": "windows/src/pages/AboutPage.tsx",
+    "language": "tsx",
+    "nodeCount": 17,
+    "size": 16464
+  },
+  {
+    "path": "windows/src/pages/AiPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 11,
+    "size": 4963
+  },
+  {
+    "path": "windows/src/pages/AiPage.tsx",
+    "language": "tsx",
+    "nodeCount": 15,
+    "size": 21211
+  },
+  {
+    "path": "windows/src/pages/BackupPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 6,
+    "size": 2234
+  },
+  {
+    "path": "windows/src/pages/BackupPage.tsx",
+    "language": "tsx",
+    "nodeCount": 18,
+    "size": 20031
+  },
+  {
+    "path": "windows/src/pages/CloudSyncPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 12,
+    "size": 19369
+  },
+  {
+    "path": "windows/src/pages/CloudSyncPage.tsx",
+    "language": "tsx",
+    "nodeCount": 35,
+    "size": 55859
+  },
+  {
+    "path": "windows/src/pages/DailyRecordPage.tsx",
+    "language": "tsx",
+    "nodeCount": 13,
+    "size": 16183
+  },
+  {
+    "path": "windows/src/pages/DateRecordsPage.tsx",
+    "language": "tsx",
+    "nodeCount": 12,
+    "size": 11290
+  },
+  {
+    "path": "windows/src/pages/DiaryPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 17,
+    "size": 9933
+  },
+  {
+    "path": "windows/src/pages/DiaryPage.tsx",
+    "language": "tsx",
+    "nodeCount": 31,
+    "size": 35286
+  },
+  {
+    "path": "windows/src/pages/GamesPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 10,
+    "size": 6041
+  },
+  {
+    "path": "windows/src/pages/GamesPage.tsx",
+    "language": "tsx",
+    "nodeCount": 33,
+    "size": 42195
+  },
+  {
+    "path": "windows/src/pages/HealthPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 9,
+    "size": 5257
+  },
+  {
+    "path": "windows/src/pages/HealthPage.tsx",
+    "language": "tsx",
+    "nodeCount": 18,
+    "size": 16689
+  },
+  {
+    "path": "windows/src/pages/HomePage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 10,
+    "size": 7592
+  },
+  {
+    "path": "windows/src/pages/HomePage.tsx",
+    "language": "tsx",
+    "nodeCount": 21,
+    "size": 31262
+  },
+  {
+    "path": "windows/src/pages/MealPage.ai.test.tsx",
+    "language": "tsx",
+    "nodeCount": 10,
+    "size": 8921
+  },
+  {
+    "path": "windows/src/pages/MealPage.tsx",
+    "language": "tsx",
+    "nodeCount": 20,
+    "size": 30003
+  },
+  {
+    "path": "windows/src/pages/MorePage.tsx",
+    "language": "tsx",
+    "nodeCount": 8,
+    "size": 2748
+  },
+  {
+    "path": "windows/src/pages/NotesPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 15,
+    "size": 6741
+  },
+  {
+    "path": "windows/src/pages/NotesPage.tsx",
+    "language": "tsx",
+    "nodeCount": 27,
+    "size": 33253
+  },
+  {
+    "path": "windows/src/pages/PoetryPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 9,
+    "size": 6129
+  },
+  {
+    "path": "windows/src/pages/PoetryPage.tsx",
+    "language": "tsx",
+    "nodeCount": 15,
+    "size": 26904
+  },
+  {
+    "path": "windows/src/pages/ReaderPage.pdfViewer.test.tsx",
+    "language": "tsx",
+    "nodeCount": 16,
+    "size": 5700
+  },
+  {
+    "path": "windows/src/pages/ReaderPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 17,
+    "size": 14522
+  },
+  {
+    "path": "windows/src/pages/ReaderPage.tsx",
+    "language": "tsx",
+    "nodeCount": 37,
+    "size": 62421
+  },
+  {
+    "path": "windows/src/pages/RssPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 11,
+    "size": 7399
+  },
+  {
+    "path": "windows/src/pages/RssPage.tsx",
+    "language": "tsx",
+    "nodeCount": 28,
+    "size": 27148
+  },
+  {
+    "path": "windows/src/pages/SettingsPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 13,
+    "size": 15076
+  },
+  {
+    "path": "windows/src/pages/SettingsPage.tsx",
+    "language": "tsx",
+    "nodeCount": 22,
+    "size": 26008
+  },
+  {
+    "path": "windows/src/pages/StatsPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 7,
+    "size": 2931
+  },
+  {
+    "path": "windows/src/pages/StatsPage.tsx",
+    "language": "tsx",
+    "nodeCount": 27,
+    "size": 18008
+  },
+  {
+    "path": "windows/src/pages/ThoughtsPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 14,
+    "size": 4477
+  },
+  {
+    "path": "windows/src/pages/ThoughtsPage.tsx",
+    "language": "tsx",
+    "nodeCount": 17,
+    "size": 28580
+  },
+  {
+    "path": "windows/src/pages/UsagePage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 10,
+    "size": 5840
+  },
+  {
+    "path": "windows/src/pages/UsagePage.tsx",
+    "language": "tsx",
+    "nodeCount": 17,
+    "size": 20526
+  },
+  {
+    "path": "windows/src/pages/VaultPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 9,
+    "size": 7299
+  },
+  {
+    "path": "windows/src/pages/VaultPage.tsx",
+    "language": "tsx",
+    "nodeCount": 32,
+    "size": 29453
+  },
+  {
+    "path": "windows/src/pages/gameEngines.test.ts",
+    "language": "typescript",
+    "nodeCount": 3,
+    "size": 6107
+  },
+  {
+    "path": "windows/src/pages/gameEngines.ts",
+    "language": "typescript",
+    "nodeCount": 89,
+    "size": 42014
+  },
+  {
+    "path": "windows/src/pages/homeModels.test.ts",
+    "language": "typescript",
+    "nodeCount": 6,
+    "size": 2514
+  },
+  {
+    "path": "windows/src/pages/homeModels.ts",
+    "language": "typescript",
+    "nodeCount": 17,
+    "size": 4877
+  },
+  {
+    "path": "windows/src/pages/index.ts",
+    "language": "typescript",
+    "nodeCount": 1,
+    "size": 504
+  },
+  {
+    "path": "windows/src/pages/notesPreview.ts",
+    "language": "typescript",
+    "nodeCount": 6,
+    "size": 1876
+  },
+  {
+    "path": "windows/src/pages/readerPdfViewer.tsx",
+    "language": "tsx",
+    "nodeCount": 22,
+    "size": 17763
+  },
+  {
+    "path": "windows/src/pages/readerTextScroll.tsx",
+    "language": "tsx",
+    "nodeCount": 22,
+    "size": 13779
+  },
+  {
+    "path": "windows/src/pages/settings/AiSettingsPage.test.tsx",
+    "language": "tsx",
+    "nodeCount": 13,
+    "size": 3269
+  },
+  {
+    "path": "windows/src/pages/settings/AiSettingsPage.tsx",
+    "language": "tsx",
+    "nodeCount": 14,
+    "size": 15569
+  },
+  {
+    "path": "windows/src/pages/settings/DesktopNavigationSettings.tsx",
+    "language": "tsx",
+    "nodeCount": 11,
+    "size": 13403
+  },
+  {
+    "path": "windows/src/pages/settings/SettingsSections.tsx",
+    "language": "tsx",
+    "nodeCount": 20,
+    "size": 36387
+  },
+  {
+    "path": "windows/src/pages/settings/settingsNavigation.tsx",
+    "language": "tsx",
+    "nodeCount": 11,
+    "size": 4889
+  },
+  {
+    "path": "windows/src/pages/settings/settingsRoutes.ts",
+    "language": "typescript",
+    "nodeCount": 12,
+    "size": 8793
+  },
+  {
+    "path": "windows/src/pages/statsModels.test.ts",
+    "language": "typescript",
+    "nodeCount": 4,
+    "size": 1298
+  },
+  {
+    "path": "windows/src/pages/statsModels.ts",
+    "language": "typescript",
+    "nodeCount": 6,
+    "size": 2419
+  },
+  {
+    "path": "windows/src/store/appStore.ts",
+    "language": "typescript",
+    "nodeCount": 25,
+    "size": 7039
+  },
+  {
+    "path": "windows/src/test/setup.ts",
+    "language": "typescript",
+    "nodeCount": 7,
+    "size": 1447
+  },
+  {
+    "path": "windows/src/types.ts",
+    "language": "typescript",
+    "nodeCount": 9,
+    "size": 909
+  },
+  {
+    "path": "windows/src/vite-env.d.ts",
+    "language": "typescript",
+    "nodeCount": 1,
+    "size": 38
+  },
+  {
+    "path": "windows/vite.config.ts",
+    "language": "typescript",
+    "nodeCount": 10,
+    "size": 3743
+  }
+]
