@@ -11,6 +11,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.StateFlow
 
+private const val LEGACY_MIGRATED_XX_FIELD_PREFIX = "f_migrated_word_"
+
 /** True only when a workspace file has never been created; existing empty files are intentional. */
 internal fun shouldInitializeStructuredWorkspaceFile(raw: String?): Boolean = raw == null
 
@@ -23,6 +25,34 @@ internal fun defaultTemplatesSupportedBy(
         template.segments.filterIsInstance<StructuredRecordSegment.Field>()
             .all { it.fieldId in fieldIds }
     }
+}
+
+/**
+ * Older structured-record releases converted every legacy daily-event `xx` into a generated WORD
+ * field whose id starts with [LEGACY_MIGRATED_XX_FIELD_PREFIX]. Those fields were implementation
+ * artifacts, not user-created structured fields. Restore only those bindings to literal `xx` at the
+ * workspace boundary so existing installs immediately regain the original underline/tap-replace UI.
+ *
+ * This is intentionally a projection migration rather than a destructive history rewrite: old
+ * Markdown markers and their Room index rows remain readable, while all future records from the
+ * restored template write the replacement as ordinary Markdown text.
+ */
+internal fun restoreLegacyPlainXxTemplates(
+    templates: List<StructuredRecordTemplate>,
+): List<StructuredRecordTemplate> = templates.map { template ->
+    var changed = false
+    val restored = template.segments.map { segment ->
+        if (
+            segment is StructuredRecordSegment.Field &&
+            segment.fieldId.startsWith(LEGACY_MIGRATED_XX_FIELD_PREFIX)
+        ) {
+            changed = true
+            StructuredRecordSegment.Text("xx")
+        } else {
+            segment
+        }
+    }
+    if (changed) template.copy(segments = restored) else template
 }
 
 /**
@@ -149,10 +179,16 @@ class StructuredWorkspaceRepository @Inject constructor(
         appSettings: AppSettings,
         transform: (List<StructuredField>) -> List<StructuredField>,
     ): List<StructuredField> {
-        loadFields(appSettings)
         var resolved: List<StructuredField>? = null
         diaryFileRepository.updateWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_FIELDS) { current ->
-            val existing = current?.let(StructuredRecordsCodec::decodeFields).orEmpty().sortedBy { it.sortOrder }
+            // updateWorkspaceFile already reads the latest file under the workspace mutex. Calling
+            // loadFields immediately beforehand doubled SAF I/O. A genuinely missing file has the
+            // same initialization semantics here: start from the default field set.
+            val existing = if (current == null) {
+                DefaultStructuredExamples.FIELDS
+            } else {
+                StructuredRecordsCodec.decodeFields(current).sortedBy { it.sortOrder }
+            }
             val updated = transform(existing)
             resolved = updated
             if (current != null && updated == existing) current else StructuredRecordsCodec.encodeFields(updated)
@@ -167,7 +203,9 @@ class StructuredWorkspaceRepository @Inject constructor(
     suspend fun loadTemplates(appSettings: AppSettings): List<StructuredRecordTemplate> {
         val raw = diaryFileRepository.readWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_RECORDS)
         if (!shouldInitializeStructuredWorkspaceFile(raw)) {
-            return StructuredRecordsCodec.decodeTemplates(requireNotNull(raw)).sortedBy { it.sortOrder }
+            return restoreLegacyPlainXxTemplates(
+                StructuredRecordsCodec.decodeTemplates(requireNotNull(raw)).sortedBy { it.sortOrder },
+            )
         }
 
         val migrated = migrateLegacyDailyEvents(appSettings)
@@ -181,7 +219,9 @@ class StructuredWorkspaceRepository @Inject constructor(
             if (current == null) {
                 StructuredRecordsCodec.encodeTemplates(candidate)
             } else {
-                resolved = StructuredRecordsCodec.decodeTemplates(current).sortedBy { it.sortOrder }
+                resolved = restoreLegacyPlainXxTemplates(
+                    StructuredRecordsCodec.decodeTemplates(current).sortedBy { it.sortOrder },
+                )
                 current
             }
         }
@@ -192,7 +232,9 @@ class StructuredWorkspaceRepository @Inject constructor(
     suspend fun loadTemplatesReadOnly(appSettings: AppSettings): List<StructuredRecordTemplate> {
         val raw = diaryFileRepository.readWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_RECORDS)
             ?: return emptyList()
-        return StructuredRecordsCodec.decodeTemplates(raw).sortedBy { it.sortOrder }
+        return restoreLegacyPlainXxTemplates(
+            StructuredRecordsCodec.decodeTemplates(raw).sortedBy { it.sortOrder },
+        )
     }
 
     /**
@@ -202,7 +244,11 @@ class StructuredWorkspaceRepository @Inject constructor(
      */
     suspend fun loadTemplatesForWidget(appSettings: AppSettings): List<StructuredRecordTemplate> {
         val raw = diaryFileRepository.readWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_RECORDS)
-        if (raw != null) return StructuredRecordsCodec.decodeTemplates(raw).sortedBy { it.sortOrder }
+        if (raw != null) {
+            return restoreLegacyPlainXxTemplates(
+                StructuredRecordsCodec.decodeTemplates(raw).sortedBy { it.sortOrder },
+            )
+        }
         return appSettings.dailyEventTemplates.mapIndexedNotNull { index, event ->
             val text = event.text.trim().take(StructuredRecordsCodec.MAX_TEXT_CHARS)
             if (text.isBlank()) null else StructuredRecordTemplate(
@@ -247,7 +293,7 @@ class StructuredWorkspaceRepository @Inject constructor(
         diaryFileRepository.writeWorkspaceFile(
             appSettings,
             StructuredRecordsCodec.FILE_RECORDS,
-            StructuredRecordsCodec.encodeTemplates(templates),
+            StructuredRecordsCodec.encodeTemplates(restoreLegacyPlainXxTemplates(templates)),
         )
     }
 
@@ -259,7 +305,9 @@ class StructuredWorkspaceRepository @Inject constructor(
         loadTemplates(appSettings)
         var resolved: List<StructuredRecordTemplate>? = null
         diaryFileRepository.updateWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_RECORDS) { current ->
-            val existing = current?.let(StructuredRecordsCodec::decodeTemplates).orEmpty().sortedBy { it.sortOrder }
+            val existing = restoreLegacyPlainXxTemplates(
+                current?.let(StructuredRecordsCodec::decodeTemplates).orEmpty().sortedBy { it.sortOrder },
+            )
             val updated = transform(existing)
             resolved = updated
             if (current != null && updated == existing) current else StructuredRecordsCodec.encodeTemplates(updated)
@@ -356,57 +404,29 @@ class StructuredWorkspaceRepository @Inject constructor(
         }
     }
 
-    /** Migrates legacy daily-event templates without rewriting historical Markdown. */
+    /**
+     * Migrates legacy daily-event templates without rewriting historical Markdown. `xx` remains
+     * literal ordinary text: the structured editor provides its underline/tap replacement affordance
+     * as a UI-only placeholder, but it never creates a StructuredField or participates in indexing.
+     */
     private suspend fun migrateLegacyDailyEvents(
         appSettings: AppSettings,
     ): List<StructuredRecordTemplate> {
         val legacy = appSettings.dailyEventTemplates
         if (legacy.isEmpty()) return emptyList()
-        val templates = ArrayList<StructuredRecordTemplate>(legacy.size)
-        val fieldsToMerge = ArrayList<StructuredField>()
-        var wordIndex = 0
-        val xxPattern = Regex("xx", RegexOption.IGNORE_CASE)
-        for (event in legacy) {
+        return legacy.mapIndexedNotNull { index, event ->
             val text = event.text.trim().take(StructuredRecordsCodec.MAX_TEXT_CHARS)
-            if (text.isBlank()) continue
-            val templateId = "r_migrated_${stableId(event.id)}"
-            val segments = ArrayList<StructuredRecordSegment>()
-            if (!xxPattern.containsMatchIn(text)) {
-                segments += StructuredRecordSegment.Text(text)
+            if (text.isBlank()) {
+                null
             } else {
-                val fieldId = "f_migrated_word_${wordIndex++}_${stableId(event.id)}"
-                fieldsToMerge += StructuredField(
-                    id = fieldId,
-                    name = "文字",
-                    type = StructuredFieldType.WORD,
-                    source = StructuredFieldSource.MANUAL,
-                )
-                val parts = xxPattern.split(text)
-                for (index in parts.indices) {
-                    if (parts[index].isNotEmpty()) segments += StructuredRecordSegment.Text(parts[index])
-                    if (index < parts.size - 1) segments += StructuredRecordSegment.Field(fieldId)
-                }
-            }
-            if (segments.isNotEmpty()) {
-                templates += StructuredRecordTemplate(
-                    id = templateId,
+                StructuredRecordTemplate(
+                    id = "r_migrated_${stableId(event.id)}",
                     name = text.take(StructuredRecordsCodec.MAX_NAME_CHARS),
-                    segments = segments,
-                    sortOrder = templates.size,
+                    segments = listOf(StructuredRecordSegment.Text(text)),
+                    sortOrder = index,
                 )
             }
         }
-        if (templates.isEmpty()) return emptyList()
-        if (fieldsToMerge.isNotEmpty()) {
-            mutateFields(appSettings) { current ->
-                val existingIds = current.mapTo(HashSet(current.size)) { it.id }
-                var nextOrder = (current.maxOfOrNull { it.sortOrder } ?: -1) + 1
-                current + fieldsToMerge
-                    .filter { it.id !in existingIds }
-                    .map { it.copy(sortOrder = nextOrder++) }
-            }
-        }
-        return templates
     }
 
     private fun stableId(value: String): String {

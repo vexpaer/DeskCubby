@@ -29,12 +29,15 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+
+private const val UI_WORKSPACE_REFRESH_COALESCE_MS = 1_500L
 
 data class StructuredRecordsFeedback(
     val key: Long,
@@ -91,6 +94,8 @@ class StructuredRecordsViewModel @Inject constructor(
                         uiStore.rootUri = uri
                         uiStore.fields.value = emptyList()
                         uiStore.templates.value = emptyList()
+                        uiStore.lastWorkspaceRefreshAtMillis = 0L
+                        uiStore.lastAppliedWorkspaceRevision = -1L
                     }
                     changed
                 }
@@ -111,11 +116,20 @@ class StructuredRecordsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            workspaceRepository.workspaceChanges.collect {
+            // StateFlow immediately replays its current revision. The diary-root collector above
+            // already performs the initial load, so consuming that replay used to do the same SAF
+            // workspace read twice on every ViewModel creation.
+            workspaceRepository.workspaceChanges.drop(1).collect { revision ->
                 val appSettings = settingsRepository.settings.first()
                 if (appSettings.diaryTreeUri != null) {
                     try {
-                        uiStore.mutationMutex.withLock { refreshWorkspace(appSettings) }
+                        uiStore.mutationMutex.withLock {
+                            // App-side template mutations update uiStore optimistically and then
+                            // publish this same revision. Do not re-read the files we just wrote.
+                            if (revision != uiStore.lastAppliedWorkspaceRevision) {
+                                refreshWorkspace(appSettings)
+                            }
+                        }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
@@ -128,17 +142,23 @@ class StructuredRecordsViewModel @Inject constructor(
 
     private suspend fun refreshWorkspace(appSettings: AppSettings) {
         val rootUri = appSettings.diaryTreeUri ?: return
-        workspaceRepository.ensureSystemFields(appSettings)
+        // ensureSystemFields already returns the canonical field list; loading fields.json again was
+        // a redundant SAF round-trip on every page visit.
+        val loadedFields = workspaceRepository.ensureSystemFields(appSettings)
         val loadedTemplates = workspaceRepository.loadTemplates(appSettings)
-        val loadedFields = workspaceRepository.loadFields(appSettings)
         if (uiStore.rootInitialized && uiStore.rootUri == rootUri) {
             uiStore.fields.value = loadedFields
             uiStore.templates.value = loadedTemplates
+            uiStore.lastWorkspaceRefreshAtMillis = System.currentTimeMillis()
+            uiStore.lastAppliedWorkspaceRevision = workspaceRepository.workspaceChanges.value
         }
-        try {
-            DeskCubbyWidgetProvider.requestUpdate(applicationContext)
-        } catch (_: Exception) {
-            // Workspace persistence must not depend on launcher availability.
+        // Refreshing launcher widgets is best effort and should never extend page loading.
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                DeskCubbyWidgetProvider.requestUpdate(applicationContext)
+            } catch (_: Exception) {
+                // Workspace persistence must not depend on launcher availability.
+            }
         }
     }
 
@@ -146,7 +166,15 @@ class StructuredRecordsViewModel @Inject constructor(
         viewModelScope.launch {
             val appSettings = settingsRepository.settings.first()
             try {
-                uiStore.mutationMutex.withLock { refreshWorkspace(appSettings) }
+                uiStore.mutationMutex.withLock {
+                    val rootUri = appSettings.diaryTreeUri ?: return@withLock
+                    val elapsed = System.currentTimeMillis() - uiStore.lastWorkspaceRefreshAtMillis
+                    val recentlyLoaded = uiStore.rootInitialized &&
+                        uiStore.rootUri == rootUri &&
+                        uiStore.lastWorkspaceRefreshAtMillis > 0L &&
+                        elapsed in 0..UI_WORKSPACE_REFRESH_COALESCE_MS
+                    if (!recentlyLoaded) refreshWorkspace(appSettings)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -195,6 +223,7 @@ class StructuredRecordsViewModel @Inject constructor(
         if (template.id in mutableSending.value) return
         mutableSending.value += template.id
         viewModelScope.launch {
+            var refreshWidgetAfterWrite = false
             try {
                 val appSettings = settingsRepository.settings.first()
                 if (appSettings.diaryTreeUri == null) {
@@ -216,6 +245,9 @@ class StructuredRecordsViewModel @Inject constructor(
                     template = editedTemplate,
                     values = values,
                     targetDate = targetDate,
+                    // The screen already loaded exactly these field definitions from `.deskcubby`.
+                    // Re-reading fields.json through SAF for every tap added visible spinner time.
+                    knownFieldsById = uiStore.fields.value.associateBy { it.id },
                 )
                 if (result.success) {
                     showFeedback(
@@ -224,11 +256,7 @@ class StructuredRecordsViewModel @Inject constructor(
                         isError = false,
                         recordedTemplateId = template.id,
                     )
-                    try {
-                        DeskCubbyWidgetProvider.requestUpdate(applicationContext)
-                    } catch (_: Exception) {
-                        // The record and its derived index are already durable.
-                    }
+                    refreshWidgetAfterWrite = true
                 } else {
                     showFeedback(
                         result.message ?: "记录失败",
@@ -242,6 +270,17 @@ class StructuredRecordsViewModel @Inject constructor(
                 showFeedback("记录失败", "Could not record", isError = true)
             } finally {
                 mutableSending.value -= template.id
+            }
+
+            // Launcher/widget refresh is best effort and must not extend the send-button spinner.
+            if (refreshWidgetAfterWrite) {
+                viewModelScope.launch(Dispatchers.Default) {
+                    try {
+                        DeskCubbyWidgetProvider.requestUpdate(applicationContext)
+                    } catch (_: Exception) {
+                        // The record and its derived index are already durable.
+                    }
+                }
             }
         }
     }
@@ -294,6 +333,8 @@ class StructuredRecordsViewModel @Inject constructor(
                     val canonical = workspaceRepository.mutateTemplates(appSettings, transform)
                     if (uiStore.rootUri == rootUri) {
                         uiStore.templates.value = canonical
+                        uiStore.lastWorkspaceRefreshAtMillis = System.currentTimeMillis()
+                        uiStore.lastAppliedWorkspaceRevision = workspaceRepository.workspaceChanges.value
                     }
                     persisted = true
                 } catch (cancelled: CancellationException) {

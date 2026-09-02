@@ -21,4 +21,8 @@ class StructuredRecordsUiStore @Inject constructor() {
     internal val mutationMutex = Mutex()
     internal var rootInitialized = false
     internal var rootUri: String? = null
+    /** Wall-clock timestamp used only to collapse duplicate lifecycle refreshes. */
+    internal var lastWorkspaceRefreshAtMillis: Long = 0L
+    /** Latest workspace revision already reflected in [fields]/[templates]. */
+    internal var lastAppliedWorkspaceRevision: Long = -1L
 }

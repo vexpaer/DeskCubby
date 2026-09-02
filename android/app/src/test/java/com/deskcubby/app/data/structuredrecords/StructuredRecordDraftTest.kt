@@ -41,6 +41,51 @@ class StructuredRecordDraftTest {
     }
 
     @Test
+    fun plainXxIsUiOnlyAndReplacementRoundTripsAsOrdinaryText() {
+        val xxTemplate = StructuredRecordTemplate(
+            id = "r_xx",
+            name = "喝水",
+            segments = listOf(
+                StructuredRecordSegment.Text("喝水 xx 杯，做了 "),
+                StructuredRecordSegment.Field(count.id),
+                StructuredRecordSegment.Text(" 个俯卧撑"),
+            ),
+        )
+        var draft = createStructuredRecordDraft(xxTemplate, fields, LocalTime.NOON)
+        val xx = draft.fields.single { it.plainPlaceholder }
+        assertEquals("xx", draft.text.substring(xx.start, xx.endExclusive))
+        assertNull(structuredDraftValues(draft))
+
+        draft = applyStructuredDraftEdit(
+            draft,
+            draft.text.replaceRange(xx.start, xx.endExclusive, "3"),
+        )!!
+
+        assertTrue(draft.fields.none { it.plainPlaceholder })
+        assertTrue(draft.text.startsWith("喝水 3 杯"))
+        val segments = structuredDraftToSegments(draft)
+        assertEquals(1, segments.count { it is StructuredRecordSegment.Field })
+        assertTrue(
+            segments.filterIsInstance<StructuredRecordSegment.Text>()
+                .joinToString("") { it.value }
+                .contains("喝水 3 杯"),
+        )
+    }
+
+    @Test
+    fun newlyTypedXxBecomesPlainUiPlaceholder() {
+        val draft = StructuredRecordDraft("今天喝水 ", emptyList())
+        val edited = applyStructuredDraftEdit(draft, "今天喝水 xx")!!
+
+        assertEquals(1, edited.fields.count { it.plainPlaceholder })
+        assertEquals(emptyList<String>(), structuredDraftValues(edited))
+        assertEquals(
+            listOf(StructuredRecordSegment.Text("今天喝水 xx")),
+            structuredDraftToSegments(edited),
+        )
+    }
+
+    @Test
     fun incompleteTypedDraftStillAllowsSubmitAttemptForValidation() {
         val draft = createStructuredRecordDraft(template, fields, LocalTime.NOON)
         assertTrue(isStructuredDraftReady(draft))

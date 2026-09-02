@@ -15,6 +15,34 @@ import org.mockito.Mockito.mock
 
 class StructuredWorkspaceRepositoryTest {
     @Test
+    fun previouslyMigratedXxBindingRestoresToPlainTextOnly() {
+        val templates = listOf(
+            StructuredRecordTemplate(
+                id = "r_migrated_water",
+                name = "喝水",
+                segments = listOf(
+                    StructuredRecordSegment.Text("喝水 "),
+                    StructuredRecordSegment.Field("f_migrated_word_0_water"),
+                    StructuredRecordSegment.Text(" 杯，真正字段 "),
+                    StructuredRecordSegment.Field("f_user_number"),
+                ),
+            ),
+        )
+
+        val restored = restoreLegacyPlainXxTemplates(templates).single()
+
+        assertEquals(
+            listOf(
+                StructuredRecordSegment.Text("喝水 "),
+                StructuredRecordSegment.Text("xx"),
+                StructuredRecordSegment.Text(" 杯，真正字段 "),
+                StructuredRecordSegment.Field("f_user_number"),
+            ),
+            restored.segments,
+        )
+    }
+
+    @Test
     fun switchingDiaryRootsNeverReturnsSettingsFromPreviousRoot() = runBlocking {
         val diary = mock(DiaryFileRepository::class.java)
         val todaySwitch = mock(TodayDiarySwitchTimeStore::class.java)
