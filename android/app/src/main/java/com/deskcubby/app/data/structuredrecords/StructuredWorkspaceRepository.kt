@@ -149,10 +149,16 @@ class StructuredWorkspaceRepository @Inject constructor(
         appSettings: AppSettings,
         transform: (List<StructuredField>) -> List<StructuredField>,
     ): List<StructuredField> {
-        loadFields(appSettings)
         var resolved: List<StructuredField>? = null
         diaryFileRepository.updateWorkspaceFile(appSettings, StructuredRecordsCodec.FILE_FIELDS) { current ->
-            val existing = current?.let(StructuredRecordsCodec::decodeFields).orEmpty().sortedBy { it.sortOrder }
+            // updateWorkspaceFile already reads the latest file under the workspace mutex. Calling
+            // loadFields immediately beforehand doubled SAF I/O. A genuinely missing file has the
+            // same initialization semantics here: start from the default field set.
+            val existing = if (current == null) {
+                DefaultStructuredExamples.FIELDS
+            } else {
+                StructuredRecordsCodec.decodeFields(current).sortedBy { it.sortOrder }
+            }
             val updated = transform(existing)
             resolved = updated
             if (current != null && updated == existing) current else StructuredRecordsCodec.encodeFields(updated)
@@ -356,57 +362,29 @@ class StructuredWorkspaceRepository @Inject constructor(
         }
     }
 
-    /** Migrates legacy daily-event templates without rewriting historical Markdown. */
+    /**
+     * Migrates legacy daily-event templates without rewriting historical Markdown. `xx` remains
+     * literal ordinary text: the structured editor provides its underline/tap replacement affordance
+     * as a UI-only placeholder, but it never creates a StructuredField or participates in indexing.
+     */
     private suspend fun migrateLegacyDailyEvents(
         appSettings: AppSettings,
     ): List<StructuredRecordTemplate> {
         val legacy = appSettings.dailyEventTemplates
         if (legacy.isEmpty()) return emptyList()
-        val templates = ArrayList<StructuredRecordTemplate>(legacy.size)
-        val fieldsToMerge = ArrayList<StructuredField>()
-        var wordIndex = 0
-        val xxPattern = Regex("xx", RegexOption.IGNORE_CASE)
-        for (event in legacy) {
+        return legacy.mapIndexedNotNull { index, event ->
             val text = event.text.trim().take(StructuredRecordsCodec.MAX_TEXT_CHARS)
-            if (text.isBlank()) continue
-            val templateId = "r_migrated_${stableId(event.id)}"
-            val segments = ArrayList<StructuredRecordSegment>()
-            if (!xxPattern.containsMatchIn(text)) {
-                segments += StructuredRecordSegment.Text(text)
+            if (text.isBlank()) {
+                null
             } else {
-                val fieldId = "f_migrated_word_${wordIndex++}_${stableId(event.id)}"
-                fieldsToMerge += StructuredField(
-                    id = fieldId,
-                    name = "文字",
-                    type = StructuredFieldType.WORD,
-                    source = StructuredFieldSource.MANUAL,
-                )
-                val parts = xxPattern.split(text)
-                for (index in parts.indices) {
-                    if (parts[index].isNotEmpty()) segments += StructuredRecordSegment.Text(parts[index])
-                    if (index < parts.size - 1) segments += StructuredRecordSegment.Field(fieldId)
-                }
-            }
-            if (segments.isNotEmpty()) {
-                templates += StructuredRecordTemplate(
-                    id = templateId,
+                StructuredRecordTemplate(
+                    id = "r_migrated_${stableId(event.id)}",
                     name = text.take(StructuredRecordsCodec.MAX_NAME_CHARS),
-                    segments = segments,
-                    sortOrder = templates.size,
+                    segments = listOf(StructuredRecordSegment.Text(text)),
+                    sortOrder = index,
                 )
             }
         }
-        if (templates.isEmpty()) return emptyList()
-        if (fieldsToMerge.isNotEmpty()) {
-            mutateFields(appSettings) { current ->
-                val existingIds = current.mapTo(HashSet(current.size)) { it.id }
-                var nextOrder = (current.maxOfOrNull { it.sortOrder } ?: -1) + 1
-                current + fieldsToMerge
-                    .filter { it.id !in existingIds }
-                    .map { it.copy(sortOrder = nextOrder++) }
-            }
-        }
-        return templates
     }
 
     private fun stableId(value: String): String {
