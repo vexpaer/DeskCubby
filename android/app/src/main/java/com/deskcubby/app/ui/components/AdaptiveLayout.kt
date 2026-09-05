@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
@@ -211,14 +210,15 @@ fun DeskCubbyNavigationRail(
             ) {
                 surface()
                 // The rail shares the card plane with page content, so a hairline - not a
-                // shadow - is what separates navigation from the workspace.
-                HorizontalDivider(
-                    modifier = Modifier
+                // shadow - is what separates navigation from the workspace. This is a Box
+                // rather than HorizontalDivider because that component forces fillMaxWidth and
+                // would paint a horizontal rule across the rail instead of a vertical edge.
+                Box(
+                    Modifier
                         .align(Alignment.CenterEnd)
                         .fillMaxHeight()
-                        .width(1.dp),
-                    thickness = 1.dp,
-                    color = MaterialTheme.colorScheme.hairline,
+                        .width(1.dp)
+                        .background(MaterialTheme.colorScheme.hairline),
                 )
             }
         }
@@ -261,10 +261,12 @@ fun ContextPanel(
     ) {
         if (content != null) {
             Row(Modifier.fillMaxHeight().clipToBounds()) {
-                HorizontalDivider(
-                    modifier = Modifier.fillMaxHeight().width(1.dp),
-                    thickness = 1.dp,
-                    color = MaterialTheme.colorScheme.hairline,
+                // Same reason as the rail: HorizontalDivider cannot render a vertical edge.
+                Box(
+                    Modifier
+                        .fillMaxHeight()
+                        .width(1.dp)
+                        .background(MaterialTheme.colorScheme.hairline),
                 )
                 Column(
                     modifier = Modifier

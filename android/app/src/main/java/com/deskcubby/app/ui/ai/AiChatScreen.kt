@@ -40,7 +40,6 @@ import androidx.compose.material.icons.outlined.AddComment
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.Autorenew
 import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -50,13 +49,12 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.HourglassEmpty
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material.icons.outlined.Storage
@@ -864,9 +862,9 @@ private fun AgentExecutionRow(update: AgentExecutionUpdate) {
 }
 
 private fun statusIcon(status: AgentExecutionStatus) = when (status) {
-    AgentExecutionStatus.PREPARING -> Icons.Outlined.HourglassEmpty
-    AgentExecutionStatus.RUNNING -> Icons.Outlined.Autorenew
-    AgentExecutionStatus.WAITING_APPROVAL -> Icons.Outlined.HelpOutline
+    AgentExecutionStatus.PREPARING -> Icons.Outlined.Schedule
+    AgentExecutionStatus.RUNNING -> Icons.Outlined.Sync
+    AgentExecutionStatus.WAITING_APPROVAL -> Icons.Outlined.Lock
     AgentExecutionStatus.APPROVED -> Icons.Outlined.Check
     AgentExecutionStatus.REJECTED -> Icons.Outlined.Close
     AgentExecutionStatus.SUCCEEDED -> Icons.Outlined.Check
