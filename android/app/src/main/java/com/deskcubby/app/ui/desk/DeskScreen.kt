@@ -236,6 +236,6 @@ private fun ambientTintColor(ambient: DeskAmbient, background: Color, onBackgrou
         DeskAmbient.EVENING -> 0.035f
         DeskAmbient.LATE_NIGHT -> 0.07f
     }
-    val warm = Color(0xFFC96F4A)
+    val warm = MaterialTheme.colorScheme.tertiary
     return lerp(background, if (ambient == DeskAmbient.LATE_NIGHT) onBackground else warm, warmth * 0.5f)
 }

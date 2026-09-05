@@ -73,6 +73,7 @@ import com.deskcubby.app.data.statistics.StatisticsChartType
 import com.deskcubby.app.data.statistics.StatisticsPoint
 import com.deskcubby.app.ui.statistics.StatisticsChart
 import com.deskcubby.app.ui.statistics.StatisticsMessagePanel
+import com.deskcubby.app.ui.theme.DeskCubbyType
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.PanelRole
 import com.deskcubby.app.ui.theme.tr
@@ -422,8 +423,8 @@ private fun StatisticsHubCard(
             }
             Text(
                 primaryValue,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
+                style = DeskCubbyType.metric,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -740,8 +741,8 @@ private fun CompactMetric(label: String, value: String, modifier: Modifier = Mod
         )
         Text(
             value,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
+            style = DeskCubbyType.metricCompact,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -750,14 +751,15 @@ private fun CompactMetric(label: String, value: String, modifier: Modifier = Mod
 
 @Composable
 private fun SectionHeading(title: String, description: String, modifier: Modifier = Modifier) {
-    Column(modifier) {
+    // Section names use the shared eyebrow so a statistics section and a settings section are
+    // provably the same style; the description carries the detail.
+    Column(modifier.semantics { heading() }) {
         Text(
             title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.semantics { heading() },
+            style = DeskCubbyType.eyebrow,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(3.dp))
+        Spacer(Modifier.height(DeskCubbySpacing.xxs))
         Text(
             description,
             style = MaterialTheme.typography.bodySmall,

@@ -78,6 +78,17 @@ object DeskCubbyType {
 
     val metricLabel: TextStyle = deskText(12f, 16f, FontWeight.Medium, 0.2f)
 
+    /** Secondary numeric readout, for dense metric grids. */
+    val metricCompact: TextStyle = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 19.sp,
+        lineHeight = 24.sp,
+        letterSpacing = (-0.3).sp,
+        fontFeatureSettings = "tnum",
+        lineHeightStyle = CenteredLineHeight,
+    )
+
     /** Primary line of a list row: quiet medium weight, never shouting. */
     val listTitle: TextStyle = deskText(15f, 21f, FontWeight.Medium, 0f)
 

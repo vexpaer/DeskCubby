@@ -87,6 +87,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -229,6 +230,11 @@ import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncRunMode
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.ColorPickerDialog
+import com.deskcubby.app.ui.components.DcCard
+import com.deskcubby.app.ui.components.DcCardContentPadding
+import com.deskcubby.app.ui.components.DcListRow
+import com.deskcubby.app.ui.components.DcSectionHeader
+import com.deskcubby.app.ui.components.currentGutter
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.components.MarkdownText
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
@@ -238,6 +244,10 @@ import com.deskcubby.app.ui.iconFor
 import com.deskcubby.app.ui.poetry.rememberPoetryFontFamily
 import com.deskcubby.app.ui.poetry.isSevenCharacterPoem
 import com.deskcubby.app.ui.poetry.wrapSevenCharacterVerse
+import com.deskcubby.app.ui.theme.DeskCubbyColors.hairline
+import com.deskcubby.app.ui.theme.DeskCubbyRadius
+import com.deskcubby.app.ui.theme.DeskCubbySpacing
+import com.deskcubby.app.ui.theme.DeskCubbyType
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.LocalCompactMode
@@ -1300,8 +1310,13 @@ private fun SettingsMainPage(
     val compact = LocalCompactMode.current
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = if (compact) 8.dp else 12.dp),
-        verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 12.dp),
+        contentPadding = PaddingValues(
+            horizontal = currentGutter(),
+            vertical = if (compact) DeskCubbySpacing.sm else DeskCubbySpacing.md,
+        ),
+        verticalArrangement = Arrangement.spacedBy(
+            if (compact) DeskCubbySpacing.sm else DeskCubbySpacing.md,
+        ),
     ) {
         item {
             OutlinedTextField(
@@ -1309,6 +1324,12 @@ private fun SettingsMainPage(
                 onValueChange = { searchQuery = it },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                shape = DeskCubbyRadius.field,
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedBorderColor = MaterialTheme.colorScheme.hairline,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                ),
                 placeholder = { Text(tr("搜索设置", "Search settings")) },
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
                 trailingIcon = if (searchQuery.isNotEmpty()) {
@@ -1540,23 +1561,45 @@ private fun SettingsMenuItem(
             onClick = onClick,
         )
     } else {
-        GlassPanel(
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-            padding = PaddingValues(0.dp),
+        DcCard(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = onClick,
+            contentPadding = PaddingValues(
+                horizontal = DeskCubbySpacing.md,
+                vertical = DeskCubbySpacing.md,
+            ),
         ) {
-            ListItem(
-                headlineContent = { Text(title) },
-                supportingContent = if (description == null) {
-                    null
-                } else {
-                    { Text(description) }
-                },
-                leadingContent = icon,
-                trailingContent = {
-                    Icon(Icons.Outlined.ChevronRight, contentDescription = tr("进入$title", "Open $title"))
-                },
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(DeskCubbySpacing.touchTarget - 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) { icon() }
+                Spacer(Modifier.width(DeskCubbySpacing.iconGap))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = DeskCubbyType.listTitle,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (description != null) {
+                        Text(
+                            text = description,
+                            style = DeskCubbyType.listSubtitle,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Spacer(Modifier.width(DeskCubbySpacing.md))
+                Icon(
+                    Icons.Outlined.ChevronRight,
+                    contentDescription = tr("进入$title", "Open $title"),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -4957,23 +5000,19 @@ private fun openUsageAccessSettings(context: Context) {
 }
 
 @Composable
-private fun SettingsSubpageRow(title: String, description: String, onClick: () -> Unit) {    GlassPanel(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        cornerRadius = 18.dp,
-        padding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Text(
-                    description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
+private fun SettingsSubpageRow(title: String, description: String, onClick: () -> Unit) {
+    DcListRow(
+        title = title,
+        subtitle = description,
+        onClick = onClick,
+        trailing = {
+            Icon(
+                Icons.Outlined.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+    )
 }
 
 @Composable
@@ -7672,15 +7711,19 @@ private fun readPdfiumNotices(context: Context): String? = runCatching {
 
 @Composable
 private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
-    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
-    GlassPanel(modifier = Modifier.fillMaxWidth(), padding = PaddingValues(16.dp)) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                color = if (organic) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
+    // The section name sits above its card as a quiet eyebrow rather than inside it as an
+    // accent-coloured heading: with ~40 subpages this is what stops Settings reading as one
+    // long stack of identical green titles.
+    Column(Modifier.fillMaxWidth()) {
+        DcSectionHeader(title)
+        DcCard(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = DcCardContentPadding,
+        ) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(DeskCubbySpacing.md),
+                content = content,
             )
-            content()
         }
     }
 }
@@ -7708,12 +7751,19 @@ private fun displayFolderName(rawUri: String): String = runCatching {
 
 @Composable
 private fun SettingField(value: String, onValueChange: (String) -> Unit, label: String, hint: String) {
+    val scheme = MaterialTheme.colorScheme
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text(label) },
         supportingText = { Text(hint) },
         singleLine = true,
+        shape = DeskCubbyRadius.field,
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedBorderColor = scheme.hairline,
+            unfocusedContainerColor = scheme.surfaceContainer,
+            focusedContainerColor = scheme.surfaceContainer,
+        ),
         modifier = Modifier.fillMaxWidth(),
     )
 }

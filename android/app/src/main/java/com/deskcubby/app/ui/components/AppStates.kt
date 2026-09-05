@@ -217,67 +217,6 @@ fun AppEmptyState(
     }
 }
 
-/**
- * Failure state. Distinct from empty: it names what failed, keeps the detail in the secondary
- * colour so an error never reads as a shout, and offers a retry.
- */
-@Composable
-fun AppErrorState(
-    title: String,
-    description: String,
-    modifier: Modifier = Modifier,
-    icon: ImageVector? = null,
-    retryLabel: String? = null,
-    onRetry: (() -> Unit)? = null,
-) {
-    val scheme = MaterialTheme.colorScheme
-    Box(
-        modifier = modifier.fillMaxWidth(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .widthIn(max = 340.dp)
-                .padding(DeskCubbySpacing.xxl),
-        ) {
-            if (icon != null) {
-                Box(
-                    modifier = Modifier
-                        .size(DeskCubbySpacing.xxxl)
-                        .background(scheme.errorContainer, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = scheme.error,
-                        modifier = Modifier.size(24.dp),
-                    )
-                }
-                Spacer(Modifier.height(DeskCubbySpacing.base))
-            }
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                color = scheme.onSurface,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(DeskCubbySpacing.sm))
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodyMedium,
-                color = scheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            if (!retryLabel.isNullOrBlank() && onRetry != null) {
-                Spacer(Modifier.height(DeskCubbySpacing.xl))
-                FilledTonalButton(onClick = onRetry) { Text(retryLabel) }
-            }
-        }
-    }
-}
-
 /** Quiet inline hint for surfaces that are configured but have nothing to report yet. */
 @Composable
 fun AppInlineHint(

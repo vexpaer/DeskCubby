@@ -208,7 +208,4 @@ object DeskCubbyColors {
 
     val ColorScheme.textPrimary: Color get() = onSurface
     val ColorScheme.textSecondary: Color get() = onSurfaceVariant
-
-    /** Third-tier text: timestamps, counters, helper hints. */
-    val ColorScheme.textTertiary: Color get() = onSurfaceVariant.copy(alpha = 0.72f)
 }

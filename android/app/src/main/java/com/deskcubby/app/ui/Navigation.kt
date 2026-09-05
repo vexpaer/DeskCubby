@@ -107,6 +107,7 @@ import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
 import com.deskcubby.app.ui.blog.BlogScreen
 import com.deskcubby.app.ui.blog.BlogViewModel
 import com.deskcubby.app.ui.components.AppLoadingIndicator
+import com.deskcubby.app.ui.components.AppLoadingState
 import com.deskcubby.app.ui.components.AppBackground
 import com.deskcubby.app.ui.components.DeskCubbyNavigationRail
 import com.deskcubby.app.ui.components.LocalLayoutMode
@@ -229,9 +230,7 @@ fun DeskCubbyRoot(
     DeskCubbyTheme(settings) {
         AppBackground(settings) {
         if (!ready) {
-            Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                AppLoadingIndicator()
-            }
+            AppLoadingState(Modifier.fillMaxSize())
             return@AppBackground
         }
         // First launch: before the navigation graph, ask for the UI language once. The device-
