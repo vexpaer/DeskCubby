@@ -76,6 +76,8 @@ import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.iconFor
+import com.deskcubby.app.ui.theme.DeskCubbyRadius
+import com.deskcubby.app.ui.theme.DeskCubbySpacing
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.PanelRole
@@ -512,17 +514,18 @@ private fun MorePageCard(
                     )
                 }
             }
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(DeskCubbySpacing.lg))
             Text(
                 text = label,
                 style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             item.localizedDescription()
                 .takeIf { showDescription && it.isNotBlank() }
                 ?.let { description ->
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(DeskCubbySpacing.xxs))
                     Text(
                         text = description,
                         style = MaterialTheme.typography.bodySmall,
@@ -534,7 +537,7 @@ private fun MorePageCard(
         }
     }
     val customCardColor = item.moreCardColorArgb?.let(::Color)
-    val shape = RoundedCornerShape(22.dp)
+    val shape = DeskCubbyRadius.panel
     if (customCardColor != null) {
         Box(
             modifier = modifier
@@ -542,7 +545,7 @@ private fun MorePageCard(
                 .then(clickModifier)
                 .clip(shape)
                 .background(customCardColor)
-                .padding(16.dp),
+                .padding(DeskCubbySpacing.cardPadding),
             contentAlignment = Alignment.TopStart,
         ) { cardContent() }
     } else {
@@ -550,9 +553,9 @@ private fun MorePageCard(
             modifier = modifier
                 .fillMaxWidth()
                 .then(clickModifier),
-            cornerRadius = 22.dp,
+            cornerRadius = DeskCubbyRadius.lg,
             role = panelRole,
-            padding = PaddingValues(16.dp),
+            padding = PaddingValues(DeskCubbySpacing.cardPadding),
         ) { cardContent() }
     }
 }

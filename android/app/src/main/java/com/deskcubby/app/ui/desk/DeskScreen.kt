@@ -229,6 +229,9 @@ private fun DeskEntrance(
     }
 }
 
+/** Warm light spill used by the Desk ambience blend; a fixed pigment, not a theme role. */
+private val DeskWarmTint = Color(0xFFC96F4A)
+
 private fun ambientTintColor(ambient: DeskAmbient, background: Color, onBackground: Color): Color {
     val warmth = when (ambient) {
         DeskAmbient.MORNING -> 0.0f
@@ -236,6 +239,5 @@ private fun ambientTintColor(ambient: DeskAmbient, background: Color, onBackgrou
         DeskAmbient.EVENING -> 0.035f
         DeskAmbient.LATE_NIGHT -> 0.07f
     }
-    val warm = Color(0xFFC96F4A)
-    return lerp(background, if (ambient == DeskAmbient.LATE_NIGHT) onBackground else warm, warmth * 0.5f)
+    return lerp(background, if (ambient == DeskAmbient.LATE_NIGHT) onBackground else DeskWarmTint, warmth * 0.5f)
 }

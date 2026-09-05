@@ -65,51 +65,181 @@ val LocalAppLanguage: ProvidableCompositionLocal<AppLanguage> =
 val LocalCompactMode: ProvidableCompositionLocal<Boolean> =
     staticCompositionLocalOf { false }
 
+/*
+ * Base palettes.
+ *
+ * Each style declares its full surface ladder and text roles rather than relying on Material's
+ * neutral defaults. Before this, Material and Liquid Glass only overrode primary/surface, so
+ * `surfaceContainer`, `onSurface` and `outlineVariant` fell back to Material's cool
+ * purple-grey (#F3EDF7, #1C1B1F, #CAC4D0) and read as a visible colour mismatch on top of the
+ * green paper canvas. Every role is now derived from the same hue family as the canvas.
+ */
+
 private val MaterialLight = lightColorScheme(
-    primary = Color(0xFF42664D),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFC4ECCD),
-    onPrimaryContainer = Color(0xFF00210D),
-    secondary = Color(0xFF526359),
-    background = Color(0xFFF7FBF5),
-    surface = Color(0xFFF7FBF5),
-    surfaceVariant = Color(0xFFDDE5DD),
+    primary = Color(0xFF3D6B4E),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFD8E8DC),
+    onPrimaryContainer = Color(0xFF14301F),
+    inversePrimary = Color(0xFF93D3A2),
+    secondary = Color(0xFF5C7263),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFDFE9E0),
+    onSecondaryContainer = Color(0xFF1C2A20),
+    tertiary = Color(0xFF7A6544),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFF0E4CE),
+    onTertiaryContainer = Color(0xFF2E2411),
+    background = Color(0xFFF4F5F1),
+    onBackground = Color(0xFF161A15),
+    surface = Color(0xFFFAFBF8),
+    onSurface = Color(0xFF161A15),
+    surfaceVariant = Color(0xFFE3E7DF),
+    onSurfaceVariant = Color(0xFF55604F),
+    surfaceTint = Color(0xFF3D6B4E),
+    inverseSurface = Color(0xFF2E332D),
+    inverseOnSurface = Color(0xFFF1F3EE),
+    error = Color(0xFFB3261E),
+    onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFF9DEDC),
+    onErrorContainer = Color(0xFF410E0B),
+    outline = Color(0xFF78827A),
+    outlineVariant = Color(0xFFDCE0D8),
+    scrim = Color(0xFF000000),
+    surfaceBright = Color(0xFFFAFBF8),
+    surfaceDim = Color(0xFFDADFD7),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF5F6F2),
+    surfaceContainer = Color(0xFFEEF0EB),
+    surfaceContainerHigh = Color(0xFFE7EAE4),
+    surfaceContainerHighest = Color(0xFFE0E4DD),
 )
 
 private val MaterialDark = darkColorScheme(
-    primary = Color(0xFFA8D0B1),
-    onPrimary = Color(0xFF123722),
-    primaryContainer = Color(0xFF2B4E37),
-    onPrimaryContainer = Color(0xFFC4ECCD),
-    secondary = Color(0xFFB9CCBF),
-    background = Color(0xFF101511),
-    surface = Color(0xFF101511),
-    surfaceVariant = Color(0xFF414943),
+    primary = Color(0xFF93D3A2),
+    onPrimary = Color(0xFF0C2D18),
+    primaryContainer = Color(0xFF23462E),
+    onPrimaryContainer = Color(0xFFD2E9D8),
+    inversePrimary = Color(0xFF3D6B4E),
+    secondary = Color(0xFFB9CCBE),
+    onSecondary = Color(0xFF22332A),
+    secondaryContainer = Color(0xFF2E4034),
+    onSecondaryContainer = Color(0xFFD5E7DA),
+    tertiary = Color(0xFFDCC39A),
+    onTertiary = Color(0xFF3B2E12),
+    tertiaryContainer = Color(0xFF4E4022),
+    onTertiaryContainer = Color(0xFFF0E1C6),
+    background = Color(0xFF0E110E),
+    onBackground = Color(0xFFE3E7E1),
+    surface = Color(0xFF141814),
+    onSurface = Color(0xFFE3E7E1),
+    surfaceVariant = Color(0xFF2A312A),
+    onSurfaceVariant = Color(0xFFA9B3A6),
+    surfaceTint = Color(0xFF93D3A2),
+    inverseSurface = Color(0xFFE3E7E1),
+    inverseOnSurface = Color(0xFF2B312B),
+    error = Color(0xFFFFB4AB),
+    onError = Color(0xFF690005),
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color(0xFFFFDAD6),
+    outline = Color(0xFF7E887C),
+    outlineVariant = Color(0xFF2B312B),
+    scrim = Color(0xFF000000),
+    surfaceBright = Color(0xFF333933),
+    surfaceDim = Color(0xFF0E110E),
+    surfaceContainerLowest = Color(0xFF090B09),
+    surfaceContainerLow = Color(0xFF111511),
+    surfaceContainer = Color(0xFF171B17),
+    surfaceContainerHigh = Color(0xFF1F241F),
+    surfaceContainerHighest = Color(0xFF282E28),
 )
 
 private val GlassLight = lightColorScheme(
-    primary = Color(0xFF4C63A6),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFDCE1FF),
-    onPrimaryContainer = Color(0xFF071A52),
-    secondary = Color(0xFF5D5F72),
-    background = Color(0xFFF0F4FF),
-    surface = Color(0xFFF8F9FF),
-    surfaceVariant = Color(0xFFE1E5F4),
+    primary = Color(0xFF4160A6),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFD9E1F7),
+    onPrimaryContainer = Color(0xFF102348),
+    inversePrimary = Color(0xFFA9C0F5),
+    secondary = Color(0xFF5A6478),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFDEE3EE),
+    onSecondaryContainer = Color(0xFF18202F),
+    tertiary = Color(0xFF75598C),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFEBDDF6),
+    onTertiaryContainer = Color(0xFF2C1442),
+    background = Color(0xFFEFF2F9),
+    onBackground = Color(0xFF161A22),
+    surface = Color(0xFFF8F9FD),
+    onSurface = Color(0xFF161A22),
+    surfaceVariant = Color(0xFFE1E6F1),
+    onSurfaceVariant = Color(0xFF4E5866),
+    surfaceTint = Color(0xFF4160A6),
+    inverseSurface = Color(0xFF2C313B),
+    inverseOnSurface = Color(0xFFF0F2F7),
+    error = Color(0xFFB3261E),
+    onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFF9DEDC),
+    onErrorContainer = Color(0xFF410E0B),
+    outline = Color(0xFF747F8D),
+    outlineVariant = Color(0xFFD9DFEA),
+    scrim = Color(0xFF000000),
+    surfaceBright = Color(0xFFF8F9FD),
+    surfaceDim = Color(0xFFD7DCE8),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF3F5FB),
+    surfaceContainer = Color(0xFFEBEEF7),
+    surfaceContainerHigh = Color(0xFFE4E8F2),
+    surfaceContainerHighest = Color(0xFFDDE2EE),
 )
 
 private val GlassDark = darkColorScheme(
-    primary = Color(0xFFB6C4FF),
-    onPrimary = Color(0xFF1B326F),
-    primaryContainer = Color(0xFF344A88),
-    onPrimaryContainer = Color(0xFFDCE1FF),
-    secondary = Color(0xFFC5C6DC),
-    background = Color(0xFF0D1020),
-    surface = Color(0xFF151827),
-    surfaceVariant = Color(0xFF444654),
+    primary = Color(0xFFA9C0F5),
+    onPrimary = Color(0xFF122450),
+    primaryContainer = Color(0xFF2B4480),
+    onPrimaryContainer = Color(0xFFD8E2FA),
+    inversePrimary = Color(0xFF4160A6),
+    secondary = Color(0xFFBCC5D8),
+    onSecondary = Color(0xFF262E3E),
+    secondaryContainer = Color(0xFF343D50),
+    onSecondaryContainer = Color(0xFFD9E0EC),
+    tertiary = Color(0xFFD6BCEA),
+    onTertiary = Color(0xFF3E2454),
+    tertiaryContainer = Color(0xFF573E6E),
+    onTertiaryContainer = Color(0xFFF0E1FB),
+    background = Color(0xFF0A0D14),
+    onBackground = Color(0xFFE2E6EF),
+    surface = Color(0xFF11151E),
+    onSurface = Color(0xFFE2E6EF),
+    surfaceVariant = Color(0xFF283040),
+    onSurfaceVariant = Color(0xFFA7B0C0),
+    surfaceTint = Color(0xFFA9C0F5),
+    inverseSurface = Color(0xFFE2E6EF),
+    inverseOnSurface = Color(0xFF2A3140),
+    error = Color(0xFFFFB4AB),
+    onError = Color(0xFF690005),
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color(0xFFFFDAD6),
+    outline = Color(0xFF78828F),
+    outlineVariant = Color(0xFF283040),
+    scrim = Color(0xFF000000),
+    surfaceBright = Color(0xFF303849),
+    surfaceDim = Color(0xFF0A0D14),
+    surfaceContainerLowest = Color(0xFF06080D),
+    surfaceContainerLow = Color(0xFF0E121A),
+    surfaceContainer = Color(0xFF141924),
+    surfaceContainerHigh = Color(0xFF1C2230),
+    surfaceContainerHighest = Color(0xFF252C3C),
 )
 
-private val DefaultShapes = Shapes()
+/** Standard corner language for Material and Liquid Glass. Organic Future keeps its own. */
+private val StandardShapes = Shapes(
+    extraSmall = RoundedCornerShape(DeskCubbyRadius.xs),
+    small = RoundedCornerShape(DeskCubbyRadius.sm),
+    medium = RoundedCornerShape(DeskCubbyRadius.md),
+    large = RoundedCornerShape(DeskCubbyRadius.lg),
+    extraLarge = RoundedCornerShape(DeskCubbyRadius.xl),
+)
+
 
 @Composable
 fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
@@ -143,7 +273,7 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
     val typography = scaledTypography(baseTypography, settings.fontScale)
     val shapes = when (settings.visualStyle) {
         VisualStyle.CUSTOM -> customShapes(customTheme.cornerRadiusDp.dp)
-        else -> if (effectiveStyle == VisualStyle.ORGANIC_FUTURE) OrganicFutureShapes else DefaultShapes
+        else -> if (effectiveStyle == VisualStyle.ORGANIC_FUTURE) OrganicFutureShapes else StandardShapes
     }
     val visualTokens = if (settings.visualStyle == VisualStyle.CUSTOM) {
         customVisualTokens(effectiveStyle, customTheme)
@@ -393,7 +523,7 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 @Composable
 fun GlassPanel(
     modifier: Modifier = Modifier,
-    cornerRadius: Dp = 24.dp,
+    cornerRadius: Dp = DeskCubbyRadius.lg,
     role: PanelRole = PanelRole.STANDARD,
     padding: PaddingValues = PaddingValues(0.dp),
     content: @Composable BoxScope.() -> Unit,
@@ -498,17 +628,34 @@ fun GlassPanel(
                     shape,
                 )
 
-        VisualStyle.MATERIAL -> modifier
-                .shadow(if (visuals.customized) visuals.panelElevation else 1.dp, shape)
-                .clip(shape)
-                .background(scheme.surfaceContainer.copy(alpha = visuals.panelOpacity))
+        VisualStyle.MATERIAL -> {
+            // Quiet surface language: a card sits one step above the canvas and is separated by
+            // a hairline rather than a drop shadow. Shadow is reserved for chrome that really
+            // floats (bottom bar, sheets, dialogs). When a wallpaper replaces the opaque canvas
+            // the fill steps up to the brightest surface so panels stay legible over the image.
+            val fill = if (scheme.background == Color.Transparent) {
+                scheme.surfaceContainerLowest
+            } else {
+                scheme.surface
+            }
+            modifier
                 .then(
-                    if (visuals.customized && visuals.borderWidth > 0.dp) {
+                    if (visuals.customized && visuals.panelElevation > 0.dp) {
+                        Modifier.shadow(visuals.panelElevation, shape)
+                    } else {
+                        Modifier
+                    },
+                )
+                .clip(shape)
+                .background(fill.copy(alpha = visuals.panelOpacity))
+                .then(
+                    if (visuals.borderWidth > 0.dp) {
                         Modifier.border(visuals.borderWidth, scheme.outlineVariant, shape)
                     } else {
                         Modifier
                     },
                 )
+        }
 
         VisualStyle.CUSTOM -> error("CUSTOM is resolved before it reaches LocalVisualStyle")
     }

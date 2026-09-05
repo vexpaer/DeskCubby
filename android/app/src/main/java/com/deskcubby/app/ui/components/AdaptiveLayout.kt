@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
@@ -51,6 +50,9 @@ import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.ui.iconFor
+import com.deskcubby.app.ui.theme.DeskCubbyColors.hairline
+import com.deskcubby.app.ui.theme.DeskCubbyColors.selectedContainer
+import com.deskcubby.app.ui.theme.DeskCubbySpacing
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.LocalVisualStyle
@@ -134,7 +136,7 @@ fun DeskCubbyNavigationRail(
     onSelected: (NavItemConfig) -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
-    railWidth: Dp = 84.dp,
+    railWidth: Dp = DeskCubbySpacing.railWidth,
 ) {
     val language = LocalAppLanguage.current
     val glass = LocalVisualStyle.current == VisualStyle.LIQUID_GLASS
@@ -143,7 +145,7 @@ fun DeskCubbyNavigationRail(
     val primaryItems = items.filter { it.id != NavItemId.SETTINGS }
     val backgroundColor = when {
         glass || organic -> Color.Transparent
-        else -> MaterialTheme.colorScheme.surfaceContainer
+        else -> MaterialTheme.colorScheme.surface
     }
 
     Box(
@@ -205,7 +207,20 @@ fun DeskCubbyNavigationRail(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(backgroundColor),
-            ) { surface() }
+            ) {
+                surface()
+                // The rail shares the card plane with page content, so a hairline - not a
+                // shadow - is what separates navigation from the workspace. This is a Box
+                // rather than HorizontalDivider because that component forces fillMaxWidth and
+                // would paint a horizontal rule across the rail instead of a vertical edge.
+                Box(
+                    Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .width(1.dp)
+                        .background(MaterialTheme.colorScheme.hairline),
+                )
+            }
         }
     }
 }
@@ -214,7 +229,7 @@ fun DeskCubbyNavigationRail(
 private fun navigationRailItemColors() = NavigationRailItemDefaults.colors(
     selectedIconColor = MaterialTheme.colorScheme.primary,
     selectedTextColor = MaterialTheme.colorScheme.primary,
-    indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+    indicatorColor = MaterialTheme.colorScheme.selectedContainer,
     unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
     unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
 )
@@ -246,9 +261,12 @@ fun ContextPanel(
     ) {
         if (content != null) {
             Row(Modifier.fillMaxHeight().clipToBounds()) {
-                HorizontalDivider(
-                    modifier = Modifier.fillMaxHeight().width(1.dp),
-                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
+                // Same reason as the rail: HorizontalDivider cannot render a vertical edge.
+                Box(
+                    Modifier
+                        .fillMaxHeight()
+                        .width(1.dp)
+                        .background(MaterialTheme.colorScheme.hairline),
                 )
                 Column(
                     modifier = Modifier

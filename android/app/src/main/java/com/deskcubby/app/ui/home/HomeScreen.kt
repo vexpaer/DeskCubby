@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.only
@@ -31,9 +33,11 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -71,6 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -99,9 +104,18 @@ import com.deskcubby.app.data.sync.AppCloudSyncStatus
 import com.deskcubby.app.data.sync.CloudSyncItemOutcome
 import com.deskcubby.app.data.sync.CloudSyncManualScheduler
 import com.deskcubby.app.data.sync.CloudSyncRunMode
+import com.deskcubby.app.ui.components.AppInlineHint
+import com.deskcubby.app.ui.components.DcCardContentPadding
+import com.deskcubby.app.ui.components.DcCard
+import com.deskcubby.app.ui.components.DcStat
 import com.deskcubby.app.ui.components.LocalLayoutMode
+import com.deskcubby.app.ui.components.currentGutter
 import com.deskcubby.app.ui.structuredrecords.StructuredRecordRecorder
 import com.deskcubby.app.ui.structuredrecords.StructuredRecordsViewModel
+import com.deskcubby.app.ui.theme.DeskCubbyColors.insetSurface
+import com.deskcubby.app.ui.theme.DeskCubbyRadius
+import com.deskcubby.app.ui.theme.DeskCubbySpacing
+import com.deskcubby.app.ui.theme.DeskCubbyType
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalCompactMode
 import com.deskcubby.app.ui.theme.LocalVisualStyle
@@ -321,20 +335,40 @@ fun HomeScreen(
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            Surface(color = MaterialTheme.colorScheme.surface) {
+            // The header establishes hierarchy before any card does: the date is a quiet
+            // eyebrow, the greeting is the page title. It sits on the canvas rather than on a
+            // separate bar so Home opens as one continuous sheet.
+            val today = LocalDate.now()
+            val gutter = currentGutter()
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(
+                        start = gutter,
+                        top = DeskCubbySpacing.lg,
+                        end = gutter,
+                        bottom = DeskCubbySpacing.md,
+                    ),
+            ) {
+                Text(
+                    text = homeDateEyebrow(today, settings.appLanguage),
+                    style = DeskCubbyType.eyebrow,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(DeskCubbySpacing.xxs))
                 Text(
                     text = HomeGreeting.forDate(
-                        date = LocalDate.now(),
+                        date = today,
                         language = settings.appLanguage,
                         userName = settings.userName,
                         templates = settings.homeGreetings,
                     ),
-                    style = if (organic) MaterialTheme.typography.titleMedium
-                    else MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    style = if (organic) MaterialTheme.typography.titleLarge
+                    else MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         },
@@ -380,18 +414,25 @@ fun HomeScreen(
                 onUndoCloudSync = { viewModel.undoLastCloudSync() },
             )
         } else {
+            val gutter = currentGutter()
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(inner),
-                contentPadding = PaddingValues(if (compact) 10.dp else 16.dp),
+                contentPadding = PaddingValues(
+                    start = gutter,
+                    top = DeskCubbySpacing.xxs,
+                    end = gutter,
+                    bottom = DeskCubbySpacing.xxl,
+                ),
                 verticalArrangement = Arrangement.spacedBy(
                     when {
                         !settings.homeWidgetBordersEnabled -> 0.dp
-                        compact -> 6.dp
-                        else -> 12.dp
+                        compact -> DeskCubbySpacing.sm
+                        else -> DeskCubbySpacing.cardGap
                     },
                 ),
             ) {
                 items(settings.homeWidgets, key = { it }) { id ->
+                    Box(Modifier.animateItem()) {
                     HomeWidget(
                         id = id,
                         settings = settings,
@@ -431,8 +472,8 @@ fun HomeScreen(
                         },
                         onUndoCloudSync = { viewModel.undoLastCloudSync() },
                     )
+                    }
                 }
-                item { Spacer(Modifier.height(20.dp)) }
             }
         }
     }
@@ -477,9 +518,27 @@ private fun HomeWidget(
         "calendar" -> WidgetCard(tr("日历", "Calendar"), showTitle, settings.homeWidgetBordersEnabled) { MonthCalendar(today) }
         "weather" -> WidgetCard(tr("天气", "Weather"), showTitle, settings.homeWidgetBordersEnabled) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.WbSunny, null)
-                Spacer(Modifier.width(10.dp))
-                Column { Text(tr("离线模式", "Offline")); Text(tr("暂无上次天气缓存", "No cached weather"), style = MaterialTheme.typography.bodySmall) }
+                Box(
+                    Modifier
+                        .size(DeskCubbySpacing.xxxl)
+                        .background(MaterialTheme.colorScheme.insetSurface, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Outlined.WbSunny,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(DeskCubbySpacing.md))
+                Column {
+                    Text(tr("离线模式", "Offline"), style = DeskCubbyType.listTitle)
+                    Text(
+                        tr("暂无上次天气缓存", "No cached weather"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
         "poem" -> WidgetCard(tr("每日诗词", "Daily poem"), showTitle, settings.homeWidgetBordersEnabled) {
@@ -559,30 +618,71 @@ private fun HomeWidget(
             DateRecordsWidget(dateRecords, today, onOpenDateRecords)
         }
         "streak" -> WidgetCard(tr("连续记录", "Writing streak"), showTitle, settings.homeWidgetBordersEnabled) {
-            Text(if (settings.appLanguage == AppLanguage.ENGLISH) "${streakDays(diaries, today)} days" else "${streakDays(diaries, today)} 天", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary)
+            DcStat(
+                value = streakDays(diaries, today).toString(),
+                label = if (settings.appLanguage == AppLanguage.ENGLISH) "day streak" else "天连续记录",
+                accent = true,
+            )
         }
         "month_diaries" -> WidgetCard(tr("本月日记", "Diaries this month"), showTitle, settings.homeWidgetBordersEnabled) {
             val prefix = today.toString().take(7)
             val count = diaries.count { it.dateIso.startsWith(prefix) }
-            Text(if (settings.appLanguage == AppLanguage.ENGLISH) "$count entries" else "$count 篇", style = MaterialTheme.typography.headlineMedium)
+            DcStat(
+                value = count.toString(),
+                label = if (settings.appLanguage == AppLanguage.ENGLISH) "entries" else "篇",
+            )
         }
         "total_words" -> WidgetCard(tr("日记总字数", "Total diary words"), showTitle, settings.homeWidgetBordersEnabled) {
-            Text("${diaries.sumOf { it.wordCount }}", style = MaterialTheme.typography.headlineMedium)
+            DcStat(
+                value = diaries.sumOf { it.wordCount }.toString(),
+                label = if (settings.appLanguage == AppLanguage.ENGLISH) "words written" else "累计字数",
+            )
         }
         "recent_diary" -> WidgetCard(tr("最近日记", "Recent diary"), showTitle, settings.homeWidgetBordersEnabled) {
-            diaries.take(3).forEach { item ->
-                TextButton(onClick = { onOpenDiary(item.uri) }, modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.fillMaxWidth()) {
-                        Text(item.name.removeSuffix(".md"), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(item.dateIso, style = MaterialTheme.typography.bodySmall)
+            if (diaries.isEmpty()) {
+                AppInlineHint(tr("还没有日记，写下第一篇吧", "No diaries yet - write the first one"))
+            } else {
+                diaries.take(3).forEach { item ->
+                    HomeLinkRow(
+                        title = item.name.removeSuffix(".md"),
+                        subtitle = item.dateIso,
+                        onClick = { onOpenDiary(item.uri) },
+                    )
+                }
+            }
+        }
+        "recent_thought" -> WidgetCard(tr("最近小巧思", "Recent thoughts"), showTitle, settings.homeWidgetBordersEnabled) {
+            if (thoughts.isEmpty()) {
+                AppInlineHint(tr("还没有小巧思", "No thoughts yet"))
+            } else {
+                thoughts.take(3).forEach { thought ->
+                    Row(Modifier.fillMaxWidth()) {
+                        Box(
+                            Modifier
+                                .padding(top = 9.dp)
+                                .size(5.dp)
+                                .background(
+                                    MaterialTheme.colorScheme.primary,
+                                    CircleShape,
+                                ),
+                        )
+                        Spacer(Modifier.width(DeskCubbySpacing.md))
+                        Text(
+                            text = thought.content,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
                     }
                 }
             }
-            if (diaries.isEmpty()) Text(tr("还没有日记", "No diaries yet"))
-        }
-        "recent_thought" -> WidgetCard(tr("最近小巧思", "Recent thoughts"), showTitle, settings.homeWidgetBordersEnabled) {
-            thoughts.take(3).forEach { Text(it.content, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            TextButton(onClick = onOpenThoughts) { Text(tr("查看全部", "View all")) }
+            HomeLinkRow(
+                title = tr("查看全部", "View all"),
+                onClick = onOpenThoughts,
+                trailingLabel = thoughts.size.toString(),
+            )
         }
         "quick_input" -> QuickInputWidget(
             showTitle = showTitle,
@@ -1022,10 +1122,15 @@ private fun localizedCloudSyncStatus(value: String, language: AppLanguage): Stri
 @Composable
 private fun HomeMetric(value: String, label: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.headlineSmall)
         Text(
-            label,
-            style = MaterialTheme.typography.bodySmall,
+            text = value,
+            style = DeskCubbyType.metric,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(DeskCubbySpacing.xxxs))
+        Text(
+            text = label,
+            style = DeskCubbyType.metricLabel,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -1038,38 +1143,95 @@ private fun WidgetCard(
     showBorder: Boolean,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
-    if (showBorder) {
-        GlassPanel(modifier = Modifier.fillMaxWidth(), padding = PaddingValues(16.dp)) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (showTitle) {
-                    Text(
-                        title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = if (organic) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
-                    )
-                }
-                content()
+    val body: @Composable ColumnScope.() -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(DeskCubbySpacing.md)) {
+            if (showTitle) {
+                // Card titles use the ink colour, never the accent. Colour is reserved for
+                // values and selection, which keeps the accent meaningful.
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
             }
-        }
-    } else {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (showTitle) {
-                    Text(
-                        title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = if (organic) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
-                    )
-                }
-                content()
-            }
+            content()
         }
     }
+    if (showBorder) {
+        DcCard(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = DcCardContentPadding,
+            content = body,
+        )
+    } else {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = DeskCubbySpacing.xxs, vertical = DeskCubbySpacing.sm),
+            content = body,
+        )
+    }
+}
+
+/**
+ * In-card navigation row. Replaces the `TextButton` rows that used to sit inside cards, whose
+ * centred content and default insets made lists read like a stack of buttons.
+ */
+@Composable
+private fun HomeLinkRow(
+    title: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    leading: (@Composable () -> Unit)? = null,
+    trailingLabel: String? = null,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .defaultMinSize(minHeight = 44.dp)
+            .clip(DeskCubbyRadius.control)
+            .clickable(onClick = onClick)
+            .padding(vertical = DeskCubbySpacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (leading != null) {
+            leading()
+            Spacer(Modifier.width(DeskCubbySpacing.md))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = DeskCubbyType.listTitle,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (trailingLabel != null) {
+            Spacer(Modifier.width(DeskCubbySpacing.md))
+            Text(
+                text = trailingLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun homeDateEyebrow(date: LocalDate, language: AppLanguage): String {
+    val locale = if (language == AppLanguage.ENGLISH) Locale.ENGLISH else Locale.SIMPLIFIED_CHINESE
+    val pattern = if (language == AppLanguage.ENGLISH) "MMMM d - EEEE" else "M月d日 · EEEE"
+    return date.format(DateTimeFormatter.ofPattern(pattern, locale))
 }
 
 private data class ParsedDateRecord(
@@ -1085,46 +1247,30 @@ private fun DateRecordsWidget(
 ) {
     val nearest = remember(records, today) { nearestDateRecords(records, today) }
     if (nearest.isEmpty()) {
-        Text(tr("还没有日期记录", "No date records yet"))
-        TextButton(onClick = onOpenDateRecords) {
-            Text(tr("添加目标日期", "Add a target date"))
-        }
+        AppInlineHint(tr("还没有日期记录", "No date records yet"))
+        HomeLinkRow(
+            title = tr("添加目标日期", "Add a target date"),
+            onClick = onOpenDateRecords,
+        )
         return
     }
 
     nearest.forEach { item ->
-        TextButton(
-            onClick = onOpenDateRecords,
-            modifier = Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+        HomeLinkRow(
+            title = dateDistanceText(item.record.name, item.date, today),
+            subtitle = item.record.dateIso,
+            leading = {
                 Text(
                     text = item.record.icon.ifBlank { "🎯" },
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.width(40.dp),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.width(28.dp),
                     textAlign = TextAlign.Center,
                 )
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = dateDistanceText(item.record.name, item.date, today),
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        text = item.record.dateIso,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
+            },
+            onClick = onOpenDateRecords,
+        )
     }
-    TextButton(onClick = onOpenDateRecords) {
-        Text(tr("查看全部", "View all"))
-    }
+    HomeLinkRow(title = tr("查看全部", "View all"), onClick = onOpenDateRecords)
 }
 
 private fun nearestDateRecords(
@@ -1304,7 +1450,7 @@ private fun MealPhotosWidget(
                 Surface(
                     modifier = Modifier
                         .weight(1f)
-                        .height(48.dp)
+                        .height(58.dp)
                         .semantics { contentDescription = label }
                         .combinedClickable(
                             enabled = !uploading,
@@ -1318,11 +1464,17 @@ private fun MealPhotosWidget(
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                 ) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 2.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
                         Text(
                             text = if (useIcons) displayedIcons[index] else label,
-                            style = if (useIcons) MaterialTheme.typography.titleLarge else MaterialTheme.typography.labelMedium,
-                            maxLines = 1,
+                            style = if (useIcons) MaterialTheme.typography.titleLarge
+                            else MaterialTheme.typography.labelMedium,
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                             textAlign = TextAlign.Center,
                         )
@@ -1335,41 +1487,67 @@ private fun MealPhotosWidget(
 
 @Composable
 private fun MonthCalendar(today: LocalDate) {
-    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
-    val visuals = deskCubbyVisuals
+    val scheme = MaterialTheme.colorScheme
+    val language = com.deskcubby.app.ui.theme.LocalAppLanguage.current
+    val english = language == AppLanguage.ENGLISH
     val month = YearMonth.from(today)
     val firstOffset = month.atDay(1).dayOfWeek.value - 1
     val cells = List(firstOffset) { 0 } + (1..month.lengthOfMonth()).toList()
-    Text(if (com.deskcubby.app.ui.theme.LocalAppLanguage.current == AppLanguage.ENGLISH) "${month.month.getDisplayName(TextStyle.FULL, Locale.ENGLISH)} ${month.year}" else "${month.year}年${month.monthValue}月", style = MaterialTheme.typography.titleLarge)
+    Text(
+        text = if (english) {
+            "${month.month.getDisplayName(TextStyle.FULL, Locale.ENGLISH)} ${month.year}"
+        } else {
+            "${month.year}年${month.monthValue}月"
+        },
+        style = MaterialTheme.typography.titleSmall,
+        color = scheme.onSurface,
+    )
+    Spacer(Modifier.height(DeskCubbySpacing.md))
     Row(Modifier.fillMaxWidth()) {
-        val weekdays = if (com.deskcubby.app.ui.theme.LocalAppLanguage.current == AppLanguage.ENGLISH) listOf("M", "T", "W", "T", "F", "S", "S") else listOf("一", "二", "三", "四", "五", "六", "日")
-        weekdays.forEach { Text(it, Modifier.weight(1f), textAlign = TextAlign.Center) }
+        val weekdays = if (english) {
+            listOf("M", "T", "W", "T", "F", "S", "S")
+        } else {
+            listOf("一", "二", "三", "四", "五", "六", "日")
+        }
+        weekdays.forEachIndexed { index, label ->
+            Text(
+                text = label,
+                style = DeskCubbyType.eyebrow,
+                // Weekend columns carry the accent so the grid can be scanned by rhythm.
+                color = if (index >= 5) scheme.primary else scheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
+    Spacer(Modifier.height(DeskCubbySpacing.xxs))
     cells.chunked(7).forEach { week ->
         Row(Modifier.fillMaxWidth()) {
             week.forEach { day ->
-                Text(
-                    text = if (day == 0) "" else day.toString(),
+                val isToday = day != 0 && day == today.dayOfMonth
+                Box(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(5.dp)
-                        .then(
-                            if (organic && day == today.dayOfMonth) {
-                                Modifier.background(
-                                    MaterialTheme.colorScheme.primaryContainer,
-                                    visuals.badgeShape,
-                                )
-                            } else {
-                                Modifier
-                            },
-                        ),
-                    textAlign = TextAlign.Center,
-                    color = when {
-                        organic && day == today.dayOfMonth -> MaterialTheme.colorScheme.onPrimaryContainer
-                        day == today.dayOfMonth -> MaterialTheme.colorScheme.primary
-                        else -> MaterialTheme.colorScheme.onSurface
-                    },
-                )
+                        .height(34.dp)
+                        .padding(1.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (isToday) {
+                        Box(
+                            Modifier
+                                .size(28.dp)
+                                .background(scheme.primary, CircleShape),
+                        )
+                    }
+                    if (day != 0) {
+                        Text(
+                            text = day.toString(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isToday) scheme.onPrimary else scheme.onSurface,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
             }
             repeat(7 - week.size) { Spacer(Modifier.weight(1f)) }
         }
@@ -1385,6 +1563,9 @@ private fun streakDays(diaries: List<DiaryIndexEntity>, today: LocalDate): Int {
 }
 
 private const val CAMERA_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L
+
+/** Reading-column cap for the tablet workspace, so cards never stretch edge to edge. */
+private const val WORKSPACE_MAX_WIDTH_DP = 1_180
 private const val HOME_DAILY_EVENT_LIMIT = 4
 
 @Composable
@@ -1466,30 +1647,49 @@ private fun HomeWorkspaceContent(
         )
     }
 
-    Row(
+    // Two lazy columns rather than two scrolled Columns: on a tablet both panes can hold
+    // dozens of widgets, and recycling keeps the workspace cheap while scrolling either side.
+    // The row is width-capped and centred so a 12" tablet does not stretch cards to 900dp.
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(padding)
-            .padding(horizontal = 20.dp, vertical = 16.dp),
+            .padding(padding),
+        contentAlignment = Alignment.TopCenter,
     ) {
-        Column(
+        Row(
             modifier = Modifier
-                .weight(0.6f)
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .widthIn(max = WORKSPACE_MAX_WIDTH_DP.dp)
+                .padding(
+                    horizontal = DeskCubbySpacing.gutterExpanded,
+                    vertical = DeskCubbySpacing.base,
+                ),
         ) {
-            for (id in primaryIds) render(id)
-        }
-        Spacer(Modifier.width(16.dp))
-        Column(
-            modifier = Modifier
-                .weight(0.4f)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            for (id in secondaryIds) render(id)
+            LazyColumn(
+                modifier = Modifier
+                    .weight(0.6f)
+                    .fillMaxHeight(),
+                contentPadding = PaddingValues(
+                    end = DeskCubbySpacing.md,
+                    bottom = DeskCubbySpacing.xxl,
+                ),
+                verticalArrangement = Arrangement.spacedBy(DeskCubbySpacing.cardGap),
+            ) {
+                items(primaryIds, key = { "primary-$it" }) { id -> render(id) }
+            }
+            Spacer(Modifier.width(DeskCubbySpacing.base))
+            LazyColumn(
+                modifier = Modifier
+                    .weight(0.4f)
+                    .fillMaxHeight(),
+                contentPadding = PaddingValues(
+                    start = DeskCubbySpacing.md,
+                    bottom = DeskCubbySpacing.xxl,
+                ),
+                verticalArrangement = Arrangement.spacedBy(DeskCubbySpacing.cardGap),
+            ) {
+                items(secondaryIds, key = { "secondary-$it" }) { id -> render(id) }
+            }
         }
     }
 }

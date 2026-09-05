@@ -8,6 +8,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
@@ -28,10 +29,15 @@ fun AppBackground(
 ) {
     val uri = settings.backgroundImageUri
     val blurDp = settings.backgroundImageBlurDp.coerceIn(0f, 40f)
+    val scheme = MaterialTheme.colorScheme
+    // A wallpaper makes `background` transparent; otherwise the canvas is `background` and
+    // cards are `surface`. Painting `surface` here used to make cards on a transparent
+    // Scaffold land on their own colour with nothing to separate them but the hairline.
+    val canvas = scheme.background.takeIf { it != Color.Transparent } ?: scheme.surface
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface),
+            .background(canvas),
     ) {
         if (uri != null) {
             AsyncImage(

@@ -69,6 +69,7 @@ import com.deskcubby.app.data.model.RssSubscription
 import com.deskcubby.app.data.repository.RssArticle
 import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.AppLoadingIndicator
+import com.deskcubby.app.ui.components.AppLoadingState
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.PanelRole
@@ -135,14 +136,11 @@ fun RssScreen(
     ) { innerPadding ->
         when {
             state.loadingSettings -> {
-                Box(
-                    modifier = Modifier
+                AppLoadingState(
+                    Modifier
                         .fillMaxSize()
                         .padding(innerPadding),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    AppLoadingIndicator()
-                }
+                )
             }
             state.subscriptions.isEmpty() -> {
                 AppEmptyState(

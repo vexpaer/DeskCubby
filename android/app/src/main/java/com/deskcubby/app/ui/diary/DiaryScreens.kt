@@ -146,6 +146,7 @@ import com.deskcubby.app.ui.components.AppEmptyState
 import com.deskcubby.app.ui.components.ContextPanel
 import com.deskcubby.app.ui.components.LocalLayoutMode
 import com.deskcubby.app.ui.components.AppLoadingIndicator
+import com.deskcubby.app.ui.components.AppLoadingState
 import com.deskcubby.app.ui.components.FourDotDragHandle
 import com.deskcubby.app.ui.components.MarkdownPreview
 import com.deskcubby.app.ui.components.MarkdownResolvedMedia
@@ -245,7 +246,7 @@ fun DiaryListScreen(
                 onSettings = onOpenSettings,
                 modifier = Modifier.padding(inner),
             )
-            state.loading && state.items.isEmpty() -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) { AppLoadingIndicator() }
+            state.loading && state.items.isEmpty() -> AppLoadingState(Modifier.fillMaxSize().padding(inner))
             state.items.isEmpty() -> AppEmptyState(
                 icon = Icons.Outlined.MenuBook,
                 title = if (state.error == null) {
