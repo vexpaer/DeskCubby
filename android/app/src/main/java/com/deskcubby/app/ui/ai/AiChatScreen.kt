@@ -5,6 +5,7 @@ package com.deskcubby.app.ui.ai
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,6 +40,9 @@ import androidx.compose.material.icons.outlined.AddComment
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Autorenew
+import androidx.compose.material.icons.outlined.Cancel
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
@@ -46,19 +50,25 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.HourglassEmpty
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -81,8 +91,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -104,6 +114,15 @@ import com.deskcubby.app.data.repository.AiChatMessage
 import com.deskcubby.app.data.repository.AiChatRole
 import com.deskcubby.app.data.repository.AiConversation
 import com.deskcubby.app.ui.components.AppEmptyState
+import com.deskcubby.app.ui.components.DcCard
+import com.deskcubby.app.ui.components.DcDivider
+import com.deskcubby.app.ui.components.DcListRow
+import com.deskcubby.app.ui.components.DcSectionHeader
+import com.deskcubby.app.ui.components.currentGutter
+import com.deskcubby.app.ui.theme.DeskCubbyColors.hairline
+import com.deskcubby.app.ui.theme.DeskCubbyRadius
+import com.deskcubby.app.ui.theme.DeskCubbySpacing
+import com.deskcubby.app.ui.theme.DeskCubbyType
 import com.deskcubby.app.ui.components.ContextPanel
 import com.deskcubby.app.ui.components.LocalLayoutMode
 import com.deskcubby.app.ui.components.AppLoadingIndicator
@@ -215,6 +234,8 @@ fun AiChatScreen(
                 isPreparing = state.isPreparingAttachments,
                 configured = configured,
                 fontSizeSp = settings.aiPageFontSizeSp,
+                authorizedSourceCount = settings.agentEnabledSources.size,
+                permissionModeLabel = agentPermissionModeLabel(settings.agentPermissionMode),
                 onValueChange = viewModel::updateDraft,
                 onPickFiles = {
                     picker.launch(
@@ -276,8 +297,11 @@ fun AiChatScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(
+                        horizontal = currentGutter(),
+                        vertical = DeskCubbySpacing.base,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(DeskCubbySpacing.lg),
                 ) {
                     items(state.messages, key = AiChatMessage::id) {
                         AgentMessageBubble(
@@ -436,6 +460,8 @@ private fun AgentComposer(
     isPreparing: Boolean,
     configured: Boolean,
     fontSizeSp: Float,
+    authorizedSourceCount: Int,
+    permissionModeLabel: String,
     onValueChange: (String) -> Unit,
     onPickFiles: () -> Unit,
     onManageContext: () -> Unit,
@@ -446,37 +472,32 @@ private fun AgentComposer(
 ) {
     var menu by rememberSaveable { mutableStateOf(false) }
     val canSend = configured && (value.isNotBlank() || attachments.isNotEmpty()) && !isRunning && !isPreparing
-    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp, shadowElevation = 6.dp) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(color = scheme.surface) {
+        Column(Modifier.fillMaxWidth()) {
+            HorizontalDivider(thickness = 1.dp, color = scheme.hairline)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        horizontal = DeskCubbySpacing.md,
+                        vertical = DeskCubbySpacing.md,
+                    ),
+            ) {
             attachments.forEach { attachment ->
                 AttachmentRow(attachment, enabled = !isRunning, onRemove = { onRemoveAttachment(attachment.uri) })
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(DeskCubbySpacing.sm))
             }
             Row(verticalAlignment = Alignment.Bottom) {
-                Box {
-                    IconButton(enabled = !isRunning && !isPreparing, onClick = { menu = true }) {
-                        if (isPreparing) AppLoadingIndicator(size = 22.dp, strokeWidth = 2.dp)
-                        else Icon(Icons.Outlined.Apps, tr("Agent 工具与上下文", "Agent tools and context"))
-                    }
-                    DropdownMenu(menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(
-                            text = { Text(tr("插入图片 / 文档", "Insert image / document")) },
-                            leadingIcon = { Icon(Icons.Outlined.AttachFile, null) },
-                            onClick = { menu = false; onPickFiles() },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(tr("管理上下文", "Manage context")) },
-                            leadingIcon = { Icon(Icons.Outlined.Storage, null) },
-                            onClick = { menu = false; onManageContext() },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(tr("AI 权限模式", "AI permission mode")) },
-                            leadingIcon = { Icon(Icons.Outlined.Lock, null) },
-                            onClick = { menu = false; onPermissionMode() },
-                        )
-                    }
+                IconButton(
+                    enabled = !isRunning && !isPreparing,
+                    onClick = { menu = true },
+                    modifier = Modifier.padding(bottom = DeskCubbySpacing.xxs),
+                ) {
+                    if (isPreparing) AppLoadingIndicator(size = 20.dp, strokeWidth = 2.dp)
+                    else Icon(Icons.Outlined.Apps, tr("Agent 工具与上下文", "Agent tools and context"))
                 }
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(DeskCubbySpacing.sm))
                 OutlinedTextField(
                     value = value,
                     onValueChange = onValueChange,
@@ -492,7 +513,12 @@ private fun AgentComposer(
                     maxLines = 6,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
-                    shape = MaterialTheme.shapes.large,
+                    shape = DeskCubbyRadius.field,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = scheme.hairline,
+                        unfocusedContainerColor = scheme.surfaceContainer,
+                        focusedContainerColor = scheme.surfaceContainer,
+                    ),
                     trailingIcon = {
                         if (isRunning) {
                             IconButton(onClick = onStop) {
@@ -503,6 +529,73 @@ private fun AgentComposer(
                                 Icon(Icons.AutoMirrored.Outlined.Send, tr("运行 Agent", "Run Agent"))
                             }
                         }
+                    },
+                )
+            }
+            }
+        }
+    }
+
+    // The four-square entry is the Agent's control surface, so it earns a sheet with room for
+    // descriptions and current state instead of three anonymous dropdown rows.
+    if (menu) {
+        ModalBottomSheet(
+            onDismissRequest = { menu = false },
+            containerColor = scheme.surfaceContainerLow,
+            shape = DeskCubbyRadius.sheet,
+            dragHandle = { BottomSheetDefaults.DragHandle() },
+        ) {
+            Column(Modifier.padding(bottom = DeskCubbySpacing.xl)) {
+                DcSectionHeader(
+                    title = tr("Agent 工具与上下文", "Agent tools and context"),
+                    modifier = Modifier.padding(horizontal = DeskCubbySpacing.base),
+                )
+                DcListRow(
+                    title = tr("插入图片 / 文档", "Insert image / document"),
+                    subtitle = tr("图片、PDF、Word、纯文本", "Images, PDF, Word, plain text"),
+                    leading = {
+                        Icon(
+                            Icons.Outlined.AttachFile,
+                            contentDescription = null,
+                            tint = scheme.onSurfaceVariant,
+                        )
+                    },
+                    onClick = {
+                        menu = false
+                        onPickFiles()
+                    },
+                )
+                DcListRow(
+                    title = tr("管理上下文", "Manage context"),
+                    subtitle = tr(
+                        "已授权 $authorizedSourceCount 个数据源",
+                        "$authorizedSourceCount source(s) authorized",
+                    ),
+                    leading = {
+                        Icon(
+                            Icons.Outlined.Storage,
+                            contentDescription = null,
+                            tint = scheme.onSurfaceVariant,
+                        )
+                    },
+                    onClick = {
+                        menu = false
+                        onManageContext()
+                    },
+                )
+                DcListRow(
+                    title = tr("AI 权限模式", "AI permission mode"),
+                    subtitle = permissionModeLabel,
+                    leading = {
+                        Icon(
+                            Icons.Outlined.Lock,
+                            contentDescription = null,
+                            tint = scheme.onSurfaceVariant,
+                        )
+                    },
+                    onClick = {
+                        menu = false
+                        onPermissionMode()
                     },
                 )
             }
@@ -570,21 +663,48 @@ private fun AgentMessageBubble(
         return
     }
     val user = message.role == AiChatRole.USER
+    val scheme = MaterialTheme.colorScheme
     Box(Modifier.fillMaxWidth(), contentAlignment = if (user) Alignment.CenterEnd else Alignment.CenterStart) {
-        Surface(
-            modifier = Modifier.widthIn(max = replyBoxWidthDp.dp).fillMaxWidth(0.92f),
-            shape = MaterialTheme.shapes.large,
-            color = if (user) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
-            contentColor = if (user) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+        // Your own words are a compact filled bubble pushed to the reading edge; the Agent's
+        // reply is plain typeset text on the canvas. Wrapping long Markdown in a tinted box
+        // fights the content, so the container is only used where it carries meaning.
+        Column(
+            modifier = Modifier
+                .widthIn(max = replyBoxWidthDp.dp)
+                .fillMaxWidth(if (user) 0.88f else 1f),
+            horizontalAlignment = if (user) Alignment.End else Alignment.Start,
         ) {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            if (!user) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(if (user) Icons.Outlined.Person else Icons.Outlined.AutoAwesome, null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (user) tr("我", "You") else tr("Agent", "Agent"), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium)
+                    Icon(
+                        Icons.Outlined.AutoAwesome,
+                        contentDescription = null,
+                        tint = scheme.primary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(DeskCubbySpacing.sm))
+                    Text(
+                        text = tr("Agent", "Agent"),
+                        style = DeskCubbyType.eyebrow,
+                        color = scheme.onSurfaceVariant,
+                    )
                 }
+                Spacer(Modifier.height(DeskCubbySpacing.sm))
+            }
+            Surface(
+                modifier = if (user) Modifier else Modifier.fillMaxWidth(),
+                shape = if (user) MaterialTheme.shapes.large else DeskCubbyRadius.control,
+                color = if (user) scheme.primaryContainer else Color.Transparent,
+                contentColor = if (user) scheme.onPrimaryContainer else scheme.onSurface,
+            ) {
+            Column(
+                Modifier.padding(
+                    horizontal = if (user) DeskCubbySpacing.base else 0.dp,
+                    vertical = if (user) DeskCubbySpacing.md else 0.dp,
+                ),
+            ) {
                 message.attachments.forEach { attachment ->
-                    Spacer(Modifier.height(8.dp))
+                    if (user) Spacer(Modifier.height(8.dp))
                     if (attachment.kind == AiAttachmentKind.IMAGE && attachment.uri.isNotBlank()) {
                         AsyncImage(
                             model = Uri.parse(attachment.uri),
@@ -605,7 +725,7 @@ private fun AgentMessageBubble(
                     }
                 }
                 if (message.content.isNotBlank()) {
-                    Spacer(Modifier.height(7.dp))
+                    if (user) Spacer(Modifier.height(7.dp))
                     if (user) {
                         SelectionContainer {
                             Text(
@@ -623,6 +743,7 @@ private fun AgentMessageBubble(
                     }
                 }
             }
+            }
         }
     }
 }
@@ -633,25 +754,35 @@ private fun AgentExecutionPanel(
     usage: AgentRunUsage?,
     running: Boolean,
 ) {
-    Surface(
+    DcCard(
         modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp),
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        contentPadding = PaddingValues(DeskCubbySpacing.md),
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(DeskCubbySpacing.sm)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (running) AppLoadingIndicator(size = 20.dp, strokeWidth = 2.dp)
-                else Icon(Icons.Outlined.CheckCircle, null, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(8.dp))
+                if (running) {
+                    AppLoadingIndicator(size = 18.dp, strokeWidth = 2.dp)
+                } else {
+                    Icon(
+                        Icons.Outlined.CheckCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                Spacer(Modifier.width(DeskCubbySpacing.sm))
                 Text(
-                    if (running) tr("Agent 执行中", "Agent running") else tr("执行记录", "Execution log"),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
+                    text = if (running) tr("Agent 执行中", "Agent running")
+                    else tr("执行记录", "Execution log"),
+                    style = DeskCubbyType.eyebrow,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             updates.forEach { AgentExecutionRow(it) }
-            usage?.let { AgentUsageRow(it) }
+            usage?.let {
+                DcDivider()
+                AgentUsageRow(it)
+            }
         }
     }
 }
@@ -659,50 +790,102 @@ private fun AgentExecutionPanel(
 @Composable
 private fun AgentExecutionRow(update: AgentExecutionUpdate) {
     var expanded by rememberSaveable(update.toolCallId) { mutableStateOf(false) }
-    Surface(
-        modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+    val scheme = MaterialTheme.colorScheme
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(DeskCubbyRadius.md)
+            .background(scheme.surfaceContainer)
+            .clickable { expanded = !expanded }
+            .padding(
+                horizontal = DeskCubbySpacing.md,
+                vertical = DeskCubbySpacing.md,
+            ),
     ) {
-        Column(Modifier.padding(horizontal = 11.dp, vertical = 9.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(statusGlyph(update.status), modifier = Modifier.width(22.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(update.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                    if (update.target.isNotBlank()) {
-                        Text(update.target, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null)
-            }
-            if (expanded) {
-                HorizontalDivider(Modifier.padding(vertical = 7.dp))
-                Text("Tool: ${update.toolName}", style = MaterialTheme.typography.labelMedium)
-                if (update.argumentsSummary.isNotBlank()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = statusIcon(update.status),
+                contentDescription = null,
+                tint = statusTint(update.status, scheme),
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(DeskCubbySpacing.md))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = update.title,
+                    style = DeskCubbyType.listTitle,
+                    color = scheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (update.target.isNotBlank()) {
                     Text(
-                        update.argumentsSummary,
+                        text = update.target,
                         style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
+                        color = scheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (update.resultSummary.isNotBlank()) {
-                    Spacer(Modifier.height(5.dp))
-                    Text(update.resultSummary, style = MaterialTheme.typography.bodySmall)
-                }
+            }
+            Icon(
+                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription = if (expanded) tr("收起", "Collapse") else tr("展开", "Expand"),
+                tint = scheme.onSurfaceVariant,
+            )
+        }
+        if (expanded) {
+            Spacer(Modifier.height(DeskCubbySpacing.md))
+            DcDivider()
+            Spacer(Modifier.height(DeskCubbySpacing.md))
+            Text(
+                text = update.toolName,
+                style = DeskCubbyType.mono,
+                color = scheme.onSurfaceVariant,
+            )
+            if (update.argumentsSummary.isNotBlank()) {
+                Spacer(Modifier.height(DeskCubbySpacing.xxs))
+                Text(
+                    text = update.argumentsSummary,
+                    style = DeskCubbyType.mono,
+                    color = scheme.onSurfaceVariant,
+                )
+            }
+            if (update.resultSummary.isNotBlank()) {
+                Spacer(Modifier.height(DeskCubbySpacing.sm))
+                Text(
+                    text = update.resultSummary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                )
             }
         }
     }
 }
 
-private fun statusGlyph(status: AgentExecutionStatus): String = when (status) {
-    AgentExecutionStatus.PREPARING -> "…"
-    AgentExecutionStatus.RUNNING -> "↻"
-    AgentExecutionStatus.WAITING_APPROVAL -> "?"
-    AgentExecutionStatus.APPROVED -> "✓"
-    AgentExecutionStatus.REJECTED -> "×"
-    AgentExecutionStatus.SUCCEEDED -> "✓"
-    AgentExecutionStatus.FAILED -> "!"
-    AgentExecutionStatus.CANCELED -> "■"
+private fun statusIcon(status: AgentExecutionStatus) = when (status) {
+    AgentExecutionStatus.PREPARING -> Icons.Outlined.HourglassEmpty
+    AgentExecutionStatus.RUNNING -> Icons.Outlined.Autorenew
+    AgentExecutionStatus.WAITING_APPROVAL -> Icons.Outlined.HelpOutline
+    AgentExecutionStatus.APPROVED -> Icons.Outlined.Check
+    AgentExecutionStatus.REJECTED -> Icons.Outlined.Close
+    AgentExecutionStatus.SUCCEEDED -> Icons.Outlined.Check
+    AgentExecutionStatus.FAILED -> Icons.Outlined.ErrorOutline
+    AgentExecutionStatus.CANCELED -> Icons.Outlined.Cancel
+}
+
+private fun statusTint(status: AgentExecutionStatus, scheme: ColorScheme) = when (status) {
+    AgentExecutionStatus.PREPARING,
+    AgentExecutionStatus.RUNNING,
+    AgentExecutionStatus.CANCELED,
+    -> scheme.onSurfaceVariant
+    AgentExecutionStatus.WAITING_APPROVAL -> scheme.tertiary
+    AgentExecutionStatus.REJECTED,
+    AgentExecutionStatus.FAILED,
+    -> scheme.error
+    AgentExecutionStatus.APPROVED,
+    AgentExecutionStatus.SUCCEEDED,
+    -> scheme.primary
 }
 
 @Composable
@@ -728,12 +911,14 @@ private fun AgentUsageRow(usage: AgentRunUsage) {
 
 @Composable
 private fun AgentThinkingBubble() {
-    Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            AppLoadingIndicator(size = 22.dp, strokeWidth = 2.dp)
-            Spacer(Modifier.width(10.dp))
-            Text(tr("Agent 正在规划下一步…", "Agent is planning the next step…"))
-        }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        AppLoadingIndicator(size = 18.dp, strokeWidth = 2.dp)
+        Spacer(Modifier.width(DeskCubbySpacing.md))
+        Text(
+            text = tr("Agent 正在规划下一步…", "Agent is planning the next step…"),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -836,16 +1021,26 @@ private fun AgentPermissionDialog(
 
 @Composable
 private fun PermissionModeCard(selected: Boolean, title: String, description: String, onClick: () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = MaterialTheme.shapes.large,
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+    DcCard(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick,
+        selected = selected,
+        contentPadding = PaddingValues(DeskCubbySpacing.md),
     ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+        Row(verticalAlignment = Alignment.Top) {
             Checkbox(checked = selected, onCheckedChange = { onClick() })
-            Column(Modifier.padding(start = 6.dp)) {
-                Text(title, fontWeight = FontWeight.SemiBold)
-                Text(description, style = MaterialTheme.typography.bodySmall)
+            Column(Modifier.padding(start = DeskCubbySpacing.sm)) {
+                Text(
+                    text = title,
+                    style = DeskCubbyType.listTitle,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(DeskCubbySpacing.xxxs))
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -886,13 +1081,12 @@ private fun ReviewField(label: String, value: String) {
 @Composable
 private fun ReviewCodeBlock(label: String, value: String) {
     Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
+    Surface(shape = DeskCubbyRadius.md, color = MaterialTheme.colorScheme.surfaceContainer) {
         SelectionContainer {
             Text(
                 value.take(256 * 1024),
-                modifier = Modifier.fillMaxWidth().padding(10.dp),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.fillMaxWidth().padding(DeskCubbySpacing.md),
+                style = DeskCubbyType.mono,
             )
         }
     }
@@ -958,13 +1152,31 @@ private fun RenameConversationDialog(
 
 @Composable
 private fun ConfigurationNotice(onOpenSettings: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Outlined.Settings, null)
-            Spacer(Modifier.width(10.dp))
-            Text(tr("请选择可用的文字模型", "Select an available text model"), modifier = Modifier.weight(1f))
-            TextButton(onClick = onOpenSettings) { Text(tr("设置", "Settings")) }
-        }
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(scheme.errorContainer)
+            .padding(
+                horizontal = currentGutter(),
+                vertical = DeskCubbySpacing.md,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.ErrorOutline,
+            contentDescription = null,
+            tint = scheme.onErrorContainer,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(DeskCubbySpacing.md))
+        Text(
+            text = tr("请选择可用的文字模型", "Select an available text model"),
+            style = MaterialTheme.typography.bodyMedium,
+            color = scheme.onErrorContainer,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onOpenSettings) { Text(tr("设置", "Settings")) }
     }
 }
 
@@ -986,9 +1198,18 @@ private fun AiContextPanel(
                 Spacer(Modifier.height(12.dp))
                 enabledSources.forEach { source ->
                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("✓", color = MaterialTheme.colorScheme.primary)
-                        Spacer(Modifier.width(8.dp))
-                        Text(agentDataSourceLabel(source), style = MaterialTheme.typography.bodyMedium)
+                        Icon(
+                            Icons.Outlined.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(DeskCubbySpacing.md))
+                        Text(
+                            text = agentDataSourceLabel(source),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
                     }
                 }
                 Spacer(Modifier.height(8.dp))

@@ -1,45 +1,118 @@
 #!/usr/bin/env python3
-"""Brace/paren depth check for Compose sources.
+"""Brace/paren/bracket depth check for Kotlin sources.
 
-Compose files are edited mechanically during a redesign, and there is no local Kotlin
-toolchain in this sandbox, so a structural check is run over every touched file before the
-real compile happens on CI. Line based with block-comment tracking, which - unlike a
-whole-file regex - is not confused by apostrophes inside comments.
+There is no Kotlin toolchain in this sandbox, so every touched file gets a structural check
+before the real compile happens on CI. This is a single-pass scanner that tracks line
+comments, block comments, single-line strings, raw triple-quoted strings, string templates and
+char literals, because naive regexes get them wrong: `"image/*"` is a MIME type, not the start
+of a KDoc block, and `'}'` is a char literal, not a brace.
 
 Usage: python3 .guide/compose_balance_check.py <file.kt> [...]
 Exits non-zero on the first unbalanced file.
 """
-import re
 import sys
 
+PAIRS = {"{": "}", "(": ")", "[": "]"}
+CLOSERS = set(PAIRS.values())
 
-def check(path):
-    depth = 0
-    parens = 0
-    in_block = False
-    for number, line in enumerate(open(path, encoding="utf-8").read().split("\n"), 1):
-        if in_block:
-            if "*/" in line:
-                in_block = False
+
+def scan(source):
+    stack = []
+    line = 1
+    i = 0
+    n = len(source)
+    while i < n:
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < n else ""
+        if ch == "\n":
+            line += 1
+            i += 1
             continue
-        if "/*" in line and "*/" not in line:
-            in_block = True
+        # Line comment.
+        if ch == "/" and nxt == "/":
+            while i < n and source[i] != "\n":
+                i += 1
             continue
-        stripped = re.sub(r'"(\\.|[^"\\])*"', '""', line)
-        stripped = re.sub(r"//.*", "", stripped)
-        depth += stripped.count("{") - stripped.count("}")
-        parens += stripped.count("(") - stripped.count(")")
-        if depth < 0:
-            return f"{path}:{number} brace depth went negative"
-    if depth != 0:
-        return f"{path}: unbalanced braces (net {depth})"
-    if parens != 0:
-        return f"{path}: unbalanced parentheses (net {parens})"
+        # Block comment (nesting is not a Kotlin thing, but a stray /* inside one is harmless).
+        if ch == "/" and nxt == "*":
+            depth = 1
+            i += 2
+            while i < n and depth:
+                if source[i] == "/" and source[i + 1:i + 2] == "*":
+                    depth += 1
+                    i += 2
+                    continue
+                if source[i] == "*" and source[i + 1:i + 2] == "/":
+                    depth -= 1
+                    i += 2
+                    continue
+                if source[i] == "\n":
+                    line += 1
+                i += 1
+            continue
+        # Raw string.
+        if source.startswith('"""', i):
+            i += 3
+            while i < n and not source.startswith('"""', i):
+                if source[i] == "\n":
+                    line += 1
+                i += 1
+            i += 3
+            continue
+        # Single-line string, including ${...} templates whose braces must be ignored.
+        if ch == '"':
+            i += 1
+            while i < n and source[i] != '"':
+                if source[i] == "\\":
+                    i += 2
+                    continue
+                if source[i] == "$" and source[i + 1:i + 2] == "{":
+                    depth = 1
+                    i += 2
+                    while i < n and depth:
+                        if source[i] == "{":
+                            depth += 1
+                        elif source[i] == "}":
+                            depth -= 1
+                        elif source[i] == "\n":
+                            line += 1
+                        i += 1
+                    continue
+                i += 1
+            i += 1
+            continue
+        # Char literal.
+        if ch == "'":
+            i += 1
+            while i < n and source[i] != "'":
+                i += 2 if source[i] == "\\" else 1
+            i += 1
+            continue
+        if ch in PAIRS:
+            stack.append((ch, line))
+            i += 1
+            continue
+        if ch in CLOSERS:
+            if not stack:
+                return f"line {line}: unexpected '{ch}' with an empty stack"
+            opener, opened_at = stack.pop()
+            if PAIRS[opener] != ch:
+                return f"line {line}: '{ch}' closes '{opener}' opened on line {opened_at}"
+            i += 1
+            continue
+        i += 1
+    if stack:
+        opener, opened_at = stack[-1]
+        return f"unclosed '{opener}' opened on line {opened_at} ({len(stack)} still open)"
     return None
 
 
 def main(argv):
-    problems = [r for r in (check(p) for p in argv) if r]
+    problems = []
+    for path in argv:
+        result = scan(open(path, encoding="utf-8").read())
+        if result:
+            problems.append(f"{path}: {result}")
     for problem in problems:
         print("FAIL", problem)
     if not problems:
