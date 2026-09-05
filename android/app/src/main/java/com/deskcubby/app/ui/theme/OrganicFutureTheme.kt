@@ -2,7 +2,6 @@ package com.deskcubby.app.ui.theme
 
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Shapes
-import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -256,103 +255,104 @@ private fun contrastRatio(first: Color, second: Color): Float {
 
 private fun opaqueColor(argb: Int): Color = Color(argb or 0xFF000000.toInt())
 
-private val DefaultTypography = Typography()
-
-internal val OrganicFutureTypography = DefaultTypography.copy(
-    displayLarge = DefaultTypography.displayLarge.copy(
+/** Organic Future keeps its own authored scale but inherits the shared base for anything it
+ * does not override, so label sizes and line-height behaviour match the rest of the app.
+ */
+internal val OrganicFutureTypography = AppTypography.copy(
+    displayLarge = AppTypography.displayLarge.copy(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 52.sp,
         lineHeight = 56.sp,
         letterSpacing = (-1.4).sp,
     ),
-    displayMedium = DefaultTypography.displayMedium.copy(
+    displayMedium = AppTypography.displayMedium.copy(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 45.sp,
         lineHeight = 49.sp,
         letterSpacing = (-1.1).sp,
     ),
-    displaySmall = DefaultTypography.displaySmall.copy(
+    displaySmall = AppTypography.displaySmall.copy(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 39.sp,
         lineHeight = 44.sp,
         letterSpacing = (-0.8).sp,
     ),
-    headlineLarge = DefaultTypography.headlineLarge.copy(
+    headlineLarge = AppTypography.headlineLarge.copy(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 33.sp,
         lineHeight = 38.sp,
         letterSpacing = (-0.6).sp,
     ),
-    headlineMedium = DefaultTypography.headlineMedium.copy(
+    headlineMedium = AppTypography.headlineMedium.copy(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 29.sp,
         lineHeight = 34.sp,
         letterSpacing = (-0.4).sp,
     ),
-    headlineSmall = DefaultTypography.headlineSmall.copy(
+    headlineSmall = AppTypography.headlineSmall.copy(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 25.sp,
         lineHeight = 30.sp,
         letterSpacing = (-0.25).sp,
     ),
-    titleLarge = DefaultTypography.titleLarge.copy(
+    titleLarge = AppTypography.titleLarge.copy(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 22.sp,
         lineHeight = 27.sp,
         letterSpacing = (-0.2).sp,
     ),
-    titleMedium = DefaultTypography.titleMedium.copy(
+    titleMedium = AppTypography.titleMedium.copy(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 17.sp,
         lineHeight = 23.sp,
         letterSpacing = (-0.05).sp,
     ),
-    titleSmall = DefaultTypography.titleSmall.copy(
+    titleSmall = AppTypography.titleSmall.copy(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
         fontSize = 14.sp,
         lineHeight = 20.sp,
         letterSpacing = 0.1.sp,
     ),
-    bodyLarge = DefaultTypography.bodyLarge.copy(
+    bodyLarge = AppTypography.bodyLarge.copy(
         fontFamily = FontFamily.SansSerif,
         fontSize = 16.sp,
         lineHeight = 24.sp,
         letterSpacing = 0.1.sp,
     ),
-    bodyMedium = DefaultTypography.bodyMedium.copy(
+    bodyMedium = AppTypography.bodyMedium.copy(
         fontFamily = FontFamily.SansSerif,
-        fontSize = 14.sp,
-        lineHeight = 21.sp,
+        fontSize = 15.sp,
+        lineHeight = 23.sp,
         letterSpacing = 0.12.sp,
     ),
-    bodySmall = DefaultTypography.bodySmall.copy(
+    bodySmall = AppTypography.bodySmall.copy(
         fontFamily = FontFamily.SansSerif,
-        fontSize = 12.sp,
-        lineHeight = 18.sp,
+        fontSize = 13.sp,
+        lineHeight = 19.sp,
         letterSpacing = 0.18.sp,
     ),
-    labelLarge = DefaultTypography.labelLarge.copy(
+    labelLarge = AppTypography.labelLarge.copy(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 13.sp,
         lineHeight = 18.sp,
         letterSpacing = 0.35.sp,
     ),
-    labelMedium = DefaultTypography.labelMedium.copy(
+    labelMedium = AppTypography.labelMedium.copy(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
         letterSpacing = 0.4.sp,
     ),
-    labelSmall = DefaultTypography.labelSmall.copy(
+    labelSmall = AppTypography.labelSmall.copy(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
         letterSpacing = 0.55.sp,
