@@ -4,10 +4,7 @@ import android.animation.ValueAnimator
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FiniteAnimationSpec
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
@@ -78,7 +75,6 @@ object DeskCubbyRadius {
     val md: Dp = 14.dp
     val lg: Dp = 20.dp
     val xl: Dp = 26.dp
-    val pill: Dp = 999.dp
 
     /** Small controls: chips, toggles, icon buttons. */
     val control: Shape = RoundedCornerShape(sm)
@@ -94,29 +90,13 @@ object DeskCubbyRadius {
 
     /** Modal sheets anchored to an edge. */
     val sheet: Shape = RoundedCornerShape(topStart = xl, topEnd = xl)
-
-    val pillShape: Shape = RoundedCornerShape(pill)
-}
-
-/**
- * Depth is expressed with contrast and hairlines, not shadow. Shadow is reserved for chrome
- * that genuinely floats above the content plane.
- */
-object DeskCubbyElevation {
-    val flat: Dp = 0.dp
-    val hairline: Dp = 1.dp
-    val raised: Dp = 2.dp
-    val floating: Dp = 8.dp
-    val overlay: Dp = 16.dp
 }
 
 /** Durations stay inside 120-340ms so motion never delays the next tap. */
 object DeskCubbyMotion {
-    const val INSTANT = 80
     const val FAST = 120
     const val BASE = 200
     const val SLOW = 280
-    const val EMPHASIS = 340
 
     /** Decelerate hard: elements arrive quickly and settle, which reads as responsive. */
     val EaseOut: Easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
@@ -126,17 +106,6 @@ object DeskCubbyMotion {
 
     /** Symmetric curve for value animation (progress, selection). */
     val EaseStandard: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
-
-    /** Damped, never bouncy. */
-    fun <T> settle(): SpringSpec<T> = spring(
-        dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = Spring.StiffnessMediumLow,
-    )
-
-    fun <T> press(): SpringSpec<T> = spring(
-        dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = Spring.StiffnessHigh,
-    )
 }
 
 /**
@@ -187,25 +156,12 @@ object DeskCubbyColors {
     /** 1dp separator that never competes with content. */
     val ColorScheme.hairline: Color get() = outlineVariant
 
-    /** Stronger separator used sparingly, e.g. under a sticky header. */
-    val ColorScheme.hairlineStrong: Color get() = outline.copy(alpha = 0.28f)
-
     /** Fill behind a selected navigation destination or list row. */
     val ColorScheme.selectedContainer: Color get() = primary.copy(alpha = 0.12f)
-
-    /** Pressed overlay shared by every interactive surface. */
-    val ColorScheme.pressedOverlay: Color get() = onSurface.copy(alpha = 0.10f)
-
-    /** The plane a card sits on. */
-    val ColorScheme.cardSurface: Color
-        get() = if (background == Color.Transparent) surfaceContainerLowest else surface
 
     /** Inset plane inside a card (code blocks, image wells, disabled rows). */
     val ColorScheme.insetSurface: Color get() = surfaceContainer
 
     /** Quiet accent wash used behind metrics and status chips. */
     val ColorScheme.accentWash: Color get() = primaryContainer.copy(alpha = 0.55f)
-
-    val ColorScheme.textPrimary: Color get() = onSurface
-    val ColorScheme.textSecondary: Color get() = onSurfaceVariant
 }

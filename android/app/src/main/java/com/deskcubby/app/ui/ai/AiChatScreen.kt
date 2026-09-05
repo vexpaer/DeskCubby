@@ -792,7 +792,7 @@ private fun AgentExecutionRow(update: AgentExecutionUpdate) {
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(DeskCubbyRadius.md)
+            .clip(DeskCubbyRadius.card)
             .background(scheme.surfaceContainer)
             .clickable { expanded = !expanded }
             .padding(
@@ -1079,7 +1079,7 @@ private fun ReviewField(label: String, value: String) {
 @Composable
 private fun ReviewCodeBlock(label: String, value: String) {
     Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Surface(shape = DeskCubbyRadius.md, color = MaterialTheme.colorScheme.surfaceContainer) {
+    Surface(shape = DeskCubbyRadius.card, color = MaterialTheme.colorScheme.surfaceContainer) {
         SelectionContainer {
             Text(
                 value.take(256 * 1024),

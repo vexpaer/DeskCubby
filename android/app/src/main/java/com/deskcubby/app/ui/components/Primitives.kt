@@ -205,7 +205,7 @@ fun DcListRow(
     selected: Boolean = false,
     enabled: Boolean = true,
     minHeight: Dp = DeskCubbySpacing.listRowMinHeight,
-    shape: Shape = DeskCubbyRadius.md,
+    shape: Shape = DeskCubbyRadius.card,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -359,7 +359,7 @@ fun DcTag(
 @Composable
 fun DcInset(
     modifier: Modifier = Modifier,
-    shape: Shape = DeskCubbyRadius.md,
+    shape: Shape = DeskCubbyRadius.card,
     contentPadding: PaddingValues = PaddingValues(DeskCubbySpacing.md),
     content: @Composable ColumnScope.() -> Unit,
 ) {

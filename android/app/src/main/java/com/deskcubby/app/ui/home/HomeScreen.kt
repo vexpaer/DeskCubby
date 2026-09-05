@@ -339,13 +339,15 @@ fun HomeScreen(
             // eyebrow, the greeting is the page title. It sits on the canvas rather than on a
             // separate bar so Home opens as one continuous sheet.
             val today = LocalDate.now()
+            val gutter = currentGutter()
             Column(
                 Modifier
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.statusBars)
                     .padding(
-                        horizontal = currentGutter(),
+                        start = gutter,
                         top = DeskCubbySpacing.lg,
+                        end = gutter,
                         bottom = DeskCubbySpacing.md,
                     ),
             ) {

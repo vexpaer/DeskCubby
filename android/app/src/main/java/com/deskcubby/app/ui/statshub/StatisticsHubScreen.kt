@@ -73,6 +73,7 @@ import com.deskcubby.app.data.statistics.StatisticsChartType
 import com.deskcubby.app.data.statistics.StatisticsPoint
 import com.deskcubby.app.ui.statistics.StatisticsChart
 import com.deskcubby.app.ui.statistics.StatisticsMessagePanel
+import com.deskcubby.app.ui.theme.DeskCubbySpacing
 import com.deskcubby.app.ui.theme.DeskCubbyType
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.PanelRole
