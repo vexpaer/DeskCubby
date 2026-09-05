@@ -51,6 +51,9 @@ import com.deskcubby.app.data.model.NavItemConfig
 import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.ui.iconFor
+import com.deskcubby.app.ui.theme.DeskCubbyColors.hairline
+import com.deskcubby.app.ui.theme.DeskCubbyColors.selectedContainer
+import com.deskcubby.app.ui.theme.DeskCubbySpacing
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.LocalVisualStyle
@@ -134,7 +137,7 @@ fun DeskCubbyNavigationRail(
     onSelected: (NavItemConfig) -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
-    railWidth: Dp = 84.dp,
+    railWidth: Dp = DeskCubbySpacing.railWidth,
 ) {
     val language = LocalAppLanguage.current
     val glass = LocalVisualStyle.current == VisualStyle.LIQUID_GLASS
@@ -143,7 +146,7 @@ fun DeskCubbyNavigationRail(
     val primaryItems = items.filter { it.id != NavItemId.SETTINGS }
     val backgroundColor = when {
         glass || organic -> Color.Transparent
-        else -> MaterialTheme.colorScheme.surfaceContainer
+        else -> MaterialTheme.colorScheme.surface
     }
 
     Box(
@@ -205,7 +208,19 @@ fun DeskCubbyNavigationRail(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(backgroundColor),
-            ) { surface() }
+            ) {
+                surface()
+                // The rail shares the card plane with page content, so a hairline - not a
+                // shadow - is what separates navigation from the workspace.
+                HorizontalDivider(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .width(1.dp),
+                    thickness = 1.dp,
+                    color = MaterialTheme.colorScheme.hairline,
+                )
+            }
         }
     }
 }
@@ -214,7 +229,7 @@ fun DeskCubbyNavigationRail(
 private fun navigationRailItemColors() = NavigationRailItemDefaults.colors(
     selectedIconColor = MaterialTheme.colorScheme.primary,
     selectedTextColor = MaterialTheme.colorScheme.primary,
-    indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+    indicatorColor = MaterialTheme.colorScheme.selectedContainer,
     unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
     unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
 )
@@ -248,7 +263,8 @@ fun ContextPanel(
             Row(Modifier.fillMaxHeight().clipToBounds()) {
                 HorizontalDivider(
                     modifier = Modifier.fillMaxHeight().width(1.dp),
-                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
+                    thickness = 1.dp,
+                    color = MaterialTheme.colorScheme.hairline,
                 )
                 Column(
                     modifier = Modifier

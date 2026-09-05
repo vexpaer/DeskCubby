@@ -21,6 +21,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -60,6 +61,7 @@ import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.ViewDay
 import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -152,12 +154,17 @@ import com.deskcubby.app.ui.ai.AiChatScreen
 import com.deskcubby.app.ui.ai.AgentReviewScreen
 import com.deskcubby.app.ui.ai.AgentReviewViewModel
 import com.deskcubby.app.ui.ai.AiChatViewModel
+import com.deskcubby.app.ui.theme.DeskCubbyColors.hairline
+import com.deskcubby.app.ui.theme.DeskCubbyColors.selectedContainer
+import com.deskcubby.app.ui.theme.DeskCubbyMotion
+import com.deskcubby.app.ui.theme.DeskCubbySpacing
 import com.deskcubby.app.ui.theme.DeskCubbyTheme
 import com.deskcubby.app.ui.theme.GlassPanel
 import com.deskcubby.app.ui.theme.LocalAppLanguage
 import com.deskcubby.app.ui.theme.LocalVisualStyle
 import com.deskcubby.app.ui.theme.PanelRole
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
+import com.deskcubby.app.ui.theme.rememberAppMotion
 import com.deskcubby.app.ui.theme.tr
 import com.deskcubby.app.ui.games.GamesScreen
 import com.deskcubby.app.ui.games.GamesViewModel
@@ -273,7 +280,11 @@ fun DeskCubbyRoot(
         } else {
             300
         }
-        val standardMotionMillis = if (rootVisuals.customized) rootVisuals.transitionMillis else 700
+        // Motion budget for the standard styles. The previous 700ms cross-fade made every tab
+        // switch feel like it was waiting for permission; the app now settles inside ~240ms and
+        // honours the system animator switch and any custom animation scale through
+        // rememberAppMotion().
+        val motion = rememberAppMotion()
         val backStack by navController.currentBackStackEntryAsState()
         val route = backStack?.destination?.route
         val windowInfo = rememberWindowInfo()
@@ -374,7 +385,14 @@ fun DeskCubbyRoot(
                                 scaleIn(tween(organicEnterMillis), initialScale = 0.992f)
                             resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
                                 EnterTransition.None
-                            else -> fadeIn(tween(standardMotionMillis))
+                            else -> fadeIn(motion.tween(DeskCubbyMotion.SLOW, DeskCubbyMotion.EaseOut)) +
+                                slideInHorizontally(
+                                    motion.tween(DeskCubbyMotion.SLOW, DeskCubbyMotion.EaseOut),
+                                ) { it / 40 } +
+                                scaleIn(
+                                    motion.tween(DeskCubbyMotion.SLOW, DeskCubbyMotion.EaseOut),
+                                    initialScale = 0.994f,
+                                )
                         }
                     },
                     exitTransition = {
@@ -384,7 +402,10 @@ fun DeskCubbyRoot(
                                 scaleOut(tween(organicEnterMillis), targetScale = 1.008f)
                             resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
                                 ExitTransition.None
-                            else -> fadeOut(tween(standardMotionMillis))
+                            else -> fadeOut(motion.tween(DeskCubbyMotion.SLOW, DeskCubbyMotion.EaseIn)) +
+                                slideOutHorizontally(
+                                    motion.tween(DeskCubbyMotion.SLOW, DeskCubbyMotion.EaseIn),
+                                ) { -it / 48 }
                         }
                     },
                     popEnterTransition = {
@@ -394,7 +415,14 @@ fun DeskCubbyRoot(
                                 scaleIn(tween(organicEnterMillis), initialScale = 0.992f)
                             resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
                                 EnterTransition.None
-                            else -> fadeIn(tween(standardMotionMillis))
+                            else -> fadeIn(motion.tween(DeskCubbyMotion.SLOW, DeskCubbyMotion.EaseOut)) +
+                                slideInHorizontally(
+                                    motion.tween(DeskCubbyMotion.SLOW, DeskCubbyMotion.EaseOut),
+                                ) { it / 40 } +
+                                scaleIn(
+                                    motion.tween(DeskCubbyMotion.SLOW, DeskCubbyMotion.EaseOut),
+                                    initialScale = 0.994f,
+                                )
                         }
                     },
                     popExitTransition = {
@@ -404,7 +432,10 @@ fun DeskCubbyRoot(
                                 scaleOut(tween(organicEnterMillis), targetScale = 1.008f)
                             resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
                                 ExitTransition.None
-                            else -> fadeOut(tween(standardMotionMillis))
+                            else -> fadeOut(motion.tween(DeskCubbyMotion.SLOW, DeskCubbyMotion.EaseIn)) +
+                                slideOutHorizontally(
+                                    motion.tween(DeskCubbyMotion.SLOW, DeskCubbyMotion.EaseIn),
+                                ) { -it / 48 }
                         }
                     },
                 ) {
@@ -1140,7 +1171,9 @@ internal fun DeskBottomBar(
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = MaterialTheme.colorScheme.primary,
                             selectedTextColor = MaterialTheme.colorScheme.primary,
-                            indicatorColor = Color.Transparent,
+                            // A visible pill behind the active destination is what tells the
+                            // eye where it is; a recoloured icon alone is not enough.
+                            indicatorColor = MaterialTheme.colorScheme.selectedContainer,
                             unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         ),
@@ -1156,7 +1189,7 @@ internal fun DeskBottomBar(
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
                 .padding(
-                    horizontal = if (organic) 10.dp else 12.dp,
+                    horizontal = if (organic) 10.dp else DeskCubbySpacing.md,
                     vertical = if (showLabels) {
                         if (organic) 6.dp else 8.dp
                     } else {
@@ -1172,14 +1205,21 @@ internal fun DeskBottomBar(
             ) { content() }
         }
     } else {
-        Box(
+        // Quiet chrome: the bar sits on the card plane and is separated from the scrolling
+        // content by a hairline rather than by tonal elevation, so the page reads as one
+        // continuous sheet of paper.
+        Column(
             modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .background(MaterialTheme.colorScheme.surface)
                 .windowInsetsPadding(
                     WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
                 ),
         ) {
+            HorizontalDivider(
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.hairline,
+            )
             content()
         }
     }

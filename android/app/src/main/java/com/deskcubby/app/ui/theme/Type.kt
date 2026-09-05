@@ -78,6 +78,12 @@ object DeskCubbyType {
 
     val metricLabel: TextStyle = deskText(12f, 16f, FontWeight.Medium, 0.2f)
 
+    /** Primary line of a list row: quiet medium weight, never shouting. */
+    val listTitle: TextStyle = deskText(15f, 21f, FontWeight.Medium, 0f)
+
+    /** Secondary line of a list row. */
+    val listSubtitle: TextStyle = deskText(13f, 18f, FontWeight.Normal, 0.05f)
+
     /** Monospace for code, diffs and raw JSON in the AI review surface. */
     val mono: TextStyle = TextStyle(
         fontFamily = FontFamily.Monospace,
