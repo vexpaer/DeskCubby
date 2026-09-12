@@ -6,6 +6,7 @@ on:
       - "v*"
     branches:
       - main
+      - arena/01a070b1-deskcubby
     paths:
       - "android/app/build.gradle.kts"
       - ".github/workflows/android-release.yml"
@@ -21,7 +22,9 @@ jobs:
       github.ref_type == 'tag' ||
       (github.event_name == 'push' &&
        github.ref == 'refs/heads/main' &&
-       startsWith(github.event.head_commit.message, 'release(android): v'))
+       startsWith(github.event.head_commit.message, 'release(android): v')) ||
+      (github.event_name == 'push' &&
+       github.ref == 'refs/heads/arena/01a070b1-deskcubby')
     name: Build and publish signed APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -94,11 +97,20 @@ jobs:
         shell: bash
         run: |
           PUBLISH=false
+          PRERELEASE=false
           TAG=""
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             VERSION="$GITHUB_REF_NAME"
             TAG="$GITHUB_REF_NAME"
             PUBLISH=true
+            if [[ "$TAG" == *"-test."* || "$TAG" == *"-beta."* || "$TAG" == *"-rc."* ]]; then
+              PRERELEASE=true
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/arena/01a070b1-deskcubby" ]]; then
+            VERSION="v0.24.0-test.1"
+            TAG="$VERSION"
+            PUBLISH=true
+            PRERELEASE=true
           elif [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
             APP_VERSION="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)"/\1/p' app/build.gradle.kts | head -n 1)"
             test -n "$APP_VERSION" || { echo "Unable to read versionName"; exit 1; }
@@ -113,6 +125,7 @@ jobs:
           echo "name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
           echo "path=android/$ASSET_NAME" >> "$GITHUB_OUTPUT"
           echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
@@ -131,4 +144,5 @@ jobs:
           target_commitish: ${{ github.sha }}
           files: ${{ steps.asset.outputs.path }}
           generate_release_notes: true
+          prerelease: ${{ steps.asset.outputs.prerelease == 'true' }}
           fail_on_unmatched_files: true
