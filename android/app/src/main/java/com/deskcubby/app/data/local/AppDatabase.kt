@@ -30,12 +30,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         UsageDeviceEntity::class,
         StepHistoryEntity::class,
         StepDayEntity::class,
+        SleepDeviceEntity::class,
+        SleepNightEntity::class,
         LegacyStatisticsMigrationEntity::class,
         StructuredRecordFileEntity::class,
         StructuredRecordOccurrenceEntity::class,
         AgentApprovalRequestEntity::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -53,12 +55,49 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun gameStatisticDao(): GameStatisticDao
     abstract fun usageStatisticsDao(): UsageStatisticsDao
     abstract fun stepStatisticsDao(): StepStatisticsDao
+    abstract fun sleepStatisticsDao(): SleepStatisticsDao
     abstract fun legacyStatisticsMigrationDao(): LegacyStatisticsMigrationDao
     abstract fun aiTaskDao(): AiTaskDao
     abstract fun agentApprovalDao(): AgentApprovalDao
     abstract fun structuredRecordDao(): StructuredRecordDao
 
     companion object {
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sleep_devices` (
+                        `deviceId` TEXT NOT NULL,
+                        `deviceName` TEXT NOT NULL,
+                        `platform` TEXT NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`deviceId`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sleep_nights` (
+                        `deviceId` TEXT NOT NULL,
+                        `wakeDateIso` TEXT NOT NULL,
+                        `zoneId` TEXT NOT NULL,
+                        `bedtimeEpochMillis` INTEGER NOT NULL,
+                        `wakeEpochMillis` INTEGER NOT NULL,
+                        `durationMinutes` INTEGER NOT NULL,
+                        `source` TEXT NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`deviceId`, `wakeDateIso`),
+                        FOREIGN KEY(`deviceId`) REFERENCES `sleep_devices`(`deviceId`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_sleep_nights_deviceId` ON `sleep_nights` (`deviceId`)",
+                )
+            }
+        }
+
         val MIGRATION_15_16 = object : Migration(15, 16) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(

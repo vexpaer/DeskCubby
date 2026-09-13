@@ -212,9 +212,10 @@ private fun CalorieQueueSummary(state: CalorieEstimationQueueState) {
             } else {
                 Text(
                     tr(
-                        "同一天最多 3 张图片并行识别，再统一计算并只保存一次；中途结果不会部分写入。",
-                        "Up to 3 photos per date are recognized in parallel, then calculated " +
-                            "together and saved once; intermediate results are not partially written.",
+                        "手动计算按日期串行；每张图片都使用与拍照后自动估算相同的“图片识别 → 文字估算”链路，整日完成后只保存一次；中途结果不会部分写入。",
+                        "Manual estimation is serialized by date. Every photo uses the same image-recognition " +
+                            "then text-estimation path as automatic post-capture estimation, and the day is saved " +
+                            "only after all selected photos succeed.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )

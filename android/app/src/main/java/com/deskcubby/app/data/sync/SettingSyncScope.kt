@@ -105,6 +105,7 @@ object SettingSyncScopes {
         "aiPageFontSizeSp",
         "aiReplyBoxWidthDp",
         "usageTrackingEnabled",
+        "sleepTrackingEnabled",
         "stepTrackingEnabled",
         "navigationIntroAcknowledged",
         "navItems",

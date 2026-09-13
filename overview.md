@@ -6,7 +6,7 @@ DeskCubby 是一个本地优先、可高度定制的个人记录应用，仓库�
 
 Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room 保存小巧思、分类、浏览记录、日期记录、诗词、AI 对话等数据。Windows 通过受限 Tauri IPC 让 Rust 后端访问用户选择的普通目录，并用 SQLite 保存核心结构化数据；React 前端不获得任意文件系统权限。Web 端以 FastAPI + SQLite 复刻 Android 的数据与业务语义：所有文件、AI 调用与敏感配置都留在服务端，浏览器只通过 `/api` 访问，API Key 与云凭据永不下发前端。
 
-两个客户端都提供 Material、Liquid Glass 和 Organic Future 三套预设视觉风格；Android 另有只映射到 Compose 主题角色的受控 Custom 风格。两端均支持简体中文/繁体中文/英文/韩语/日语、深浅色模式和字号缩放（Android 0.16.0 起支持五种语言；首次启动会先让用户选择语言）。当前版本为 Android **0.20.1**、Windows **0.8.0**。Android 当前应用备份格式为 v34（0.20.0 起：手动备份不再包含 AI API Key、SAF URI 与云凭据，新增 URI-free Agent 对话载荷）；Windows **0.8.0** 追赶 Android 数据类型进度：支持导入 Android v1–v33 并统一导出 v33（补齐 v30 Agent 来源授权/权限模式/模型工具能力、v31 AI 页面字号/回复框宽度/Agent 提示词/导航页列数与模块颜色、v32 桌面小卡片使用时间范围、v33 应用模块内容类型与云同步归一映射），Reader 内部状态 schema 升至 v5 并携带与 Android 一致的 0/5/…/95 页内偏移。注意：Windows 0.8.0 尚不支持导入 Android v34 JSON（需等待 Windows 侧跟进）。
+两个客户端都提供 Material、Liquid Glass 和 Organic Future 三套预设视觉风格；Android 另有只映射到 Compose 主题角色的受控 Custom 风格。两端均支持简体中文/繁体中文/英文/韩语/日语、深浅色模式和字号缩放（Android 0.16.0 起支持五种语言；首次启动会先让用户选择语言）。当前版本为 Android **0.23.7**、Windows **0.8.0**。Android 当前应用备份格式为 v34（0.20.0 起：手动备份不再包含 AI API Key、SAF URI 与云凭据，新增 URI-free Agent 对话载荷）；Windows **0.8.0** 追赶 Android 数据类型进度：支持导入 Android v1–v33 并统一导出 v33（补齐 v30 Agent 来源授权/权限模式/模型工具能力、v31 AI 页面字号/回复框宽度/Agent 提示词/导航页列数与模块颜色、v32 桌面小卡片使用时间范围、v33 应用模块内容类型与云同步归一映射），Reader 内部状态 schema 升至 v5 并携带与 Android 一致的 0/5/…/95 页内偏移。注意：Windows 0.8.0 尚不支持导入 Android v34 JSON（需等待 Windows 侧跟进）。
 
 ## 2. Android 技术栈
 
@@ -15,7 +15,7 @@ Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room
 | UI | Kotlin、Jetpack Compose、Material 3、Navigation Compose |
 | 状态 | ViewModel、StateFlow、Lifecycle Compose |
 | 依赖注入 | Hilt |
-| 结构化数据 | Room，数据库版本 13；手机使用时间、其他设备缓存、健康每日统计、小游戏特色累计统计、Agent 会话/运行/用量/Review 以 Room 为运行时权威 |
+| 结构化数据 | Room，数据库版本 17；手机使用时间、按设备睡眠、健康每日统计、小游戏特色累计统计、Agent 会话/运行/用量/Review 与结构化记录索引以 Room 为运行时权威 |
 | 设置 | Preferences DataStore |
 | 文件 | Storage Access Framework、DocumentFile |
 | 后台任务 | WorkManager（逐任务持久 AI 队列、自动备份、可选云端周期同步、可选本机统计补采） |
@@ -24,6 +24,8 @@ Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room
 | Markdown | CommonMark |
 | 网络 | `HttpURLConnection`（普通请求）、OkHttp（仅 WebDAV `PROPFIND`）、`org.json`、XmlPullParser |
 | 构建 | Gradle Kotlin DSL、JDK 17、compile/target SDK 36、min SDK 26 |
+
+Android 0.23.7 新增按设备独立的睡眠统计（Room v17 + 可选 `records/sleep` 记录同步），并修复 Health Connect 延迟历史回填、手动热量 AI 路由、Agent 原生工具模型校验及桌面小组件拍照返回栈；共享应用 JSON 备份继续保持 v34，不把 Android-only 睡眠导航/采集开关投影给尚未支持该枚举的 Windows/Web。
 
 Android 工程位于仓库的 `android/` 目录，包含 application module `:app` 与内部扩展契约 module `:plugin-api:core`。后者只提供插件生命周期、API 契约和 Compose UI contribution 类型；现有业务仍全部留在 `:app`。
 
@@ -204,7 +206,7 @@ Rust command boundary
 | 顶层导航与聚合页 | `ui/Navigation.kt`、`ui/components/PageTutorialOverlay.kt`、`ui/more/MoreHubScreen.kt` | `NavItemId` 定义主页面；默认开启的教学模式按稳定页面 ID 为主路由、嵌套路由、设置子页、阅读状态与具体小游戏各显示一次蒙版，确认只存设备本机；导航页按设置使用一列/两列/三列独立高度的瀑布流，平时卡片不显示手柄，长按模块进入布局更改模式后所有卡片出现四点手柄并可拖动排序，右上角对勾退出；每个模块可单独设置按钮底色、模块整体底色、名称和描述 |
 | 首页 | `ui/home/HomeScreen.kt`、`HomeViewModel.kt`、`data/sync/AppCloudSyncService.kt` | 可配置模块、快速小巧思、饮食图片、日常记录；笔记入口、从八个小游戏/变体中自选的快捷入口和日记/小巧思/日期记录概览；24 条中性默认问候及可增删改的双语问候模板。饮食图片的交互忙碌状态只覆盖图片与今日日记的真实落盘，成功后立即恢复餐别按钮；可选 AI 热量估算与索引扫描继续后台执行，不再让页面持续转圈。首页的“立即同步”与“强制上传/下载”模块共享串行队列、进度、待确认 JSON 和持久化的最近完成结果；0.16.2 起完成后明确显示上传、下载与冲突文件数，进程重启后仍可见 |
 | Desk | `ui/desk/DeskScreen.kt`、`DeskViewModel.kt`、`ui/desk/components/`、`ui/desk/model/` | 个人数字桌面，把今天留下的日记、小巧思、照片、事件和痕迹摊成一张编辑式「桌面」而非列表；只用现有 repository/DAO 聚合（`DiaryIndexDao`、`FlashThoughtDao`、`DateRecordDao`、`DiaryFileRepository.scanMealCalendar`/`load`），不新建数据系统。日期即页面标题，Diary 是带轻高度与微小旋转的「纸张」主对象，Idea/Photo 各自极简呈现，Today Traces 用排版而非卡片建立层级；右上角 ✦ 打开轻量 AI 浮层并转入既有 AI 页，底部低调 `+` 展开 Quick Capture 到既有创建流程；内容随当天数据动态改变信息层级，无数据时留白即空状态。对象旋转与选择用日期+内容 ID 生成可重现 seed，早晨/午后/傍晚/深夜仅做极轻微环境色倾移 |
-| 日记与吃历 | `ui/diary/DiaryScreens.kt`、`DiaryViewModel.kt`、`data/repository/DefaultDiaryFolderSetup.kt`、`ui/components/MarkdownPreview.kt` | 未配置日记目录时可由用户在系统 SAF 选择器确认本机 Documents，一次创建并绑定 `Documents/deskcubby/diary` 与 `Documents/deskcubby/media`，也保留手动选择入口；`DiaryFileRepository` 负责 SAF、SHA 冲突、媒体、回收站、索引、预览照片地点和按日范围导出吃历 PNG 长图；Markdown 源码普通文字使用完整编辑宽度，删除/拖动控件仅在独占媒体行尾部局部覆盖；吃历用单次 SAF 子项元数据快照同时建立日记/媒体索引，返回嵌套页面时复用已加载结果，内部日记变更用进程内 revision 失效；共享预览保留 CommonMark 块级/行内格式并按 H1–H6 设置应用独立字号；热量估算仍按日期串行，但同一天最多 3 张图片并行识别，随后只调用一次文字模型统一计算并一次性保存；运行卡可展开并发图片与全日文字模型的用时、流式 reasoning/回复；`dc-media.json` v2 用输入上限、previous/pending 与回读校验保护更新 |
+| 日记与吃历 | `ui/diary/DiaryScreens.kt`、`DiaryViewModel.kt`、`data/repository/DefaultDiaryFolderSetup.kt`、`ui/components/MarkdownPreview.kt` | 未配置日记目录时可由用户在系统 SAF 选择器确认本机 Documents，一次创建并绑定 `Documents/deskcubby/diary` 与 `Documents/deskcubby/media`，也保留手动选择入口；`DiaryFileRepository` 负责 SAF、SHA 冲突、媒体、回收站、索引、预览照片地点和按日范围导出吃历 PNG 长图；Markdown 源码普通文字使用完整编辑宽度，删除/拖动控件仅在独占媒体行尾部局部覆盖；吃历用单次 SAF 子项元数据快照同时建立日记/媒体索引，返回嵌套页面时复用已加载结果，内部日记变更用进程内 revision 失效；共享预览保留 CommonMark 块级/行内格式并按 H1–H6 设置应用独立字号；手动热量估算按日期串行，每张图片复用拍照后自动估算的“图片识别 → 文字估算”调用链，整日所选图片全部成功后再一次性保存，不部分写入；运行卡显示当前图片的识别/估算阶段；`dc-media.json` v2 用输入上限、previous/pending 与回读校验保护更新 |
 | 笔记 | `ui/notes/`、`data/repository/NotesRepository.kt`、`ui/components/MarkdownPreview.kt` | SAF 直接打开用户选择的 Obsidian 笔记库，文件夹优先、按名称顺序列出 Markdown；支持新建/重命名/删除文件夹和笔记、自动保存、SHA-256 外部修改冲突的加载/覆盖/另存副本；兼容标准 Markdown 图片与 `![[Wiki 嵌入]]`，每次上传媒体都由用户重新选择当前笔记库内的目标文件夹并写入可移植相对链接；不复用日记媒体目录、不建立日期索引 |
 | 阅读 | `ui/reader/`、`data/repository/ReaderRepository.kt`、`data/sync/ReaderProgressJsonCodec.kt`、`data/statistics/EngagementTimeRepository.kt` | SAF 持久读取 TXT/PDF；增强视图使用 PDFium（`io.legere:pdfiumandroid:1.0.35`），通过 SAF 文件描述符直接打开且不复制原书，提供连续纵向按需渲染、缩放、页码、双色映射、文字搜索跳页与文本目录扫描，失败时安全切换系统 `PdfRenderer` 连续兼容视图。0.13.1 将 TXT、增强 PDF 与兼容 PDF 的本机恢复位置细化为页内 5%，约 600ms 防抖并在离开时检查点保存；0.13.2 让纯净模式控件悬浮覆盖固定正文平面，并把 engagement 私有文件升至 schema v2，为已有时长的书保留最后书名。0.15.0 把 PDF 双指缩放改为矩阵实时变换：手势期间内容围绕捏合中心实时跟随手指且不重新渲染，手势结束后才提交最终比例并重新渲染页面。0.16.0 让提交后按捏合中心锚定滚动位置，重载后的页面与松手时大小、位置一致；缩放滑杆按 1% 步进。0.16.3 用共享 `ReaderPdfContinuousViewport` 彻底替换增强/兼容视图各自的 nested-scroll 补丁：在方向锁定前读取原始 X 并独立结算横移，Y 继续交给 `LazyColumn` 以保留纵向惯性，单指斜向或画圈仍会同时移动两轴，任一轴到边界不吞另一轴；双指接管同一二维移动并增加围绕质心的即时缩放。专用 `ReaderPdfPageViewport` 继续以非约束测量让 100% 以上按目标像素宽度真实渲染，缩到视口内则居中并清除旧横向偏移。PDF 自动封面先取已验证缓存/提供方缩略图，缺失时再串行受限渲染第一页；封面文字可独立编辑、隐藏或恢复书名。Reader schema-v8 兼容 v1–v7；封面文字、更细偏移、书名和时长只留在 Android 私有状态，v33 与可选 `reading/v1/progress.json` 继续按原有页/段字段和完整文件 SHA-256+类型合并，不携带书名、URI、封面、正文或时长 |
 | 吃历滤镜 | `ui/diary/filter/`、`data/model/MealPhotoFilterSettings.kt` | 统一亮度、对比度、饱和度、色温和色调；仅改变 Compose 显示，不改原图 |
@@ -222,7 +224,7 @@ Rust command boundary
 | 桌面小卡片与同步组件 | `ui/widgets/`、`widget/`、`DesktopWidgetInstanceStore.kt`、`DesktopWidgetUpdateWorker.kt`、`DesktopWidgetActionWorker.kt`、`DesktopWidgetInteractionActivity.kt` | 每个 App Widget ID 保存“绑定模板 ID + 最后有效完整快照”；音乐服务也优先读取该精确实例快照，切换模板后不会被旧模板回写覆盖。编辑器用下拉菜单选择“主页模块 / 应用模块 / 应用按钮”，主页与应用模块使用彼此独立的白名单。0.16.2 将音乐重写为占满卡片、无文字/自身背景的频谱、波形或曲线，并按实际小组件尺寸有界绘制；使用时间提供无背景/坐标/文字的纯色块、纯折线、纯柱状三种图表，范围为 7/30/90 天，采集成功后主动刷新。饮食图片只显示无底色、整体垂直居中的 emoji。快速输入按实例保存设备本机草稿，点纸飞机加入未分类，长按私有编辑器主操作可选已有分类；受 `RemoteViews` 限制，真实键盘输入仍由非导出 Activity 承载。2048 只保留上/下/左/右四个透明触控区，没有任何新局入口；渲染器也拒绝旧 `NEW` PendingIntent，避免启动器缓存旧视图时覆盖存档。`RemoteViews` 不提供任意四向滑动回调，因此系统桌面不能实现等同 Compose 页面的原生滑动。实例快照 schema 升至 2 并继续读取 schema 1；草稿与实例状态不进 Android 备份或设备迁移 |
 | 更新检查与安装 | `data/repository/UpdateRepository.kt`、设置 About 页 | GitHub Releases latest API；检测到新版后下载精确匹配 APK 到私有缓存，限制 HTTPS 重定向/大小并校验包名、版本与当前签名，再交给系统安装器 |
 | 取色器/缩放查看 | `ui/components/ColorPickerDialog.kt`、`ZoomableImageDialog.kt` | HSV 同行滑杆 + Compose 蜂窝色盘 + hex 取色（强制不透明）；吃历照片全屏缩放查看复用滤镜 |
-| AI Agent | `ui/ai/`、`agent/`、`data/taskqueue/`、`data/repository/AiChatRepository.kt` | User→LLM→Tool Call→Execution→Result→LLM 循环由持久 Room 任务和每任务唯一 WorkRequest 驱动；Agent 与热量/图片 AI 可并行，页面切换、旋转或进程重建后从任务、工具事件与用量账本恢复状态。工具模型继续使用审批、Review/Undo、参数上限和 12 轮保护；旧 `supportsToolCalling=false` 配置退化为不调用工具的普通聊天，不解析文字冒充工具。四方块入口提供最多 5 个附件、8 类数据源授权和需要批准/全自动模式 |
+| AI Agent | `ui/ai/`、`agent/`、`data/taskqueue/`、`data/repository/AiChatRepository.kt` | User→LLM→Tool Call→Execution→Result→LLM 循环由持久 Room 任务和每任务唯一 WorkRequest 驱动；Agent 与热量/图片 AI 可并行，页面切换、旋转或进程重建后从任务、工具事件与用量账本恢复状态。工具模型继续使用审批、Review/Undo、参数上限和 12 轮保护；`supportsToolCalling=false` 的配置会明确拒绝启动 Agent，避免把普通聊天误报成工具 Agent；不会解析普通文字冒充工具。四方块入口提供最多 5 个附件、8 类数据源授权和需要批准/全自动模式 |
 | Agent Review / Undo | `ui/ai/AgentReview*`、`agent/AgentReviewRepository.kt`、Room `agent_*` 表 | 按 Run/会话记录全部工具事件和每项实际 mutation 的目标、摘要、before/after、状态与 Undo token；需要批准逐项弹窗，全自动仍完整记录。Undo 在当前内容仍匹配 Agent 结果时执行对应数据/SAF 文件/设置恢复，不以删除日志冒充恢复 |
 | AI 密钥 | 设置页 | Key 是 `AiModelConfig` 的明文字段，随 DataStore 与 v30 JSON 备份保存；旧加密值仅做一次性迁移。`supportsToolCalling` 是显式能力字段，旧配置默认 false |
 | 云端同步 | `ui/settings/`、`ui/home/HomeScreen.kt`、`data/sync/`、`data/model/CloudSyncModels.kt` | 设置页把立即同步与“撤回一次”组成等宽操作行：首页也显示最近一次完成的上传、下载与冲突文件数。`AppCloudSyncService` 将这些安全计数和完成时间持久化到排除备份的运行时状态，多服务结果聚合后写入，进程重启仍可恢复；撤回快照恢复被覆盖的本地日记并把本轮新建文件移入回收站，仅保留最近一次。既有日记/媒体/应用 JSON/usage/阅读同步边界不变；可选 Agent 会话 `agent/v1/chats.json` 继续以稳定 sync ID、LWW 和 tombstone 合并文字、冻结文档文字、图片占位、完成 Run 与 Provider 用量，不同步本机 URI/图片字节、Review/Undo 载荷或秘密 |

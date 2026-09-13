@@ -25,6 +25,7 @@ import com.deskcubby.app.data.local.ThoughtCategoryEntity
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.AiModelConfig
 import com.deskcubby.app.data.model.AiModelType
+import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.normalizeHomeGameShortcutIds
 import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.sync.AgentChatSyncRepository
@@ -605,7 +606,13 @@ internal fun AppSettings.sanitizedForManualBackup(): AppSettings = copy(
     notesTreeUri = null,
     poetryFontUri = null,
     usageTrackingEnabled = false,
+    sleepTrackingEnabled = false,
     stepTrackingEnabled = false,
+    // Sleep is Android-only in this release. Keep the shared v34 backup projection readable by
+    // Windows/Web clients that do not yet know NavItemId.SLEEP.
+    navItems = navItems.filterNot { it.id == NavItemId.SLEEP },
+    morePageOrder = morePageOrder.filterNot { it == NavItemId.SLEEP },
+    defaultPage = if (defaultPage == NavItemId.SLEEP) NavItemId.HOME else defaultPage,
     cloudSyncEnabled = false,
     aiConfigs = aiConfigs.map { it.copy(apiKey = "") },
     cloudSyncConfigs = cloudSyncConfigs.map { config ->
@@ -615,6 +622,8 @@ internal fun AppSettings.sanitizedForManualBackup(): AppSettings = copy(
             s3AccessKey = "",
             s3SecretKey = "",
             s3SessionToken = "",
+            // Android-only until the shared backup schema is bumped on every client.
+            selectedContents = config.selectedContents - com.deskcubby.app.data.model.CloudSyncContent.SLEEP_STATISTICS,
         )
     },
     desktopWidgetConfigs = desktopWidgetConfigs.map { it.copy(backgroundImageUri = null) },

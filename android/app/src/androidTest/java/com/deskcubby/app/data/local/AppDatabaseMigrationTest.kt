@@ -521,6 +521,71 @@ class AppDatabaseMigrationTest {
         database.close()
     }
 
+    @Test
+    fun migrate16To17AddsPerDeviceSleepTablesAndCascadeDelete() {
+        val databaseName = "sleep-room-migration-test"
+        helper.createDatabase(databaseName, 16).apply {
+            execSQL(
+                """
+                INSERT INTO diary_index (
+                    uri, name, title, dateIso, monthKey, lastModified,
+                    size, wordCount, sha256, indexedAt
+                ) VALUES (
+                    'content://diary/sleep-migration', '2026-09-12.md', '睡眠迁移前日记',
+                    '2026-09-12', '2026-09', 10, 20, 30, 'before-sleep', 40
+                )
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            databaseName,
+            17,
+            true,
+            AppDatabase.MIGRATION_16_17,
+        )
+
+        database.query(
+            "SELECT title FROM diary_index WHERE uri = 'content://diary/sleep-migration'",
+        ).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("睡眠迁移前日记", cursor.getString(0))
+        }
+        database.execSQL(
+            """
+            INSERT INTO sleep_devices (deviceId, deviceName, platform, updatedAtEpochMillis)
+            VALUES ('device-1', 'Phone', 'android', 100)
+            """.trimIndent(),
+        )
+        database.execSQL(
+            """
+            INSERT INTO sleep_nights (
+                deviceId, wakeDateIso, zoneId, bedtimeEpochMillis, wakeEpochMillis,
+                durationMinutes, source, updatedAtEpochMillis
+            ) VALUES (
+                'device-1', '2026-09-13', 'Asia/Shanghai',
+                1000, 2000, 480, 'ESTIMATED', 100
+            )
+            """.trimIndent(),
+        )
+        database.query(
+            "SELECT durationMinutes, source FROM sleep_nights WHERE deviceId = 'device-1'",
+        ).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(480, cursor.getInt(0))
+            assertEquals("ESTIMATED", cursor.getString(1))
+        }
+
+        database.execSQL("PRAGMA foreign_keys = ON")
+        database.execSQL("DELETE FROM sleep_devices WHERE deviceId = 'device-1'")
+        database.query("SELECT COUNT(*) FROM sleep_nights WHERE deviceId = 'device-1'").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(0, cursor.getInt(0))
+        }
+        database.close()
+    }
+
     private companion object {
         const val TEST_DATABASE = "ai-chat-migration-test"
     }

@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -166,6 +167,7 @@ class DiaryViewModel @Inject constructor(
     private var observedDiaryTreeUri: String? = null
     private var hasObservedDiaryTreeUri = false
     private var suppressCachedIndexUntilScan = false
+    private val observedSucceededCalorieTaskIds = mutableSetOf<Long>()
 
     init {
         viewModelScope.launch {
@@ -180,6 +182,38 @@ class DiaryViewModel @Inject constructor(
                     cached.isNotEmpty()
                 ) {
                     publishDiaryList(cached.map(DiaryIndexEntity::toDiaryDocument), loading = _listState.value.loading)
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            aiTaskQueue.observeTasks().collect { tasks ->
+                val succeededIds = tasks.asSequence()
+                    .filter { task ->
+                        task.state == AiTaskStateEntity.SUCCEEDED &&
+                            task.type in setOf(
+                                AiTaskTypeEntity.CALORIE_DAY,
+                                AiTaskTypeEntity.CALORIE_SINGLE,
+                            )
+                    }
+                    .map(AiTaskQueueEntity::id)
+                    .toSet()
+                val newlySucceeded = succeededIds - observedSucceededCalorieTaskIds
+                observedSucceededCalorieTaskIds += succeededIds
+                if (newlySucceeded.isNotEmpty()) {
+                    // AI workers write meal metadata outside this ViewModel. Without invalidating
+                    // the in-memory meal calendar, the page can keep showing the pre-task calories
+                    // until the user leaves and re-enters, which looks like a bad AI result.
+                    markMealCalendarDirty()
+                    if (_mealCalendarState.value.items.isNotEmpty()) {
+                        val liveSettings = settingsRepository.settings.first()
+                        if (liveSettings.diaryTreeUri != null && liveSettings.mediaTreeUri != null) {
+                            refreshMealCalendar(
+                                force = true,
+                                source = mealCalendarSource(liveSettings),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -337,7 +371,11 @@ class DiaryViewModel @Inject constructor(
         viewModelScope.launch {
             calorieEnqueueMutex.withLock {
                 try {
-                    val currentSettings = settings.value
+                    // Read the authoritative settings snapshot at enqueue time. The public
+                    // StateFlow is for UI rendering and may lag a just-saved model/endpoint change
+                    // by one emission; automatic post-capture estimation already reads directly
+                    // from SettingsRepository. Manual estimation must use the same source.
+                    val currentSettings = settingsRepository.settings.first()
                     if (!currentSettings.calorieEstimationEnabled) return@withLock
                     calorieConfigurationError(currentSettings)?.let { error ->
                         _message.value = error

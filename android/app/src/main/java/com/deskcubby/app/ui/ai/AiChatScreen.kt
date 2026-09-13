@@ -409,18 +409,22 @@ private fun ModelSelector(
         }
         DropdownMenu(expanded, onDismissRequest = { onExpanded(false) }) {
             configs.forEach { config ->
+                val agentCapable = config.supportsToolCalling &&
+                    config.endpointUrl.isNotBlank() &&
+                    config.model.isNotBlank()
                 DropdownMenuItem(
                     text = {
                         Column {
                             Text(config.name)
                             Text(
-                                if (config.supportsToolCalling) tr("原生工具调用", "Native tool calling")
-                                else tr("不支持 Agent 工具", "Agent tools unsupported"),
+                                if (agentCapable) tr("原生工具调用", "Native tool calling")
+                                else tr("不可用于 Agent", "Unavailable for Agent"),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     },
+                    enabled = agentCapable,
                     onClick = { onExpanded(false); onSelect(config.id) },
                 )
             }

@@ -31,6 +31,7 @@ import kotlinx.coroutines.launch
 internal interface StatisticsWorkerEntryPoint {
     fun settingsRepository(): SettingsRepository
     fun usageStatisticsRepository(): UsageStatisticsRepository
+    fun sleepStatisticsRepository(): SleepStatisticsRepository
     fun stepStatisticsRepository(): StepStatisticsRepository
 }
 
@@ -52,6 +53,9 @@ class StatisticsWorker(
                     add(usageOutcome)
                     usageUpdated = usageOutcome == StatisticsRefreshOutcome.SUCCESS
                 }
+                if (settings.sleepTrackingEnabled) {
+                    entryPoint.sleepStatisticsRepository().refreshRecent()
+                }
                 if (settings.stepTrackingEnabled) {
                     val steps = entryPoint.stepStatisticsRepository()
                     if (steps.canReadInBackground()) {
@@ -70,8 +74,8 @@ class StatisticsWorker(
 }
 
 /**
- * Keeps one six-hour compensation worker aligned with the two local tracking
- * switches. Cancelling work never removes either app-private Room history.
+ * Keeps one six-hour compensation worker aligned with the local tracking
+ * switches. Cancelling work never removes app-private Room history.
  */
 @Singleton
 class StatisticsScheduler @Inject constructor(
@@ -86,7 +90,7 @@ class StatisticsScheduler @Inject constructor(
         if (!started.compareAndSet(false, true)) return
         scope.launch {
             settingsRepository.settings
-                .map { it.usageTrackingEnabled || it.stepTrackingEnabled }
+                .map { it.usageTrackingEnabled || it.sleepTrackingEnabled || it.stepTrackingEnabled }
                 .distinctUntilChanged()
                 .collect { enabled ->
                     if (enabled) enqueuePeriodic() else workManager.cancelUniqueWork(WORK_NAME)

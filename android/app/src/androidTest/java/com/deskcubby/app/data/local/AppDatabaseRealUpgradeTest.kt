@@ -14,14 +14,14 @@ class AppDatabaseRealUpgradeTest {
     fun installedV15DatabaseMigratesInPlaceAndPreservesRepresentativeData() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val database = Room.databaseBuilder(context, AppDatabase::class.java, DATABASE_NAME)
-            .addMigrations(AppDatabase.MIGRATION_15_16)
+            .addMigrations(AppDatabase.MIGRATION_15_16, AppDatabase.MIGRATION_16_17)
             .allowMainThreadQueries()
             .build()
         try {
             val sqlite = database.openHelper.writableDatabase
             sqlite.query("PRAGMA user_version").use { cursor ->
                 assertTrue(cursor.moveToFirst())
-                assertEquals(16, cursor.getInt(0))
+                assertEquals(17, cursor.getInt(0))
             }
             assertSingleString(
                 sqlite,
@@ -48,6 +48,10 @@ class AppDatabaseRealUpgradeTest {
                 "SELECT title FROM diary_index WHERE uri = 'content://upgrade/v15'",
                 "upgrade-diary-v15",
             )
+
+            sqlite.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sleep_nights'").use { cursor ->
+                assertTrue("sleep_nights table must exist after the real upgrade", cursor.moveToFirst())
+            }
 
             sqlite.query("PRAGMA index_list('agent_approval_requests')").use { cursor ->
                 val nameIndex = cursor.getColumnIndexOrThrow("name")

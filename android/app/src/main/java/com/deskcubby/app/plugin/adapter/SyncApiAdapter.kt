@@ -78,6 +78,7 @@ private fun CloudSyncConfig.toPluginConfig(): SyncConfiguration = SyncConfigurat
             AppSyncContent.GAME_STATES -> SyncContent.GAME_STATES
             AppSyncContent.GAME_STATISTICS -> SyncContent.GAME_STATISTICS
             AppSyncContent.USAGE_STATISTICS -> SyncContent.USAGE_STATISTICS
+            AppSyncContent.SLEEP_STATISTICS -> SyncContent.SLEEP_STATISTICS
             AppSyncContent.READING_PROGRESS -> SyncContent.READING_PROGRESS
             AppSyncContent.READER_PREFERENCES -> SyncContent.READER_PREFERENCES
             AppSyncContent.AGENT_CHATS -> SyncContent.AGENT_CHATS

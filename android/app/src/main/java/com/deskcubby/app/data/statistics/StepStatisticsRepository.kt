@@ -94,7 +94,15 @@ class StepStatisticsRepository @Inject constructor(
                     else -> null
                 }
                 if (healthPermissionDetail == null) {
-                    val refreshed = refreshFromHealthConnect(client, clock)
+                    val refreshed = refreshFromHealthConnect(
+                        client = client,
+                        clock = clock,
+                        reconciliationDays = if (fromBackground) {
+                            BACKGROUND_RECONCILIATION_DAYS
+                        } else {
+                            FOREGROUND_RECONCILIATION_DAYS
+                        },
+                    )
                     val refreshedAt = refreshed.days
                         .maxOfOrNull(StepStatisticsDay::collectedAtEpochMillis)
                         ?: clock.millis()
@@ -162,35 +170,39 @@ class StepStatisticsRepository @Inject constructor(
     private suspend fun refreshFromHealthConnect(
         client: HealthConnectClient,
         clock: Clock,
+        reconciliationDays: Int,
     ): StepStatisticsHistory {
         val zone = clock.zone
         val today = LocalDate.now(clock)
-        val current = store.current()
-        val firstDate = current.trackingStartedOn ?: today
+        val firstDate = healthReconciliationStartDate(
+            today = today,
+            reconciliationDays = reconciliationDays,
+        )
         val replacements = mutableMapOf<LocalDate, StepStatisticsDay>()
         var date = firstDate
         while (!date.isAfter(today)) {
-            val existing = current.days.firstOrNull { it.date == date }
-            if (existing?.state != StatisticsDayState.FINAL) {
-                replacements[date] = queryDay(
-                    client = client,
-                    date = date,
-                    today = today,
-                    zone = zone,
-                    nowMillis = clock.millis(),
-                )
-            }
+            replacements[date] = queryDay(
+                client = client,
+                date = date,
+                today = today,
+                zone = zone,
+                nowMillis = clock.millis(),
+            )
             date = date.plusDays(1)
         }
         return store.update { latest ->
             val byDate = latest.days.associateBy(StepStatisticsDay::date).toMutableMap()
             replacements.forEach { (replacementDate, replacement) ->
-                if (byDate[replacementDate]?.state != StatisticsDayState.FINAL) {
-                    byDate[replacementDate] = replacement
-                }
+                // Health Connect sources may upload an older day's data late (for example when a
+                // wearable/vendor app is opened after several days). Reconcile recent FINAL rows
+                // instead of treating them as immutable snapshots.
+                byDate[replacementDate] = replacement
             }
             latest.copy(
-                trackingStartedOn = latest.trackingStartedOn ?: firstDate,
+                trackingStartedOn = listOfNotNull(
+                    latest.trackingStartedOn,
+                    firstDate,
+                ).minOrNull(),
                 days = byDate.values.sortedBy(StepStatisticsDay::date),
                 deviceSensorBaseline = null,
             )
@@ -242,8 +254,19 @@ class StepStatisticsRepository @Inject constructor(
         const val DETAIL_BACKGROUND_PERMISSION = "background_permission_required"
         const val DETAIL_OPEN_HEALTH_CONNECT_FAILED = "health_connect_open_failed"
         const val DETAIL_HEALTH_CONNECT = "health_connect"
+
+        // Foreground refreshes deliberately re-read a bounded historical window because Health
+        // Connect providers can backfill old dates after DeskCubby already finalized them.
+        private const val FOREGROUND_RECONCILIATION_DAYS = 30
+        private const val BACKGROUND_RECONCILIATION_DAYS = 7
     }
 }
+
+internal fun healthReconciliationStartDate(
+    today: LocalDate,
+    reconciliationDays: Int,
+): LocalDate =
+    today.minusDays((reconciliationDays.coerceAtLeast(1) - 1).toLong())
 
 private fun java.time.Instant.coerceAtMost(maximum: java.time.Instant): java.time.Instant =
     if (isAfter(maximum)) maximum else this

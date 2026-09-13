@@ -59,6 +59,40 @@ class StatisticsModelsTest {
         assertEquals(7, result.size)
     }
 
+
+    @Test
+    fun healthForegroundReconciliationCoversThirtyCivilDates() {
+        assertEquals(
+            LocalDate.parse("2026-08-15"),
+            healthReconciliationStartDate(
+                today = LocalDate.parse("2026-09-13"),
+                reconciliationDays = 30,
+            ),
+        )
+    }
+
+    @Test
+    fun healthBackgroundReconciliationCoversSevenCivilDates() {
+        assertEquals(
+            LocalDate.parse("2026-09-07"),
+            healthReconciliationStartDate(
+                today = LocalDate.parse("2026-09-13"),
+                reconciliationDays = 7,
+            ),
+        )
+    }
+
+    @Test
+    fun healthReconciliationNeverRequestsAnEmptyWindow() {
+        assertEquals(
+            LocalDate.parse("2026-09-13"),
+            healthReconciliationStartDate(
+                today = LocalDate.parse("2026-09-13"),
+                reconciliationDays = 0,
+            ),
+        )
+    }
+
     @Test
     fun emptyHistoryHasNoStartDate() {
         val overview = UsageStatisticsHistory().overview()

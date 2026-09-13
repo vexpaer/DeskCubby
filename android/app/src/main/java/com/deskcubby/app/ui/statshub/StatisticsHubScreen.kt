@@ -39,6 +39,7 @@ import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.SportsEsports
@@ -87,6 +88,7 @@ fun StatisticsHubScreen(
     viewModel: StatisticsHubViewModel,
     onOpenUsage: () -> Unit,
     onOpenHealth: () -> Unit,
+    onOpenSleep: () -> Unit,
     onOpenStructuredRecords: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -96,6 +98,7 @@ fun StatisticsHubScreen(
         state = state,
         onOpenUsage = onOpenUsage,
         onOpenHealth = onOpenHealth,
+        onOpenSleep = onOpenSleep,
         onOpenStructuredRecords = onOpenStructuredRecords,
         modifier = modifier,
     )
@@ -107,6 +110,7 @@ internal fun StatisticsHubScreen(
     state: StatisticsHubUiState,
     onOpenUsage: () -> Unit,
     onOpenHealth: () -> Unit,
+    onOpenSleep: () -> Unit,
     onOpenStructuredRecords: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -152,6 +156,7 @@ internal fun StatisticsHubScreen(
                 onOpenDiary = { pageName = StatisticsHubPage.DIARY.name },
                 onOpenUsage = onOpenUsage,
                 onOpenHealth = onOpenHealth,
+                onOpenSleep = onOpenSleep,
                 onOpenStructuredRecords = onOpenStructuredRecords,
                 onOpenReading = { pageName = StatisticsHubPage.READING.name },
                 onOpenGames = { pageName = StatisticsHubPage.GAMES.name },
@@ -172,6 +177,7 @@ private fun StatisticsOverviewPage(
     onOpenDiary: () -> Unit,
     onOpenUsage: () -> Unit,
     onOpenHealth: () -> Unit,
+    onOpenSleep: () -> Unit,
     onOpenStructuredRecords: () -> Unit,
     onOpenReading: () -> Unit,
     onOpenGames: () -> Unit,
@@ -287,6 +293,20 @@ private fun StatisticsOverviewPage(
                     chartValues = state.usage.lastSevenPoints.map(StatisticsPoint::value),
                     chartDescription = recentDurationChartDescription(state.usage.lastSevenPoints),
                     onClick = onOpenUsage,
+                )
+            }
+            item {
+                StatisticsHubCard(
+                    icon = Icons.Outlined.Bedtime,
+                    title = tr("睡眠", "Sleep"),
+                    primaryValue = tr("按设备查看", "By device"),
+                    secondaryValue = tr(
+                        "独立估算每台 Android 设备的睡眠，不跨设备合并",
+                        "Sleep is estimated per Android device and never merged across devices",
+                    ),
+                    chartValues = emptyList(),
+                    chartDescription = tr("睡眠趋势与历史", "Sleep trends and history"),
+                    onClick = onOpenSleep,
                 )
             }
             item {

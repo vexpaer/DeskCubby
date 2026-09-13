@@ -16,6 +16,7 @@ import com.deskcubby.app.data.local.LegacyStatisticsMigrationDao
 import com.deskcubby.app.data.local.PoetryCategoryDao
 import com.deskcubby.app.data.local.SavedPoemDao
 import com.deskcubby.app.data.local.StepStatisticsDao
+import com.deskcubby.app.data.local.SleepStatisticsDao
 import com.deskcubby.app.data.local.StructuredRecordDao
 import com.deskcubby.app.data.local.ThoughtCategoryDao
 import com.deskcubby.app.data.local.UsageStatisticsDao
@@ -50,6 +51,7 @@ object AppModule {
                     AppDatabase.MIGRATION_13_14,
                     AppDatabase.MIGRATION_14_15,
                     AppDatabase.MIGRATION_15_16,
+                    AppDatabase.MIGRATION_16_17,
             )
             .build()
 
@@ -71,6 +73,9 @@ object AppModule {
 
     @Provides
     fun provideStepStatisticsDao(db: AppDatabase): StepStatisticsDao = db.stepStatisticsDao()
+
+    @Provides
+    fun provideSleepStatisticsDao(db: AppDatabase): SleepStatisticsDao = db.sleepStatisticsDao()
 
     @Provides
     fun provideLegacyStatisticsMigrationDao(

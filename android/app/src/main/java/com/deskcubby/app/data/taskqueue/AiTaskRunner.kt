@@ -23,7 +23,6 @@ import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.MAX_MEAL_NOTE_CHARS
 import com.deskcubby.app.data.repository.MealDayDetails
 import com.deskcubby.app.data.repository.MealEnergyEstimate
-import com.deskcubby.app.data.repository.MealImageRecognition
 import com.deskcubby.plugin.api.core.api.AIImage
 import java.util.UUID
 import javax.inject.Inject
@@ -51,6 +50,10 @@ class AiTaskRunner @Inject constructor(
 ) {
     private val dao: AiTaskDao = database.aiTaskDao()
     private val claimMutex = Mutex()
+    // WorkManager may start several durable task workers at once. Manual/day calorie estimation is
+    // intentionally serialized so "calculate all" cannot fan out multiple days against the same
+    // model provider. Agent runs and automatic single-photo estimates remain independent.
+    private val calorieDayExecutionMutex = Mutex()
     private val liveLeaseOwners = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /** Claims and executes only the task named by one unique WorkRequest. */
@@ -119,7 +122,9 @@ class AiTaskRunner @Inject constructor(
         try {
             when (task.type) {
                 com.deskcubby.app.data.local.AiTaskTypeEntity.CALORIE_DAY ->
-                    executeCalorieDay(task, CalorieDayTaskPayload.decode(task.payloadJson))
+                    calorieDayExecutionMutex.withLock {
+                        executeCalorieDay(task, CalorieDayTaskPayload.decode(task.payloadJson))
+                    }
                 com.deskcubby.app.data.local.AiTaskTypeEntity.CALORIE_SINGLE ->
                     executeCalorieSingle(task, CalorieSingleTaskPayload.decode(task.payloadJson))
                 com.deskcubby.app.data.local.AiTaskTypeEntity.AGENT_RUN ->
@@ -155,46 +160,58 @@ class AiTaskRunner @Inject constructor(
         require(settings.diaryTreeUri != null && settings.mediaTreeUri != null) {
             "请先选择日记和媒体目录"
         }
-        dao.setProgress(task.id, calorieProgress(progressStage = "IMAGE_RECOGNITION", payload = payload))
-        val recognitions = withContext(Dispatchers.IO) {
-            payload.photos.map { photo ->
-                checkTaskCancelled(task.id)
-                RecognizedCaloriePhoto(
-                    fileName = photo.fileName,
-                    recognition = calorieRepository.recognizeImage(
-                        imageUri = photo.uri,
-                        settings = settings,
-                    ),
-                )
-            }
-        }
-        checkTaskCancelled(task.id)
         val calculationNote = payload.noteOverride
             ?.trim()
             ?.take(MAX_MEAL_NOTE_CHARS)
             ?.takeIf(String::isNotEmpty)
             ?: payload.fallbackNote
-        dao.setProgress(
-            task.id,
-            calorieProgress(
-                progressStage = "TEXT_ESTIMATION",
-                payload = payload,
-                completedPhotoCount = payload.photos.size,
-            ),
-        )
-        val estimateList = withContext(Dispatchers.IO) {
-            calorieRepository.estimateRecognizedDay(
-                recognitions = recognitions.map(RecognizedCaloriePhoto::recognition),
-                settings = settings,
-                note = calculationNote,
+
+        // Manual/day-scoped estimation must use the same proven AI direction as automatic
+        // post-capture estimation: one image recognition followed immediately by one text
+        // estimation for that same image. The former implementation recognized every photo first
+        // and then sent a different multi-photo JSON contract to the text model, so manual
+        // estimation could fail or mis-map results while CALORIE_SINGLE worked with the same
+        // provider/configuration. Keep the final write atomic, but make each model call identical
+        // to the automatic single-photo path.
+        val estimates = linkedMapOf<String, MealEnergyEstimate>()
+        payload.photos.forEachIndexed { index, photo ->
+            checkTaskCancelled(task.id)
+            dao.setProgress(
+                task.id,
+                calorieProgress(
+                    progressStage = "IMAGE_RECOGNITION",
+                    payload = payload,
+                    completedPhotoCount = index,
+                    activePhotoCount = 1,
+                ),
             )
-        }
-        checkTaskCancelled(task.id)
-        val estimates = linkedMapOf<String, MealEnergyEstimate>().apply {
-            recognitions.zip(estimateList).forEach { (recognized, estimate) ->
-                put(recognized.fileName, estimate)
+            val recognition = withContext(Dispatchers.IO) {
+                calorieRepository.recognizeImage(
+                    imageUri = photo.uri,
+                    settings = settings,
+                )
             }
+            checkTaskCancelled(task.id)
+            dao.setProgress(
+                task.id,
+                calorieProgress(
+                    progressStage = "TEXT_ESTIMATION",
+                    payload = payload,
+                    completedPhotoCount = index,
+                    activePhotoCount = 1,
+                ),
+            )
+            val estimate = withContext(Dispatchers.IO) {
+                calorieRepository.estimateRecognizedDay(
+                    recognitions = listOf(recognition),
+                    settings = settings,
+                    note = calculationNote,
+                ).single()
+            }
+            estimates[photo.fileName] = estimate
+            checkTaskCancelled(task.id)
         }
+
         val detailsByDate = if (payload.force) {
             mapOf(
                 payload.dateIso to MealDayDetails(
@@ -206,7 +223,14 @@ class AiTaskRunner @Inject constructor(
         } else {
             emptyMap()
         }
-        dao.setProgress(task.id, calorieProgress(progressStage = "SAVING", payload = payload))
+        dao.setProgress(
+            task.id,
+            calorieProgress(
+                progressStage = "SAVING",
+                payload = payload,
+                completedPhotoCount = payload.photos.size,
+            ),
+        )
         withContext(Dispatchers.IO) {
             checkTaskCancelled(task.id)
             diaryRepository.setMealEnergyResults(estimates, detailsByDate, settings)
@@ -450,8 +474,4 @@ class AiTaskRunner @Inject constructor(
         const val MAX_HISTORY_CONTENT_CHARS = 1024 * 1024
     }
 
-    private data class RecognizedCaloriePhoto(
-        val fileName: String,
-        val recognition: MealImageRecognition,
-    )
 }
