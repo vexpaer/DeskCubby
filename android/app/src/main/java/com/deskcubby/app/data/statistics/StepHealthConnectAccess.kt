@@ -13,6 +13,7 @@ import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 
 enum class StepHealthConnectAction {
     MANAGE_OR_PERMISSIONS,
@@ -28,10 +29,13 @@ object StepHealthConnectAccess {
         HealthPermission.getReadPermission(DistanceRecord::class)
     val activeCaloriesReadPermission: String =
         HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class)
+    val totalCaloriesReadPermission: String =
+        HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class)
     val healthReadPermissions: Set<String> = setOf(
         stepReadPermission,
         distanceReadPermission,
         activeCaloriesReadPermission,
+        totalCaloriesReadPermission,
     )
 
     fun permissionContract(): ActivityResultContract<Set<String>, Set<String>> =
