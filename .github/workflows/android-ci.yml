@@ -93,7 +93,7 @@ jobs:
           retention-days: 7
 
   migration-test:
-    name: Room 15 to 16 migration on emulator
+    name: Room migration tests on emulator
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
@@ -139,7 +139,7 @@ jobs:
           working-directory: ./android
           script: >-
             ./gradlew --no-daemon connectedDebugAndroidTest
-            -Pandroid.testInstrumentationRunnerArguments.class=com.deskcubby.app.data.local.AppDatabase15To16MigrationTest
+            -Pandroid.testInstrumentationRunnerArguments.class=com.deskcubby.app.data.local.AppDatabase15To16MigrationTest,com.deskcubby.app.data.local.AppDatabaseMigrationTest
             --stacktrace
 
       - name: Upload instrumentation reports on failure

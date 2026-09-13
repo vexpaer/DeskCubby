@@ -2221,6 +2221,16 @@ private fun CloudSyncConfigDetailPage(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
+                if (CloudSyncContent.SLEEP_STATISTICS in selectedContents) {
+                    Text(
+                        tr(
+                            "睡眠记录会按设备 ID 独立同步，包含估算/手动修正的入睡与起床时间；不同设备的同一晚不会合并。请只使用可信云端。",
+                            "Sleep history is synchronized independently by device ID, including estimated or manually corrected bed and wake times. The same night from different devices is never merged; use only a trusted cloud service.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 if (CloudSyncContent.READING_PROGRESS in selectedContents) {
                     Text(
                         tr(
@@ -2407,6 +2417,7 @@ private fun syncContentLabel(content: CloudSyncContent): String = when (content)
     CloudSyncContent.GAME_STATES -> tr("游戏存档", "Game saves")
     CloudSyncContent.GAME_STATISTICS -> tr("游戏统计", "Game statistics")
     CloudSyncContent.USAGE_STATISTICS -> tr("使用统计", "Usage statistics")
+    CloudSyncContent.SLEEP_STATISTICS -> tr("睡眠记录", "Sleep history")
     CloudSyncContent.READING_PROGRESS -> tr("阅读进度", "Reading progress")
     CloudSyncContent.READER_PREFERENCES -> tr("阅读偏好", "Reader preferences")
     CloudSyncContent.AGENT_CHATS -> tr("Agent 对话", "Agent chats")
@@ -2433,6 +2444,7 @@ private fun syncContentsLabel(contents: Set<CloudSyncContent>): String {
                 CloudSyncContent.GAME_STATES -> "Game saves"
                 CloudSyncContent.GAME_STATISTICS -> "Game stats"
                 CloudSyncContent.USAGE_STATISTICS -> "Usage"
+                CloudSyncContent.SLEEP_STATISTICS -> "Sleep"
                 CloudSyncContent.READING_PROGRESS -> "Reading"
                 CloudSyncContent.READER_PREFERENCES -> "Reader prefs"
                 CloudSyncContent.AGENT_CHATS -> "Agent chats"
@@ -2454,6 +2466,7 @@ private fun syncContentsLabel(contents: Set<CloudSyncContent>): String {
                 CloudSyncContent.GAME_STATES -> "游戏"
                 CloudSyncContent.GAME_STATISTICS -> "游戏统计"
                 CloudSyncContent.USAGE_STATISTICS -> "使用统计"
+                CloudSyncContent.SLEEP_STATISTICS -> "睡眠记录"
                 CloudSyncContent.READING_PROGRESS -> "阅读进度"
                 CloudSyncContent.READER_PREFERENCES -> "阅读偏好"
                 CloudSyncContent.AGENT_CHATS -> "Agent 对话"

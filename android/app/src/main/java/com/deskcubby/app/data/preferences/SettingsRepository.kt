@@ -223,6 +223,7 @@ class SettingsRepository @Inject constructor(
         val calorieVisionPrompt = stringPreferencesKey("calorie_vision_prompt")
         val calorieTextPrompt = stringPreferencesKey("calorie_text_prompt")
         val usageTrackingEnabled = booleanPreferencesKey("usage_tracking_enabled")
+        val sleepTrackingEnabled = booleanPreferencesKey("sleep_tracking_enabled")
         val stepTrackingEnabled = booleanPreferencesKey("step_tracking_enabled")
         val navigationIntroAcknowledged = booleanPreferencesKey("navigation_intro_acknowledged")
         val navItems = stringPreferencesKey("nav_items")
@@ -448,6 +449,8 @@ class SettingsRepository @Inject constructor(
             ),
             usageTrackingEnabled = prefs[Keys.usageTrackingEnabled]
                 ?: defaults.usageTrackingEnabled,
+            sleepTrackingEnabled = prefs[Keys.sleepTrackingEnabled]
+                ?: defaults.sleepTrackingEnabled,
             stepTrackingEnabled = prefs[Keys.stepTrackingEnabled]
                 ?: defaults.stepTrackingEnabled,
             navigationIntroAcknowledged = prefs[Keys.navigationIntroAcknowledged]
@@ -788,6 +791,7 @@ class SettingsRepository @Inject constructor(
         }
     }
     suspend fun setUsageTrackingEnabled(value: Boolean) = set(Keys.usageTrackingEnabled, value)
+    suspend fun setSleepTrackingEnabled(value: Boolean) = set(Keys.sleepTrackingEnabled, value)
     suspend fun setStepTrackingEnabled(value: Boolean) = set(Keys.stepTrackingEnabled, value)
     suspend fun acknowledgeNavigationIntro() = set(Keys.navigationIntroAcknowledged, true)
     suspend fun setTutorialModeEnabled(value: Boolean) = set(Keys.tutorialModeEnabled, value)
@@ -1132,6 +1136,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.calorieTextPrompt] = normalizeCalorieTextPrompt(value.calorieTextPrompt)
                 .take(MAX_AI_SYSTEM_PROMPT_CHARS)
             prefs[Keys.usageTrackingEnabled] = value.usageTrackingEnabled
+            prefs[Keys.sleepTrackingEnabled] = value.sleepTrackingEnabled
             prefs[Keys.stepTrackingEnabled] = value.stepTrackingEnabled
             prefs[Keys.navItems] = encodeNav(normalizedNav)
             prefs[Keys.morePageOrder] = encodeMorePageOrder(normalizedMorePageOrder)

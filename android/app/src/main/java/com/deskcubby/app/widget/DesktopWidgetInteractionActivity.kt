@@ -690,7 +690,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                     ),
                     if (followUpWarning == null) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
                 ).show()
-                finish()
+                returnToLauncherAfterWidgetMealCapture()
 
                 // Only best-effort work remains here. It references durable app-owned media, never
                 // the temporary camera file that is deleted in finally.
@@ -732,6 +732,15 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                 sourceFile?.delete()
             }
         }
+    }
+
+    private fun returnToLauncherAfterWidgetMealCapture() {
+        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { startActivity(homeIntent) }
+        finish()
     }
 
     private fun showMealFailure() {

@@ -99,6 +99,7 @@ enum class CloudSyncContent(
     GAME_STATES("records/game-states", CloudSyncContentKind.RECORD),
     GAME_STATISTICS("records/game-statistics", CloudSyncContentKind.RECORD),
     USAGE_STATISTICS("records/usage", CloudSyncContentKind.RECORD),
+    SLEEP_STATISTICS("records/sleep", CloudSyncContentKind.RECORD),
     READING_PROGRESS("records/reader-progress", CloudSyncContentKind.RECORD),
     READER_PREFERENCES("records/reader-preferences", CloudSyncContentKind.RECORD),
     AGENT_CHATS("records/agent-chats", CloudSyncContentKind.RECORD),

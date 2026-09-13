@@ -60,6 +60,7 @@ import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.ViewDay
 import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -144,6 +145,8 @@ import com.deskcubby.app.ui.rss.RssScreen
 import com.deskcubby.app.ui.rss.RssViewModel
 import com.deskcubby.app.ui.steps.StepStatisticsScreen
 import com.deskcubby.app.ui.steps.StepStatisticsViewModel
+import com.deskcubby.app.ui.sleep.SleepStatisticsScreen
+import com.deskcubby.app.ui.sleep.SleepStatisticsViewModel
 import com.deskcubby.app.ui.statshub.StatisticsHubScreen
 import com.deskcubby.app.ui.statshub.StatisticsHubViewModel
 import com.deskcubby.app.ui.usage.UsageStatisticsScreen
@@ -560,6 +563,7 @@ fun DeskCubbyRoot(
                             viewModel = statisticsHubViewModel,
                             onOpenUsage = { navController.navigate(Routes.STATISTICS_USAGE) },
                             onOpenHealth = { navController.navigate(Routes.STATISTICS_HEALTH) },
+                            onOpenSleep = { navController.navigate(NavItemId.SLEEP.route) },
                             onOpenStructuredRecords = { navController.navigate(Routes.STATISTICS_STRUCTURED) },
                         )
                     }
@@ -572,6 +576,14 @@ fun DeskCubbyRoot(
                             onOpenTrackingSettings = {
                                 navController.navigate(Routes.USAGE_SETTINGS)
                             },
+                        )
+                    }
+                    composable(NavItemId.SLEEP.route) {
+                        val sleepStatisticsViewModel: SleepStatisticsViewModel = hiltViewModel()
+                        SleepStatisticsScreen(
+                            padding = padding,
+                            viewModel = sleepStatisticsViewModel,
+                            onRequestUsageAccess = { openUsageAccessSettings(aliasContext) },
                         )
                     }
                     composable(NavItemId.STEPS.route) {
@@ -1213,6 +1225,7 @@ fun iconFor(key: String): ImageVector = when (key) {
     "game" -> Icons.Outlined.SportsEsports
     "reader" -> Icons.Outlined.AutoStories
     "usage" -> Icons.Outlined.AccessTime
+    "sleep" -> Icons.Outlined.Bedtime
     "steps" -> Icons.Outlined.MonitorHeart
     "statistics" -> Icons.Outlined.BarChart
     "widgets" -> Icons.Outlined.Widgets

@@ -634,6 +634,16 @@ enum class NavItemId(
         defaultVisible = false,
         defaultShowInMore = false,
     ),
+    SLEEP(
+        "sleep",
+        "睡眠",
+        "Sleep",
+        "sleep",
+        "根据本机夜间使用情况估算并记录睡眠",
+        "Estimate and track sleep from nighttime usage on this device",
+        defaultVisible = false,
+        defaultShowInMore = true,
+    ),
     STEPS(
         "step_statistics",
         "健康",
@@ -835,6 +845,7 @@ data class AppSettings(
     val calorieVisionPrompt: String = DEFAULT_CALORIE_VISION_PROMPT,
     val calorieTextPrompt: String = DEFAULT_CALORIE_TEXT_PROMPT,
     val usageTrackingEnabled: Boolean = false,
+    val sleepTrackingEnabled: Boolean = false,
     val stepTrackingEnabled: Boolean = false,
     val navigationIntroAcknowledged: Boolean = false,
     val navItems: List<NavItemConfig> = NavItemId.entries.map { id ->

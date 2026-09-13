@@ -10,6 +10,8 @@ import com.deskcubby.app.data.repository.ReaderRepository
 import com.deskcubby.app.data.repository.VaultEncryptedBackup
 import com.deskcubby.app.data.repository.VaultEncryptedKeyBackup
 import com.deskcubby.app.data.repository.VaultRepository
+import com.deskcubby.app.data.statistics.SleepDeviceJsonCodec
+import com.deskcubby.app.data.statistics.SleepStatisticsRepository
 import com.deskcubby.app.data.statistics.UsageDeviceJsonCodec
 import com.deskcubby.app.data.statistics.UsageDeviceRepository
 import javax.inject.Inject
@@ -21,12 +23,14 @@ import org.json.JSONObject
 @Singleton
 class RepositoryRecordSyncAdapters @Inject constructor(
     usageDeviceRepository: UsageDeviceRepository,
+    sleepStatisticsRepository: SleepStatisticsRepository,
     readerRepository: ReaderRepository,
     agentChatSyncRepository: AgentChatSyncRepository,
     vaultRepository: VaultRepository,
     settingsRepository: SettingsRepository,
 ) {
     private val usageStatistics = UsageRecordSyncAdapter(usageDeviceRepository)
+    private val sleepStatistics = SleepRecordSyncAdapter(sleepStatisticsRepository)
     private val readerProgress = ReaderProgressRecordSyncAdapter(readerRepository)
     private val agentChats = AgentChatRecordSyncAdapter(agentChatSyncRepository)
     private val vault = VaultRecordSyncAdapter(vaultRepository)
@@ -36,6 +40,7 @@ class RepositoryRecordSyncAdapters @Inject constructor(
 
     fun all(): Map<CloudSyncContent, RecordSyncAdapter> = linkedMapOf(
         CloudSyncContent.USAGE_STATISTICS to usageStatistics,
+        CloudSyncContent.SLEEP_STATISTICS to sleepStatistics,
         CloudSyncContent.READING_PROGRESS to readerProgress,
         CloudSyncContent.AGENT_CHATS to agentChats,
         CloudSyncContent.VAULT to vault,
@@ -80,6 +85,52 @@ private class UsageRecordSyncAdapter(
     override suspend fun deleteLocalRecord(localKey: String) {
         // Usage histories are per-device merge-only data. Tombstones suppress the record in the
         // sync manifest; this device never creates one because its own identity is always listed.
+    }
+}
+
+
+private class SleepRecordSyncAdapter(
+    private val repository: SleepStatisticsRepository,
+) : RecordSyncAdapter {
+    override val contentType = CloudSyncContent.SLEEP_STATISTICS
+    override val conflictPolicy = RecordConflictPolicy.LWW
+
+    override suspend fun listLocalRecords(): List<LocalRecordRef> = repository.snapshotAll().map { record ->
+        val revision = maxOf(
+            record.updatedAtEpochMillis,
+            record.nights.maxOfOrNull { it.updatedAtEpochMillis } ?: 0L,
+        ).coerceAtLeast(0L)
+        LocalRecordRef(record.deviceId, revision, revision)
+    }
+
+    override suspend fun readLocalRecord(localKey: String): SyncRecord {
+        val record = repository.snapshotAll().firstOrNull { it.deviceId == localKey }
+            ?: throw CloudSyncConflictException("本地睡眠记录在同步读取期间被删除。")
+        val revision = maxOf(
+            record.updatedAtEpochMillis,
+            record.nights.maxOfOrNull { it.updatedAtEpochMillis } ?: 0L,
+        ).coerceAtLeast(0L)
+        return SyncRecord(
+            id = "local",
+            revision = revision,
+            updatedAt = revision,
+            payload = SleepDeviceJsonCodec.encode(record),
+        )
+    }
+
+    override suspend fun applyRemoteRecord(
+        record: SyncRecord,
+        preserveLocalConflict: SyncRecord?,
+        preserveLocalKey: String?,
+    ): RecordApplyResult? {
+        val decoded = SleepDeviceJsonCodec.decode(record.payload)
+        val merged = repository.mergeIncoming(decoded)
+        return RecordApplyResult(merged.deviceId)
+    }
+
+    override suspend fun deleteLocalRecord(localKey: String) {
+        // Sleep history is merge-only per device. A remote tombstone never deletes the
+        // device's local long-term sleep history.
     }
 }
 

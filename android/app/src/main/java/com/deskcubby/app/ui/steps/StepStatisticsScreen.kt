@@ -355,8 +355,8 @@ private fun StepCollectionMessage(
         else -> StatisticsMessagePanel(
             title = tr("Health Connect 数据源", "Health Connect source"),
             message = tr(
-                "今天的数据可刷新；过去日期成功日结后不会重复计算。健康数据和权限不会进入应用备份或云同步。",
-                "Today can refresh. Finalized past dates are never recalculated. Health data and permissions are excluded from backups and cloud sync.",
+                "每次打开或手动刷新都会重新核对最近 30 天，以接收 Health Connect 延迟补写的历史数据；后台同步会核对最近 7 天。健康数据和权限不会进入应用备份或云同步。",
+                "Opening or manually refreshing rechecks the last 30 days so delayed Health Connect backfills can be imported; background refresh rechecks the last 7 days. Health data and permissions are excluded from backups and cloud sync.",
             ),
             actionLabel = if (
                 state.healthConnectAction == StepHealthConnectAction.MANAGE_OR_PERMISSIONS

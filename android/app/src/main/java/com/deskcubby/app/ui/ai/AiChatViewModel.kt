@@ -325,13 +325,14 @@ class AiChatViewModel @Inject constructor(
         submitJob = viewModelScope.launch {
             try {
                 val currentSettings = settingsRepository.settings.first()
-                val textConfig = currentSettings.aiConfigs.firstOrNull { config ->
-                    config.id == currentSettings.aiChatConfigId &&
-                        config.type == AiModelType.TEXT && config.enabled
-                } ?: throw AgentRuntimeException(
-                    "AI_MODEL_UNAVAILABLE",
-                    localized("请先选择可用的文字模型配置。", "Select an available text-model configuration first."),
-                )
+                val textConfig = currentSettings.agentModelConfig()
+                    ?: throw AgentRuntimeException(
+                        "AI_MODEL_UNAVAILABLE",
+                        localized(
+                            "请选择已启用原生工具调用的 Agent 文字模型配置。",
+                            "Select an Agent text-model configuration with native tool calling enabled.",
+                        ),
+                    )
                 val effectiveRequest = content.ifBlank {
                     localized("请分析我附加的内容。", "Please analyze the attached content.")
                 }
@@ -507,7 +508,12 @@ class AiChatViewModel @Inject constructor(
     private suspend fun openConversationInternal(conversation: AiConversation) {
         val persisted = settingsRepository.settings.first()
         val originalAvailable = persisted.aiConfigs.any {
-            it.id == conversation.modelConfigId && it.type == AiModelType.TEXT && it.enabled
+            it.id == conversation.modelConfigId &&
+                it.type == AiModelType.TEXT &&
+                it.enabled &&
+                it.supportsToolCalling &&
+                it.endpointUrl.isNotBlank() &&
+                it.model.isNotBlank()
         }
         if (originalAvailable) settingsRepository.setAiChatConfigId(conversation.modelConfigId)
         activeRunId.value = null
@@ -521,8 +527,8 @@ class AiChatViewModel @Inject constructor(
                 activeConversationTitle = conversation.title,
                 errorMessage = if (conversation.modelConfigId.isNotBlank() && !originalAvailable) {
                     localized(
-                        "原对话使用的模型配置已不存在；历史仍可查看，继续时将使用当前配置。",
-                        "The original model configuration no longer exists. History remains available; continuing uses the current configuration.",
+                        "原对话使用的模型已不存在或不再具备 Agent 工具能力；历史仍可查看，继续时将使用当前 Agent 配置。",
+                        "The original model is missing or is no longer Agent-capable. History remains available; continuing uses the current Agent configuration.",
                     )
                 } else null,
             )
@@ -564,3 +570,12 @@ internal fun executionStatusIsTerminal(status: AgentExecutionStatus): Boolean = 
     AgentExecutionStatus.FAILED,
     AgentExecutionStatus.CANCELED,
 )
+
+internal fun AppSettings.agentModelConfig() = aiConfigs.firstOrNull { config ->
+    config.id == aiChatConfigId &&
+        config.type == AiModelType.TEXT &&
+        config.enabled &&
+        config.supportsToolCalling &&
+        config.endpointUrl.isNotBlank() &&
+        config.model.isNotBlank()
+}
