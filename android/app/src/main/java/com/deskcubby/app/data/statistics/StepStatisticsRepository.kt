@@ -7,6 +7,7 @@ import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -230,6 +231,7 @@ class StepStatisticsRepository @Inject constructor(
                     StepsRecord.COUNT_TOTAL,
                     DistanceRecord.DISTANCE_TOTAL,
                     ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL,
+                    TotalCaloriesBurnedRecord.ENERGY_TOTAL,
                 ),
                 timeRangeFilter = TimeRangeFilter.between(start, safeEnd),
             ),
@@ -242,7 +244,8 @@ class StepStatisticsRepository @Inject constructor(
             steps = aggregate[StepsRecord.COUNT_TOTAL],
             distanceMeters = aggregate[DistanceRecord.DISTANCE_TOTAL]?.inMeters,
             activeCaloriesKilocalories =
-                aggregate[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories,
+                aggregate[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories
+                    ?: aggregate[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories,
         )
     }
 
