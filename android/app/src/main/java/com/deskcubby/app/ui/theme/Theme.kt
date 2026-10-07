@@ -135,11 +135,12 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
     } else {
         baseScheme
     }
-    val baseTypography = if (effectiveStyle == VisualStyle.ORGANIC_FUTURE) {
-        OrganicFutureTypography
-    } else {
-        AppTypography
+    val baseTypography = when (effectiveStyle) {
+        VisualStyle.ORGANIC_FUTURE -> OrganicFutureTypography
+        VisualStyle.LIQUID_GLASS -> GlassTypography
+        else -> AppTypography
     }
+    val reducedMotion = androidx.compose.runtime.remember { systemReducedMotion() }
     val typography = scaledTypography(baseTypography, settings.fontScale)
     val shapes = when (settings.visualStyle) {
         VisualStyle.CUSTOM -> customShapes(customTheme.cornerRadiusDp.dp)
@@ -171,6 +172,7 @@ fun DeskCubbyTheme(settings: AppSettings, content: @Composable () -> Unit) {
         LocalVisualStyle provides effectiveStyle,
         LocalAppLanguage provides settings.appLanguage,
         LocalCompactMode provides settings.compactMode,
+        LocalReducedMotion provides reducedMotion,
         LocalDeskCubbyVisuals provides visualTokens,
         LocalOrganicFuturePrimaryColor provides Color(settings.themeColorArgb or 0xFF000000.toInt()),
         LocalOrganicFutureAccentColors provides organicFutureAccentColors(

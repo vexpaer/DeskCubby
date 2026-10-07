@@ -18,6 +18,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -74,12 +75,17 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.deskcubby.app.syncLauncherAlias
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -107,6 +113,10 @@ import com.deskcubby.app.ui.blog.BlogScreen
 import com.deskcubby.app.ui.blog.BlogViewModel
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.AppBackground
+import com.deskcubby.app.ui.components.NavItemSpan
+import com.deskcubby.app.ui.components.NavSelectionIndicator
+import com.deskcubby.app.ui.theme.DeskMotion
+import com.deskcubby.app.ui.theme.rememberDeskHaptics
 import com.deskcubby.app.ui.components.DeskCubbyNavigationRail
 import com.deskcubby.app.ui.components.LocalLayoutMode
 import com.deskcubby.app.ui.components.rememberWindowInfo
@@ -1108,8 +1118,20 @@ internal fun DeskBottomBar(
     val floatingPanel = glass || organic
     val language = LocalAppLanguage.current
     val visuals = deskCubbyVisuals
+    val haptics = rememberDeskHaptics()
+    // Item spans are measured in root coordinates and re-based on the bar container, so the
+    // indicator follows whatever spacing the Material NavigationBar version applies.
+    var barOriginX by remember { mutableFloatStateOf(0f) }
+    val itemRootSpans = remember { mutableStateMapOf<String, NavItemSpan>() }
+    val selectedSpan = itemRootSpans[selectedRoute]?.let { span ->
+        NavItemSpan(span.left - barOriginX, span.right - barOriginX)
+    }
     val content: @Composable () -> Unit = {
-        Box(Modifier.fillMaxWidth()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .onGloballyPositioned { barOriginX = it.positionInRoot().x },
+        ) {
             MusicVisualizerLayer(
                 enabled = visualizerActive,
                 style = musicVisualizerStyle,
@@ -1121,6 +1143,9 @@ internal fun DeskBottomBar(
                 // the Box has derived its height from that non-match-parent child.
                 modifier = Modifier.matchParentSize(),
             )
+            if (floatingPanel) {
+                NavSelectionIndicator(target = selectedSpan, modifier = Modifier.matchParentSize())
+            }
             NavigationBar(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1139,10 +1164,33 @@ internal fun DeskBottomBar(
                     } else {
                         item.label
                     }
+                    val selected = selectedRoute == item.id.route
                     NavigationBarItem(
-                        selected = selectedRoute == item.id.route,
-                        onClick = { onSelected(item) },
-                        icon = { Icon(iconFor(item.iconKey), label) },
+                        selected = selected,
+                        onClick = {
+                            if (!selected) haptics.tick()
+                            onSelected(item)
+                        },
+                        modifier = Modifier.onGloballyPositioned { coordinates ->
+                            val x = coordinates.positionInRoot().x
+                            itemRootSpans[item.id.route] =
+                                NavItemSpan(x, x + coordinates.size.width)
+                        },
+                        icon = {
+                            val iconScale by animateFloatAsState(
+                                targetValue = if (selected) 1.14f else 1f,
+                                animationSpec = DeskMotion.pop<Float>(style),
+                                label = "navIconScale",
+                            )
+                            Icon(
+                                iconFor(item.iconKey),
+                                label,
+                                modifier = Modifier.graphicsLayer {
+                                    scaleX = iconScale
+                                    scaleY = iconScale
+                                },
+                            )
+                        },
                         label = if (showLabels) {
                             { Text(label, maxLines = 1) }
                         } else {
@@ -1158,6 +1206,9 @@ internal fun DeskBottomBar(
                         ),
                     )
                 }
+            }
+            if (!floatingPanel) {
+                NavSelectionIndicator(target = selectedSpan, modifier = Modifier.matchParentSize())
             }
         }
     }

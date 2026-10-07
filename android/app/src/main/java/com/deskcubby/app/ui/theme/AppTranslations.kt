@@ -10,6 +10,10 @@ package com.deskcubby.app.ui.theme
  */
 internal object AppTranslations {
     val TRADITIONAL: Map<String, String> = mapOf(
+        "清晨" to "清晨",
+        "白天" to "白天",
+        "黄昏" to "黃昏",
+        "夜晚" to "夜晚",
         "\${category.chineseLabel}图片已加入今日日记" to "\${category.chineseLabel}圖片已加入今日日記",
         "\${settings.cloudSyncConfigs.count { it.enabled }} 个已启用来源" to "\${settings.cloudSyncConfigs.count { it.enabled }} 個已啟用來源",
         "\${settings.dailyEventTemplates.size} 个模板" to "\${settings.dailyEventTemplates.size} 個範本",
@@ -1328,6 +1332,10 @@ internal object AppTranslations {
     )
 
     val KOREAN: Map<String, String> = mapOf(
+        "清晨" to "이른 아침",
+        "白天" to "낮",
+        "黄昏" to "해질녘",
+        "夜晚" to "밤",
         "\${category.chineseLabel}图片已加入今日日记" to "\${category.chineseLabel} 사진이 오늘 일기에 추가되었습니다",
         "\${settings.cloudSyncConfigs.count { it.enabled }} 个已启用来源" to "\${settings.cloudSyncConfigs.count { it.enabled }}개 활성화된 소스",
         "\${settings.dailyEventTemplates.size} 个模板" to "\${settings.dailyEventTemplates.size}개 템플릿",
@@ -2646,6 +2654,10 @@ internal object AppTranslations {
     )
 
     val JAPANESE: Map<String, String> = mapOf(
+        "清晨" to "早朝",
+        "白天" to "日中",
+        "黄昏" to "夕暮れ",
+        "夜晚" to "夜",
         "\${category.chineseLabel}图片已加入今日日记" to "\${category.chineseLabel}の写真を今日の日記に追加しました",
         "\${settings.cloudSyncConfigs.count { it.enabled }} 个已启用来源" to "\${settings.cloudSyncConfigs.count { it.enabled }} 件の有効なソース",
         "\${settings.dailyEventTemplates.size} 个模板" to "\${settings.dailyEventTemplates.size} 個のテンプレート",

@@ -29,11 +29,9 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -70,6 +68,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import com.deskcubby.app.ui.components.CountUpNumber
+import com.deskcubby.app.ui.components.StaggeredEntrance
+import com.deskcubby.app.ui.theme.rememberDeskHaptics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -174,7 +175,6 @@ fun HomeScreen(
     onOpenStatistics: () -> Unit,
 ) {
     val context = LocalContext.current
-    val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     val diaries by viewModel.diaries.collectAsStateWithLifecycle()
     val thoughts by viewModel.thoughts.collectAsStateWithLifecycle()
     val thoughtCategories by viewModel.thoughtCategories.collectAsStateWithLifecycle()
@@ -190,6 +190,16 @@ fun HomeScreen(
     }
     val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val haptics = rememberDeskHaptics()
+    // Widgets cascade in once per visit; ones that scroll back into the lazy list stay put.
+    val revealedWidgets = remember { mutableSetOf<String>() }
+    // Haptic confirmation fires only after the ViewModel reports the thought was persisted.
+    val addThoughtConfirmed: (String, Long?, (Boolean) -> Unit) -> Unit = { text, categoryId, onDone ->
+        viewModel.addThought(text, categoryId) { success ->
+            if (success) haptics.confirm()
+            onDone(success)
+        }
+    }
     var pendingMealKey by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingCameraPath by rememberSaveable { mutableStateOf<String?>(null) }
     val foldersMissingMessage = tr(
@@ -321,22 +331,15 @@ fun HomeScreen(
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            Surface(color = MaterialTheme.colorScheme.surface) {
-                Text(
-                    text = HomeGreeting.forDate(
-                        date = LocalDate.now(),
-                        language = settings.appLanguage,
-                        userName = settings.userName,
-                        templates = settings.homeGreetings,
-                    ),
-                    style = if (organic) MaterialTheme.typography.titleMedium
-                    else MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                )
-            }
+            HomeHeroHeader(
+                greeting = HomeGreeting.forDate(
+                    date = LocalDate.now(),
+                    language = settings.appLanguage,
+                    userName = settings.userName,
+                    templates = settings.homeGreetings,
+                ),
+                language = settings.appLanguage,
+            )
         },
     ) { inner ->
         val compact = LocalCompactMode.current
@@ -354,7 +357,7 @@ fun HomeScreen(
                 onOpenThoughts = onOpenThoughts,
                 onOpenDateRecords = onOpenDateRecords,
                 onOpenWebsite = onOpenWebsite,
-                onQuickThought = viewModel::addThought,
+                onQuickThought = addThoughtConfirmed,
                 poemRefreshing = poemRefreshing,
                 onRefreshPoem = { viewModel.refreshPoem(settings.appLanguage) },
                 onSavePoem = { viewModel.savePoem(poem, settings.appLanguage) },
@@ -391,7 +394,12 @@ fun HomeScreen(
                     },
                 ),
             ) {
-                items(settings.homeWidgets, key = { it }) { id ->
+                itemsIndexed(settings.homeWidgets, key = { _, id -> id }) { index, id ->
+                    StaggeredEntrance(
+                        index = index,
+                        alreadyShown = id in revealedWidgets,
+                        onShown = { revealedWidgets.add(id) },
+                    ) {
                     HomeWidget(
                         id = id,
                         settings = settings,
@@ -404,7 +412,7 @@ fun HomeScreen(
                         onOpenThoughts = onOpenThoughts,
                         onOpenDateRecords = onOpenDateRecords,
                         onOpenWebsite = onOpenWebsite,
-                        onQuickThought = viewModel::addThought,
+                        onQuickThought = addThoughtConfirmed,
                         poemRefreshing = poemRefreshing,
                         onRefreshPoem = {
                             viewModel.refreshPoem(settings.appLanguage)
@@ -431,6 +439,7 @@ fun HomeScreen(
                         },
                         onUndoCloudSync = { viewModel.undoLastCloudSync() },
                     )
+                    }
                 }
                 item { Spacer(Modifier.height(20.dp)) }
             }
@@ -674,9 +683,9 @@ private fun HomeWidget(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
-                HomeMetric(diaries.size.toString(), tr("日记", "Diaries"))
-                HomeMetric(thoughts.size.toString(), tr("小巧思", "Thoughts"))
-                HomeMetric(dateRecords.size.toString(), tr("日期", "Dates"))
+                HomeMetric(diaries.size, tr("日记", "Diaries"))
+                HomeMetric(thoughts.size, tr("小巧思", "Thoughts"))
+                HomeMetric(dateRecords.size, tr("日期", "Dates"))
             }
             TextButton(onClick = onOpenStatistics, modifier = Modifier.align(Alignment.End)) {
                 Icon(Icons.Outlined.Insights, contentDescription = null)
@@ -1020,9 +1029,13 @@ private fun localizedCloudSyncStatus(value: String, language: AppLanguage): Stri
 }
 
 @Composable
-private fun HomeMetric(value: String, label: String) {
+private fun HomeMetric(value: Int, label: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.headlineSmall)
+        CountUpNumber(
+            target = value,
+            style = MaterialTheme.typography.displaySmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
         Text(
             label,
             style = MaterialTheme.typography.bodySmall,
