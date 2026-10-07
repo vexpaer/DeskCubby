@@ -309,7 +309,7 @@
     "path": "android/app/src/main/AndroidManifest.xml",
     "language": "xml",
     "nodeCount": 1,
-    "size": 10575
+    "size": 10667
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/DeskCubbyApplication.kt",
@@ -764,14 +764,14 @@
   {
     "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/StepHealthConnectAccess.kt",
     "language": "kotlin",
-    "nodeCount": 33,
-    "size": 5238
+    "nodeCount": 35,
+    "size": 5470
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/StepStatisticsRepository.kt",
     "language": "kotlin",
-    "nodeCount": 50,
-    "size": 11926
+    "nodeCount": 51,
+    "size": 12147
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/data/statistics/UsageDailyBucketAggregator.kt",

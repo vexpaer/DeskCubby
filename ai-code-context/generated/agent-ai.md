@@ -11,7 +11,7 @@ Found 2 symbols across 1 file.
 - `access` (android/app/src/main/java/com/deskcubby/app/ui/reader/PdfiumPdfReader.kt:70) — 3 callers in `android/app/src/main/java/com/deskcubby/app/ui/reader/PdfiumPdfReader.kt`, `windows/scripts/copy-portable.mjs`; ⚠️ no covering tests found
 - `execute` (android/app/src/main/java/com/deskcubby/app/agent/AgentToolExecutor.kt:18) — 2 callers in `android/app/src/main/java/com/deskcubby/app/agent/AgentRuntime.kt`, `android/app/src/main/java/com/deskcubby/app/agent/AgentContracts.kt`; ⚠️ no covering tests found
 - `DefaultAgentContextProvider` (android/app/src/main/java/com/deskcubby/app/agent/DefaultAgentContextProvider.kt:7) — 3 callers in `android/app/src/main/java/com/deskcubby/app/di/AgentModule.kt`; tests: `android/app/src/test/java/com/deskcubby/app/agent/AgentContextProviderTest.kt`
-- `permissionsToRequest` (android/app/src/main/java/com/deskcubby/app/data/statistics/StepHealthConnectAccess.kt:97) — 1 caller in `android/app/src/main/java/com/deskcubby/app/data/statistics/StepStatisticsRepository.kt`; ⚠️ no covering tests found
+- `permissionsToRequest` (android/app/src/main/java/com/deskcubby/app/data/statistics/StepHealthConnectAccess.kt:101) — 1 caller in `android/app/src/main/java/com/deskcubby/app/data/statistics/StepStatisticsRepository.kt`; ⚠️ no covering tests found
 
 **Relationships**
 
@@ -39,7 +39,7 @@ Found 2 symbols across 1 file.
 - renderPdfiumPage → transfer
 - renderPdfiumPage → releaseOwned
 - PdfiumPage → renderPdfiumPage
-- ... and 110 more
+- ... and 109 more
 
 **instantiates:**
 - PdfiumPdfReader → PdfiumDocumentSession
@@ -75,9 +75,9 @@ Found 2 symbols across 1 file.
 - StepStatisticsScreen → StepHealthConnectAccess
 - commitMutation → UNDO_SCHEMA
 - commitMutation → PLAN_SCHEMA
+- healthReadPermissions → activeCaloriesReadPermission
 - refresh → DETAIL_HEALTH_CONNECT
-- refresh → DETAIL_STEP_PERMISSION
-- ... and 14 more
+- ... and 15 more
 
 **Source Code**
 
@@ -432,7 +432,6 @@ Found 2 symbols across 1 file.
 539	                            onReadingChanged = { readerOpen = it },
 540	                            onTutorialTargetChanged = { childTutorialTarget = it },
 541	                        )
-542	                    }
 
 ... (output truncated to budget; the source above is complete and verbatim — treat it as already Read. For any area not covered, run another codegraph_explore with the specific names — do NOT Read these files.)
 
