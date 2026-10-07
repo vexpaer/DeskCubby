@@ -3,6 +3,7 @@
 package com.deskcubby.app.ui.desk
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -11,6 +12,25 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import com.deskcubby.app.ui.desk.components.DeskDayRecapCard
+import com.deskcubby.app.ui.home.daylight
+import com.deskcubby.app.ui.home.rememberDaylight
+import com.deskcubby.app.ui.theme.LocalReducedMotion
+import com.deskcubby.app.ui.theme.rememberDeskHaptics
+import com.deskcubby.app.ui.theme.tr
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -67,7 +87,24 @@ fun DeskScreen(
     onOpenAi: (String?) -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val recapSaveState by viewModel.recapSaveState.collectAsStateWithLifecycle()
     val scheme = MaterialTheme.colorScheme
+    val haptics = rememberDeskHaptics()
+    val reducedMotion = LocalReducedMotion.current
+    val daylight = rememberDaylight()
+
+    // "Close the day": the desk's objects sweep down into the drawer, then the recap card rises.
+    var dayClosed by rememberSaveable { mutableStateOf(false) }
+    val sweep = remember { Animatable(if (dayClosed) 1f else 0f) }
+    BackHandler(enabled = dayClosed) { dayClosed = false }
+    LaunchedEffect(dayClosed, reducedMotion) {
+        val target = if (dayClosed) 1f else 0f
+        if (reducedMotion) {
+            sweep.snapTo(target)
+        } else {
+            sweep.animateTo(target, spring(dampingRatio = 0.86f, stiffness = 170f))
+        }
+    }
 
     var aiOpen by remember { mutableStateOf(false) }
     var quickCaptureOpen by remember { mutableStateOf(false) }
@@ -106,11 +143,21 @@ fun DeskScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(ambientTint),
+            .background(ambientTint)
+            .daylight(daylight, anchorY = 0.02f, strength = 0.55f),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    val p = sweep.value
+                    translationY = p * 180.dp.toPx()
+                    alpha = (1f - p * 1.15f).coerceIn(0f, 1f)
+                    val scale = 1f - 0.12f * p
+                    scaleX = scale
+                    scaleY = scale
+                    rotationX = 10f * p
+                }
                 .verticalScroll(rememberScrollState())
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .padding(top = padding.calculateTopPadding() + 24.dp)
@@ -182,13 +229,31 @@ fun DeskScreen(
             }
 
             Spacer(Modifier.height(24.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClickLabel = "Quick capture") { quickCaptureOpen = !quickCaptureOpen },
-                contentAlignment = Alignment.CenterEnd,
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = "+", color = scheme.onSurfaceVariant.copy(alpha = 0.85f), fontSize = 28.sp)
+                if (state.recap != null && !state.isEmpty) {
+                    OutlinedButton(
+                        onClick = {
+                            haptics.tick()
+                            quickCaptureOpen = false
+                            dayClosed = true
+                        },
+                    ) {
+                        Icon(Icons.Outlined.Inventory2, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(tr("收起今天", "Close the day"))
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(onClickLabel = "Quick capture") { quickCaptureOpen = !quickCaptureOpen },
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    Text(text = "+", color = scheme.onSurfaceVariant.copy(alpha = 0.85f), fontSize = 28.sp)
+                }
             }
         }
 
@@ -203,6 +268,36 @@ fun DeskScreen(
             onSelectEvent = { quickCaptureOpen = false; onOpenEvent() },
             modifier = Modifier.align(Alignment.BottomCenter),
         )
+
+        val recap = state.recap
+        AnimatedVisibility(
+            visible = dayClosed && recap != null,
+            enter = fadeIn(tween(240, delayMillis = if (reducedMotion) 0 else 180)) +
+                slideInVertically(spring(dampingRatio = 0.78f, stiffness = 260f)) { it / 3 },
+            exit = fadeOut(tween(160)) + slideOutVertically(tween(200)) { it / 4 },
+        ) {
+            // Blocks taps on the swept-away objects while the recap is up.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) { detectTapGestures { } }
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = padding.calculateBottomPadding()),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (recap != null) {
+                    DeskDayRecapCard(
+                        recap = recap,
+                        saveState = recapSaveState,
+                        onSave = {
+                            viewModel.saveRecap { saved -> if (saved) haptics.confirm() }
+                        },
+                        onReopen = { dayClosed = false },
+                    )
+                }
+            }
+        }
 
         DeskAiOverlay(
             visible = aiOpen,

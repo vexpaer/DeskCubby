@@ -521,8 +521,7 @@ class SettingsViewModel @Inject constructor(
 
     /** First-launch picker: applies the language and records the device-local "chosen" flag. */
     fun chooseFirstLaunchLanguage(value: AppLanguage) = viewModelScope.launch {
-        repository.setAppLanguage(value)
-        repository.markLanguageSelected()
+        repository.completeFirstLaunch(value)
     }
     fun setUserName(value: String) = launch { repository.setUserName(value) }
     fun setHomeGreetingSettings(

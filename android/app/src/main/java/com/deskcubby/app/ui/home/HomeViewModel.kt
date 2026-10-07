@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -52,7 +53,32 @@ class HomeViewModel @Inject constructor(
     private val aiTaskQueue: AiTaskQueue,
     private val cloudSyncService: com.deskcubby.app.data.sync.AppCloudSyncService,
     private val cloudSyncUndoStore: com.deskcubby.app.data.sync.CloudSyncUndoStore,
+    private val settingsRepository: com.deskcubby.app.data.preferences.SettingsRepository,
 ) : ViewModel() {
+    /** Home's one-time "Meet your Desk" card for people who installed before the Desk led. */
+    val deskIntroVisible: StateFlow<Boolean> = settingsRepository.deskIntroDismissed
+        .map { dismissed -> !dismissed }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun dismissDeskIntro() {
+        viewModelScope.launch { settingsRepository.dismissDeskIntro() }
+    }
+
+    /** Promotes the Desk to the bar's first slot and start page; [onDone] reports persistence. */
+    fun makeDeskStartPage(onDone: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val saved = try {
+                settingsRepository.makeDeskStartPage()
+                true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
+            onDone(saved)
+        }
+    }
+
     val diaries: StateFlow<List<DiaryIndexEntity>> = diaryIndexDao.observeAll().stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),

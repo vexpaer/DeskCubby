@@ -480,6 +480,7 @@ fun DeskCubbyRoot(
                             onOpenStatistics = {
                                 navController.navigate(NavItemId.STATISTICS.route)
                             },
+                            onOpenDesk = { navController.navigate(NavItemId.DESK.route) },
                         )
                     }
                     composable(NavItemId.DESK.route) {

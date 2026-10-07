@@ -20,6 +20,8 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,21 +97,8 @@ internal fun HomeHeroHeader(
     now: LocalTime = LocalTime.now(),
 ) {
     val scheme = MaterialTheme.colorScheme
-    val reduced = LocalReducedMotion.current
-    val phase = remember(now.hour) { dayPhaseFor(now) }
-    val lightX = remember(now.hour, now.minute / 10) { lightSourceFraction(now) }
-    val (glow, halo) = phaseColors(phase, scheme)
-    val night = phase == DayPhase.NIGHT
-    val breath = if (reduced) {
-        null
-    } else {
-        rememberInfiniteTransition(label = "heroLight").animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(7_000, easing = LinearEasing), RepeatMode.Reverse),
-            label = "heroLightBreath",
-        )
-    }
+    val light = rememberDaylight(now)
+    val phase = light.phase
     val locale = remember(language) { language.javaLocale() }
     val weekday = today.dayOfWeek.getDisplayName(TextStyle.FULL, locale)
     val month = today.month.getDisplayName(TextStyle.FULL, locale)
@@ -123,22 +112,7 @@ internal fun HomeHeroHeader(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .drawBehind {
-                val pulse = breath?.value ?: 0.5f
-                val center = Offset(size.width * lightX, size.height * (0.15f + 0.1f * pulse))
-                val radius = size.maxDimension * (0.62f + 0.08f * pulse)
-                drawRect(
-                    Brush.radialGradient(
-                        colors = listOf(
-                            glow.copy(alpha = if (night) 0.30f else 0.70f),
-                            halo.copy(alpha = if (night) 0.12f else 0.28f),
-                            Color.Transparent,
-                        ),
-                        center = center,
-                        radius = radius,
-                    ),
-                )
-            }
+            .daylight(light)
             .windowInsetsPadding(WindowInsets.statusBars)
             .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -170,4 +144,61 @@ internal fun HomeHeroHeader(
             )
         }
     }
+}
+
+/** Theme-derived ambient light for the current local time, shared by Home's hero and the Desk. */
+@Stable
+internal class Daylight(
+    val phase: DayPhase,
+    val glow: Color,
+    val halo: Color,
+    val sourceX: Float,
+    val breath: State<Float>?,
+)
+
+@Composable
+internal fun rememberDaylight(now: LocalTime = LocalTime.now()): Daylight {
+    val scheme = MaterialTheme.colorScheme
+    val reduced = LocalReducedMotion.current
+    val phase = remember(now.hour) { dayPhaseFor(now) }
+    val sourceX = remember(now.hour, now.minute / 10) { lightSourceFraction(now) }
+    val (glow, halo) = phaseColors(phase, scheme)
+    val breath = if (reduced) {
+        null
+    } else {
+        rememberInfiniteTransition(label = "daylight").animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(7_000, easing = LinearEasing), RepeatMode.Reverse),
+            label = "daylightBreath",
+        )
+    }
+    return Daylight(phase, glow, halo, sourceX, breath)
+}
+
+/**
+ * Paints [light] as a soft radial glow behind the content. [anchorY] places the source vertically
+ * (fraction of the height) and [strength] scales its opacity. Only the draw phase reads the
+ * breathing animation, so it never recomposes the content.
+ */
+internal fun Modifier.daylight(
+    light: Daylight,
+    anchorY: Float = 0.15f,
+    strength: Float = 1f,
+): Modifier = drawBehind {
+    val pulse = light.breath?.value ?: 0.5f
+    val night = light.phase == DayPhase.NIGHT
+    val center = Offset(size.width * light.sourceX, size.height * (anchorY + 0.1f * pulse))
+    val radius = size.maxDimension * (0.62f + 0.08f * pulse)
+    drawRect(
+        Brush.radialGradient(
+            colors = listOf(
+                light.glow.copy(alpha = (if (night) 0.30f else 0.70f) * strength),
+                light.halo.copy(alpha = (if (night) 0.12f else 0.28f) * strength),
+                Color.Transparent,
+            ),
+            center = center,
+            radius = radius,
+        ),
+    )
 }

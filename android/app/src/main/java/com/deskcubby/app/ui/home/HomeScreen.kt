@@ -97,6 +97,7 @@ import com.deskcubby.app.data.model.AppLanguage
 import com.deskcubby.app.data.model.AppSettings
 import com.deskcubby.app.data.model.DailyEventTemplate
 import com.deskcubby.app.data.model.LayoutMode
+import com.deskcubby.app.data.model.NavItemId
 import com.deskcubby.app.data.model.VisualStyle
 import com.deskcubby.app.data.repository.DailyPoem
 import com.deskcubby.app.data.sync.AppCloudSyncStatus
@@ -176,8 +177,10 @@ fun HomeScreen(
     onOpenNotes: () -> Unit,
     onOpenGame: (String) -> Unit,
     onOpenStatistics: () -> Unit,
+    onOpenDesk: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val deskIntroVisible by viewModel.deskIntroVisible.collectAsStateWithLifecycle()
     val diaries by viewModel.diaries.collectAsStateWithLifecycle()
     val thoughts by viewModel.thoughts.collectAsStateWithLifecycle()
     val thoughtCategories by viewModel.thoughtCategories.collectAsStateWithLifecycle()
@@ -419,6 +422,17 @@ fun HomeScreen(
                     },
                 ),
             ) {
+                if (deskIntroVisible && settings.defaultPage != NavItemId.DESK) {
+                    item(key = "desk_intro") {
+                        StaggeredEntrance(index = 0, alreadyShown = false, onShown = {}) {
+                            DeskIntroCard(
+                                onOpenDesk = onOpenDesk,
+                                onMakeStartPage = viewModel::makeDeskStartPage,
+                                onDismiss = viewModel::dismissDeskIntro,
+                            )
+                        }
+                    }
+                }
                 itemsIndexed(settings.homeWidgets, key = { _, id -> id }) { index, id ->
                     StaggeredEntrance(
                         index = index,

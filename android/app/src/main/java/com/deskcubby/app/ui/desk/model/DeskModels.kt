@@ -73,6 +73,8 @@ data class DeskUiState(
     val isEmpty: Boolean = true,
     /** One-shot user-facing notice from a completed photo add (success/failure), localized. */
     val photoNotice: String? = null,
+    /** Summary shown when the day is closed; null until today's sources have loaded. */
+    val recap: DeskDayRecap? = null,
 ) {
     val hasDiary: Boolean get() = diary != null
     val hasIdeas: Boolean get() = ideas.isNotEmpty()

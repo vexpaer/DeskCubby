@@ -14,6 +14,9 @@ import com.deskcubby.app.data.preferences.SettingsRepository
 import com.deskcubby.app.data.repository.DiaryFileRepository
 import com.deskcubby.app.data.repository.MealCalendarPhoto
 import com.deskcubby.app.ui.desk.model.DeskAmbient
+import com.deskcubby.app.ui.desk.model.DeskDayRecap
+import com.deskcubby.app.ui.desk.model.RecapSaveState
+import com.deskcubby.app.ui.desk.model.buildDayRecapMarkdown
 import com.deskcubby.app.ui.desk.model.DeskDateLabel
 import com.deskcubby.app.ui.desk.model.DeskItem
 import com.deskcubby.app.ui.desk.model.DeskItemKind
@@ -27,6 +30,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -55,6 +59,47 @@ class DeskViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(DeskUiState())
     val state: StateFlow<DeskUiState> = _state.asStateFlow()
+
+    // Kept outside DeskUiState because refresh() rebuilds that state on every source change.
+    private val _recapSave = MutableStateFlow<Pair<LocalDate?, RecapSaveState>>(null to RecapSaveState.IDLE)
+    val recapSaveState: StateFlow<RecapSaveState> = _recapSave
+        .map { it.second }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, RecapSaveState.IDLE)
+
+    /**
+     * Appends the day's recap block to today's diary through the conflict-checked, verified
+     * [DiaryFileRepository.appendTextToToday] path. [onDone] reports whether it really landed.
+     */
+    fun saveRecap(onDone: (Boolean) -> Unit) {
+        val recap = _state.value.recap
+        if (recap == null || recap.isEmpty || _recapSave.value.second == RecapSaveState.SAVING) {
+            onDone(false)
+            return
+        }
+        _recapSave.value = recap.date to RecapSaveState.SAVING
+        viewModelScope.launch {
+            val current = settingsRepository.settings.first()
+            val saved = try {
+                diaryRepository.appendTextToToday(
+                    buildDayRecapMarkdown(recap, current.appLanguage),
+                    current,
+                    recap.date,
+                )
+                true
+            } catch (cancelled: CancellationException) {
+                _recapSave.value = recap.date to RecapSaveState.IDLE
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
+            _recapSave.value = recap.date to if (saved) RecapSaveState.SAVED else RecapSaveState.FAILED
+            onDone(saved)
+            if (saved) {
+                // The Markdown write is durable; refreshing the index can safely happen afterwards.
+                runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { diaryRepository.scan(current) } }
+            }
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -136,7 +181,20 @@ class DeskViewModel @Inject constructor(
             // MealCalendarPhoto currently carries no trustworthy capture/import timestamp. Keep the
             // photo card, but omit it from the timed trace until a real timestamp is available.
             val traces = buildTraces(source, todayIdeas, todayDiary, language)
+            val momentTimes = todayIdeas.map { it.createdAt } +
+                listOfNotNull(todayDiary?.lastModified?.takeIf { it in startOfDay until endOfDay })
+            val recap = DeskDayRecap(
+                date = today,
+                diaryWords = todayDiary?.wordCount ?: 0,
+                ideaCount = todayIdeas.size,
+                photoCount = mealDays.firstOrNull { it.dateIso == today.toString() }?.photos?.size ?: 0,
+                momentCount = traces.size,
+                firstMomentMillis = momentTimes.minOrNull(),
+                lastMomentMillis = momentTimes.maxOrNull(),
+            )
+            if (_recapSave.value.first != today) _recapSave.value = today to RecapSaveState.IDLE
             _state.value = DeskUiState(
+                recap = recap,
                 loading = false,
                 dateLabel = DeskDateLabel(
                     dayNumber = today.dayOfMonth.toString(),
