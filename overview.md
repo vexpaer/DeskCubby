@@ -373,12 +373,13 @@ Windows 设置采用接近 Android 的层级：设置主页为「外观与语言
 
 ## 8. 最近完成的功能
 
-### Android 视觉焕新第一阶段（未发版）：字体、动效与主页主视觉
+### Android 视觉焕新第一、二阶段（未发版）：字体、动效、主页主视觉与毛玻璃
 
 - 字体系统：`ui/theme/Type.kt` 不再是默认 `Typography()`。Material 采用「纸张」气质：display/headline 使用系统衬线（CJK 走设备 Noto Serif CJK 回退）并收紧字距；Liquid Glass 新增 `GlassTypography`，display 为细字重大数字、headline 为 Medium；Organic Future 保持原 `OrganicFutureTypography`。只使用系统字族，不打包字体文件；字号缩放仍经 `scaledTypography()`。`withTabularFigures()` 为计数数字开启等宽数字。
 - 动效语言：新增 `ui/theme/Motion.kt`。`DeskMotion` 按风格给出 leading/trailing/entrance/pop 弹簧与错落间隔（Material 利落无回弹、Liquid Glass 有回弹、Organic Future 舒缓）；`LocalReducedMotion` 由 `DeskCubbyTheme` 根据系统动画开关提供，所有装饰性动画在其为 true 时直接定格；`DeskHaptics`（`rememberDeskHaptics()`）经 `View.performHapticFeedback` 提供 confirm/tick，遵循系统触感设置。
 - 组件：`ui/components/DeskMotionComponents.kt` 提供 `CountUpNumber`（计数动画，读屏只读最终值，时长按数量级 520–1200ms）、`StaggeredEntrance`（错落浮现）与 `NavSelectionIndicator`（底栏选中指示器，两条边沿独立弹簧形成拉伸；Material 墨线绘制在不透明底栏之上，Glass 胶囊/Organic 色块绘制在透明浮动底栏之下）。`Navigation.kt` 的 `DeskBottomBar` 以 root 坐标测量各 `NavigationBarItem`，切换时轻触感、选中图标弹大。
 - 主页：`ui/home/HomeHero.kt` 的 `HomeHeroHeader` 替换原纯文字问候顶栏——超大日期数字 + 「星期 · 月份 · 时段」+ 问候语；背后柔光颜色取自主题角色，按 `dayPhaseFor()`（清晨/白天/黄昏/夜晚）变化，位置由 `lightSourceFraction()` 随太阳从左到右。主页模块列表改用 `itemsIndexed` + `StaggeredEntrance` 每次进入错落浮现（已出现过的不重复）；「记录概览」数字改为主题色大号计数；快速输入只在 ViewModel 回报落库成功后触发 confirm 触感。
+- 第二阶段：Liquid Glass（非 Custom）浮动底栏改为真毛玻璃——`Navigation.kt` 的 NavHost 容器 `hazeSource(navHazeState)`，`FrostedGlassBar` 以 `hazeEffect` 绘制模糊（新增依赖 `dev.chrisbanes.haze:haze:1.7.2`，1.7.x 是最后一个基于 Kotlin 2.2 构建的版本；API 31+ 用 RenderEffect，以下回退为 92% 表面色半透明底）。未自定义的 Material 与 Liquid Glass 拥有各自的页面转场（Material 纸张上升 / Glass 弹性放大），Custom 与系统关闭动画时沿用原淡入淡出。主页列表不再整体让出底栏高度，而是把底栏高度加到 `contentPadding`，使卡片能从毛玻璃下方滚过；Snackbar 单独避开底栏。
 - 无新的持久化设置、Room 或备份变化。纯函数测试：`HomeHeroTest`、`DeskMotionComponentsTest`。构建验证在 GitHub Actions `android-ci.yml`（单元测试、lint、assembleDebug）上进行。
 
 ### Web 端（`web/`）：完整复刻 Android 全部功能

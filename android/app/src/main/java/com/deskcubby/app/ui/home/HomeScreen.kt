@@ -12,6 +12,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -73,6 +75,7 @@ import com.deskcubby.app.ui.components.StaggeredEntrance
 import com.deskcubby.app.ui.theme.rememberDeskHaptics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
@@ -326,10 +329,15 @@ fun HomeScreen(
         }
     }
 
+    // The list scrolls underneath the (possibly translucent, frosted) bottom bar; only its
+    // content padding and the snackbar keep clear of the bar.
+    val bottomBarPadding = padding.calculateBottomPadding()
     Scaffold(
-        modifier = Modifier.padding(bottom = padding.calculateBottomPadding()).imePadding(),
+        modifier = Modifier.imePadding(),
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            SnackbarHost(snackbarHostState, Modifier.padding(bottom = bottomBarPadding))
+        },
         topBar = {
             HomeHeroHeader(
                 greeting = HomeGreeting.forDate(
@@ -346,7 +354,12 @@ fun HomeScreen(
         val layoutMode = LocalLayoutMode.current
         if (layoutMode == LayoutMode.EXPANDED) {
             HomeWorkspaceContent(
-                padding = inner,
+                padding = PaddingValues(
+                    start = inner.calculateStartPadding(LocalLayoutDirection.current),
+                    top = inner.calculateTopPadding(),
+                    end = inner.calculateEndPadding(LocalLayoutDirection.current),
+                    bottom = inner.calculateBottomPadding() + bottomBarPadding,
+                ),
                 settings = settings,
                 diaries = diaries,
                 thoughts = thoughts,
@@ -383,9 +396,21 @@ fun HomeScreen(
                 onUndoCloudSync = { viewModel.undoLastCloudSync() },
             )
         } else {
+            val edge = if (compact) 10.dp else 16.dp
             LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(inner),
-                contentPadding = PaddingValues(if (compact) 10.dp else 16.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = inner.calculateTopPadding())
+                    .padding(
+                        start = inner.calculateStartPadding(LocalLayoutDirection.current),
+                        end = inner.calculateEndPadding(LocalLayoutDirection.current),
+                    ),
+                contentPadding = PaddingValues(
+                    start = edge,
+                    top = edge,
+                    end = edge,
+                    bottom = edge + inner.calculateBottomPadding() + bottomBarPadding,
+                ),
                 verticalArrangement = Arrangement.spacedBy(
                     when {
                         !settings.homeWidgetBordersEnabled -> 0.dp

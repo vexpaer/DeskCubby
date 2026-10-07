@@ -18,7 +18,11 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -28,6 +32,18 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.luminance
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeStyle
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -287,6 +303,15 @@ fun DeskCubbyRoot(
             300
         }
         val standardMotionMillis = if (rootVisuals.customized) rootVisuals.transitionMillis else 700
+        // Uncustomized Material and Liquid Glass get their own page choreography: Material lifts a
+        // new sheet of paper into place; Liquid Glass swells in on a spring like a droplet.
+        // Custom themes keep their explicit transition duration and system "remove animations"
+        // keeps the existing fade (which the platform already shortens to instant).
+        val expressiveMotion = systemAnimationsEnabled && !rootVisuals.customized
+        val materialPages = expressiveMotion && resolvedVisualStyle == VisualStyle.MATERIAL
+        val glassPages = expressiveMotion && resolvedVisualStyle == VisualStyle.LIQUID_GLASS
+        // Backdrop shared by page content (source) and the floating Liquid Glass bar (effect).
+        val navHazeState = rememberHazeState()
         val backStack by navController.currentBackStackEntryAsState()
         val route = backStack?.destination?.route
         val windowInfo = rememberWindowInfo()
@@ -359,6 +384,7 @@ fun DeskCubbyRoot(
                         musicVisualizerMinFrequencyHz = settings.musicVisualizerMinFrequencyHz,
                         musicVisualizerMaxFrequencyHz = settings.musicVisualizerMaxFrequencyHz,
                         onSelected = { item -> navigateMain(item.id.route) },
+                        hazeState = navHazeState,
                     )
                 }
             },
@@ -375,7 +401,7 @@ fun DeskCubbyRoot(
                 // Drawer sheets animate into negative local X while closed. Clip the content
                 // column so that hidden/dragging pixels can never paint over the sibling rail.
                 // The open sheet still begins at this column's x=0, flush with the rail.
-                Box(Modifier.weight(1f).fillMaxSize().clipToBounds()) {
+                Box(Modifier.weight(1f).fillMaxSize().clipToBounds().hazeSource(navHazeState)) {
                 NavHost(
                     navController = navController,
                     startDestination = initialStartDestination,
@@ -387,6 +413,10 @@ fun DeskCubbyRoot(
                                 scaleIn(tween(organicEnterMillis), initialScale = 0.992f)
                             resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
                                 EnterTransition.None
+                            materialPages -> fadeIn(tween(220, delayMillis = 60)) +
+                                slideInVertically(tween(320, easing = FastOutSlowInEasing)) { it / 18 }
+                            glassPages -> fadeIn(tween(200)) +
+                                scaleIn(spring(dampingRatio = 0.74f, stiffness = 320f), initialScale = 0.93f)
                             else -> fadeIn(tween(standardMotionMillis))
                         }
                     },
@@ -397,6 +427,9 @@ fun DeskCubbyRoot(
                                 scaleOut(tween(organicEnterMillis), targetScale = 1.008f)
                             resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
                                 ExitTransition.None
+                            materialPages -> fadeOut(tween(120))
+                            glassPages -> fadeOut(tween(160)) +
+                                scaleOut(tween(220), targetScale = 1.04f)
                             else -> fadeOut(tween(standardMotionMillis))
                         }
                     },
@@ -407,6 +440,9 @@ fun DeskCubbyRoot(
                                 scaleIn(tween(organicEnterMillis), initialScale = 0.992f)
                             resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
                                 EnterTransition.None
+                            materialPages -> fadeIn(tween(220, delayMillis = 60))
+                            glassPages -> fadeIn(tween(200)) +
+                                scaleIn(spring(dampingRatio = 0.74f, stiffness = 320f), initialScale = 1.05f)
                             else -> fadeIn(tween(standardMotionMillis))
                         }
                     },
@@ -417,6 +453,10 @@ fun DeskCubbyRoot(
                                 scaleOut(tween(organicEnterMillis), targetScale = 1.008f)
                             resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
                                 ExitTransition.None
+                            materialPages -> fadeOut(tween(140)) +
+                                slideOutVertically(tween(220)) { it / 18 }
+                            glassPages -> fadeOut(tween(160)) +
+                                scaleOut(tween(220), targetScale = 0.93f)
                             else -> fadeOut(tween(standardMotionMillis))
                         }
                     },
@@ -1088,6 +1128,7 @@ internal fun DeskBottomBar(
     musicVisualizerMaxFrequencyHz: Int,
     onSelected: (NavItemConfig) -> Unit,
     modifier: Modifier = Modifier,
+    hazeState: HazeState? = null,
 ) {
     val style = LocalVisualStyle.current
     val context = LocalContext.current
@@ -1227,12 +1268,16 @@ internal fun DeskBottomBar(
                     },
                 ),
         ) {
-            GlassPanel(
-                modifier = Modifier.fillMaxWidth(),
-                cornerRadius = 28.dp,
-                role = if (organic) PanelRole.FEATURE else PanelRole.STANDARD,
-                padding = PaddingValues(0.dp),
-            ) { content() }
+            if (glass && hazeState != null && !visuals.customized) {
+                FrostedGlassBar(hazeState = hazeState) { content() }
+            } else {
+                GlassPanel(
+                    modifier = Modifier.fillMaxWidth(),
+                    cornerRadius = 28.dp,
+                    role = if (organic) PanelRole.FEATURE else PanelRole.STANDARD,
+                    padding = PaddingValues(0.dp),
+                ) { content() }
+            }
         }
     } else {
         Box(
@@ -1245,6 +1290,52 @@ internal fun DeskBottomBar(
         ) {
             content()
         }
+    }
+}
+
+/**
+ * Liquid Glass navigation bar made of real frosted glass: page content scrolling underneath is
+ * blurred through a RenderEffect on Android 12+ (older versions fall back to a dense tinted
+ * scrim), with a light specular rim. Colors come from the active theme roles.
+ */
+@Composable
+private fun FrostedGlassBar(
+    hazeState: HazeState,
+    content: @Composable () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val dark = scheme.surface.luminance() < 0.4f
+    val shape = RoundedCornerShape(28.dp)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .shadow(6.dp, shape, ambientColor = scheme.primary.copy(alpha = 0.16f))
+            .clip(shape)
+            .hazeEffect(
+                state = hazeState,
+                style = HazeStyle(
+                    backgroundColor = scheme.surface,
+                    tints = listOf(
+                        HazeTint(scheme.surface.copy(alpha = if (dark) 0.46f else 0.52f)),
+                        HazeTint(scheme.primaryContainer.copy(alpha = 0.14f)),
+                    ),
+                    blurRadius = 26.dp,
+                    noiseFactor = 0.08f,
+                    fallbackTint = HazeTint(scheme.surface.copy(alpha = 0.92f)),
+                ),
+            )
+            .border(
+                1.dp,
+                Brush.linearGradient(
+                    listOf(
+                        Color.White.copy(alpha = if (dark) 0.26f else 0.72f),
+                        scheme.primary.copy(alpha = 0.18f),
+                    ),
+                ),
+                shape,
+            ),
+    ) {
+        content()
     }
 }
 
