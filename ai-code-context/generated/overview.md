@@ -1,6 +1,6 @@
 # DeskCubby CodeGraph Snapshot
 
-Source commit: `d2aac0d4e5f45e9147602221ecb532edb34a6a54`
+Source commit: `b89705f19b3a449f20bbcd29775c25f64b7f3090`
 
 CodeGraph version: `1.5.0`
 

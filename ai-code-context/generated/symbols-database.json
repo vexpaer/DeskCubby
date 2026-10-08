@@ -17,7 +17,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 101.02917939347807
   },
@@ -38,7 +38,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 97.05991388116654
   },
@@ -59,7 +59,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749123
+      "updatedAt": 1791428896028
     },
     "score": 94.00815874562186
   },
@@ -80,7 +80,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746054
+      "updatedAt": 1791428893381
     },
     "score": 78.93142792205285
   },
@@ -101,7 +101,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746089
+      "updatedAt": 1791428893409
     },
     "score": 78.90608813714067
   },
@@ -122,7 +122,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746094
+      "updatedAt": 1791428893416
     },
     "score": 78.90608813714067
   },
@@ -143,7 +143,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746095
+      "updatedAt": 1791428893417
     },
     "score": 78.90608813714067
   },
@@ -164,7 +164,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746097
+      "updatedAt": 1791428893418
     },
     "score": 78.90608813714067
   },
@@ -186,7 +186,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Boolean",
-      "updatedAt": 1791428746790
+      "updatedAt": 1791428894127
     },
     "score": 46.90608813714068
   },
@@ -208,7 +208,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749286
+      "updatedAt": 1791428896137
     },
     "score": 43.93424463531464
   },
@@ -229,7 +229,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749149
+      "updatedAt": 1791428896050
     },
     "score": 40.05991388116654
   },
@@ -250,7 +250,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749398
+      "updatedAt": 1791428896215
     },
     "score": 40.05991388116654
   },
@@ -271,7 +271,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746094
+      "updatedAt": 1791428893415
     },
     "score": 39.85575937686718
   },
@@ -292,7 +292,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749149
+      "updatedAt": 1791428896050
     },
     "score": 37.05991388116654
   },
@@ -314,7 +314,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746253
+      "updatedAt": 1791428893577
     },
     "score": 34.771983034187016
   },
@@ -337,7 +337,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "SecurityErrorDto",
-      "updatedAt": 1791428749072
+      "updatedAt": 1791428895994
     },
     "score": 30.880865559185267
   },
@@ -360,7 +360,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "VaultEncryptedItem",
-      "updatedAt": 1791428749398
+      "updatedAt": 1791428896215
     },
     "score": 30.855759376867177
   },
@@ -382,7 +382,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749149
+      "updatedAt": 1791428896050
     },
     "score": 30.806737799771177
   },
@@ -405,7 +405,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749398
+      "updatedAt": 1791428896215
     },
     "score": 30.805892991133526
   },
@@ -428,7 +428,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "VaultItemRecord",
-      "updatedAt": 1791428749398
+      "updatedAt": 1791428896215
     },
     "score": 30.781131202091196
   },
@@ -450,7 +450,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748756
+      "updatedAt": 1791428895740
     },
     "score": 30.756482637264575
   },
@@ -473,7 +473,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749398
+      "updatedAt": 1791428896215
     },
     "score": 30.756482637264575
   },
@@ -495,7 +495,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748756
+      "updatedAt": 1791428895740
     },
     "score": 30.610926056674423
   },
@@ -517,7 +517,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 30.610926056674423
   },
@@ -539,7 +539,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749226
+      "updatedAt": 1791428896098
     },
     "score": 30.596905323899144
   },
@@ -560,7 +560,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746091
+      "updatedAt": 1791428893411
     },
     "score": 21.855759376867177
   },
@@ -581,7 +581,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746092
+      "updatedAt": 1791428893412
     },
     "score": 21.855759376867177
   },
@@ -603,7 +603,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746637
+      "updatedAt": 1791428893950
     },
     "score": 21.703907270255016
   },
@@ -625,7 +625,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746767
+      "updatedAt": 1791428894100
     },
     "score": 21.703907270255016
   },
@@ -648,7 +648,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Arc",
-      "updatedAt": 1791428749398
+      "updatedAt": 1791428896215
     },
     "score": 20.33397137030788
   },
@@ -671,7 +671,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.673116829314075
   },
@@ -694,7 +694,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.478243976846024
   },
@@ -717,7 +717,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.478243976846024
   },
@@ -740,7 +740,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749398
+      "updatedAt": 1791428896215
     },
     "score": 19.478243976846024
   },
@@ -763,7 +763,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.383722592445032
   },
@@ -786,7 +786,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.383722592445032
   },
@@ -808,7 +808,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.383722592445032
   },
@@ -831,7 +831,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.383722592445032
   },
@@ -853,7 +853,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.383722592445032
   },
@@ -876,7 +876,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.383722592445032
   },
@@ -899,7 +899,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.383722592445032
   },
@@ -922,7 +922,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.291067814353067
   },
@@ -945,7 +945,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.291067814353067
   },
@@ -968,7 +968,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.291067814353067
   },
@@ -991,7 +991,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.291067814353067
   },
@@ -1014,7 +1014,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.291067814353067
   },
@@ -1037,7 +1037,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.291067814353067
   },
@@ -1060,7 +1060,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "CommandResult",
-      "updatedAt": 1791428749072
+      "updatedAt": 1791428895994
     },
     "score": 19.222841775908392
   },
@@ -1083,7 +1083,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.200224890637006
   },
@@ -1106,7 +1106,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.200224890637006
   },
@@ -1128,7 +1128,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.200224890637006
   },
@@ -1151,7 +1151,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.200224890637006
   },
@@ -1173,7 +1173,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.200224890637006
   },
@@ -1195,7 +1195,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.200224890637006
   },
@@ -1218,7 +1218,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.200224890637006
   },
@@ -1240,7 +1240,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.200224890637006
   },
@@ -1262,7 +1262,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749262
+      "updatedAt": 1791428896116
     },
     "score": 19.200224890637006
   },
@@ -1285,7 +1285,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749398
+      "updatedAt": 1791428896215
     },
     "score": 19.200224890637006
   },
@@ -1307,7 +1307,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749072
+      "updatedAt": 1791428895994
     },
     "score": 19.111212533239573
   },
@@ -1330,7 +1330,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Result",
-      "updatedAt": 1791428749286
+      "updatedAt": 1791428896137
     },
     "score": 19.111212533239573
   }

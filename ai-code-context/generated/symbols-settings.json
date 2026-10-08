@@ -16,7 +16,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747657
+      "updatedAt": 1791428894868
     },
     "score": 104.17466747730322
   },
@@ -37,7 +37,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746547
+      "updatedAt": 1791428893858
     },
     "score": 102.14896461462477
   },
@@ -59,7 +59,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749390
+      "updatedAt": 1791428896208
     },
     "score": 96.1705530429217
   },
@@ -81,7 +81,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749408
+      "updatedAt": 1791428896224
     },
     "score": 96.1705530429217
   },
@@ -103,7 +103,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Map",
-      "updatedAt": 1791428747070
+      "updatedAt": 1791428894380
     },
     "score": 96.11333801556692
   },
@@ -125,7 +125,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Map",
-      "updatedAt": 1791428748522
+      "updatedAt": 1791428895563
     },
     "score": 96.09919966066585
   },
@@ -146,7 +146,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748239
+      "updatedAt": 1791428895344
     },
     "score": 89.12754207007868
   },
@@ -167,7 +167,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746942
+      "updatedAt": 1791428894281
     },
     "score": 89.11333801556692
   },
@@ -188,7 +188,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747290
+      "updatedAt": 1791428894574
     },
     "score": 89.11333801556692
   },
@@ -209,7 +209,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747306
+      "updatedAt": 1791428894584
     },
     "score": 89.11333801556692
   },
@@ -230,7 +230,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747346
+      "updatedAt": 1791428894616
     },
     "score": 89.11333801556692
   },
@@ -251,7 +251,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747355
+      "updatedAt": 1791428894623
     },
     "score": 89.11333801556692
   },
@@ -272,7 +272,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747396
+      "updatedAt": 1791428894663
     },
     "score": 89.11333801556692
   },
@@ -293,7 +293,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747553
+      "updatedAt": 1791428894780
     },
     "score": 89.11333801556692
   },
@@ -314,7 +314,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748066
+      "updatedAt": 1791428895231
     },
     "score": 89.11333801556692
   },
@@ -335,7 +335,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748072
+      "updatedAt": 1791428895237
     },
     "score": 89.11333801556692
   },
@@ -356,7 +356,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748130
+      "updatedAt": 1791428895264
     },
     "score": 89.11333801556692
   },
@@ -377,7 +377,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748179
+      "updatedAt": 1791428895299
     },
     "score": 89.11333801556692
   },
@@ -398,7 +398,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746516
+      "updatedAt": 1791428893840
     },
     "score": 89.09919966066585
   },
@@ -419,7 +419,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748525
+      "updatedAt": 1791428895569
     },
     "score": 89.08512655059549
   },
@@ -441,7 +441,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749591
+      "updatedAt": 1791428896367
     },
     "score": 89.05717426671781
   },
@@ -462,7 +462,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748453
+      "updatedAt": 1791428895508
     },
     "score": 81.11333801556692
   },
@@ -484,7 +484,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749385
+      "updatedAt": 1791428896204
     },
     "score": 74.05717426671781
   },
@@ -506,7 +506,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749422
+      "updatedAt": 1791428896236
     },
     "score": 74.05717426671781
   },
@@ -529,7 +529,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748962
+      "updatedAt": 1791428895897
     },
     "score": 61.18502452915083
   },
@@ -551,7 +551,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749597
+      "updatedAt": 1791428896380
     },
     "score": 61.11118052391015
   },
@@ -574,7 +574,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748962
+      "updatedAt": 1791428895897
     },
     "score": 61.01131182462215
   },
@@ -596,7 +596,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749531
+      "updatedAt": 1791428896322
     },
     "score": 59.19956405343689
   },
@@ -617,7 +617,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747857
+      "updatedAt": 1791428895045
     },
     "score": 58.16093518949829
   },
@@ -638,7 +638,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747946
+      "updatedAt": 1791428895122
     },
     "score": 57.16093518949829
   },
@@ -659,7 +659,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749026
+      "updatedAt": 1791428895951
     },
     "score": 56.19956405343689
   },
@@ -680,7 +680,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747854
+      "updatedAt": 1791428895042
     },
     "score": 56.16093518949829
   },
@@ -701,7 +701,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747864
+      "updatedAt": 1791428895052
     },
     "score": 56.16093518949829
   },
@@ -722,7 +722,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747867
+      "updatedAt": 1791428895055
     },
     "score": 56.16093518949829
   },
@@ -744,7 +744,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748962
+      "updatedAt": 1791428895897
     },
     "score": 56.099199660665846
   },
@@ -766,7 +766,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749597
+      "updatedAt": 1791428896380
     },
     "score": 56.063454874823705
   },
@@ -788,7 +788,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749597
+      "updatedAt": 1791428896380
     },
     "score": 56.0157240458731
   },
@@ -809,7 +809,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749603
+      "updatedAt": 1791428896384
     },
     "score": 54.18502452915083
   },
@@ -831,7 +831,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "List",
-      "updatedAt": 1791428747863
+      "updatedAt": 1791428895050
     },
     "score": 54.16093518949829
   },
@@ -852,7 +852,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747911
+      "updatedAt": 1791428895090
     },
     "score": 54.16093518949829
   },
@@ -873,7 +873,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749603
+      "updatedAt": 1791428896384
     },
     "score": 53.19956405343689
   },
@@ -894,7 +894,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747657
+      "updatedAt": 1791428894868
     },
     "score": 53.16093518949829
   },
@@ -915,7 +915,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747660
+      "updatedAt": 1791428894871
     },
     "score": 52.17466747730321
   },
@@ -936,7 +936,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747863
+      "updatedAt": 1791428895050
     },
     "score": 52.16093518949829
   },
@@ -958,7 +958,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748962
+      "updatedAt": 1791428895897
     },
     "score": 52.071118234763674
   },
@@ -980,7 +980,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749604
+      "updatedAt": 1791428896389
     },
     "score": 52.043294204097506
   },
@@ -1002,7 +1002,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748741
+      "updatedAt": 1791428895723
     },
     "score": 51.14233865836894
   },
@@ -1023,7 +1023,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747004
+      "updatedAt": 1791428894329
     },
     "score": 51.127542070078675
   },
@@ -1044,7 +1044,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748589
+      "updatedAt": 1791428895618
     },
     "score": 51.043294204097506
   },
@@ -1065,7 +1065,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749026
+      "updatedAt": 1791428895951
     },
     "score": 51.043294204097506
   },
@@ -1086,7 +1086,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749603
+      "updatedAt": 1791428896384
     },
     "score": 50.18502452915083
   },
@@ -1107,7 +1107,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747854
+      "updatedAt": 1791428895042
     },
     "score": 50.16093518949829
   },
@@ -1129,7 +1129,7 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "PageTutorialTarget",
-      "updatedAt": 1791428747949
+      "updatedAt": 1791428895125
     },
     "score": 50.16093518949829
   },
@@ -1150,7 +1150,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746547
+      "updatedAt": 1791428893858
     },
     "score": 50.127542070078675
   },
@@ -1171,7 +1171,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747854
+      "updatedAt": 1791428895043
     },
     "score": 49.16093518949829
   },
@@ -1192,7 +1192,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428747004
+      "updatedAt": 1791428894329
     },
     "score": 49.127542070078675
   },
@@ -1213,7 +1213,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428746547
+      "updatedAt": 1791428893858
     },
     "score": 46.127542070078675
   },
@@ -1234,7 +1234,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428748962
+      "updatedAt": 1791428895897
     },
     "score": 46.066455594365756
   },
@@ -1255,7 +1255,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749603
+      "updatedAt": 1791428896384
     },
     "score": 45.08980278451714
   },
@@ -1277,7 +1277,7 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791428749603
+      "updatedAt": 1791428896384
     },
     "score": 45.06387668390568
   }
