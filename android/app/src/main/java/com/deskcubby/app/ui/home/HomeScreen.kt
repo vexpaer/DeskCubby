@@ -178,6 +178,7 @@ fun HomeScreen(
     onOpenGame: (String) -> Unit,
     onOpenStatistics: () -> Unit,
     onOpenDesk: () -> Unit = {},
+    onOpenPalette: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val deskIntroVisible by viewModel.deskIntroVisible.collectAsStateWithLifecycle()
@@ -350,6 +351,7 @@ fun HomeScreen(
                     templates = settings.homeGreetings,
                 ),
                 language = settings.appLanguage,
+                onSearch = onOpenPalette,
             )
         },
     ) { inner ->

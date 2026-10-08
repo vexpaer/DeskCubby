@@ -14,12 +14,16 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -85,6 +89,7 @@ fun DeskScreen(
     onOpenPhoto: (DeskItem) -> Unit,
     onOpenEvent: () -> Unit,
     onOpenAi: (String?) -> Unit,
+    onOpenPalette: () -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val recapSaveState by viewModel.recapSaveState.collectAsStateWithLifecycle()
@@ -246,13 +251,33 @@ fun DeskScreen(
                         Text(tr("收起今天", "Close the day"))
                     }
                 }
+                IconButton(onClick = onOpenPalette) {
+                    Icon(
+                        Icons.Outlined.Search,
+                        contentDescription = tr("搜索与跳转", "Search and jump"),
+                        tint = scheme.onSurfaceVariant,
+                    )
+                }
+                // The capture "+" turns into a "×" on a spring while the capture tray is open.
+                val plusTurn by animateFloatAsState(
+                    targetValue = if (quickCaptureOpen) 45f else 0f,
+                    animationSpec = if (reducedMotion) snap<Float>() else spring<Float>(dampingRatio = 0.5f, stiffness = 420f),
+                    label = "captureTurn",
+                )
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .clickable(onClickLabel = "Quick capture") { quickCaptureOpen = !quickCaptureOpen },
+                        .clickable(
+                            onClickLabel = if (quickCaptureOpen) tr("收起快速记录", "Close quick capture") else tr("快速记录", "Quick capture"),
+                        ) { quickCaptureOpen = !quickCaptureOpen },
                     contentAlignment = Alignment.CenterEnd,
                 ) {
-                    Text(text = "+", color = scheme.onSurfaceVariant.copy(alpha = 0.85f), fontSize = 28.sp)
+                    Text(
+                        text = "+",
+                        color = if (quickCaptureOpen) scheme.primary else scheme.onSurfaceVariant.copy(alpha = 0.85f),
+                        fontSize = 28.sp,
+                        modifier = Modifier.graphicsLayer { rotationZ = plusTurn },
+                    )
                 }
             }
         }

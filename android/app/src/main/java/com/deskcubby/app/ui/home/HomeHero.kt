@@ -17,6 +17,10 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -95,6 +99,7 @@ internal fun HomeHeroHeader(
     modifier: Modifier = Modifier,
     today: LocalDate = LocalDate.now(),
     now: LocalTime = LocalTime.now(),
+    onSearch: (() -> Unit)? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
     val light = rememberDaylight(now)
@@ -142,6 +147,15 @@ internal fun HomeHeroHeader(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.semantics { heading() },
             )
+        }
+        if (onSearch != null) {
+            IconButton(onClick = onSearch) {
+                Icon(
+                    Icons.Outlined.Search,
+                    contentDescription = tr("搜索与跳转", "Search and jump"),
+                    tint = scheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

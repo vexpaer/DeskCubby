@@ -373,7 +373,7 @@ Windows 设置采用接近 Android 的层级：设置主页为「外观与语言
 
 ## 8. 最近完成的功能
 
-### Android 视觉焕新第一至三阶段（未发版）：字体、动效、主页主视觉、毛玻璃与以桌面为中心
+### Android 视觉焕新第一至四阶段（未发版）：字体、动效、主页主视觉、毛玻璃、以桌面为中心与命令面板
 
 - 字体系统：`ui/theme/Type.kt` 不再是默认 `Typography()`。Material 采用「纸张」气质：display/headline 使用系统衬线（CJK 走设备 Noto Serif CJK 回退）并收紧字距；Liquid Glass 新增 `GlassTypography`，display 为细字重大数字、headline 为 Medium；Organic Future 保持原 `OrganicFutureTypography`。只使用系统字族，不打包字体文件；字号缩放仍经 `scaledTypography()`。`withTabularFigures()` 为计数数字开启等宽数字。
 - 动效语言：新增 `ui/theme/Motion.kt`。`DeskMotion` 按风格给出 leading/trailing/entrance/pop 弹簧与错落间隔（Material 利落无回弹、Liquid Glass 有回弹、Organic Future 舒缓）；`LocalReducedMotion` 由 `DeskCubbyTheme` 根据系统动画开关提供，所有装饰性动画在其为 true 时直接定格；`DeskHaptics`（`rememberDeskHaptics()`）经 `View.performHapticFeedback` 提供 confirm/tick，遵循系统触感设置。
@@ -381,7 +381,8 @@ Windows 设置采用接近 Android 的层级：设置主页为「外观与语言
 - 主页：`ui/home/HomeHero.kt` 的 `HomeHeroHeader` 替换原纯文字问候顶栏——超大日期数字 + 「星期 · 月份 · 时段」+ 问候语；背后柔光颜色取自主题角色，按 `dayPhaseFor()`（清晨/白天/黄昏/夜晚）变化，位置由 `lightSourceFraction()` 随太阳从左到右。主页模块列表改用 `itemsIndexed` + `StaggeredEntrance` 每次进入错落浮现（已出现过的不重复）；「记录概览」数字改为主题色大号计数；快速输入只在 ViewModel 回报落库成功后触发 confirm 触感。
 - 第二阶段：Liquid Glass（非 Custom）浮动底栏改为真毛玻璃——`Navigation.kt` 的 NavHost 容器 `hazeSource(navHazeState)`，`FrostedGlassBar` 以 `hazeEffect` 绘制模糊（新增依赖 `dev.chrisbanes.haze:haze:1.7.2`，1.7.x 是最后一个基于 Kotlin 2.2 构建的版本；API 31+ 用 RenderEffect，以下回退为 92% 表面色半透明底）。未自定义的 Material 与 Liquid Glass 拥有各自的页面转场（Material 纸张上升 / Glass 弹性放大），Custom 与系统关闭动画时沿用原淡入淡出。主页列表不再整体让出底栏高度，而是把底栏高度加到 `contentPadding`，使卡片能从毛玻璃下方滚过；Snackbar 单独避开底栏。
 - 第三阶段「桌面成为中心」：`SettingsRepository.completeFirstLaunch()` 在首次选择语言时以单次原子编辑写入语言与 `language_selected`；若 navItems、defaultPage、diaryTreeUri 均未保存（真正全新安装），同时写入 `freshInstallDeskNavItems()`（桌面、首页、日记、导航、设置，小巧思移入导航页）与 `defaultPage = DESK`。已有配置一律不动。旧用户在主页看到 `HomeDeskIntro.kt` 的一次性卡片：「设为启动页」调用 `makeDeskStartPage()`（`promoteDeskToStart()` 只把 DESK 置首并可见）；`desk_intro_dismissed` 是与 `language_selected` 同类的本机 DataStore 键，不属于 `AppSettings`，不进备份或云同步。桌面页复用 `HomeHero.kt` 中抽出的 `rememberDaylight()` / `Modifier.daylight()`，并新增「收起今天」：对象以弹簧扫入抽屉（graphicsLayer 位移/缩放/rotationX/淡出），`DeskDayRecapCard` 浮起显示 `DeskDayRecap`（`ui/desk/model/DeskRecap.kt`，在 `DeskViewModel.refresh()` 中由当日小巧思、今日日记、餐食照片和痕迹计算）。「写入今日日记」才调用 `DiaryFileRepository.appendTextToToday()` 追加 `buildDayRecapMarkdown()` 的仅含数字与时间的段落，写入成功后再扫描索引；保存状态独立于每次重建的 `DeskUiState`，按日期复位。系统返回键先收回回顾卡。
-- 无 Room 或备份格式变化（只新增一个本机 DataStore 键）。纯函数测试：`HomeHeroTest`、`DeskMotionComponentsTest`、`DeskStartLayoutTest`、`DeskRecapTest`。构建验证在 GitHub Actions `android-ci.yml`（单元测试、lint、assembleDebug）上进行。
+- 第四阶段「中心与面板」：`ui/components/CommandPalette.kt` 全局「搜索与跳转」——`CommandPaletteSearch.kt` 的 `paletteScore()`/`rankPaletteEntries()` 做有序子序列模糊匹配（连续/词首/前缀加分，日记略降权）。`Navigation.kt` 根部持有 `paletteOpen`，条目由页面（`navItems`，含中英名称为检索词）、四个快捷动作和 `HomeViewModel.diaries` 最近 400 篇日记组成；主页顶栏与桌面底部的放大镜、以及一级页面上的 Ctrl/⌘+K 打开，设置子页打开时禁用。统计中心日记页新增 `statshub/YearInPixels.kt` 年度像素（`DiaryYearPixels` 由 `deriveDiaryStatistics()` 生成，`yearPixelLevel()` 四档、`yearPixelIndex()` 网格到日期映射）。桌面 `+` 展开快速记录时以弹簧旋转成 `×`。
+- 无 Room 或备份格式变化（只新增一个本机 DataStore 键）。纯函数测试：`HomeHeroTest`、`DeskMotionComponentsTest`、`DeskStartLayoutTest`、`DeskRecapTest`、`CommandPaletteSearchTest`、`YearInPixelsTest`。构建验证在 GitHub Actions `android-ci.yml`（单元测试、lint、assembleDebug）上进行。
 
 ### Web 端（`web/`）：完整复刻 Android 全部功能
 

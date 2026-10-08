@@ -129,6 +129,17 @@ import com.deskcubby.app.ui.blog.BlogScreen
 import com.deskcubby.app.ui.blog.BlogViewModel
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.AppBackground
+import com.deskcubby.app.ui.theme.translate
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import com.deskcubby.app.ui.components.CommandPalette
+import com.deskcubby.app.ui.components.PaletteEntry
+import com.deskcubby.app.ui.components.PaletteEntryKind
 import com.deskcubby.app.ui.components.NavItemSpan
 import com.deskcubby.app.ui.components.NavSelectionIndicator
 import com.deskcubby.app.ui.theme.DeskMotion
@@ -336,6 +347,12 @@ fun DeskCubbyRoot(
         // The rail is shown in landscape on top-level destinations.
         val showWorkspaceRail = windowInfo.isLandscape &&
             route in NavItemId.entries.map { it.route }
+        // Global command palette: pages, quick actions and diary entries in one fuzzy search.
+        var paletteOpen by remember { mutableStateOf(false) }
+        val paletteDiaries by homeViewModel.diaries.collectAsStateWithLifecycle()
+        // Never offered over a settings sub-page, so unsaved drafts keep their exit confirmation.
+        val paletteAllowed = route in NavItemId.entries.map { it.route } &&
+            !(route == NavItemId.SETTINGS.route && settingsSubpageOpen)
         val navigateMain: (String) -> Unit = { destination ->
             navController.navigate(destination) {
                 // Keep only the graph itself, so no tab can restore another tab's nested page.
@@ -369,7 +386,19 @@ fun DeskCubbyRoot(
 
         CompositionLocalProvider(LocalLayoutMode provides layoutMode) {
         Scaffold(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .onPreviewKeyEvent { event ->
+                    val shortcut = event.type == KeyEventType.KeyDown &&
+                        (event.isCtrlPressed || event.isMetaPressed) &&
+                        event.key == Key.K
+                    if (shortcut && paletteAllowed) {
+                        paletteOpen = true
+                        true
+                    } else {
+                        false
+                    }
+                },
             containerColor = Color.Transparent,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
@@ -481,6 +510,7 @@ fun DeskCubbyRoot(
                                 navController.navigate(NavItemId.STATISTICS.route)
                             },
                             onOpenDesk = { navController.navigate(NavItemId.DESK.route) },
+                            onOpenPalette = { paletteOpen = true },
                         )
                     }
                     composable(NavItemId.DESK.route) {
@@ -499,6 +529,7 @@ fun DeskCubbyRoot(
                                 pendingAiPrompt = prompt
                                 navController.navigate(NavItemId.AI_CHAT.route)
                             },
+                            onOpenPalette = { paletteOpen = true },
                         )
                     }
                     composable(NavItemId.DIARY.route) {
@@ -880,6 +911,87 @@ fun DeskCubbyRoot(
                 onConfirm = {
                     tutorialConfirmedThisSession += tutorialTarget.pageId
                     settingsViewModel.acknowledgeTutorialPage(tutorialTarget.pageId)
+                },
+            )
+        }
+
+        if (paletteOpen && paletteAllowed) {
+            val language = settings.appLanguage
+            val pageEntries = settings.navItems
+                .filter { it.id != NavItemId.MORE }
+                .map { item ->
+                    val label = if (item.label.isDefaultLabelFor(item.id)) {
+                        translate(item.id.defaultLabel, item.id.englishLabel, language)
+                    } else {
+                        item.label
+                    }
+                    PaletteEntry(
+                        id = PALETTE_PAGE + item.id.route,
+                        kind = PaletteEntryKind.PAGE,
+                        title = label,
+                        subtitle = translate(item.id.defaultDescription, item.id.englishDescription, language),
+                        terms = listOf(item.id.defaultLabel, item.id.englishLabel, item.label),
+                    )
+                }
+            val actionEntries = listOf(
+                PaletteEntry(
+                    PALETTE_ACTION_TODAY_DIARY, PaletteEntryKind.ACTION,
+                    tr("写今天的日记", "Write today's diary"),
+                    terms = listOf("日记", "diary", "today", "今天"),
+                ),
+                PaletteEntry(
+                    PALETTE_ACTION_THOUGHT, PaletteEntryKind.ACTION,
+                    tr("记一条小巧思", "Capture a thought"),
+                    terms = listOf("小巧思", "thought", "idea", "灵感"),
+                ),
+                PaletteEntry(
+                    PALETTE_ACTION_DAILY_RECORD, PaletteEntryKind.ACTION,
+                    tr("添加今日记录", "Add today's record"),
+                    terms = listOf("记录", "record", "daily"),
+                ),
+                PaletteEntry(
+                    PALETTE_ACTION_MEALS, PaletteEntryKind.ACTION,
+                    tr("打开吃历", "Open the meal calendar"),
+                    terms = listOf("吃历", "meal", "food", "饮食"),
+                ),
+            )
+            val diaryEntries = paletteDiaries
+                .sortedByDescending { it.dateIso }
+                .take(PALETTE_DIARY_LIMIT)
+                .map { diary ->
+                    PaletteEntry(
+                        id = PALETTE_DIARY + diary.uri,
+                        kind = PaletteEntryKind.DIARY,
+                        title = diary.title.ifBlank { diary.name },
+                        subtitle = diary.dateIso,
+                        terms = listOf(diary.name),
+                    )
+                }
+            CommandPalette(
+                entries = actionEntries + pageEntries + diaryEntries,
+                onDismiss = { paletteOpen = false },
+                onChoose = { entry ->
+                    paletteOpen = false
+                    when {
+                        entry.id == PALETTE_ACTION_TODAY_DIARY ->
+                            diaryViewModel.enterToday { navController.navigate(Routes.EDITOR) }
+                        entry.id == PALETTE_ACTION_THOUGHT -> navController.navigate(NavItemId.THOUGHT.route)
+                        entry.id == PALETTE_ACTION_DAILY_RECORD -> navController.navigate(Routes.DAILY_RECORDS_TODAY)
+                        entry.id == PALETTE_ACTION_MEALS -> navController.navigate(Routes.MEAL_CALENDAR)
+                        entry.id.startsWith(PALETTE_DIARY) -> {
+                            diaryViewModel.open(entry.id.removePrefix(PALETTE_DIARY))
+                            navController.navigate(Routes.EDITOR)
+                        }
+                        entry.id.startsWith(PALETTE_PAGE) -> {
+                            val destination = entry.id.removePrefix(PALETTE_PAGE)
+                            val inBar = visibleTabs.any { it.id.route == destination }
+                            if (inBar) {
+                                navigateMain(destination)
+                            } else {
+                                navController.navigate(destination) { launchSingleTop = true }
+                            }
+                        }
+                    }
                 },
             )
         }
@@ -1339,6 +1451,14 @@ private fun FrostedGlassBar(
         content()
     }
 }
+
+private const val PALETTE_PAGE = "page:"
+private const val PALETTE_DIARY = "diary:"
+private const val PALETTE_ACTION_TODAY_DIARY = "action:today-diary"
+private const val PALETTE_ACTION_THOUGHT = "action:thought"
+private const val PALETTE_ACTION_DAILY_RECORD = "action:daily-record"
+private const val PALETTE_ACTION_MEALS = "action:meals"
+private const val PALETTE_DIARY_LIMIT = 400
 
 private fun String.isDefaultLabelFor(id: NavItemId): Boolean =
     this == id.defaultLabel ||

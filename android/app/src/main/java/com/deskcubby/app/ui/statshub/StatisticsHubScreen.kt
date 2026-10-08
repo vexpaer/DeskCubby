@@ -526,6 +526,15 @@ private fun DiaryStatisticsPage(
                 ),
             )
         }
+        if (summary.yearPixels.dailyWords.isNotEmpty()) {
+            item {
+                SectionHeading(
+                    tr("年度像素", "Year in pixels"),
+                    tr("今年每一天一格，颜色越深写得越多；点按格子查看当天。", "One cell per day this year; deeper color means more words. Tap a cell to see that day."),
+                )
+            }
+            item { YearInPixelsPanel(summary.yearPixels) }
+        }
         if (summary.monthlyWords.isEmpty()) {
             item {
                 StatisticsMessagePanel(
