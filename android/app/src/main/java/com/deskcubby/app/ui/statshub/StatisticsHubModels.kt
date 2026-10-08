@@ -18,7 +18,50 @@ data class DiaryStatisticsSummary(
     val currentStreakDays: Int = 0,
     val longestStreakDays: Int = 0,
     val monthlyWords: List<StatisticsPoint> = emptyList(),
+    val yearPixels: DiaryYearPixels = DiaryYearPixels(),
 )
+
+/** One cell per day of [year]: words written and whether any diary exists for that day. */
+data class DiaryYearPixels(
+    val year: Int = 0,
+    val dailyWords: List<Long> = emptyList(),
+    val written: List<Boolean> = emptyList(),
+    /** Zero-based day-of-year of "today"; later cells are still in the future. */
+    val todayIndex: Int = -1,
+) {
+    val writtenDays: Int get() = written.count { it }
+    val maxWords: Long get() = dailyWords.maxOrNull() ?: 0L
+
+    /** 0 = nothing written; 1..4 = quarter of the busiest day of the year. */
+    fun levelAt(index: Int): Int {
+        if (written.getOrNull(index) != true) return 0
+        return yearPixelLevel(dailyWords.getOrElse(index) { 0L }, maxWords).coerceAtLeast(1)
+    }
+}
+
+internal fun yearPixelLevel(words: Long, maxWords: Long): Int = when {
+    words <= 0L || maxWords <= 0L -> 0
+    else -> 1 + (words.toDouble() / maxWords * 4).toInt().coerceIn(0, 3)
+}
+
+internal fun diaryYearPixels(datedEntries: List<Pair<LocalDate, Long>>, today: LocalDate): DiaryYearPixels {
+    val days = java.time.Year.of(today.year).length()
+    val words = LongArray(days)
+    val written = BooleanArray(days)
+    datedEntries.forEach { (date, count) ->
+        if (date.year == today.year) {
+            val index = date.dayOfYear - 1
+            words[index] = saturatedAdd(words[index], count)
+            written[index] = true
+        }
+    }
+    return DiaryYearPixels(
+        year = today.year,
+        dailyWords = words.toList(),
+        written = written.toList(),
+        todayIndex = today.dayOfYear - 1,
+    )
+}
 
 data class RecentStatisticsSummary(
     val enabled: Boolean = false,
@@ -164,6 +207,7 @@ internal fun deriveDiaryStatistics(
         currentStreakDays = currentStreak,
         longestStreakDays = longestStreak,
         monthlyWords = monthlyWords,
+        yearPixels = diaryYearPixels(datedEntries, today),
     )
 }
 

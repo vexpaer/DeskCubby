@@ -18,6 +18,11 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -27,6 +32,18 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.luminance
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeStyle
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -74,12 +91,17 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.deskcubby.app.syncLauncherAlias
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -107,6 +129,21 @@ import com.deskcubby.app.ui.blog.BlogScreen
 import com.deskcubby.app.ui.blog.BlogViewModel
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.AppBackground
+import com.deskcubby.app.ui.theme.translate
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import com.deskcubby.app.ui.components.CommandPalette
+import com.deskcubby.app.ui.components.PaletteEntry
+import com.deskcubby.app.ui.components.PaletteEntryKind
+import com.deskcubby.app.ui.components.NavItemSpan
+import com.deskcubby.app.ui.components.NavSelectionIndicator
+import com.deskcubby.app.ui.theme.DeskMotion
+import com.deskcubby.app.ui.theme.rememberDeskHaptics
 import com.deskcubby.app.ui.components.DeskCubbyNavigationRail
 import com.deskcubby.app.ui.components.LocalLayoutMode
 import com.deskcubby.app.ui.components.rememberWindowInfo
@@ -277,6 +314,15 @@ fun DeskCubbyRoot(
             300
         }
         val standardMotionMillis = if (rootVisuals.customized) rootVisuals.transitionMillis else 700
+        // Uncustomized Material and Liquid Glass get their own page choreography: Material lifts a
+        // new sheet of paper into place; Liquid Glass swells in on a spring like a droplet.
+        // Custom themes keep their explicit transition duration and system "remove animations"
+        // keeps the existing fade (which the platform already shortens to instant).
+        val expressiveMotion = systemAnimationsEnabled && !rootVisuals.customized
+        val materialPages = expressiveMotion && resolvedVisualStyle == VisualStyle.MATERIAL
+        val glassPages = expressiveMotion && resolvedVisualStyle == VisualStyle.LIQUID_GLASS
+        // Backdrop shared by page content (source) and the floating Liquid Glass bar (effect).
+        val navHazeState = rememberHazeState()
         val backStack by navController.currentBackStackEntryAsState()
         val route = backStack?.destination?.route
         val windowInfo = rememberWindowInfo()
@@ -301,6 +347,12 @@ fun DeskCubbyRoot(
         // The rail is shown in landscape on top-level destinations.
         val showWorkspaceRail = windowInfo.isLandscape &&
             route in NavItemId.entries.map { it.route }
+        // Global command palette: pages, quick actions and diary entries in one fuzzy search.
+        var paletteOpen by remember { mutableStateOf(false) }
+        val paletteDiaries by homeViewModel.diaries.collectAsStateWithLifecycle()
+        // Never offered over a settings sub-page, so unsaved drafts keep their exit confirmation.
+        val paletteAllowed = route in NavItemId.entries.map { it.route } &&
+            !(route == NavItemId.SETTINGS.route && settingsSubpageOpen)
         val navigateMain: (String) -> Unit = { destination ->
             navController.navigate(destination) {
                 // Keep only the graph itself, so no tab can restore another tab's nested page.
@@ -334,7 +386,19 @@ fun DeskCubbyRoot(
 
         CompositionLocalProvider(LocalLayoutMode provides layoutMode) {
         Scaffold(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .onPreviewKeyEvent { event ->
+                    val shortcut = event.type == KeyEventType.KeyDown &&
+                        (event.isCtrlPressed || event.isMetaPressed) &&
+                        event.key == Key.K
+                    if (shortcut && paletteAllowed) {
+                        paletteOpen = true
+                        true
+                    } else {
+                        false
+                    }
+                },
             containerColor = Color.Transparent,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
@@ -349,6 +413,7 @@ fun DeskCubbyRoot(
                         musicVisualizerMinFrequencyHz = settings.musicVisualizerMinFrequencyHz,
                         musicVisualizerMaxFrequencyHz = settings.musicVisualizerMaxFrequencyHz,
                         onSelected = { item -> navigateMain(item.id.route) },
+                        hazeState = navHazeState,
                     )
                 }
             },
@@ -365,7 +430,7 @@ fun DeskCubbyRoot(
                 // Drawer sheets animate into negative local X while closed. Clip the content
                 // column so that hidden/dragging pixels can never paint over the sibling rail.
                 // The open sheet still begins at this column's x=0, flush with the rail.
-                Box(Modifier.weight(1f).fillMaxSize().clipToBounds()) {
+                Box(Modifier.weight(1f).fillMaxSize().clipToBounds().hazeSource(navHazeState)) {
                 NavHost(
                     navController = navController,
                     startDestination = initialStartDestination,
@@ -377,6 +442,10 @@ fun DeskCubbyRoot(
                                 scaleIn(tween(organicEnterMillis), initialScale = 0.992f)
                             resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
                                 EnterTransition.None
+                            materialPages -> fadeIn(tween(220, delayMillis = 60)) +
+                                slideInVertically(tween(320, easing = FastOutSlowInEasing)) { it / 18 }
+                            glassPages -> fadeIn(tween(200)) +
+                                scaleIn(spring(dampingRatio = 0.74f, stiffness = 320f), initialScale = 0.93f)
                             else -> fadeIn(tween(standardMotionMillis))
                         }
                     },
@@ -387,6 +456,9 @@ fun DeskCubbyRoot(
                                 scaleOut(tween(organicEnterMillis), targetScale = 1.008f)
                             resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
                                 ExitTransition.None
+                            materialPages -> fadeOut(tween(120))
+                            glassPages -> fadeOut(tween(160)) +
+                                scaleOut(tween(220), targetScale = 1.04f)
                             else -> fadeOut(tween(standardMotionMillis))
                         }
                     },
@@ -397,6 +469,9 @@ fun DeskCubbyRoot(
                                 scaleIn(tween(organicEnterMillis), initialScale = 0.992f)
                             resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
                                 EnterTransition.None
+                            materialPages -> fadeIn(tween(220, delayMillis = 60))
+                            glassPages -> fadeIn(tween(200)) +
+                                scaleIn(spring(dampingRatio = 0.74f, stiffness = 320f), initialScale = 1.05f)
                             else -> fadeIn(tween(standardMotionMillis))
                         }
                     },
@@ -407,6 +482,10 @@ fun DeskCubbyRoot(
                                 scaleOut(tween(organicEnterMillis), targetScale = 1.008f)
                             resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
                                 ExitTransition.None
+                            materialPages -> fadeOut(tween(140)) +
+                                slideOutVertically(tween(220)) { it / 18 }
+                            glassPages -> fadeOut(tween(160)) +
+                                scaleOut(tween(220), targetScale = 0.93f)
                             else -> fadeOut(tween(standardMotionMillis))
                         }
                     },
@@ -430,6 +509,8 @@ fun DeskCubbyRoot(
                             onOpenStatistics = {
                                 navController.navigate(NavItemId.STATISTICS.route)
                             },
+                            onOpenDesk = { navController.navigate(NavItemId.DESK.route) },
+                            onOpenPalette = { paletteOpen = true },
                         )
                     }
                     composable(NavItemId.DESK.route) {
@@ -448,6 +529,7 @@ fun DeskCubbyRoot(
                                 pendingAiPrompt = prompt
                                 navController.navigate(NavItemId.AI_CHAT.route)
                             },
+                            onOpenPalette = { paletteOpen = true },
                         )
                     }
                     composable(NavItemId.DIARY.route) {
@@ -832,6 +914,87 @@ fun DeskCubbyRoot(
                 },
             )
         }
+
+        if (paletteOpen && paletteAllowed) {
+            val language = settings.appLanguage
+            val pageEntries = settings.navItems
+                .filter { it.id != NavItemId.MORE }
+                .map { item ->
+                    val label = if (item.label.isDefaultLabelFor(item.id)) {
+                        translate(item.id.defaultLabel, item.id.englishLabel, language)
+                    } else {
+                        item.label
+                    }
+                    PaletteEntry(
+                        id = PALETTE_PAGE + item.id.route,
+                        kind = PaletteEntryKind.PAGE,
+                        title = label,
+                        subtitle = translate(item.id.defaultDescription, item.id.englishDescription, language),
+                        terms = listOf(item.id.defaultLabel, item.id.englishLabel, item.label),
+                    )
+                }
+            val actionEntries = listOf(
+                PaletteEntry(
+                    PALETTE_ACTION_TODAY_DIARY, PaletteEntryKind.ACTION,
+                    tr("写今天的日记", "Write today's diary"),
+                    terms = listOf("日记", "diary", "today", "今天"),
+                ),
+                PaletteEntry(
+                    PALETTE_ACTION_THOUGHT, PaletteEntryKind.ACTION,
+                    tr("记一条小巧思", "Capture a thought"),
+                    terms = listOf("小巧思", "thought", "idea", "灵感"),
+                ),
+                PaletteEntry(
+                    PALETTE_ACTION_DAILY_RECORD, PaletteEntryKind.ACTION,
+                    tr("添加今日记录", "Add today's record"),
+                    terms = listOf("记录", "record", "daily"),
+                ),
+                PaletteEntry(
+                    PALETTE_ACTION_MEALS, PaletteEntryKind.ACTION,
+                    tr("打开吃历", "Open the meal calendar"),
+                    terms = listOf("吃历", "meal", "food", "饮食"),
+                ),
+            )
+            val diaryEntries = paletteDiaries
+                .sortedByDescending { it.dateIso }
+                .take(PALETTE_DIARY_LIMIT)
+                .map { diary ->
+                    PaletteEntry(
+                        id = PALETTE_DIARY + diary.uri,
+                        kind = PaletteEntryKind.DIARY,
+                        title = diary.title.ifBlank { diary.name },
+                        subtitle = diary.dateIso,
+                        terms = listOf(diary.name),
+                    )
+                }
+            CommandPalette(
+                entries = actionEntries + pageEntries + diaryEntries,
+                onDismiss = { paletteOpen = false },
+                onChoose = { entry ->
+                    paletteOpen = false
+                    when {
+                        entry.id == PALETTE_ACTION_TODAY_DIARY ->
+                            diaryViewModel.enterToday { navController.navigate(Routes.EDITOR) }
+                        entry.id == PALETTE_ACTION_THOUGHT -> navController.navigate(NavItemId.THOUGHT.route)
+                        entry.id == PALETTE_ACTION_DAILY_RECORD -> navController.navigate(Routes.DAILY_RECORDS_TODAY)
+                        entry.id == PALETTE_ACTION_MEALS -> navController.navigate(Routes.MEAL_CALENDAR)
+                        entry.id.startsWith(PALETTE_DIARY) -> {
+                            diaryViewModel.open(entry.id.removePrefix(PALETTE_DIARY))
+                            navController.navigate(Routes.EDITOR)
+                        }
+                        entry.id.startsWith(PALETTE_PAGE) -> {
+                            val destination = entry.id.removePrefix(PALETTE_PAGE)
+                            val inBar = visibleTabs.any { it.id.route == destination }
+                            if (inBar) {
+                                navigateMain(destination)
+                            } else {
+                                navController.navigate(destination) { launchSingleTop = true }
+                            }
+                        }
+                    }
+                },
+            )
+        }
         }
     }
 }
@@ -1078,6 +1241,7 @@ internal fun DeskBottomBar(
     musicVisualizerMaxFrequencyHz: Int,
     onSelected: (NavItemConfig) -> Unit,
     modifier: Modifier = Modifier,
+    hazeState: HazeState? = null,
 ) {
     val style = LocalVisualStyle.current
     val context = LocalContext.current
@@ -1108,8 +1272,20 @@ internal fun DeskBottomBar(
     val floatingPanel = glass || organic
     val language = LocalAppLanguage.current
     val visuals = deskCubbyVisuals
+    val haptics = rememberDeskHaptics()
+    // Item spans are measured in root coordinates and re-based on the bar container, so the
+    // indicator follows whatever spacing the Material NavigationBar version applies.
+    var barOriginX by remember { mutableFloatStateOf(0f) }
+    val itemRootSpans = remember { mutableStateMapOf<String, NavItemSpan>() }
+    val selectedSpan = itemRootSpans[selectedRoute]?.let { span ->
+        NavItemSpan(span.left - barOriginX, span.right - barOriginX)
+    }
     val content: @Composable () -> Unit = {
-        Box(Modifier.fillMaxWidth()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .onGloballyPositioned { barOriginX = it.positionInRoot().x },
+        ) {
             MusicVisualizerLayer(
                 enabled = visualizerActive,
                 style = musicVisualizerStyle,
@@ -1121,6 +1297,9 @@ internal fun DeskBottomBar(
                 // the Box has derived its height from that non-match-parent child.
                 modifier = Modifier.matchParentSize(),
             )
+            if (floatingPanel) {
+                NavSelectionIndicator(target = selectedSpan, modifier = Modifier.matchParentSize())
+            }
             NavigationBar(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1139,10 +1318,33 @@ internal fun DeskBottomBar(
                     } else {
                         item.label
                     }
+                    val selected = selectedRoute == item.id.route
                     NavigationBarItem(
-                        selected = selectedRoute == item.id.route,
-                        onClick = { onSelected(item) },
-                        icon = { Icon(iconFor(item.iconKey), label) },
+                        selected = selected,
+                        onClick = {
+                            if (!selected) haptics.tick()
+                            onSelected(item)
+                        },
+                        modifier = Modifier.onGloballyPositioned { coordinates ->
+                            val x = coordinates.positionInRoot().x
+                            itemRootSpans[item.id.route] =
+                                NavItemSpan(x, x + coordinates.size.width)
+                        },
+                        icon = {
+                            val iconScale by animateFloatAsState(
+                                targetValue = if (selected) 1.14f else 1f,
+                                animationSpec = DeskMotion.pop<Float>(style),
+                                label = "navIconScale",
+                            )
+                            Icon(
+                                iconFor(item.iconKey),
+                                label,
+                                modifier = Modifier.graphicsLayer {
+                                    scaleX = iconScale
+                                    scaleY = iconScale
+                                },
+                            )
+                        },
                         label = if (showLabels) {
                             { Text(label, maxLines = 1) }
                         } else {
@@ -1158,6 +1360,9 @@ internal fun DeskBottomBar(
                         ),
                     )
                 }
+            }
+            if (!floatingPanel) {
+                NavSelectionIndicator(target = selectedSpan, modifier = Modifier.matchParentSize())
             }
         }
     }
@@ -1176,12 +1381,16 @@ internal fun DeskBottomBar(
                     },
                 ),
         ) {
-            GlassPanel(
-                modifier = Modifier.fillMaxWidth(),
-                cornerRadius = 28.dp,
-                role = if (organic) PanelRole.FEATURE else PanelRole.STANDARD,
-                padding = PaddingValues(0.dp),
-            ) { content() }
+            if (glass && hazeState != null && !visuals.customized) {
+                FrostedGlassBar(hazeState = hazeState) { content() }
+            } else {
+                GlassPanel(
+                    modifier = Modifier.fillMaxWidth(),
+                    cornerRadius = 28.dp,
+                    role = if (organic) PanelRole.FEATURE else PanelRole.STANDARD,
+                    padding = PaddingValues(0.dp),
+                ) { content() }
+            }
         }
     } else {
         Box(
@@ -1196,6 +1405,60 @@ internal fun DeskBottomBar(
         }
     }
 }
+
+/**
+ * Liquid Glass navigation bar made of real frosted glass: page content scrolling underneath is
+ * blurred through a RenderEffect on Android 12+ (older versions fall back to a dense tinted
+ * scrim), with a light specular rim. Colors come from the active theme roles.
+ */
+@Composable
+private fun FrostedGlassBar(
+    hazeState: HazeState,
+    content: @Composable () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val dark = scheme.surface.luminance() < 0.4f
+    val shape = RoundedCornerShape(28.dp)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .shadow(6.dp, shape, ambientColor = scheme.primary.copy(alpha = 0.16f))
+            .clip(shape)
+            .hazeEffect(
+                state = hazeState,
+                style = HazeStyle(
+                    backgroundColor = scheme.surface,
+                    tints = listOf(
+                        HazeTint(scheme.surface.copy(alpha = if (dark) 0.46f else 0.52f)),
+                        HazeTint(scheme.primaryContainer.copy(alpha = 0.14f)),
+                    ),
+                    blurRadius = 26.dp,
+                    noiseFactor = 0.08f,
+                    fallbackTint = HazeTint(scheme.surface.copy(alpha = 0.92f)),
+                ),
+            )
+            .border(
+                1.dp,
+                Brush.linearGradient(
+                    listOf(
+                        Color.White.copy(alpha = if (dark) 0.26f else 0.72f),
+                        scheme.primary.copy(alpha = 0.18f),
+                    ),
+                ),
+                shape,
+            ),
+    ) {
+        content()
+    }
+}
+
+private const val PALETTE_PAGE = "page:"
+private const val PALETTE_DIARY = "diary:"
+private const val PALETTE_ACTION_TODAY_DIARY = "action:today-diary"
+private const val PALETTE_ACTION_THOUGHT = "action:thought"
+private const val PALETTE_ACTION_DAILY_RECORD = "action:daily-record"
+private const val PALETTE_ACTION_MEALS = "action:meals"
+private const val PALETTE_DIARY_LIMIT = 400
 
 private fun String.isDefaultLabelFor(id: NavItemId): Boolean =
     this == id.defaultLabel ||

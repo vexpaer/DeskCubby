@@ -196,6 +196,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.3.0")
 
     implementation("io.coil-kt.coil3:coil-compose:3.3.0")
+    // Real backdrop blur for the Liquid Glass navigation bar (RenderEffect on API 31+, tinted scrim below).
+    // 1.7.x is the last line built against Kotlin 2.2, matching this project's compiler.
+    implementation("dev.chrisbanes.haze:haze:1.7.2")
     implementation("org.commonmark:commonmark:0.27.0")
 
     implementation("com.google.dagger:hilt-android:2.58")

@@ -136,6 +136,7 @@ class SettingsRepository @Inject constructor(
         val orientationPreference = stringPreferencesKey("orientation_preference")
         // Device-local flag: the first-launch language chooser is shown once and never backed up.
         val languageSelected = booleanPreferencesKey("language_selected")
+        val deskIntroDismissed = booleanPreferencesKey("desk_intro_dismissed")
         val userName = stringPreferencesKey("user_name")
         val homeGreetings = stringPreferencesKey("home_greetings_v1")
         val themeColorArgb = intPreferencesKey("theme_color_argb")
@@ -548,6 +549,49 @@ class SettingsRepository @Inject constructor(
         .map { prefs -> prefs[Keys.languageSelected] ?: false }
 
     suspend fun markLanguageSelected() = set(Keys.languageSelected, true)
+
+    /**
+     * Finishes the first-launch language step in one atomic edit. A truly fresh install (no
+     * navigation, start page or diary folder saved yet) also starts on the Desk: Desk leads the
+     * bottom bar and Thoughts moves to the navigation page so the bar keeps five entries. Any
+     * existing configuration is left untouched.
+     */
+    suspend fun completeFirstLaunch(language: AppLanguage) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.appLanguage] = language.name
+            val fresh = prefs[Keys.navItems] == null &&
+                prefs[Keys.defaultPage] == null &&
+                prefs[Keys.diaryTreeUri] == null
+            if (fresh) {
+                prefs[Keys.navItems] = encodeNav(
+                    normalizeNavItems(freshInstallDeskNavItems(AppSettings().navItems)),
+                )
+                prefs[Keys.defaultPage] = NavItemId.DESK.name
+                prefs[Keys.deskIntroDismissed] = true
+            }
+            prefs[Keys.languageSelected] = true
+        }
+    }
+
+    /** Device-local: whether Home's one-time "Meet your Desk" card was dismissed. Never backed up. */
+    val deskIntroDismissed: Flow<Boolean> = context.settingsDataStore.data
+        .catch { error ->
+            if (error is IOException) emit(emptyPreferences()) else throw error
+        }
+        .map { prefs -> prefs[Keys.deskIntroDismissed] ?: false }
+
+    suspend fun dismissDeskIntro() = set(Keys.deskIntroDismissed, true)
+
+    /** Shows the Desk first in the bottom bar and makes it the start page from the next launch. */
+    suspend fun makeDeskStartPage() {
+        context.settingsDataStore.edit { prefs ->
+            migrateMorePageOrderIfNeeded(prefs)
+            val nav = normalizeNavItems(promoteDeskToStart(decodeNav(prefs[Keys.navItems])))
+            prefs[Keys.navItems] = encodeNav(nav)
+            prefs[Keys.defaultPage] = NavItemId.DESK.name
+            prefs[Keys.deskIntroDismissed] = true
+        }
+    }
     suspend fun setUserName(value: String) = set(Keys.userName, normalizeUserName(value))
     suspend fun setHomeGreetingSettings(
         userName: String,
@@ -2203,6 +2247,21 @@ internal fun normalizeMoreDescription(value: String): String =
         .replace(Regex("[\\r\\n\\t]+"), " ")
         .replace(Regex(" {2,}"), " ")
         .takeCodePoints(MAX_MORE_DESCRIPTION_CODE_POINTS)
+
+/** Moves the Desk to the front of the bottom bar, visible and out of the navigation page. */
+internal fun promoteDeskToStart(items: List<NavItemConfig>): List<NavItemConfig> {
+    val desk = (items.firstOrNull { it.id == NavItemId.DESK } ?: NavItemConfig(NavItemId.DESK))
+        .copy(visible = true, showInMore = false)
+    return listOf(desk) + items.filterNot { it.id == NavItemId.DESK }
+}
+
+/** Fresh-install bar: Desk, Home, Diary, Navigation, Settings; Thoughts lives on the navigation page. */
+internal fun freshInstallDeskNavItems(defaults: List<NavItemConfig>): List<NavItemConfig> =
+    promoteDeskToStart(
+        defaults.map { item ->
+            if (item.id == NavItemId.THOUGHT) item.copy(visible = false, showInMore = true) else item
+        },
+    )
 
 internal fun normalizeNavItems(items: List<NavItemConfig>): List<NavItemConfig> {
     val distinctItems = items.distinctBy(NavItemConfig::id).map { item ->
