@@ -5,12 +5,15 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.interaction.InteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -236,4 +239,24 @@ fun NavSelectionIndicator(
             }
         }
     }
+}
+
+/**
+ * Tactile press feedback: while [interactionSource] is pressed the returned scale dips slightly,
+ * then springs back with the active style's "pop" character on release. Apply it in a
+ * graphicsLayer so it never triggers relayout. Stays at 1 when animations are removed.
+ */
+@Composable
+fun rememberPressScale(
+    interactionSource: InteractionSource,
+    pressedScale: Float = 0.965f,
+): State<Float> {
+    val reduced = LocalReducedMotion.current
+    val style = LocalVisualStyle.current
+    val pressed by interactionSource.collectIsPressedAsState()
+    return animateFloatAsState(
+        targetValue = if (pressed && !reduced) pressedScale else 1f,
+        animationSpec = DeskMotion.pop<Float>(style),
+        label = "pressScale",
+    )
 }

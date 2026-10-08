@@ -9,6 +9,10 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import com.deskcubby.app.ui.components.rememberPressScale
+import com.deskcubby.app.ui.components.StaggeredEntrance
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -123,6 +127,8 @@ fun MoreHubScreen(
     modifier: Modifier = Modifier,
 ) {
     val columnCount = columns.coerceIn(1, 3)
+    // Drawers slide in once per visit; reordering or scrolling back does not replay it.
+    val revealedCards = remember { mutableSetOf<NavItemId>() }
     var orderedItems by remember { mutableStateOf(items) }
     var editMode by rememberSaveable { mutableStateOf(false) }
     val cardBounds = remember { mutableStateMapOf<NavItemId, Rect>() }
@@ -351,6 +357,11 @@ fun MoreHubScreen(
                                         cardBounds[item.id] = it.boundsInRoot()
                                     },
                             ) {
+                                StaggeredEntrance(
+                                    index = index,
+                                    alreadyShown = item.id in revealedCards,
+                                    onShown = { revealedCards.add(item.id) },
+                                ) {
                                 MorePageCard(
                                     modifier = Modifier.graphicsLayer {
                                         translationX = if (isDragging) dragOffsetPx.x else 0f
@@ -395,6 +406,7 @@ fun MoreHubScreen(
                                         if (target != null) moveItem(index, target)
                                     },
                                 )
+                                }
                                 if (isDropTarget) {
                                     HorizontalDivider(
                                         modifier = Modifier
@@ -459,10 +471,20 @@ private fun MorePageCard(
         else -> PanelRole.STANDARD
     }
 
+    // Cards behave like drawer fronts: they sink under the finger and spring back out.
+    val pressSource = remember { MutableInteractionSource() }
+    val pressScale by rememberPressScale(pressSource)
     val clickModifier = if (editMode) {
         Modifier
     } else {
-        Modifier.combinedClickable(
+        Modifier
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            .combinedClickable(
+            interactionSource = pressSource,
+            indication = LocalIndication.current,
             enabled = clickEnabled,
             onClickLabel = tr("打开$label", "Open $label"),
             role = Role.Button,

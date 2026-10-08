@@ -2,6 +2,12 @@ package com.deskcubby.app.ui.desk.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import com.deskcubby.app.ui.components.rememberPressScale
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,14 +47,20 @@ internal fun DeskDiaryObject(
 ) {
     val scheme = MaterialTheme.colorScheme
     val sheet = scheme.surfaceContainer
+    val press = remember { MutableInteractionSource() }
+    val lift by rememberPressScale(press, pressedScale = DESK_LIFT_SCALE)
     Box(
         modifier = modifier
             .fillMaxWidth()
             .graphicsLayerRotation(item.rotationDeg)
+            .graphicsLayer {
+                scaleX = lift
+                scaleY = lift
+            }
             .shadow(3.dp, RoundedCornerShape(4.dp), spotColor = Color.Black.copy(alpha = 0.18f))
             .clip(RoundedCornerShape(4.dp))
             .background(sheet)
-            .clickable { onClick() }
+            .clickable(interactionSource = press, indication = LocalIndication.current) { onClick() }
             .padding(horizontal = 24.dp, vertical = 22.dp),
     ) {
         Column {
@@ -106,10 +118,16 @@ internal fun DeskIdeaObject(
     modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
+    val press = remember { MutableInteractionSource() }
+    val lift by rememberPressScale(press, pressedScale = DESK_LIFT_SCALE)
     Column(
         modifier = modifier
             .graphicsLayerRotation(item.rotationDeg)
-            .clickable { onClick() }
+            .graphicsLayer {
+                scaleX = lift
+                scaleY = lift
+            }
+            .clickable(interactionSource = press, indication = LocalIndication.current) { onClick() }
             .padding(vertical = 10.dp),
     ) {
         Text(
@@ -154,8 +172,15 @@ internal fun DeskPhotoObject(
     modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
+    val press = remember { MutableInteractionSource() }
+    val lift by rememberPressScale(press, pressedScale = DESK_LIFT_SCALE)
     Column(
-        modifier = modifier.graphicsLayerRotation(item.rotationDeg),
+        modifier = modifier
+            .graphicsLayerRotation(item.rotationDeg)
+            .graphicsLayer {
+                scaleX = lift
+                scaleY = lift
+            },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
@@ -164,7 +189,7 @@ internal fun DeskPhotoObject(
                 .shadow(2.dp, RoundedCornerShape(2.dp))
                 .clip(RoundedCornerShape(2.dp))
                 .background(scheme.surfaceContainer)
-                .clickable { onClick() },
+                .clickable(interactionSource = press, indication = LocalIndication.current) { onClick() },
         ) {
             if (item.imageUri != null) {
                 AsyncImage(
@@ -190,6 +215,9 @@ internal fun DeskPhotoObject(
         )
     }
 }
+
+/** Pressing a desk object lifts it slightly toward the viewer, like picking up paper. */
+private const val DESK_LIFT_SCALE = 1.035f
 
 private fun Modifier.graphicsLayerRotation(degrees: Float): Modifier =
     rotate(degrees)

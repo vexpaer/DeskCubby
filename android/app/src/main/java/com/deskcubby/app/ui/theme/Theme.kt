@@ -30,6 +30,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.ImageShader
+import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -504,6 +508,8 @@ fun GlassPanel(
                 .shadow(if (visuals.customized) visuals.panelElevation else 1.dp, shape)
                 .clip(shape)
                 .background(scheme.surfaceContainer.copy(alpha = visuals.panelOpacity))
+                // "Paper": an almost invisible tiled grain gives panels a printed-sheet tooth.
+                .then(if (visuals.customized) Modifier else Modifier.drawBehind { drawRect(PaperGrain.brush) })
                 .then(
                     if (visuals.customized && visuals.borderWidth > 0.dp) {
                         Modifier.border(visuals.borderWidth, scheme.outlineVariant, shape)
@@ -516,5 +522,29 @@ fun GlassPanel(
     }
     CompositionLocalProvider(LocalContentColor provides scheme.onSurface) {
         Box(panelModifier.padding(scaledPanelPadding(padding)), content = content)
+    }
+}
+
+/**
+ * A tiny, deterministic noise tile shared by every Material panel. Each pixel is black or white
+ * with a very low alpha, so the grain reads on light and dark surfaces without shifting colors.
+ */
+internal object PaperGrain {
+    private const val TILE = 96
+
+    val brush: ShaderBrush by lazy {
+        val random = java.util.Random(0x5EED_DE5CL)
+        val pixels = IntArray(TILE * TILE) {
+            val alpha = random.nextInt(14)
+            val base = if (random.nextBoolean()) 0xFFFFFF else 0x000000
+            (alpha shl 24) or base
+        }
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            pixels,
+            TILE,
+            TILE,
+            android.graphics.Bitmap.Config.ARGB_8888,
+        ).asImageBitmap()
+        ShaderBrush(ImageShader(bitmap, TileMode.Repeated, TileMode.Repeated))
     }
 }
