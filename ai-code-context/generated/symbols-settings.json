@@ -16,20 +16,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077956
+      "updatedAt": 1791428747657
     },
-    "score": 104.13654617319622
+    "score": 104.17466747730322
   },
   {
     "node": {
-      "id": "field:7e9c2e70535887282166a793fcd03565",
+      "id": "field:ba257c4a56c305a3d39d21713c9c407f",
       "kind": "field",
       "name": "settings",
       "qualifiedName": "com.deskcubby.app.data.preferences::SettingsRepository::settings",
       "filePath": "android/app/src/main/java/com/deskcubby/app/data/preferences/SettingsRepository.kt",
       "language": "kotlin",
-      "startLine": 252,
-      "endLine": 256,
+      "startLine": 253,
+      "endLine": 257,
       "startColumn": 4,
       "endColumn": 22,
       "visibility": null,
@@ -37,9 +37,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077084
+      "updatedAt": 1791428746547
     },
-    "score": 102.1108798399143
+    "score": 102.14896461462477
   },
   {
     "node": {
@@ -59,9 +59,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079222
+      "updatedAt": 1791428749390
     },
-    "score": 96.13257878246993
+    "score": 96.1705530429217
   },
   {
     "node": {
@@ -81,9 +81,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079233
+      "updatedAt": 1791428749408
     },
-    "score": 96.13257878246993
+    "score": 96.1705530429217
   },
   {
     "node": {
@@ -103,9 +103,9 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Map",
-      "updatedAt": 1791384077544
+      "updatedAt": 1791428747070
     },
-    "score": 96.07530557086483
+    "score": 96.11333801556692
   },
   {
     "node": {
@@ -125,9 +125,9 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Map",
-      "updatedAt": 1791384078613
+      "updatedAt": 1791428748522
     },
-    "score": 96.06115402998601
+    "score": 96.09919966066585
   },
   {
     "node": {
@@ -146,9 +146,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078403
+      "updatedAt": 1791428748239
     },
-    "score": 89.0895233482334
+    "score": 89.12754207007868
   },
   {
     "node": {
@@ -167,9 +167,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077453
+      "updatedAt": 1791428746942
     },
-    "score": 89.07530557086483
+    "score": 89.11333801556692
   },
   {
     "node": {
@@ -188,9 +188,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077707
+      "updatedAt": 1791428747290
     },
-    "score": 89.07530557086483
+    "score": 89.11333801556692
   },
   {
     "node": {
@@ -209,9 +209,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077715
+      "updatedAt": 1791428747306
     },
-    "score": 89.07530557086483
+    "score": 89.11333801556692
   },
   {
     "node": {
@@ -230,20 +230,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077739
+      "updatedAt": 1791428747346
     },
-    "score": 89.07530557086483
+    "score": 89.11333801556692
   },
   {
     "node": {
-      "id": "field:b12ea9a57acfec4e22d42de36b627848",
+      "id": "field:f5b5872a3d6709379c20e4b77e2e2dc9",
       "kind": "field",
       "name": "settings",
       "qualifiedName": "com.deskcubby.app.ui.desk::DeskViewModel::settings",
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/desk/DeskViewModel.kt",
       "language": "kotlin",
-      "startLine": 50,
-      "endLine": 54,
+      "startLine": 54,
+      "endLine": 58,
       "startColumn": 4,
       "endColumn": 5,
       "visibility": null,
@@ -251,9 +251,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077746
+      "updatedAt": 1791428747355
     },
-    "score": 89.07530557086483
+    "score": 89.11333801556692
   },
   {
     "node": {
@@ -272,9 +272,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077769
+      "updatedAt": 1791428747396
     },
-    "score": 89.07530557086483
+    "score": 89.11333801556692
   },
   {
     "node": {
@@ -293,9 +293,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077871
+      "updatedAt": 1791428747553
     },
-    "score": 89.07530557086483
+    "score": 89.11333801556692
   },
   {
     "node": {
@@ -314,9 +314,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078306
+      "updatedAt": 1791428748066
     },
-    "score": 89.07530557086483
+    "score": 89.11333801556692
   },
   {
     "node": {
@@ -335,9 +335,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078312
+      "updatedAt": 1791428748072
     },
-    "score": 89.07530557086483
+    "score": 89.11333801556692
   },
   {
     "node": {
@@ -356,9 +356,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078327
+      "updatedAt": 1791428748130
     },
-    "score": 89.07530557086483
+    "score": 89.11333801556692
   },
   {
     "node": {
@@ -377,9 +377,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078369
+      "updatedAt": 1791428748179
     },
-    "score": 89.07530557086483
+    "score": 89.11333801556692
   },
   {
     "node": {
@@ -398,9 +398,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077063
+      "updatedAt": 1791428746516
     },
-    "score": 89.06115402998601
+    "score": 89.09919966066585
   },
   {
     "node": {
@@ -419,9 +419,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078612
+      "updatedAt": 1791428748525
     },
-    "score": 89.04706826380783
+    "score": 89.08512655059549
   },
   {
     "node": {
@@ -441,9 +441,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079369
+      "updatedAt": 1791428749591
     },
-    "score": 89.01909222976087
+    "score": 89.05717426671781
   },
   {
     "node": {
@@ -462,9 +462,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078561
+      "updatedAt": 1791428748453
     },
-    "score": 81.07530557086483
+    "score": 81.11333801556692
   },
   {
     "node": {
@@ -484,9 +484,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079219
+      "updatedAt": 1791428749385
     },
-    "score": 74.01909222976087
+    "score": 74.05717426671781
   },
   {
     "node": {
@@ -506,9 +506,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079246
+      "updatedAt": 1791428749422
     },
-    "score": 74.01909222976087
+    "score": 74.05717426671781
   },
   {
     "node": {
@@ -529,9 +529,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078928
+      "updatedAt": 1791428748962
     },
-    "score": 61.147066211116666
+    "score": 61.18502452915083
   },
   {
     "node": {
@@ -551,9 +551,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079377
+      "updatedAt": 1791428749597
     },
-    "score": 61.073020117649875
+    "score": 61.11118052391015
   },
   {
     "node": {
@@ -574,9 +574,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078928
+      "updatedAt": 1791428748962
     },
-    "score": 60.97314098282144
+    "score": 61.01131182462215
   },
   {
     "node": {
@@ -596,9 +596,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079327
+      "updatedAt": 1791428749531
     },
-    "score": 59.161622251222965
+    "score": 59.19956405343689
   },
   {
     "node": {
@@ -617,9 +617,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078126
+      "updatedAt": 1791428747857
     },
-    "score": 58.1228626119048
+    "score": 58.16093518949829
   },
   {
     "node": {
@@ -638,9 +638,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078203
+      "updatedAt": 1791428747946
     },
-    "score": 57.1228626119048
+    "score": 57.16093518949829
   },
   {
     "node": {
@@ -659,9 +659,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078979
+      "updatedAt": 1791428749026
     },
-    "score": 56.161622251222965
+    "score": 56.19956405343689
   },
   {
     "node": {
@@ -680,9 +680,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078123
+      "updatedAt": 1791428747854
     },
-    "score": 56.1228626119048
+    "score": 56.16093518949829
   },
   {
     "node": {
@@ -701,9 +701,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078134
+      "updatedAt": 1791428747864
     },
-    "score": 56.1228626119048
+    "score": 56.16093518949829
   },
   {
     "node": {
@@ -722,9 +722,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078136
+      "updatedAt": 1791428747867
     },
-    "score": 56.1228626119048
+    "score": 56.16093518949829
   },
   {
     "node": {
@@ -744,9 +744,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078928
+      "updatedAt": 1791428748962
     },
-    "score": 56.061154029986014
+    "score": 56.099199660665846
   },
   {
     "node": {
@@ -766,9 +766,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079377
+      "updatedAt": 1791428749597
     },
-    "score": 56.02527905634266
+    "score": 56.063454874823705
   },
   {
     "node": {
@@ -788,9 +788,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079377
+      "updatedAt": 1791428749597
     },
-    "score": 55.97761018784264
+    "score": 56.0157240458731
   },
   {
     "node": {
@@ -809,9 +809,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079378
+      "updatedAt": 1791428749603
     },
-    "score": 54.147066211116666
+    "score": 54.18502452915083
   },
   {
     "node": {
@@ -831,9 +831,9 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "List",
-      "updatedAt": 1791384078133
+      "updatedAt": 1791428747863
     },
-    "score": 54.1228626119048
+    "score": 54.16093518949829
   },
   {
     "node": {
@@ -852,9 +852,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078169
+      "updatedAt": 1791428747911
     },
-    "score": 54.1228626119048
+    "score": 54.16093518949829
   },
   {
     "node": {
@@ -873,9 +873,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079378
+      "updatedAt": 1791428749603
     },
-    "score": 53.161622251222965
+    "score": 53.19956405343689
   },
   {
     "node": {
@@ -886,7 +886,7 @@
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsViewModel.kt",
       "language": "kotlin",
       "startLine": 135,
-      "endLine": 1229,
+      "endLine": 1228,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "public",
@@ -894,9 +894,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077955
+      "updatedAt": 1791428747657
     },
-    "score": 53.1228626119048
+    "score": 53.16093518949829
   },
   {
     "node": {
@@ -915,9 +915,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077960
+      "updatedAt": 1791428747660
     },
-    "score": 52.13654617319622
+    "score": 52.17466747730321
   },
   {
     "node": {
@@ -936,9 +936,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078132
+      "updatedAt": 1791428747863
     },
-    "score": 52.1228626119048
+    "score": 52.16093518949829
   },
   {
     "node": {
@@ -958,9 +958,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078928
+      "updatedAt": 1791428748962
     },
-    "score": 52.03304781482386
+    "score": 52.071118234763674
   },
   {
     "node": {
@@ -980,9 +980,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079384
+      "updatedAt": 1791428749604
     },
-    "score": 52.00520105953004
+    "score": 52.043294204097506
   },
   {
     "node": {
@@ -1002,9 +1002,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078758
+      "updatedAt": 1791428748741
     },
-    "score": 51.104295866858024
+    "score": 51.14233865836894
   },
   {
     "node": {
@@ -1023,9 +1023,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077500
+      "updatedAt": 1791428747004
     },
-    "score": 51.0895233482334
+    "score": 51.127542070078675
   },
   {
     "node": {
@@ -1044,9 +1044,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078660
+      "updatedAt": 1791428748589
     },
-    "score": 51.00520105953004
+    "score": 51.043294204097506
   },
   {
     "node": {
@@ -1065,9 +1065,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078979
+      "updatedAt": 1791428749026
     },
-    "score": 51.00520105953004
+    "score": 51.043294204097506
   },
   {
     "node": {
@@ -1086,9 +1086,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079378
+      "updatedAt": 1791428749603
     },
-    "score": 50.147066211116666
+    "score": 50.18502452915083
   },
   {
     "node": {
@@ -1107,9 +1107,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078123
+      "updatedAt": 1791428747854
     },
-    "score": 50.1228626119048
+    "score": 50.16093518949829
   },
   {
     "node": {
@@ -1129,9 +1129,9 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "PageTutorialTarget",
-      "updatedAt": 1791384078206
+      "updatedAt": 1791428747949
     },
-    "score": 50.1228626119048
+    "score": 50.16093518949829
   },
   {
     "node": {
@@ -1142,7 +1142,7 @@
       "filePath": "android/app/src/main/java/com/deskcubby/app/data/preferences/SettingsRepository.kt",
       "language": "kotlin",
       "startLine": 126,
-      "endLine": 1791,
+      "endLine": 1835,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "public",
@@ -1150,9 +1150,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077084
+      "updatedAt": 1791428746547
     },
-    "score": 50.0895233482334
+    "score": 50.127542070078675
   },
   {
     "node": {
@@ -1171,9 +1171,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078124
+      "updatedAt": 1791428747854
     },
-    "score": 49.1228626119048
+    "score": 49.16093518949829
   },
   {
     "node": {
@@ -1192,9 +1192,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077498
+      "updatedAt": 1791428747004
     },
-    "score": 49.0895233482334
+    "score": 49.127542070078675
   },
   {
     "node": {
@@ -1213,9 +1213,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384077084
+      "updatedAt": 1791428746547
     },
-    "score": 46.0895233482334
+    "score": 46.127542070078675
   },
   {
     "node": {
@@ -1234,9 +1234,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384078928
+      "updatedAt": 1791428748962
     },
-    "score": 46.0282959404751
+    "score": 46.066455594365756
   },
   {
     "node": {
@@ -1255,9 +1255,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079378
+      "updatedAt": 1791428749603
     },
-    "score": 45.0516626903729
+    "score": 45.08980278451714
   },
   {
     "node": {
@@ -1277,8 +1277,8 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1791384079378
+      "updatedAt": 1791428749603
     },
-    "score": 45.02576229535252
+    "score": 45.06387668390568
   }
 ]

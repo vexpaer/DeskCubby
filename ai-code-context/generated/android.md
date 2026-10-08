@@ -27,11 +27,11 @@ Found 23 symbols across 1 file.
 - routeTutorialTarget → NAVIGATION_SETTINGS
 - DeskCubbyRoot → Routes
 - routeTutorialTarget → Routes
-- DeskCubbyRoot → STEPS_SETTINGS
-- routeTutorialTarget → STEPS_SETTINGS
-- DeskCubbyRoot → MEAL_FILTER_SETTINGS
-- routeTutorialTarget → MEAL_FILTER_SETTINGS
 - DeskCubbyRoot → MORE_PAGE_SETTINGS
+- routeTutorialTarget → MORE_PAGE_SETTINGS
+- DeskCubbyRoot → USAGE_SETTINGS
+- routeTutorialTarget → USAGE_SETTINGS
+- DeskCubbyRoot → STATISTICS_STRUCTURED
 - ... and 36 more
 
 **imports:**
@@ -81,353 +81,352 @@ Found 23 symbols across 1 file.
 
 > The code below is the **verbatim, current on-disk source** of these files — re-read from disk on this call and line-numbered, byte-for-byte identical to what the Read tool returns. It is NOT a summary, outline, or stale cache. Treat each block as a Read you have already performed: do not Read a file shown here.
 
-**`android/app/src/main/java/com/deskcubby/app/ui/Navigation.kt`** — calls(calls), imports(imports), Routes(references), NavItemId(references), SettingsStartPage(references), VisualStyle(references), references(references), NavItemId(imports), VisualStyle(imports), SettingsStartPage(imports), +26 more
+**`android/app/src/main/java/com/deskcubby/app/ui/Navigation.kt`** — calls(calls), imports(imports), Routes(references), NavItemId(references), VisualStyle(references), instantiates(instantiates), SettingsStartPage(references), PaletteEntryKind(references), references(references), NavItemId(imports), +28 more
 
 ```kotlin
-92	import androidx.navigation.compose.composable
-93	import androidx.navigation.compose.currentBackStackEntryAsState
-94	import androidx.navigation.compose.rememberNavController
-95	import com.deskcubby.app.data.model.NavItemConfig
-96	import com.deskcubby.app.data.model.NavItemId
-97	import com.deskcubby.app.data.model.HOME_GAME_SHORTCUT_IDS
-98	import com.deskcubby.app.data.model.normalizeMorePageOrder
-99	import com.deskcubby.app.data.model.AppLanguage
-100	import com.deskcubby.app.data.model.AppSettings
-101	import com.deskcubby.app.data.model.LayoutMode
-102	import com.deskcubby.app.data.model.OrientationPreference
-103	import com.deskcubby.app.data.model.VisualStyle
-104	import com.deskcubby.app.data.model.MusicVisualizerStyle
-105	import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
-106	import com.deskcubby.app.ui.blog.BlogScreen
-107	import com.deskcubby.app.ui.blog.BlogViewModel
-108	import com.deskcubby.app.ui.components.AppLoadingIndicator
-109	import com.deskcubby.app.ui.components.AppBackground
-110	import com.deskcubby.app.ui.components.DeskCubbyNavigationRail
-111	import com.deskcubby.app.ui.components.LocalLayoutMode
-112	import com.deskcubby.app.ui.components.rememberWindowInfo
-113	import com.deskcubby.app.ui.components.resolveLayoutMode
-114	import com.deskcubby.app.ui.components.PageTutorialOverlay
-115	import com.deskcubby.app.ui.components.PageTutorialTarget
-116	import com.deskcubby.app.ui.components.MusicVisualizerLayer
-117	import com.deskcubby.app.ui.diary.DiaryEditorScreen
-118	import com.deskcubby.app.ui.diary.DiaryListScreen
-119	import com.deskcubby.app.ui.diary.DiaryViewModel
-120	import com.deskcubby.app.ui.diary.MealCalendarScreen
-121	import com.deskcubby.app.ui.diary.CalorieEstimationProgressScreen
-122	import com.deskcubby.app.ui.diary.filter.MealPhotoFilterSettingsScreen
-123	import com.deskcubby.app.ui.structuredrecords.StructuredRecordsScreen
-124	import com.deskcubby.app.ui.structuredrecords.StructuredRecordsViewModel
-125	import com.deskcubby.app.ui.structuredstats.StructuredStatisticsScreen
-126	import com.deskcubby.app.ui.structuredstats.StructuredStatisticsViewModel
-127	import com.deskcubby.app.ui.date.DateRecordScreen
-128	import com.deskcubby.app.ui.date.DateRecordViewModel
-129	import com.deskcubby.app.ui.home.HomeScreen
-130	import com.deskcubby.app.ui.home.HomeViewModel
-131	import com.deskcubby.app.ui.desk.DeskScreen
-132	import com.deskcubby.app.ui.desk.DeskViewModel
-133	import com.deskcubby.app.ui.more.MoreHubScreen
-134	import com.deskcubby.app.ui.notes.NoteEditorScreen
-135	import com.deskcubby.app.ui.notes.NotesScreen
-136	import com.deskcubby.app.ui.notes.NotesViewModel
-137	import com.deskcubby.app.ui.poetry.PoetryBookScreen
-138	import com.deskcubby.app.ui.poetry.PoetryBookViewModel
-139	import com.deskcubby.app.ui.reader.ReaderScreen
-140	import com.deskcubby.app.ui.reader.ReaderViewModel
-141	import com.deskcubby.app.ui.settings.SettingsScreen
-142	import com.deskcubby.app.ui.settings.SettingsStartPage
-143	import com.deskcubby.app.ui.settings.SettingsViewModel
-144	import com.deskcubby.app.ui.rss.RssScreen
-145	import com.deskcubby.app.ui.rss.RssViewModel
-146	import com.deskcubby.app.ui.steps.StepStatisticsScreen
-147	import com.deskcubby.app.ui.steps.StepStatisticsViewModel
-148	import com.deskcubby.app.ui.sleep.SleepStatisticsScreen
-149	import com.deskcubby.app.ui.sleep.SleepStatisticsViewModel
-150	import com.deskcubby.app.ui.statshub.StatisticsHubScreen
-151	import com.deskcubby.app.ui.statshub.StatisticsHubViewModel
-152	import com.deskcubby.app.ui.usage.UsageStatisticsScreen
-153	import com.deskcubby.app.ui.usage.UsageStatisticsViewModel
-154	import com.deskcubby.app.ui.ai.AiChatScreen
-155	import com.deskcubby.app.ui.ai.AgentReviewScreen
-156	import com.deskcubby.app.ui.ai.AgentReviewViewModel
-157	import com.deskcubby.app.ui.ai.AiChatViewModel
-158	import com.deskcubby.app.ui.theme.DeskCubbyTheme
-159	import com.deskcubby.app.ui.theme.GlassPanel
-160	import com.deskcubby.app.ui.theme.LocalAppLanguage
-161	import com.deskcubby.app.ui.theme.LocalVisualStyle
-162	import com.deskcubby.app.ui.theme.PanelRole
-163	import com.deskcubby.app.ui.theme.deskCubbyVisuals
-164	import com.deskcubby.app.ui.theme.tr
-165	import com.deskcubby.app.ui.games.GamesScreen
-166	import com.deskcubby.app.ui.games.GamesViewModel
-167	import com.deskcubby.app.ui.thought.ThoughtScreen
-168	import com.deskcubby.app.ui.thought.ThoughtTrashScreen
-169	import com.deskcubby.app.ui.thought.ThoughtViewModel
-170	import com.deskcubby.app.ui.vault.VaultScreen
-171	import com.deskcubby.app.ui.vault.VaultViewModel
-172	import com.deskcubby.app.ui.widgets.DesktopWidgetsScreen
-173	import com.deskcubby.app.ui.widgets.DesktopWidgetsViewModel
-174	import com.deskcubby.app.data.statistics.StepHealthConnectAccess
-175	import kotlin.math.roundToInt
-176	
-177	object Routes {
-178	    const val EDITOR = "diary_editor"
-179	    const val NOTE_EDITOR = "note_editor"
-180	    const val GAME_SHORTCUT = "game_shortcut"
-181	    const val MEAL_CALENDAR = "meal_calendar"
-182	    const val CALORIE_ESTIMATION_PROGRESS = "meal_calendar/calorie_progress"
-183	    const val MEAL_FILTER_SETTINGS = "meal_filter_settings"
-184	    const val THOUGHT_TRASH = "thought_trash"
-185	    const val DAILY_RECORDS = "daily_records"
-186	    const val DAILY_RECORDS_TODAY = "daily_records/today"
-187	    const val NAVIGATION_SETTINGS = "settings/navigation"
-188	    const val MORE_PAGE_SETTINGS = "settings/more-page"
-189	    const val USAGE_SETTINGS = "settings/usage-statistics"
-190	    const val STEPS_SETTINGS = "settings/step-statistics"
-191	    const val STATISTICS_USAGE = "statistics/screen-time"
-192	    const val STATISTICS_HEALTH = "statistics/health"
-193	    const val STATISTICS_STRUCTURED = "statistics/structured"
-194	    const val AI_SETTINGS = "settings/ai"
-195	    const val AI_REVIEW = "ai/review"
-196	    const val POETRY_SETTINGS = "settings/poetry"
-197	}
-198	
-199	@Composable
-200	fun DeskCubbyRoot(
-201	    settingsViewModel: SettingsViewModel = hiltViewModel(),
-202	    diaryViewModel: DiaryViewModel = hiltViewModel(),
-203	    thoughtViewModel: ThoughtViewModel = hiltViewModel(),
-204	    notesViewModel: NotesViewModel = hiltViewModel(),
-205	    blogViewModel: BlogViewModel = hiltViewModel(),
-206	    homeViewModel: HomeViewModel = hiltViewModel(),
-207	    dateRecordViewModel: DateRecordViewModel = hiltViewModel(),
-208	    structuredRecordsViewModel: StructuredRecordsViewModel = hiltViewModel(),
-209	    externalNavigationRoute: String? = null,
-210	    externalDiaryUri: String? = null,
-211	    externalGameId: String? = null,
-212	    onExternalNavigationHandled: () -> Unit = {},
-213	) {
-214	    val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
-215	    val ready by settingsViewModel.ready.collectAsStateWithLifecycle()
-216	    val cloudSyncStatus by settingsViewModel.cloudSyncStatus.collectAsStateWithLifecycle()
-217	
-218	    // Device-local orientation lock: AUTO follows the sensor, PORTRAIT/LANDSCAPE pin the
-219	    // activity. This controls rotation only; LayoutMode below decides UI structure from
-220	    // the resulting window geometry. It reads the same context used by the Reader orientation
-221	    // effect and is cleared when this composable (and its reader) leaves composition.
-222	    // The Reader owns a per-book orientation preference that must win over the app-level
-223	    // preference while reading. The global lock is therefore applied below, after the reader
-224	    // open state is known, and is suspended while the reader is active.
-225	    DeskCubbyTheme(settings) {
-226	        AppBackground(settings) {
-227	        if (!ready) {
-228	            Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-229	                AppLoadingIndicator()
-230	            }
-231	            return@AppBackground
-232	        }
-233	        // First launch: before the navigation graph, ask for the UI language once. The device-
-234	        // local flag keeps this from ever showing again and is not backed up.
-235	        val languageSelected by settingsViewModel.languageSelected.collectAsStateWithLifecycle()
-236	        if (!languageSelected) {
-237	            FirstLaunchLanguageScreen(onChoose = settingsViewModel::chooseFirstLaunchLanguage)
-238	            return@AppBackground
-239	        }
-240	        val navController = rememberNavController()
-241	        val aliasContext = LocalContext.current
-242	        LaunchedEffect(settings.useChineseLauncherName, settings.launcherIcon) {
-243	            syncLauncherAlias(
-244	                aliasContext,
-245	                settings.useChineseLauncherName,
-246	                settings.launcherIcon,
-247	            )
-248	        }
-249	        val orientationActivity = LocalContext.current.findActivityCompat()
-250	        var settingsSubpageOpen by remember { mutableStateOf(false) }
-251	        var readerOpen by remember { mutableStateOf(false) }
-252	        // Apply the app-level orientation lock only while the reader is not the active
-253	        // surface; the reader's per-book orientation effect handles rotation while reading.
-254	        OrientationPreferenceEffect(
-255	            activity = orientationActivity,
-256	            preference = settings.orientationPreference,
-257	            suspendWhileReaderOpen = readerOpen,
-258	        )
-259	        var gameOpen by remember { mutableStateOf(false) }
-260	        var requestedGameId by remember { mutableStateOf<String?>(null) }
-261	        // One-shot prompt forwarded to the AI Chat screen (e.g. Desk's "总结今天"). Consumed by the
-262	        // AI chat composable; the ViewModel guards against re-sending on rotation.
-263	        var pendingAiPrompt by remember { mutableStateOf<String?>(null) }
-264	        var childTutorialTarget by remember { mutableStateOf<PageTutorialTarget?>(null) }
-265	        var tutorialConfirmedThisSession by remember { mutableStateOf(emptySet<String>()) }
-266	        val initialStartDestination = remember { settings.defaultPage.route }
-267	        val systemAnimationsEnabled = remember { ValueAnimator.areAnimatorsEnabled() }
-268	        val resolvedVisualStyle = LocalVisualStyle.current
-269	        val rootVisuals = deskCubbyVisuals
-270	        val customMotionDisabled = rootVisuals.customized && rootVisuals.transitionMillis == 0
-271	        val organicMotionEnabled = resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE &&
-272	            systemAnimationsEnabled && !customMotionDisabled
-273	        val organicEnterMillis = if (rootVisuals.customized) rootVisuals.transitionMillis else 340
-274	        val organicExitMillis = if (rootVisuals.customized) {
-275	            (rootVisuals.transitionMillis * 300 / 340f).roundToInt()
-276	        } else {
-277	            300
-278	        }
-279	        val standardMotionMillis = if (rootVisuals.customized) rootVisuals.transitionMillis else 700
-280	        val backStack by navController.currentBackStackEntryAsState()
-281	        val route = backStack?.destination?.route
-282	        val windowInfo = rememberWindowInfo()
-283	        val layoutMode = resolveLayoutMode(windowInfo)
-284	        // Navigation placement follows ORIENTATION only: portrait -> bottom bar, landscape -> left
-285	        // rail. LayoutMode (width) independently drives multi-pane content structure, so a portrait
-286	        // tablet gets a bottom bar with two-pane content instead of a left navigation rail.
-287	        val visibleTabs = settings.navItems.filter { it.visible || it.id == NavItemId.SETTINGS }
-288	        val bottomSelectedRoute = route.takeIf { currentRoute ->
-289	            visibleTabs.any { it.id.route == currentRoute }
-290	        } ?: NavItemId.MORE.route.takeIf {
-291	            route != null && settings.navItems.any { item ->
-292	                item.id.route == route && item.showInMore
-293	            }
-294	        }
-295	        val showBottomBar = !windowInfo.isLandscape &&
-296	            route in NavItemId.entries.map { it.route } &&
-297	            !(route == NavItemId.SETTINGS.route && settingsSubpageOpen) &&
-298	            !(route == NavItemId.READER.route && readerOpen) &&
-299	            !(route == NavItemId.GAMES.route && gameOpen) &&
-300	            !WindowInsets.isImeVisible
-301	        // The rail is shown in landscape on top-level destinations.
-302	        val showWorkspaceRail = windowInfo.isLandscape &&
-303	            route in NavItemId.entries.map { it.route }
-304	        val navigateMain: (String) -> Unit = { destination ->
-305	            navController.navigate(destination) {
-306	                // Keep only the graph itself, so no tab can restore another tab's nested page.
-307	                popUpTo(navController.graph.id) { saveState = false }
-308	                launchSingleTop = true
-309	                restoreState = false
-310	            }
-311	        }
-312	        LaunchedEffect(externalNavigationRoute, externalDiaryUri, externalGameId) {
-313	            when {
-314	                !externalDiaryUri.isNullOrBlank() -> {
-315	                    diaryViewModel.open(externalDiaryUri)
-316	                    navController.navigate(Routes.EDITOR)
-317	                }
-318	                externalGameId != null && externalGameId in HOME_GAME_SHORTCUT_IDS -> {
-319	                    requestedGameId = externalGameId
-320	                    navController.navigate(Routes.GAME_SHORTCUT)
-321	                }
-322	                externalNavigationRoute == Routes.DAILY_RECORDS_TODAY ->
-323	                    navController.navigate(Routes.DAILY_RECORDS_TODAY)
-324	                externalNavigationRoute != null &&
-325	                    NavItemId.entries.any { it.route == externalNavigationRoute } ->
-326	                    navigateMain(externalNavigationRoute)
-327	            }
-328	            if (
-329	                externalNavigationRoute != null || externalDiaryUri != null || externalGameId != null
-330	            ) {
-331	                onExternalNavigationHandled()
-332	            }
-333	        }
-334	
-335	        CompositionLocalProvider(LocalLayoutMode provides layoutMode) {
-336	        Scaffold(
-337	            modifier = Modifier.fillMaxSize(),
-338	            containerColor = Color.Transparent,
-339	            contentWindowInsets = WindowInsets(0, 0, 0, 0),
-340	            bottomBar = {
-341	                if (showBottomBar) {
-342	                    DeskBottomBar(
-343	                        items = visibleTabs,
-344	                        selectedRoute = bottomSelectedRoute,
-345	                        showLabels = settings.bottomNavShowLabels,
-346	                        musicVisualizerEnabled = settings.musicVisualizerEnabled,
-347	                        musicVisualizerStyle = settings.musicVisualizerStyle,
-348	                        musicVisualizerFrequencyMode = settings.musicVisualizerFrequencyMode,
-349	                        musicVisualizerMinFrequencyHz = settings.musicVisualizerMinFrequencyHz,
-350	                        musicVisualizerMaxFrequencyHz = settings.musicVisualizerMaxFrequencyHz,
-351	                        onSelected = { item -> navigateMain(item.id.route) },
-352	                    )
-353	                }
-354	            },
-355	        ) { padding ->
-356	            Row(Modifier.fillMaxSize()) {
-357	                if (showWorkspaceRail) {
-358	                    DeskCubbyNavigationRail(
-359	                        items = visibleTabs,
-360	                        selectedRoute = bottomSelectedRoute,
-361	                        onSelected = { item -> navigateMain(item.id.route) },
-362	                        onOpenSettings = { navigateMain(NavItemId.SETTINGS.route) },
-363	                    )
-364	                }
-365	                // Drawer sheets animate into negative local X while closed. Clip the content
-366	                // column so that hidden/dragging pixels can never paint over the sibling rail.
-367	                // The open sheet still begins at this column's x=0, flush with the rail.
-368	                Box(Modifier.weight(1f).fillMaxSize().clipToBounds()) {
-369	                NavHost(
-370	                    navController = navController,
-371	                    startDestination = initialStartDestination,
-372	                    modifier = Modifier.fillMaxSize(),
-373	                    enterTransition = {
-374	                        when {
-375	                            organicMotionEnabled -> fadeIn(tween(organicEnterMillis)) +
-376	                                slideInHorizontally(tween(organicEnterMillis)) { it / 20 } +
-377	                                scaleIn(tween(organicEnterMillis), initialScale = 0.992f)
-378	                            resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
-379	                                EnterTransition.None
-380	                            else -> fadeIn(tween(standardMotionMillis))
-381	                        }
-382	                    },
-383	                    exitTransition = {
-384	                        when {
-385	                            organicMotionEnabled -> fadeOut(tween(organicExitMillis)) +
-386	                                slideOutHorizontally(tween(organicEnterMillis)) { -it / 28 } +
-387	                                scaleOut(tween(organicEnterMillis), targetScale = 1.008f)
-388	                            resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
-389	                                ExitTransition.None
-390	                            else -> fadeOut(tween(standardMotionMillis))
-391	                        }
-392	                    },
-393	                    popEnterTransition = {
-394	                        when {
-395	                            organicMotionEnabled -> fadeIn(tween(organicEnterMillis)) +
-396	                                slideInHorizontally(tween(organicEnterMillis)) { -it / 20 } +
-397	                                scaleIn(tween(organicEnterMillis), initialScale = 0.992f)
-398	                            resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
-399	                                EnterTransition.None
-400	                            else -> fadeIn(tween(standardMotionMillis))
-401	                        }
-402	                    },
-403	                    popExitTransition = {
-404	                        when {
-405	                            organicMotionEnabled -> fadeOut(tween(organicExitMillis)) +
-406	                                slideOutHorizontally(tween(organicEnterMillis)) { it / 28 } +
-407	                                scaleOut(tween(organicEnterMillis), targetScale = 1.008f)
-408	                            resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
-409	                                ExitTransition.None
-410	                            else -> fadeOut(tween(standardMotionMillis))
-411	                        }
-412	                    },
-413	                ) {
-414	                    composable(NavItemId.HOME.route) {
-415	                        HomeScreen(
-416	                            padding = padding,
-417	                            settings = settings,
-418	                            cloudSyncStatus = cloudSyncStatus,
-419	                            viewModel = homeViewModel,
-420	                            onOpenDiary = { uri -> diaryViewModel.open(uri); navController.navigate(Routes.EDITOR) },
-421	                            onOpenThoughts = { navController.navigate(NavItemId.THOUGHT.route) },
-422	                            onOpenWebsite = { navController.navigate(NavItemId.BLOG.route) },
-423	                            onOpenDateRecords = { navController.navigate(NavItemId.DATE.route) },
-424	                            onOpenDailyRecords = { navController.navigate(Routes.DAILY_RECORDS_TODAY) },
-425	                            onOpenNotes = { navController.navigate(NavItemId.NOTES.route) },
-426	                            onOpenGame = { gameId ->
-427	                                requestedGameId = gameId
-428	                                navController.navigate(Routes.GAME_SHORTCUT)
-429	                            },
-430	                            onOpenStatistics = {
-431	                                navController.navigate(NavItemId.STATISTICS.route)
-432	                            },
-433	                        )
-434	                    }
-435	                    composable(NavItemId.DESK.route) {
+114	import androidx.navigation.compose.composable
+115	import androidx.navigation.compose.currentBackStackEntryAsState
+116	import androidx.navigation.compose.rememberNavController
+117	import com.deskcubby.app.data.model.NavItemConfig
+118	import com.deskcubby.app.data.model.NavItemId
+119	import com.deskcubby.app.data.model.HOME_GAME_SHORTCUT_IDS
+120	import com.deskcubby.app.data.model.normalizeMorePageOrder
+121	import com.deskcubby.app.data.model.AppLanguage
+122	import com.deskcubby.app.data.model.AppSettings
+123	import com.deskcubby.app.data.model.LayoutMode
+124	import com.deskcubby.app.data.model.OrientationPreference
+125	import com.deskcubby.app.data.model.VisualStyle
+126	import com.deskcubby.app.data.model.MusicVisualizerStyle
+127	import com.deskcubby.app.data.model.MusicVisualizerFrequencyMode
+128	import com.deskcubby.app.ui.blog.BlogScreen
+129	import com.deskcubby.app.ui.blog.BlogViewModel
+130	import com.deskcubby.app.ui.components.AppLoadingIndicator
+131	import com.deskcubby.app.ui.components.AppBackground
+132	import com.deskcubby.app.ui.theme.translate
+133	import androidx.compose.ui.input.key.Key
+134	import androidx.compose.ui.input.key.KeyEventType
+135	import androidx.compose.ui.input.key.isCtrlPressed
+136	import androidx.compose.ui.input.key.isMetaPressed
+137	import androidx.compose.ui.input.key.key
+138	import androidx.compose.ui.input.key.onPreviewKeyEvent
+139	import androidx.compose.ui.input.key.type
+140	import com.deskcubby.app.ui.components.CommandPalette
+141	import com.deskcubby.app.ui.components.PaletteEntry
+142	import com.deskcubby.app.ui.components.PaletteEntryKind
+143	import com.deskcubby.app.ui.components.NavItemSpan
+144	import com.deskcubby.app.ui.components.NavSelectionIndicator
+145	import com.deskcubby.app.ui.theme.DeskMotion
+146	import com.deskcubby.app.ui.theme.rememberDeskHaptics
+147	import com.deskcubby.app.ui.components.DeskCubbyNavigationRail
+148	import com.deskcubby.app.ui.components.LocalLayoutMode
+149	import com.deskcubby.app.ui.components.rememberWindowInfo
+150	import com.deskcubby.app.ui.components.resolveLayoutMode
+151	import com.deskcubby.app.ui.components.PageTutorialOverlay
+152	import com.deskcubby.app.ui.components.PageTutorialTarget
+153	import com.deskcubby.app.ui.components.MusicVisualizerLayer
+154	import com.deskcubby.app.ui.diary.DiaryEditorScreen
+155	import com.deskcubby.app.ui.diary.DiaryListScreen
+156	import com.deskcubby.app.ui.diary.DiaryViewModel
+157	import com.deskcubby.app.ui.diary.MealCalendarScreen
+158	import com.deskcubby.app.ui.diary.CalorieEstimationProgressScreen
+159	import com.deskcubby.app.ui.diary.filter.MealPhotoFilterSettingsScreen
+160	import com.deskcubby.app.ui.structuredrecords.StructuredRecordsScreen
+161	import com.deskcubby.app.ui.structuredrecords.StructuredRecordsViewModel
+162	import com.deskcubby.app.ui.structuredstats.StructuredStatisticsScreen
+163	import com.deskcubby.app.ui.structuredstats.StructuredStatisticsViewModel
+164	import com.deskcubby.app.ui.date.DateRecordScreen
+165	import com.deskcubby.app.ui.date.DateRecordViewModel
+166	import com.deskcubby.app.ui.home.HomeScreen
+167	import com.deskcubby.app.ui.home.HomeViewModel
+168	import com.deskcubby.app.ui.desk.DeskScreen
+169	import com.deskcubby.app.ui.desk.DeskViewModel
+170	import com.deskcubby.app.ui.more.MoreHubScreen
+171	import com.deskcubby.app.ui.notes.NoteEditorScreen
+172	import com.deskcubby.app.ui.notes.NotesScreen
+173	import com.deskcubby.app.ui.notes.NotesViewModel
+174	import com.deskcubby.app.ui.poetry.PoetryBookScreen
+175	import com.deskcubby.app.ui.poetry.PoetryBookViewModel
+176	import com.deskcubby.app.ui.reader.ReaderScreen
+177	import com.deskcubby.app.ui.reader.ReaderViewModel
+178	import com.deskcubby.app.ui.settings.SettingsScreen
+179	import com.deskcubby.app.ui.settings.SettingsStartPage
+180	import com.deskcubby.app.ui.settings.SettingsViewModel
+181	import com.deskcubby.app.ui.rss.RssScreen
+182	import com.deskcubby.app.ui.rss.RssViewModel
+183	import com.deskcubby.app.ui.steps.StepStatisticsScreen
+184	import com.deskcubby.app.ui.steps.StepStatisticsViewModel
+185	import com.deskcubby.app.ui.sleep.SleepStatisticsScreen
+186	import com.deskcubby.app.ui.sleep.SleepStatisticsViewModel
+187	import com.deskcubby.app.ui.statshub.StatisticsHubScreen
+188	import com.deskcubby.app.ui.statshub.StatisticsHubViewModel
+189	import com.deskcubby.app.ui.usage.UsageStatisticsScreen
+190	import com.deskcubby.app.ui.usage.UsageStatisticsViewModel
+191	import com.deskcubby.app.ui.ai.AiChatScreen
+192	import com.deskcubby.app.ui.ai.AgentReviewScreen
+193	import com.deskcubby.app.ui.ai.AgentReviewViewModel
+194	import com.deskcubby.app.ui.ai.AiChatViewModel
+195	import com.deskcubby.app.ui.theme.DeskCubbyTheme
+196	import com.deskcubby.app.ui.theme.GlassPanel
+197	import com.deskcubby.app.ui.theme.LocalAppLanguage
+198	import com.deskcubby.app.ui.theme.LocalVisualStyle
+199	import com.deskcubby.app.ui.theme.PanelRole
+200	import com.deskcubby.app.ui.theme.deskCubbyVisuals
+201	import com.deskcubby.app.ui.theme.tr
+202	import com.deskcubby.app.ui.games.GamesScreen
+203	import com.deskcubby.app.ui.games.GamesViewModel
+204	import com.deskcubby.app.ui.thought.ThoughtScreen
+205	import com.deskcubby.app.ui.thought.ThoughtTrashScreen
+206	import com.deskcubby.app.ui.thought.ThoughtViewModel
+207	import com.deskcubby.app.ui.vault.VaultScreen
+208	import com.deskcubby.app.ui.vault.VaultViewModel
+209	import com.deskcubby.app.ui.widgets.DesktopWidgetsScreen
+210	import com.deskcubby.app.ui.widgets.DesktopWidgetsViewModel
+211	import com.deskcubby.app.data.statistics.StepHealthConnectAccess
+212	import kotlin.math.roundToInt
+213	
+214	object Routes {
+215	    const val EDITOR = "diary_editor"
+216	    const val NOTE_EDITOR = "note_editor"
+217	    const val GAME_SHORTCUT = "game_shortcut"
+218	    const val MEAL_CALENDAR = "meal_calendar"
+219	    const val CALORIE_ESTIMATION_PROGRESS = "meal_calendar/calorie_progress"
+220	    const val MEAL_FILTER_SETTINGS = "meal_filter_settings"
+221	    const val THOUGHT_TRASH = "thought_trash"
+222	    const val DAILY_RECORDS = "daily_records"
+223	    const val DAILY_RECORDS_TODAY = "daily_records/today"
+224	    const val NAVIGATION_SETTINGS = "settings/navigation"
+225	    const val MORE_PAGE_SETTINGS = "settings/more-page"
+226	    const val USAGE_SETTINGS = "settings/usage-statistics"
+227	    const val STEPS_SETTINGS = "settings/step-statistics"
+228	    const val STATISTICS_USAGE = "statistics/screen-time"
+229	    const val STATISTICS_HEALTH = "statistics/health"
+230	    const val STATISTICS_STRUCTURED = "statistics/structured"
+231	    const val AI_SETTINGS = "settings/ai"
+232	    const val AI_REVIEW = "ai/review"
+233	    const val POETRY_SETTINGS = "settings/poetry"
+234	}
+235	
+236	@Composable
+237	fun DeskCubbyRoot(
+238	    settingsViewModel: SettingsViewModel = hiltViewModel(),
+239	    diaryViewModel: DiaryViewModel = hiltViewModel(),
+240	    thoughtViewModel: ThoughtViewModel = hiltViewModel(),
+241	    notesViewModel: NotesViewModel = hiltViewModel(),
+242	    blogViewModel: BlogViewModel = hiltViewModel(),
+243	    homeViewModel: HomeViewModel = hiltViewModel(),
+244	    dateRecordViewModel: DateRecordViewModel = hiltViewModel(),
+245	    structuredRecordsViewModel: StructuredRecordsViewModel = hiltViewModel(),
+246	    externalNavigationRoute: String? = null,
+247	    externalDiaryUri: String? = null,
+248	    externalGameId: String? = null,
+249	    onExternalNavigationHandled: () -> Unit = {},
+250	) {
+251	    val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
+252	    val ready by settingsViewModel.ready.collectAsStateWithLifecycle()
+253	    val cloudSyncStatus by settingsViewModel.cloudSyncStatus.collectAsStateWithLifecycle()
+254	
+255	    // Device-local orientation lock: AUTO follows the sensor, PORTRAIT/LANDSCAPE pin the
+256	    // activity. This controls rotation only; LayoutMode below decides UI structure from
+257	    // the resulting window geometry. It reads the same context used by the Reader orientation
+258	    // effect and is cleared when this composable (and its reader) leaves composition.
+259	    // The Reader owns a per-book orientation preference that must win over the app-level
+260	    // preference while reading. The global lock is therefore applied below, after the reader
+261	    // open state is known, and is suspended while the reader is active.
+262	    DeskCubbyTheme(settings) {
+263	        AppBackground(settings) {
+264	        if (!ready) {
+265	            Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+266	                AppLoadingIndicator()
+267	            }
+268	            return@AppBackground
+269	        }
+270	        // First launch: before the navigation graph, ask for the UI language once. The device-
+271	        // local flag keeps this from ever showing again and is not backed up.
+272	        val languageSelected by settingsViewModel.languageSelected.collectAsStateWithLifecycle()
+273	        if (!languageSelected) {
+274	            FirstLaunchLanguageScreen(onChoose = settingsViewModel::chooseFirstLaunchLanguage)
+275	            return@AppBackground
+276	        }
+277	        val navController = rememberNavController()
+278	        val aliasContext = LocalContext.current
+279	        LaunchedEffect(settings.useChineseLauncherName, settings.launcherIcon) {
+280	            syncLauncherAlias(
+281	                aliasContext,
+282	                settings.useChineseLauncherName,
+283	                settings.launcherIcon,
+284	            )
+285	        }
+286	        val orientationActivity = LocalContext.current.findActivityCompat()
+287	        var settingsSubpageOpen by remember { mutableStateOf(false) }
+288	        var readerOpen by remember { mutableStateOf(false) }
+289	        // Apply the app-level orientation lock only while the reader is not the active
+290	        // surface; the reader's per-book orientation effect handles rotation while reading.
+291	        OrientationPreferenceEffect(
+292	            activity = orientationActivity,
+293	            preference = settings.orientationPreference,
+294	            suspendWhileReaderOpen = readerOpen,
+295	        )
+296	        var gameOpen by remember { mutableStateOf(false) }
+297	        var requestedGameId by remember { mutableStateOf<String?>(null) }
+298	        // One-shot prompt forwarded to the AI Chat screen (e.g. Desk's "总结今天"). Consumed by the
+299	        // AI chat composable; the ViewModel guards against re-sending on rotation.
+300	        var pendingAiPrompt by remember { mutableStateOf<String?>(null) }
+301	        var childTutorialTarget by remember { mutableStateOf<PageTutorialTarget?>(null) }
+302	        var tutorialConfirmedThisSession by remember { mutableStateOf(emptySet<String>()) }
+303	        val initialStartDestination = remember { settings.defaultPage.route }
+304	        val systemAnimationsEnabled = remember { ValueAnimator.areAnimatorsEnabled() }
+305	        val resolvedVisualStyle = LocalVisualStyle.current
+306	        val rootVisuals = deskCubbyVisuals
+307	        val customMotionDisabled = rootVisuals.customized && rootVisuals.transitionMillis == 0
+308	        val organicMotionEnabled = resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE &&
+309	            systemAnimationsEnabled && !customMotionDisabled
+310	        val organicEnterMillis = if (rootVisuals.customized) rootVisuals.transitionMillis else 340
+311	        val organicExitMillis = if (rootVisuals.customized) {
+312	            (rootVisuals.transitionMillis * 300 / 340f).roundToInt()
+313	        } else {
+314	            300
+315	        }
+316	        val standardMotionMillis = if (rootVisuals.customized) rootVisuals.transitionMillis else 700
+317	        // Uncustomized Material and Liquid Glass get their own page choreography: Material lifts a
+318	        // new sheet of paper into place; Liquid Glass swells in on a spring like a droplet.
+319	        // Custom themes keep their explicit transition duration and system "remove animations"
+320	        // keeps the existing fade (which the platform already shortens to instant).
+321	        val expressiveMotion = systemAnimationsEnabled && !rootVisuals.customized
+322	        val materialPages = expressiveMotion && resolvedVisualStyle == VisualStyle.MATERIAL
+323	        val glassPages = expressiveMotion && resolvedVisualStyle == VisualStyle.LIQUID_GLASS
+324	        // Backdrop shared by page content (source) and the floating Liquid Glass bar (effect).
+325	        val navHazeState = rememberHazeState()
+326	        val backStack by navController.currentBackStackEntryAsState()
+327	        val route = backStack?.destination?.route
+328	        val windowInfo = rememberWindowInfo()
+329	        val layoutMode = resolveLayoutMode(windowInfo)
+330	        // Navigation placement follows ORIENTATION only: portrait -> bottom bar, landscape -> left
+331	        // rail. LayoutMode (width) independently drives multi-pane content structure, so a portrait
+332	        // tablet gets a bottom bar with two-pane content instead of a left navigation rail.
+333	        val visibleTabs = settings.navItems.filter { it.visible || it.id == NavItemId.SETTINGS }
+334	        val bottomSelectedRoute = route.takeIf { currentRoute ->
+335	            visibleTabs.any { it.id.route == currentRoute }
+336	        } ?: NavItemId.MORE.route.takeIf {
+337	            route != null && settings.navItems.any { item ->
+338	                item.id.route == route && item.showInMore
+339	            }
+340	        }
+341	        val showBottomBar = !windowInfo.isLandscape &&
+342	            route in NavItemId.entries.map { it.route } &&
+343	            !(route == NavItemId.SETTINGS.route && settingsSubpageOpen) &&
+344	            !(route == NavItemId.READER.route && readerOpen) &&
+345	            !(route == NavItemId.GAMES.route && gameOpen) &&
+346	            !WindowInsets.isImeVisible
+347	        // The rail is shown in landscape on top-level destinations.
+348	        val showWorkspaceRail = windowInfo.isLandscape &&
+349	            route in NavItemId.entries.map { it.route }
+350	        // Global command palette: pages, quick actions and diary entries in one fuzzy search.
+351	        var paletteOpen by remember { mutableStateOf(false) }
+352	        val paletteDiaries by homeViewModel.diaries.collectAsStateWithLifecycle()
+353	        // Never offered over a settings sub-page, so unsaved drafts keep their exit confirmation.
+354	        val paletteAllowed = route in NavItemId.entries.map { it.route } &&
+355	            !(route == NavItemId.SETTINGS.route && settingsSubpageOpen)
+356	        val navigateMain: (String) -> Unit = { destination ->
+357	            navController.navigate(destination) {
+358	                // Keep only the graph itself, so no tab can restore another tab's nested page.
+359	                popUpTo(navController.graph.id) { saveState = false }
+360	                launchSingleTop = true
+361	                restoreState = false
+362	            }
+363	        }
+364	        LaunchedEffect(externalNavigationRoute, externalDiaryUri, externalGameId) {
+365	            when {
+366	                !externalDiaryUri.isNullOrBlank() -> {
+367	                    diaryViewModel.open(externalDiaryUri)
+368	                    navController.navigate(Routes.EDITOR)
+369	                }
+370	                externalGameId != null && externalGameId in HOME_GAME_SHORTCUT_IDS -> {
+371	                    requestedGameId = externalGameId
+372	                    navController.navigate(Routes.GAME_SHORTCUT)
+373	                }
+374	                externalNavigationRoute == Routes.DAILY_RECORDS_TODAY ->
+375	                    navController.navigate(Routes.DAILY_RECORDS_TODAY)
+376	                externalNavigationRoute != null &&
+377	                    NavItemId.entries.any { it.route == externalNavigationRoute } ->
+378	                    navigateMain(externalNavigationRoute)
+379	            }
+380	            if (
+381	                externalNavigationRoute != null || externalDiaryUri != null || externalGameId != null
+382	            ) {
+383	                onExternalNavigationHandled()
+384	            }
+385	        }
+386	
+387	        CompositionLocalProvider(LocalLayoutMode provides layoutMode) {
+388	        Scaffold(
+389	            modifier = Modifier
+390	                .fillMaxSize()
+391	                .onPreviewKeyEvent { event ->
+392	                    val shortcut = event.type == KeyEventType.KeyDown &&
+393	                        (event.isCtrlPressed || event.isMetaPressed) &&
+394	                        event.key == Key.K
+395	                    if (shortcut && paletteAllowed) {
+396	                        paletteOpen = true
+397	                        true
+398	                    } else {
+399	                        false
+400	                    }
+401	                },
+402	            containerColor = Color.Transparent,
+403	            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+404	            bottomBar = {
+405	                if (showBottomBar) {
+406	                    DeskBottomBar(
+407	                        items = visibleTabs,
+408	                        selectedRoute = bottomSelectedRoute,
+409	                        showLabels = settings.bottomNavShowLabels,
+410	                        musicVisualizerEnabled = settings.musicVisualizerEnabled,
+411	                        musicVisualizerStyle = settings.musicVisualizerStyle,
+412	                        musicVisualizerFrequencyMode = settings.musicVisualizerFrequencyMode,
+413	                        musicVisualizerMinFrequencyHz = settings.musicVisualizerMinFrequencyHz,
+414	                        musicVisualizerMaxFrequencyHz = settings.musicVisualizerMaxFrequencyHz,
+415	                        onSelected = { item -> navigateMain(item.id.route) },
+416	                        hazeState = navHazeState,
+417	                    )
+418	                }
+419	            },
+420	        ) { padding ->
+421	            Row(Modifier.fillMaxSize()) {
+422	                if (showWorkspaceRail) {
+423	                    DeskCubbyNavigationRail(
+424	                        items = visibleTabs,
+425	                        selectedRoute = bottomSelectedRoute,
+426	                        onSelected = { item -> navigateMain(item.id.route) },
+427	                        onOpenSettings = { navigateMain(NavItemId.SETTINGS.route) },
+428	                    )
+429	                }
+430	                // Drawer sheets animate into negative local X while closed. Clip the content
+431	                // column so that hidden/dragging pixels can never paint over the sibling rail.
+432	                // The open sheet still begins at this column's x=0, flush with the rail.
+433	                Box(Modifier.weight(1f).fillMaxSize().clipToBounds().hazeSource(navHazeState)) {
+434	                NavHost(
+435	                    navController = navController,
+436	                    startDestination = initialStartDestination,
+437	                    modifier = Modifier.fillMaxSize(),
+438	                    enterTransition = {
+439	                        when {
+440	                            organicMotionEnabled -> fadeIn(tween(organicEnterMillis)) +
+441	                                slideInHorizontally(tween(organicEnterMillis)) { it / 20 } +
+442	                                scaleIn(tween(organicEnterMillis), initialScale = 0.992f)
+443	                            resolvedVisualStyle == VisualStyle.ORGANIC_FUTURE || customMotionDisabled ->
+444	                                EnterTransition.None
+445	                            materialPages -> fadeIn(tween(220, delayMillis = 60)) +
+446	                                slideInVertically(tween(320, easing = FastOutSlowInEasing)) { it / 18 }
+447	                            glassPages -> fadeIn(tween(200)) +
+448	                                scaleIn(spring(dampingRatio = 0.74f, stiffness = 320f), initialScale = 0.93f)
+449	                            else -> fadeIn(tween(standardMotionMillis))
+450	                        }
+451	                    },
+452	                    exitTransition = {
+453	                        when {
+454	                            organicMotionEnabled -> fadeOut(tween(organicExitMillis)) +
+455	                                slideOutHorizontally(tween(organicEnterMillis)) { -it / 28 } +
+456	                                scaleOut(tween(organicEnterMillis), targetScale = 1.008f)
 
 ... (output truncated to budget; the source above is complete and verbatim — treat it as already Read. For any area not covered, run another codegraph_explore with the specific names — do NOT Read these files.)
 
