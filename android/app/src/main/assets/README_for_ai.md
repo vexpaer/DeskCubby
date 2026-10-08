@@ -7,7 +7,9 @@
 > **For AI**: when the Agent grants the "App guide" source, only the `##` heading index (ids `section-N`, in document order) enters the context; it reads one `section-N` body on demand. Each `##` heading plus its `###` subheadings and prose is one section.
 
 
-本文对应 DeskCubby Android **0.23.7** 与 Windows **0.8.0**。平台专属操作会明确标出；未标注的既有编号章节描述 Android。
+本文对应 DeskCubby Android **0.24.0** 与 Windows **0.8.0**。平台专属操作会明确标出；未标注的既有编号章节描述 Android。
+
+Android 0.24.0 是一次视觉焕新：Material 标题改用衬线体并带纸张颗粒，Liquid Glass 用细字重大数字与真毛玻璃浮动底栏（Android 12+），三种风格各有底栏选中指示器、页面转场与弹簧动效，系统关闭动画时全部定格；主页顶栏改为随一天时间变化光线的大号日期；全新安装以「桌面」为启动页，旧用户在主页看到一次「认识你的桌面」卡片；桌面新增「收起今天」回顾，可选写入今日日记；新增全局「搜索与跳转」命令面板（Ctrl/⌘+K）与统计中心「年度像素」。同时 Health Connect 健康数据在缺少活动热量时回退读取总消耗热量。
 
 Android 0.23.7 新增独立「睡眠」统计：每台 Android 设备使用自己的稳定设备 ID 和本机 Usage Access 事件估算睡眠，手机与 Pad 不跨设备合并；支持 7/30/90 天及全部历史、手动修正和可选 `records/sleep` 云同步。健康页现在会在打开/手动刷新时重新核对最近 30 天、后台补采时核对最近 7 天，以接收 Health Connect 延迟写入的历史数据。吃历手动热量估算统一复用拍照后的单图 AI 链路并在完成后刷新页面；Agent 只允许真正支持原生 tool calling 的完整文字模型配置，不再静默退化为普通聊天。桌面小组件饮食拍照成功后明确返回系统桌面。
 

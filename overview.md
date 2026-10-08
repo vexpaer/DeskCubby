@@ -6,7 +6,7 @@ DeskCubby 是一个本地优先、可高度定制的个人记录应用，仓库�
 
 Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room 保存小巧思、分类、浏览记录、日期记录、诗词、AI 对话等数据。Windows 通过受限 Tauri IPC 让 Rust 后端访问用户选择的普通目录，并用 SQLite 保存核心结构化数据；React 前端不获得任意文件系统权限。Web 端以 FastAPI + SQLite 复刻 Android 的数据与业务语义：所有文件、AI 调用与敏感配置都留在服务端，浏览器只通过 `/api` 访问，API Key 与云凭据永不下发前端。
 
-两个客户端都提供 Material、Liquid Glass 和 Organic Future 三套预设视觉风格；Android 另有只映射到 Compose 主题角色的受控 Custom 风格。两端均支持简体中文/繁体中文/英文/韩语/日语、深浅色模式和字号缩放（Android 0.16.0 起支持五种语言；首次启动会先让用户选择语言）。当前版本为 Android **0.23.7**、Windows **0.8.0**。Android 当前应用备份格式为 v34（0.20.0 起：手动备份不再包含 AI API Key、SAF URI 与云凭据，新增 URI-free Agent 对话载荷）；Windows **0.8.0** 追赶 Android 数据类型进度：支持导入 Android v1–v33 并统一导出 v33（补齐 v30 Agent 来源授权/权限模式/模型工具能力、v31 AI 页面字号/回复框宽度/Agent 提示词/导航页列数与模块颜色、v32 桌面小卡片使用时间范围、v33 应用模块内容类型与云同步归一映射），Reader 内部状态 schema 升至 v5 并携带与 Android 一致的 0/5/…/95 页内偏移。注意：Windows 0.8.0 尚不支持导入 Android v34 JSON（需等待 Windows 侧跟进）。
+两个客户端都提供 Material、Liquid Glass 和 Organic Future 三套预设视觉风格；Android 另有只映射到 Compose 主题角色的受控 Custom 风格。两端均支持简体中文/繁体中文/英文/韩语/日语、深浅色模式和字号缩放（Android 0.16.0 起支持五种语言；首次启动会先让用户选择语言）。当前版本为 Android **0.24.0**、Windows **0.8.0**。Android 当前应用备份格式为 v34（0.20.0 起：手动备份不再包含 AI API Key、SAF URI 与云凭据，新增 URI-free Agent 对话载荷）；Windows **0.8.0** 追赶 Android 数据类型进度：支持导入 Android v1–v33 并统一导出 v33（补齐 v30 Agent 来源授权/权限模式/模型工具能力、v31 AI 页面字号/回复框宽度/Agent 提示词/导航页列数与模块颜色、v32 桌面小卡片使用时间范围、v33 应用模块内容类型与云同步归一映射），Reader 内部状态 schema 升至 v5 并携带与 Android 一致的 0/5/…/95 页内偏移。注意：Windows 0.8.0 尚不支持导入 Android v34 JSON（需等待 Windows 侧跟进）。
 
 ## 2. Android 技术栈
 
@@ -24,6 +24,8 @@ Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room
 | Markdown | CommonMark |
 | 网络 | `HttpURLConnection`（普通请求）、OkHttp（仅 WebDAV `PROPFIND`）、`org.json`、XmlPullParser |
 | 构建 | Gradle Kotlin DSL、JDK 17、compile/target SDK 36、min SDK 26 |
+
+Android 0.24.0 为界面视觉焕新（字体与纸张/毛玻璃材质、按风格动效、随时间变化的主页顶栏、以桌面为中心、「收起今天」回顾、命令面板与年度像素），并让 Health Connect 在缺少活动热量时回退读取总消耗热量；无 Room 与备份格式变化。
 
 Android 0.23.7 新增按设备独立的睡眠统计（Room v17 + 可选 `records/sleep` 记录同步），并修复 Health Connect 延迟历史回填、手动热量 AI 路由、Agent 原生工具模型校验及桌面小组件拍照返回栈；共享应用 JSON 备份继续保持 v34，不把 Android-only 睡眠导航/采集开关投影给尚未支持该枚举的 Windows/Web。
 
@@ -373,7 +375,7 @@ Windows 设置采用接近 Android 的层级：设置主页为「外观与语言
 
 ## 8. 最近完成的功能
 
-### Android 视觉焕新第一至四阶段（未发版）：字体、动效、主页主视觉、毛玻璃、以桌面为中心与命令面板
+### Android 0.24.0 视觉焕新：字体、动效、主页主视觉、毛玻璃、以桌面为中心与命令面板
 
 - 字体系统：`ui/theme/Type.kt` 不再是默认 `Typography()`。Material 采用「纸张」气质：display/headline 使用系统衬线（CJK 走设备 Noto Serif CJK 回退）并收紧字距；Liquid Glass 新增 `GlassTypography`，display 为细字重大数字、headline 为 Medium；Organic Future 保持原 `OrganicFutureTypography`。只使用系统字族，不打包字体文件；字号缩放仍经 `scaledTypography()`。`withTabularFigures()` 为计数数字开启等宽数字。
 - 动效语言：新增 `ui/theme/Motion.kt`。`DeskMotion` 按风格给出 leading/trailing/entrance/pop 弹簧与错落间隔（Material 利落无回弹、Liquid Glass 有回弹、Organic Future 舒缓）；`LocalReducedMotion` 由 `DeskCubbyTheme` 根据系统动画开关提供，所有装饰性动画在其为 true 时直接定格；`DeskHaptics`（`rememberDeskHaptics()`）经 `View.performHapticFeedback` 提供 confirm/tick，遵循系统触感设置。
