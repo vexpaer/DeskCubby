@@ -160,7 +160,6 @@ import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.organicFutureAccentColors
 import com.deskcubby.app.ui.theme.tr
 import com.deskcubby.app.ui.diary.filter.asComposeColorFilter
-import com.deskcubby.app.ui.diary.filter.mealCalendarExportLayout
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -501,7 +500,7 @@ fun MealCalendarScreen(
         }
     }
     val exportDocumentLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("image/png"),
+        ActivityResultContracts.CreateDocument("application/pdf"),
     ) { uri ->
         val start = pendingExportStartIso?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
         val end = pendingExportEndIso?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
@@ -561,7 +560,7 @@ fun MealCalendarScreen(
                         enabled = mealOperationsEnabled && filteredItems.isNotEmpty(),
                         onClick = { showExportRange = true },
                     ) {
-                        Icon(Icons.Outlined.FileDownload, tr("导出长图", "Export long image"))
+                        Icon(Icons.Outlined.FileDownload, tr("导出 PDF", "Export PDF"))
                     }
                     IconButton(onClick = { showCategoryFilter = true }) {
                         Icon(
@@ -820,10 +819,6 @@ fun MealCalendarScreen(
             "所选日期和餐别下没有照片",
             "No photos match this range and category filter",
         )
-        val tooTallError = tr(
-            "所选范围生成的长图过高，请缩短日期范围",
-            "The resulting image is too tall; choose a shorter range",
-        )
         if (defaultStart != null && defaultEnd != null) {
             MealCalendarExportRangeDialog(
                 initialStart = defaultStart,
@@ -836,18 +831,7 @@ fun MealCalendarScreen(
                         val date = runCatching { LocalDate.parse(day.dateIso) }.getOrNull()
                         date != null && !date.isBefore(start) && !date.isAfter(end)
                     }
-                    val preflightError = when {
-                        selectedDays.isEmpty() -> noPhotosError
-                        runCatching {
-                            mealCalendarExportLayout(
-                                photoCounts = selectedDays.map { it.photos.size },
-                                imageMaxHeight = settings.mealCalendarImageMaxHeightDp,
-                                showCaptions = settings.mealCalendarShowCaptions,
-                                photosPerRow = settings.mealCalendarPhotosPerRow,
-                            )
-                        }.isFailure -> tooTallError
-                        else -> null
-                    }
+                    val preflightError = if (selectedDays.isEmpty()) noPhotosError else null
                     if (preflightError == null) {
                         showExportRange = false
                         pendingExportStartIso = start.toString()
@@ -856,7 +840,7 @@ fun MealCalendarScreen(
                             .sortedBy(MealCategory::sortOrder)
                             .joinToString(",") { it.name }
                         exportDocumentLauncher.launch(
-                            "DeskCubby-meals-${start}_to_${end}.png",
+                            "DeskCubby-meals-${start}_to_${end}.pdf",
                         )
                     }
                     preflightError
@@ -971,13 +955,13 @@ private fun MealCalendarExportRangeDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(tr("导出吃历长图", "Export meal-calendar image")) },
+        title = { Text(tr("导出吃历 PDF", "Export meal-calendar PDF")) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     tr(
-                        "选择按天计算的时间范围，首尾日期都会包含。导出会沿用当前餐别筛选、照片滤镜、每行数量和说明显示设置。",
-                        "Choose an inclusive day range. The export uses the current meal-category filter, photo filter, row count, and caption setting.",
+                        "选择按天计算的时间范围，首尾日期都会包含，范围长度不限。PDF 按日期分组、两列排版，沿用当前餐别筛选与照片滤镜；没有照片的日期会跳过。",
+                        "Choose an inclusive day range of any length. The PDF groups photos by day in two columns and uses the current meal-category filter and photo filter; days without photos are skipped.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )

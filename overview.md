@@ -6,7 +6,7 @@ DeskCubby 是一个本地优先、可高度定制的个人记录应用，仓库�
 
 Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room 保存小巧思、分类、浏览记录、日期记录、诗词、AI 对话等数据。Windows 通过受限 Tauri IPC 让 Rust 后端访问用户选择的普通目录，并用 SQLite 保存核心结构化数据；React 前端不获得任意文件系统权限。Web 端以 FastAPI + SQLite 复刻 Android 的数据与业务语义：所有文件、AI 调用与敏感配置都留在服务端，浏览器只通过 `/api` 访问，API Key 与云凭据永不下发前端。
 
-两个客户端都提供 Material、Liquid Glass 和 Organic Future 三套预设视觉风格；Android 另有只映射到 Compose 主题角色的受控 Custom 风格。两端均支持简体中文/繁体中文/英文/韩语/日语、深浅色模式和字号缩放（Android 0.16.0 起支持五种语言；首次启动会先让用户选择语言）。当前版本为 Android **0.24.0**、Windows **0.8.0**。Android 当前应用备份格式为 v34（0.20.0 起：手动备份不再包含 AI API Key、SAF URI 与云凭据，新增 URI-free Agent 对话载荷）；Windows **0.8.0** 追赶 Android 数据类型进度：支持导入 Android v1–v33 并统一导出 v33（补齐 v30 Agent 来源授权/权限模式/模型工具能力、v31 AI 页面字号/回复框宽度/Agent 提示词/导航页列数与模块颜色、v32 桌面小卡片使用时间范围、v33 应用模块内容类型与云同步归一映射），Reader 内部状态 schema 升至 v5 并携带与 Android 一致的 0/5/…/95 页内偏移。注意：Windows 0.8.0 尚不支持导入 Android v34 JSON（需等待 Windows 侧跟进）。
+两个客户端都提供 Material、Liquid Glass 和 Organic Future 三套预设视觉风格；Android 另有只映射到 Compose 主题角色的受控 Custom 风格。两端均支持简体中文/繁体中文/英文/韩语/日语、深浅色模式和字号缩放（Android 0.16.0 起支持五种语言；首次启动会先让用户选择语言）。当前版本为 Android **0.24.1**、Windows **0.8.0**。Android 当前应用备份格式为 v34（0.20.0 起：手动备份不再包含 AI API Key、SAF URI 与云凭据，新增 URI-free Agent 对话载荷）；Windows **0.8.0** 追赶 Android 数据类型进度：支持导入 Android v1–v33 并统一导出 v33（补齐 v30 Agent 来源授权/权限模式/模型工具能力、v31 AI 页面字号/回复框宽度/Agent 提示词/导航页列数与模块颜色、v32 桌面小卡片使用时间范围、v33 应用模块内容类型与云同步归一映射），Reader 内部状态 schema 升至 v5 并携带与 Android 一致的 0/5/…/95 页内偏移。注意：Windows 0.8.0 尚不支持导入 Android v34 JSON（需等待 Windows 侧跟进）。
 
 ## 2. Android 技术栈
 
@@ -24,6 +24,8 @@ Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room
 | Markdown | CommonMark |
 | 网络 | `HttpURLConnection`（普通请求）、OkHttp（仅 WebDAV `PROPFIND`）、`org.json`、XmlPullParser |
 | 构建 | Gradle Kotlin DSL、JDK 17、compile/target SDK 36、min SDK 26 |
+
+Android 0.24.1 把吃历「导出长图」改为不限日期范围的两列 PDF 导出（`ui/diary/filter/MealCalendarPdfLayout.kt` 纯布局 + `data/repository/MealPdfWriter.kt` 流式写入）；无 Room 与备份格式变化。
 
 Android 0.24.0 为界面视觉焕新（字体与纸张/毛玻璃材质、按风格动效、随时间变化的主页顶栏、以桌面为中心、「收起今天」回顾、命令面板与年度像素），并让 Health Connect 在缺少活动热量时回退读取总消耗热量；无 Room 与备份格式变化。
 
@@ -208,7 +210,7 @@ Rust command boundary
 | 顶层导航与聚合页 | `ui/Navigation.kt`、`ui/components/PageTutorialOverlay.kt`、`ui/more/MoreHubScreen.kt` | `NavItemId` 定义主页面；默认开启的教学模式按稳定页面 ID 为主路由、嵌套路由、设置子页、阅读状态与具体小游戏各显示一次蒙版，确认只存设备本机；导航页按设置使用一列/两列/三列独立高度的瀑布流，平时卡片不显示手柄，长按模块进入布局更改模式后所有卡片出现四点手柄并可拖动排序，右上角对勾退出；每个模块可单独设置按钮底色、模块整体底色、名称和描述 |
 | 首页 | `ui/home/HomeScreen.kt`、`HomeHero.kt`、`HomeViewModel.kt`、`data/sync/AppCloudSyncService.kt` | 可配置模块、快速小巧思、饮食图片、日常记录；笔记入口、从八个小游戏/变体中自选的快捷入口和日记/小巧思/日期记录概览；24 条中性默认问候及可增删改的双语问候模板。饮食图片的交互忙碌状态只覆盖图片与今日日记的真实落盘，成功后立即恢复餐别按钮；可选 AI 热量估算与索引扫描继续后台执行，不再让页面持续转圈。首页的“立即同步”与“强制上传/下载”模块共享串行队列、进度、待确认 JSON 和持久化的最近完成结果；0.16.2 起完成后明确显示上传、下载与冲突文件数，进程重启后仍可见 |
 | Desk | `ui/desk/DeskScreen.kt`、`DeskViewModel.kt`、`ui/desk/components/`、`ui/desk/model/` | 个人数字桌面，把今天留下的日记、小巧思、照片、事件和痕迹摊成一张编辑式「桌面」而非列表；只用现有 repository/DAO 聚合（`DiaryIndexDao`、`FlashThoughtDao`、`DateRecordDao`、`DiaryFileRepository.scanMealCalendar`/`load`），不新建数据系统。日期即页面标题，Diary 是带轻高度与微小旋转的「纸张」主对象，Idea/Photo 各自极简呈现，Today Traces 用排版而非卡片建立层级；右上角 ✦ 打开轻量 AI 浮层并转入既有 AI 页，底部低调 `+` 展开 Quick Capture 到既有创建流程；内容随当天数据动态改变信息层级，无数据时留白即空状态。对象旋转与选择用日期+内容 ID 生成可重现 seed，早晨/午后/傍晚/深夜仅做极轻微环境色倾移 |
-| 日记与吃历 | `ui/diary/DiaryScreens.kt`、`DiaryViewModel.kt`、`data/repository/DefaultDiaryFolderSetup.kt`、`ui/components/MarkdownPreview.kt` | 未配置日记目录时可由用户在系统 SAF 选择器确认本机 Documents，一次创建并绑定 `Documents/deskcubby/diary` 与 `Documents/deskcubby/media`，也保留手动选择入口；`DiaryFileRepository` 负责 SAF、SHA 冲突、媒体、回收站、索引、预览照片地点和按日范围导出吃历 PNG 长图；Markdown 源码普通文字使用完整编辑宽度，删除/拖动控件仅在独占媒体行尾部局部覆盖；吃历用单次 SAF 子项元数据快照同时建立日记/媒体索引，返回嵌套页面时复用已加载结果，内部日记变更用进程内 revision 失效；共享预览保留 CommonMark 块级/行内格式并按 H1–H6 设置应用独立字号；手动热量估算按日期串行，每张图片复用拍照后自动估算的“图片识别 → 文字估算”调用链，整日所选图片全部成功后再一次性保存，不部分写入；运行卡显示当前图片的识别/估算阶段；`dc-media.json` v2 用输入上限、previous/pending 与回读校验保护更新 |
+| 日记与吃历 | `ui/diary/DiaryScreens.kt`、`DiaryViewModel.kt`、`data/repository/DefaultDiaryFolderSetup.kt`、`ui/components/MarkdownPreview.kt` | 未配置日记目录时可由用户在系统 SAF 选择器确认本机 Documents，一次创建并绑定 `Documents/deskcubby/diary` 与 `Documents/deskcubby/media`，也保留手动选择入口；`DiaryFileRepository` 负责 SAF、SHA 冲突、媒体、回收站、索引、预览照片地点和按日范围导出吃历 PDF；Markdown 源码普通文字使用完整编辑宽度，删除/拖动控件仅在独占媒体行尾部局部覆盖；吃历用单次 SAF 子项元数据快照同时建立日记/媒体索引，返回嵌套页面时复用已加载结果，内部日记变更用进程内 revision 失效；共享预览保留 CommonMark 块级/行内格式并按 H1–H6 设置应用独立字号；手动热量估算按日期串行，每张图片复用拍照后自动估算的“图片识别 → 文字估算”调用链，整日所选图片全部成功后再一次性保存，不部分写入；运行卡显示当前图片的识别/估算阶段；`dc-media.json` v2 用输入上限、previous/pending 与回读校验保护更新 |
 | 笔记 | `ui/notes/`、`data/repository/NotesRepository.kt`、`ui/components/MarkdownPreview.kt` | SAF 直接打开用户选择的 Obsidian 笔记库，文件夹优先、按名称顺序列出 Markdown；支持新建/重命名/删除文件夹和笔记、自动保存、SHA-256 外部修改冲突的加载/覆盖/另存副本；兼容标准 Markdown 图片与 `![[Wiki 嵌入]]`，每次上传媒体都由用户重新选择当前笔记库内的目标文件夹并写入可移植相对链接；不复用日记媒体目录、不建立日期索引 |
 | 阅读 | `ui/reader/`、`data/repository/ReaderRepository.kt`、`data/sync/ReaderProgressJsonCodec.kt`、`data/statistics/EngagementTimeRepository.kt` | SAF 持久读取 TXT/PDF；增强视图使用 PDFium（`io.legere:pdfiumandroid:1.0.35`），通过 SAF 文件描述符直接打开且不复制原书，提供连续纵向按需渲染、缩放、页码、双色映射、文字搜索跳页与文本目录扫描，失败时安全切换系统 `PdfRenderer` 连续兼容视图。0.13.1 将 TXT、增强 PDF 与兼容 PDF 的本机恢复位置细化为页内 5%，约 600ms 防抖并在离开时检查点保存；0.13.2 让纯净模式控件悬浮覆盖固定正文平面，并把 engagement 私有文件升至 schema v2，为已有时长的书保留最后书名。0.15.0 把 PDF 双指缩放改为矩阵实时变换：手势期间内容围绕捏合中心实时跟随手指且不重新渲染，手势结束后才提交最终比例并重新渲染页面。0.16.0 让提交后按捏合中心锚定滚动位置，重载后的页面与松手时大小、位置一致；缩放滑杆按 1% 步进。0.16.3 用共享 `ReaderPdfContinuousViewport` 彻底替换增强/兼容视图各自的 nested-scroll 补丁：在方向锁定前读取原始 X 并独立结算横移，Y 继续交给 `LazyColumn` 以保留纵向惯性，单指斜向或画圈仍会同时移动两轴，任一轴到边界不吞另一轴；双指接管同一二维移动并增加围绕质心的即时缩放。专用 `ReaderPdfPageViewport` 继续以非约束测量让 100% 以上按目标像素宽度真实渲染，缩到视口内则居中并清除旧横向偏移。PDF 自动封面先取已验证缓存/提供方缩略图，缺失时再串行受限渲染第一页；封面文字可独立编辑、隐藏或恢复书名。Reader schema-v8 兼容 v1–v7；封面文字、更细偏移、书名和时长只留在 Android 私有状态，v33 与可选 `reading/v1/progress.json` 继续按原有页/段字段和完整文件 SHA-256+类型合并，不携带书名、URI、封面、正文或时长 |
 | 吃历滤镜 | `ui/diary/filter/`、`data/model/MealPhotoFilterSettings.kt` | 统一亮度、对比度、饱和度、色温和色调；仅改变 Compose 显示，不改原图 |
@@ -374,6 +376,13 @@ Windows 使用独立的左侧竖栏，不复用 Android 的底部导航配置。
 Windows 设置采用接近 Android 的层级：设置主页为「外观与语言」「子页面设置」「应用数据」「桌面导航」「关于」；子页面设置覆盖主页、日记/媒体/标题字号、小巧思、诗词/吃历、收藏夹、AI、手机使用时间与健康的桌面边界说明；应用数据进入 v29/自动备份与 WebDAV/S3；关于进入检查更新。「桌面导航」允许全部 18 页逐项显隐、同类排序或移动分类，并支持分类中英文名、新建、排序和删除；删除分类时页面迁移到相邻分类，最后一个分类禁止删除。隐藏当前页会回退到首个可见页，全部隐藏仍可进入设置；隐藏页仍能从导航聚合页或相关业务入口打开。搜索结果可直接到目标子页，任一可编辑子页仍遵守本地草稿、右上角保存、恢复本页默认值和 dirty 离开确认。
 
 ## 8. 最近完成的功能
+
+### Android 0.24.1 吃历导出改为 PDF
+
+- 吃历顶栏「导出长图」改为「导出 PDF」；开始/结束日期与「选择保存位置」对话框流程不变，但移除了长图高度/像素预检，范围长度不限。`CreateDocument` 改为 `application/pdf`，默认文件名 `DeskCubby-meals-开始_to_结束.pdf`。
+- `ui/diary/filter/MealCalendarPdfLayout.kt`（替代 `MealCalendarExportLayout.kt`）是纯 Kotlin 布局：A4（595×842pt）、12pt 页边距、两列瀑布流，照片保持宽高比（0.35×列宽 ~ 一页可用高度之间，超出部分居中裁切），每张放入 (页, y) 更小的列。每天先在两列各自游标处放一条虚线分隔带；两段同页且高度不同时在中缝用竖线连成台阶。日期标签放在「到下一条分隔线（最后一天到列尾）」线性距离更大的一列，相等取左列；两段跨页且另一列有当天照片时另一段也标日期；某列当天照片跨页时在新页列顶加一条带日期的续接线；一天中某列的首张照片放不下时，该列分隔线随照片移到新页。`mealPdfPageContent()` 生成每页内容流（图片 `Do`、损坏图占位矩形、`[3 2]` 灰色虚线、Helvetica 日期）。
+- `data/repository/MealPdfWriter.kt` 是最小 PDF 1.4 流式写入器：对象写出即落盘，只在内存保留偏移表；可预留对象号，`finish()` 在有对象缺失时失败关闭。`DiaryFileRepository.exportMealCalendarPdf()` 先按日期升序筛出有所选餐别照片的日期（没有照片的日期跳过），只读取每张图的边界与 EXIF 方向计算宽高比，再逐张解码 → 居中裁切 → 套照片滤镜 → JPEG（DCTDecode，2.5× 像素密度）写入缓存 PDF；用 `PdfRenderer` 校验页数后复制到 SAF 目标并回读 SHA-256 校验，失败删除已创建文档与缓存。
+- 单元测试：`MealCalendarPdfLayoutTest`（台阶分隔线、标签选列与平局、2000 天分页不越界、跨页续接日期、内容流）与 `MealPdfWriterTest`（xref 偏移、缺失/重复对象失败关闭）。
 
 ### Android 0.24.0 视觉焕新：字体、动效、主页主视觉、毛玻璃、以桌面为中心与命令面板
 
@@ -896,7 +905,7 @@ cd .\windows
 - AI 使用非流式 OpenAI-compatible chat/completions 接口；聊天图片和图片识别使用 `image_url` data URL。服务商及所选聊天模型需兼容这种多模态消息格式。思考面板只显示服务端明确返回或用 `<think>` 标记的内容。
 - AI 上下文不是“只在本机分析”：只有用户点发送后，所选条目的冻结快照才会发往当前模型端点，并会随该会话后续请求复用。上下文条目最多 50 项、单项 64 KiB、总计 256 KiB，超限不会自动截断。
 - 自动热量属于 AI 估算值，不是医学或营养测量；当前单张待识别图片限制 8 MiB，请优先开启饮食图片压缩。
-- 吃历长图采用固定安全宽度并在分配 Bitmap 前限制高度和总像素；日期范围过大时需分成多次导出。缺失或损坏的照片会以占位块呈现，避免整次导出无提示失败。
+- 吃历导出为流式 PDF（0.24.1 起取代 PNG 长图），内存占用与日期范围长度无关；缺失或损坏的照片会以占位块呈现，避免整次导出无提示失败。
 - 手机使用时间依赖 Android UsageEvents 提供的应用前后台、熄屏和锁屏事件，按当前时区重建前台会话并切分自然日；统计口径和系统设置中的厂商统计可能不同。首次采集会尽力回填系统仍保留且事件流边界完整的历史，但系统已清理的数据或最老的截断日无法恢复；当天事件不可用时只回退查询当天汇总。
 - Windows 手机使用时间只接受用户显式选择的兼容文件或从已启用的专用云 usage 对象下载多设备历史。快照不会随原文件变化；只读链接仅在用户手动刷新时重读。Windows 不采集、不上传，失败保留上次有效快照；不可信应用 label/icon 会回退为包名和通用图标。
 - 健康统计只读取 Health Connect 中已有的步数、距离和活动热量聚合值；未安装、未授权、不可用或读取失败时不会改用系统计步传感器，也不会写入伪造的 0。
