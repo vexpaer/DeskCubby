@@ -380,7 +380,7 @@ Windows 设置采用接近 Android 的层级：设置主页为「外观与语言
 ### Android 0.24.1 吃历导出改为 PDF
 
 - 吃历顶栏「导出长图」改为「导出 PDF」；开始/结束日期与「选择保存位置」对话框流程不变，但移除了长图高度/像素预检，范围长度不限。`CreateDocument` 改为 `application/pdf`，默认文件名 `DeskCubby-meals-开始_to_结束.pdf`。
-- `ui/diary/filter/MealCalendarPdfLayout.kt`（替代 `MealCalendarExportLayout.kt`）是纯 Kotlin 布局：A4（595×842pt）、12pt 页边距、两列瀑布流，照片保持宽高比（0.35×列宽 ~ 一页可用高度之间，超出部分居中裁切），每张放入 (页, y) 更小的列。每天先在两列各自游标处放一条虚线分隔带；两段同页且高度不同时在中缝用竖线连成台阶。日期标签放在「到下一条分隔线（最后一天到列尾）」线性距离更大的一列，相等取左列；两段跨页且另一列有当天照片时另一段也标日期；某列当天照片跨页时在新页列顶加一条带日期的续接线；一天中某列的首张照片放不下时，该列分隔线随照片移到新页。`mealPdfPageContent()` 生成每页内容流（图片 `Do`、损坏图占位矩形、`[3 2]` 灰色虚线、Helvetica 日期）。
+- `ui/diary/filter/MealCalendarPdfLayout.kt`（替代 `MealCalendarExportLayout.kt`）是纯 Kotlin 布局：A4（595×842pt）、12pt 页边距、两列瀑布流，照片保持宽高比（0.35×列宽 ~ 一页可用高度之间，超出部分居中裁切），每张放入 (页, y) 更小的列。每天先在两列各自游标处放一条虚线分隔带；两段同页且高度不同时在中缝用竖线连成台阶。日期标签只在含当天照片的列中选，取「到下一条分隔线（最后一天到列尾）」线性距离更大的一列，相等取左列；两段跨页且另一列有当天照片时另一段也标日期；某列当天照片跨页时在新页列顶加一条带日期的续接线；一天中某列的首张照片放不下时，该列分隔线随照片移到新页。`mealPdfPageContent()` 生成每页内容流（图片 `Do`、损坏图占位矩形、`[3 2]` 灰色虚线、Helvetica 日期）。
 - `data/repository/MealPdfWriter.kt` 是最小 PDF 1.4 流式写入器：对象写出即落盘，只在内存保留偏移表；可预留对象号，`finish()` 在有对象缺失时失败关闭。`DiaryFileRepository.exportMealCalendarPdf()` 先按日期升序筛出有所选餐别照片的日期（没有照片的日期跳过），只读取每张图的边界与 EXIF 方向计算宽高比，再逐张解码 → 居中裁切 → 套照片滤镜 → JPEG（DCTDecode，2.5× 像素密度）写入缓存 PDF；用 `PdfRenderer` 校验页数后复制到 SAF 目标并回读 SHA-256 校验，失败删除已创建文档与缓存。
 - 单元测试：`MealCalendarPdfLayoutTest`（台阶分隔线、标签选列与平局、2000 天分页不越界、跨页续接日期、内容流）与 `MealPdfWriterTest`（xref 偏移、缺失/重复对象失败关闭）。
 

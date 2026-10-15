@@ -165,6 +165,34 @@ class MealCalendarPdfLayoutTest {
                 .map { it.page }
             assertTrue(photo.page in labelledPages)
         }
+        layout.separators.forEach { separator ->
+            assertTrue(
+                layout.photos.any {
+                    it.dayIndex == separator.dayIndex && it.column == separator.labelColumn
+                },
+            )
+        }
+    }
+
+    @Test
+    fun labelNeverSitsAboveAColumnWithoutThatDaysPhotos() {
+        val layout = mealCalendarPdfLayout(
+            listOf(
+                MealPdfDayInput("2026-10-01", listOf(0.3f, 0.4f, 2.6f, 1.0f)),
+                MealPdfDayInput("2026-10-02", listOf(0.75f)),
+                MealPdfDayInput("2026-10-03", listOf(0.4f, 2.6f, 0.4f)),
+                MealPdfDayInput("2026-10-04", listOf(0.75f)),
+                MealPdfDayInput("2026-10-05", listOf(2.6f, 1.6f)),
+            ),
+        )
+
+        layout.separators.forEach { separator ->
+            assertTrue(
+                layout.photos.any {
+                    it.dayIndex == separator.dayIndex && it.column == separator.labelColumn
+                },
+            )
+        }
     }
 
     @Test

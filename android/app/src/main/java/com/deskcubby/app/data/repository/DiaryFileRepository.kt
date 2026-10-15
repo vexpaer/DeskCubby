@@ -41,8 +41,8 @@ import com.deskcubby.app.ui.diary.filter.MealPdfLayout
 import com.deskcubby.app.ui.diary.filter.isDateInMealExportRange
 import com.deskcubby.app.ui.diary.filter.mealCalendarPdfLayout
 import com.deskcubby.app.ui.diary.filter.mealPdfPageContent
-import com.deskcubby.app.ui.diary.filter.pdfNumber
 import com.deskcubby.app.ui.diary.filter.mealPhotoFilterMatrix
+import com.deskcubby.app.ui.diary.filter.pdfNumber
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -1160,13 +1160,17 @@ class DiaryFileRepository @Inject constructor(
         val staleBefore = System.currentTimeMillis() - MEAL_EXPORT_CACHE_MAX_AGE_MS
         val canonicalDirectory = runCatching { directory.canonicalFile }.getOrNull() ?: return
         directory.listFiles().orEmpty().forEach { candidate ->
-            val ownedTemporaryPng =
+            // 0.24.0 and earlier left PNG caches with the same prefix; clean those up too.
+            val ownedTemporaryExport =
                 candidate.isFile &&
                     candidate.name.startsWith(MEAL_EXPORT_CACHE_PREFIX) &&
-                    candidate.name.endsWith(MEAL_EXPORT_CACHE_SUFFIX, ignoreCase = true) &&
+                    (
+                        candidate.name.endsWith(MEAL_EXPORT_CACHE_SUFFIX, ignoreCase = true) ||
+                            candidate.name.endsWith(".png", ignoreCase = true)
+                        ) &&
                     runCatching { candidate.canonicalFile.parentFile == canonicalDirectory }
                         .getOrDefault(false)
-            if (ownedTemporaryPng && candidate.lastModified() <= staleBefore) {
+            if (ownedTemporaryExport && candidate.lastModified() <= staleBefore) {
                 runCatching { candidate.delete() }
             }
         }

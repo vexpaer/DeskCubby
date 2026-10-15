@@ -177,7 +177,14 @@ internal fun mealCalendarPdfLayout(
                 ?: linear(cursorPage[column], cursorY[column])
             end - start
         }
-        val labelColumn = if (distances[1] > distances[0]) 1 else 0
+        // Only a column that actually holds this day's photos may carry the date.
+        val hasPhotos = photoColumnsPerDay[dayIndex]
+        val labelColumn = when {
+            !hasPhotos[0] -> 1
+            !hasPhotos[1] -> 0
+            distances[1] > distances[0] -> 1
+            else -> 0
+        }
         val otherColumn = 1 - labelColumn
         MealPdfSeparator(
             dayIndex = dayIndex,
