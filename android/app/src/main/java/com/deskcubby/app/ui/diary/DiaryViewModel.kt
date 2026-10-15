@@ -531,7 +531,7 @@ class DiaryViewModel @Inject constructor(
         val selectedCategories = categories.toSet()
         viewModelScope.launch {
             try {
-                val result = repository.exportMealCalendarPng(
+                val result = repository.exportMealCalendarPdf(
                     destinationUri = destinationUri,
                     settings = settings.value,
                     startInclusive = startInclusive,
@@ -539,8 +539,8 @@ class DiaryViewModel @Inject constructor(
                     categories = selectedCategories,
                 )
                 _message.value = localized(
-                    "已导出 ${result.dayCount} 天、${result.photoCount} 张照片",
-                    "Exported ${result.photoCount} photos across ${result.dayCount} days",
+                    "已导出 PDF：${result.dayCount} 天、${result.photoCount} 张照片，共 ${result.pageCount} 页",
+                    "Exported a ${result.pageCount}-page PDF with ${result.photoCount} photos across ${result.dayCount} days",
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
