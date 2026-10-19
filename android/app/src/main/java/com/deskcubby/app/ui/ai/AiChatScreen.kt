@@ -259,8 +259,8 @@ fun AiChatScreen(
                     else tr("先配置 Agent 模型", "Configure an Agent model first"),
                     description = if (configured) {
                         tr(
-                            "Agent 只能访问你授权的数据源；每项修改都会记录，可在 Review 中撤回。",
-                            "The Agent can access only sources you authorize; every change is recorded and can be undone in Review.",
+                            "Agent 只能访问你授权的数据源；修改遵守审批模式并记录在 Review 中，可在安全时撤回。",
+                            "The Agent can access only sources you authorize; changes follow the approval mode and are recorded in Review, where they can be undone when safe.",
                         )
                     } else {
                         tr(

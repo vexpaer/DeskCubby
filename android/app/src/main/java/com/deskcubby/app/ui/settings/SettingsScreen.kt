@@ -2627,8 +2627,8 @@ private fun BackupSettingsPage(
             SettingsSection(
                 tr("备份与恢复", "Backup & restore"),
                 info = tr(
-                    "JSON 备份包含小巧思及分类、日期记录、诗词及分类、收藏夹加密数据、游戏存档与统计、阅读进度、RSS 订阅和可迁移的设置。不包含日记、笔记、媒体与书籍原文件，也不包含缓存、权限、本地目录、云凭据或 AI API Key。备份只在点击导出时生成，云同步不使用这个文件。",
-                    "The JSON backup includes thoughts and categories, date records, poems and categories, encrypted Vault data, game saves and statistics, reading progress, RSS subscriptions, and portable settings. It excludes diary, note, media, and book files, as well as cache, permissions, local folders, cloud credentials, and AI API keys. A backup is created only when you export; cloud sync never uses this file.",
+                    "JSON 备份包含小巧思及分类、日期记录、诗词及分类、收藏夹加密数据、游戏存档与战绩、多设备使用时间、阅读进度、RSS 订阅和可迁移的设置。不包含日记、笔记、媒体与书籍原文件，也不包含健康历史、阅读与游戏累计时长、背景图片文件、缓存、权限、本地目录、云凭据或 AI API Key。备份只在点击导出时生成，云同步不使用这个文件。",
+                    "The JSON backup includes thoughts and categories, date records, poems and categories, encrypted Vault data, game saves and records, multi-device screen time, reading progress, RSS subscriptions, and portable settings. It excludes diary, note, media, and book files, as well as health history, total reading and play time, background image files, cache, permissions, local folders, cloud credentials, and AI API keys. A backup is created only when you export; cloud sync never uses this file.",
                 ),
             ) {
                 Button(
@@ -6422,7 +6422,7 @@ private fun LegacySingleAiSettingsPage(
                     Text(tr("清除已保存的密钥", "Clear saved key"))
                 }
                 Text(
-                    tr("密钥会以明文随配置保存，并写入 DeskCubby JSON 备份。", "The key is stored as plain text with the configuration and included in DeskCubby JSON backups."),
+                    tr("明文保存在本机，编辑时可见；不会写入 JSON 备份。", "Stored as plain text on this device and shown when editing; not included in JSON backups."),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

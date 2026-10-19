@@ -311,8 +311,8 @@ private fun ReaderLibrary(
                 icon = Icons.Outlined.WarningAmber,
                 title = tr("书架状态需要修复", "Library state needs repair"),
                 description = tr(
-                    "书架记录无法读取，已停止写入以保护数据；原书文件未改动。",
-                    "The library record can't be read, so writing has stopped to protect your data; book files are untouched.",
+                    "书架记录无法读取或无法安全保存，已停止写入以保护数据；原书文件未改动。",
+                    "The library record can't be read or safely saved, so writing has stopped to protect your data; book files are untouched.",
                 ),
                 modifier = Modifier.fillMaxSize().padding(inner),
             )
