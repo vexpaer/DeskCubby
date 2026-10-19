@@ -1179,8 +1179,8 @@ private fun PoetryPresetPickerDialog(
             ) {
                 Text(
                     tr(
-                        "按教材册次导入；重复导入会跳过已有内容。教材版本调整时篇目可能有差异。",
-                        "Import by textbook volume. Existing entries are skipped; selections can vary by edition.",
+                        "按教材册次导入，已有内容会跳过。",
+                        "Import by textbook volume; existing poems are skipped.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

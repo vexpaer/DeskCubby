@@ -270,8 +270,8 @@ fun UsageStatisticsScreen(
                     StatisticsMessagePanel(
                         title = tr("还没有使用记录", "No usage records yet"),
                         message = tr(
-                            "今天的数据会保持实时状态，过去日期完整读取成功后才会日结。",
-                            "Today stays live; a past day is finalized only after a complete successful read.",
+                            "今天的数据实时更新。",
+                            "Today's data updates live.",
                         ),
                     )
                 }
@@ -334,8 +334,8 @@ fun UsageStatisticsScreen(
                     supportingText = {
                         Text(
                             tr(
-                                "名称会随使用时间同步，随机设备 ID 不会因改名而变化。",
-                                "The name syncs with screen time; the random device ID stays unchanged.",
+                                "名称会随使用时间一起同步。",
+                                "The name syncs along with screen time.",
                             ),
                         )
                     },
@@ -385,8 +385,8 @@ private fun UsageDevicePanel(
             )
             Text(
                 tr(
-                    "每台 Android 设备只采集自己的记录。云同步中勾选“多设备使用时间”后，可在这里查看其他设备；“所有设备”会按日期相加。",
-                    "Each Android device collects only its own history. Select “Multi-device screen time” in cloud sync to view other devices here; “All devices” sums them by date.",
+                    "在云同步中勾选“多设备使用时间”后可查看其他设备；“所有设备”按日期相加。",
+                    "Enable multi-device screen time in cloud sync to see other devices; “All devices” adds them by date.",
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -470,8 +470,8 @@ private fun UsageCollectionMessage(
         !state.enabled -> StatisticsMessagePanel(
             title = tr("统计已关闭", "Tracking is off"),
             message = tr(
-                "开启后，统计只保存在应用私有数据库中；关闭不会删除已有历史。",
-                "When enabled, data stays in the app-private database. Turning it off keeps existing history.",
+                "开启后数据仅保存在本机；关闭不删除历史。",
+                "Data stays on this device; turning it off keeps history.",
             ),
             actionLabel = tr("打开使用时间设置", "Open tracking settings"),
             onAction = onOpenTrackingSettings,
@@ -481,8 +481,8 @@ private fun UsageCollectionMessage(
             StatisticsMessagePanel(
                 title = tr("需要“使用情况访问权限”", "Usage access required"),
                 message = tr(
-                    "Android 不会弹出普通权限框。请在系统“使用情况访问权限”中允许 DeskCubby，然后返回此页。",
-                    "Android uses a special settings page for Usage Access. Allow DeskCubby there, then return.",
+                    "请在系统“使用情况访问权限”中允许 DeskCubby，然后返回此页。",
+                    "Allow DeskCubby under the system's Usage access, then return here.",
                 ),
                 actionLabel = tr("打开系统设置", "Open system settings"),
                 onAction = onRequestUsageAccess,
@@ -492,8 +492,8 @@ private fun UsageCollectionMessage(
             StatisticsMessagePanel(
                 title = tr("本次读取失败", "This refresh failed"),
                 message = tr(
-                    "失败日期不会被标记为已日结，稍后可以安全重试。",
-                    "The failed date was not finalized and can be retried safely.",
+                    "失败的日期稍后可重试。",
+                    "Failed days can be retried later.",
                 ),
                 actionLabel = tr("重试", "Retry"),
                 onAction = onRetry,

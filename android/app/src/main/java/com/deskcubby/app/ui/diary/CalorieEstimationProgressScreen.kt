@@ -99,8 +99,8 @@ fun CalorieEstimationProgressScreen(
                 icon = Icons.Outlined.Calculate,
                 title = tr("还没有估算任务", "No estimation tasks yet"),
                 description = tr(
-                    "在吃历中点按计算按钮加入任务；长按该按钮可随时回到这里。",
-                    "Tap the calculate button in the meal calendar to add work; long-press it to return here.",
+                    "在吃历中点按计算按钮加入任务，长按可回到这里。",
+                    "Tap calculate in the meal calendar to add work; long-press it to return here.",
                 ),
                 modifier = Modifier
                     .fillMaxSize()
@@ -211,12 +211,7 @@ private fun CalorieQueueSummary(state: CalorieEstimationQueueState) {
                 )
             } else {
                 Text(
-                    tr(
-                        "手动计算按日期串行；每张图片都使用与拍照后自动估算相同的“图片识别 → 文字估算”链路，整日完成后只保存一次；中途结果不会部分写入。",
-                        "Manual estimation is serialized by date. Every photo uses the same image-recognition " +
-                            "then text-estimation path as automatic post-capture estimation, and the day is saved " +
-                            "only after all selected photos succeed.",
-                    ),
+                    tr("整日所有图片完成后才会保存。", "A day is saved only after all its photos finish."),
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

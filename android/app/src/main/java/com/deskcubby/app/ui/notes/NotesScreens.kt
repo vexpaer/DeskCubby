@@ -184,8 +184,8 @@ fun NotesScreen(
                     icon = Icons.Outlined.FolderOpen,
                     title = tr("选择笔记库", "Choose a notes vault"),
                     description = tr(
-                        "选择 Obsidian 仓库或普通文件夹。Markdown 正文和媒体仍是目录中的真实文件。",
-                        "Choose an Obsidian vault or a regular folder. Markdown and media remain real files in that folder.",
+                        "选择 Obsidian 仓库或普通文件夹。",
+                        "Choose an Obsidian vault or any folder.",
                     ),
                     actionLabel = tr("选择文件夹", "Choose folder"),
                     onAction = { rootPicker.launch(null) },
@@ -224,8 +224,8 @@ fun NotesScreen(
                             icon = Icons.Outlined.Description,
                             title = tr("这个文件夹是空的", "This folder is empty"),
                             description = tr(
-                                "可新建 Markdown 笔记或子文件夹。非 Markdown 文件会保留在磁盘上，但不出现在列表中。",
-                                "Create a Markdown note or subfolder. Non-Markdown files remain on disk but are not listed here.",
+                                "可新建 Markdown 笔记或子文件夹；非 Markdown 文件不会显示。",
+                                "Create Markdown notes or subfolders; non-Markdown files are hidden.",
                             ),
                             modifier = Modifier.fillMaxSize(),
                         )

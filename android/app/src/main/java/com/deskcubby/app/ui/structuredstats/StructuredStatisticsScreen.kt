@@ -474,7 +474,7 @@ private fun NewMetricDialog(
                     onExpandedChange = { startExpanded = it },
                 )
                 Text(
-                    tr("结果类型为时长。缺失任一端值时该日结果为 null，不会当作 0。", "Result type is duration. Missing either end yields null for that day, never 0."),
+                    tr("结果为时长；缺少任一端时当天留空，不计为 0。", "The result is a duration; a day missing either end stays blank, not 0."),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

@@ -6,7 +6,7 @@ DeskCubby 是一个本地优先、可高度定制的个人记录应用，仓库�
 
 Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room 保存小巧思、分类、浏览记录、日期记录、诗词、AI 对话等数据。Windows 通过受限 Tauri IPC 让 Rust 后端访问用户选择的普通目录，并用 SQLite 保存核心结构化数据；React 前端不获得任意文件系统权限。Web 端以 FastAPI + SQLite 复刻 Android 的数据与业务语义：所有文件、AI 调用与敏感配置都留在服务端，浏览器只通过 `/api` 访问，API Key 与云凭据永不下发前端。
 
-两个客户端都提供 Material、Liquid Glass 和 Organic Future 三套预设视觉风格；Android 另有只映射到 Compose 主题角色的受控 Custom 风格。两端均支持简体中文/繁体中文/英文/韩语/日语、深浅色模式和字号缩放（Android 0.16.0 起支持五种语言；首次启动会先让用户选择语言）。当前版本为 Android **0.24.1**、Windows **0.8.0**。Android 当前应用备份格式为 v34（0.20.0 起：手动备份不再包含 AI API Key、SAF URI 与云凭据，新增 URI-free Agent 对话载荷）；Windows **0.8.0** 追赶 Android 数据类型进度：支持导入 Android v1–v33 并统一导出 v33（补齐 v30 Agent 来源授权/权限模式/模型工具能力、v31 AI 页面字号/回复框宽度/Agent 提示词/导航页列数与模块颜色、v32 桌面小卡片使用时间范围、v33 应用模块内容类型与云同步归一映射），Reader 内部状态 schema 升至 v5 并携带与 Android 一致的 0/5/…/95 页内偏移。注意：Windows 0.8.0 尚不支持导入 Android v34 JSON（需等待 Windows 侧跟进）。
+两个客户端都提供 Material、Liquid Glass 和 Organic Future 三套预设视觉风格；Android 另有只映射到 Compose 主题角色的受控 Custom 风格。两端均支持简体中文/繁体中文/英文/韩语/日语、深浅色模式和字号缩放（Android 0.16.0 起支持五种语言；首次启动会先让用户选择语言）。当前版本为 Android **0.24.2**、Windows **0.8.0**。Android 当前应用备份格式为 v34（0.20.0 起：手动备份不再包含 AI API Key、SAF URI 与云凭据，新增 URI-free Agent 对话载荷）；Windows **0.8.0** 追赶 Android 数据类型进度：支持导入 Android v1–v33 并统一导出 v33（补齐 v30 Agent 来源授权/权限模式/模型工具能力、v31 AI 页面字号/回复框宽度/Agent 提示词/导航页列数与模块颜色、v32 桌面小卡片使用时间范围、v33 应用模块内容类型与云同步归一映射），Reader 内部状态 schema 升至 v5 并携带与 Android 一致的 0/5/…/95 页内偏移。注意：Windows 0.8.0 尚不支持导入 Android v34 JSON（需等待 Windows 侧跟进）。
 
 ## 2. Android 技术栈
 
@@ -24,6 +24,8 @@ Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room
 | Markdown | CommonMark |
 | 网络 | `HttpURLConnection`（普通请求）、OkHttp（仅 WebDAV `PROPFIND`）、`org.json`、XmlPullParser |
 | 构建 | Gradle Kotlin DSL、JDK 17、compile/target SDK 36、min SDK 26 |
+
+Android 0.24.2 精简全应用的界面说明文字：常驻说明压缩为一行、去掉实现术语，次要说明收进 `ui/components/InfoHint.kt` 的 ⓘ 弹窗；`AppTranslationsCoverageTest` 守护繁中/韩/日翻译覆盖；无 Room 与备份格式变化。
 
 Android 0.24.1 把吃历「导出长图」改为不限日期范围的两列 PDF 导出（`ui/diary/filter/MealCalendarPdfLayout.kt` 纯布局 + `data/repository/MealPdfWriter.kt` 流式写入）；无 Room 与备份格式变化。
 
@@ -376,6 +378,17 @@ Windows 使用独立的左侧竖栏，不复用 Android 的底部导航配置。
 Windows 设置采用接近 Android 的层级：设置主页为「外观与语言」「子页面设置」「应用数据」「桌面导航」「关于」；子页面设置覆盖主页、日记/媒体/标题字号、小巧思、诗词/吃历、收藏夹、AI、手机使用时间与健康的桌面边界说明；应用数据进入 v29/自动备份与 WebDAV/S3；关于进入检查更新。「桌面导航」允许全部 18 页逐项显隐、同类排序或移动分类，并支持分类中英文名、新建、排序和删除；删除分类时页面迁移到相邻分类，最后一个分类禁止删除。隐藏当前页会回退到首个可见页，全部隐藏仍可进入设置；隐藏页仍能从导航聚合页或相关业务入口打开。搜索结果可直接到目标子页，任一可编辑子页仍遵守本地草稿、右上角保存、恢复本页默认值和 dirty 离开确认。
 
 ## 8. 最近完成的功能
+
+### Android 0.24.2 界面文案精简
+
+- 文案规范：设置列表副标题只写「能调什么」或当前状态（如使用时间/健康入口直接显示「已开启 / 未开启」）；每个分区最多一行常驻说明；不在界面上出现 Room、SAF、URI、SHA-256、Provider、tool_calls、回读校验等实现术语。涉及知情同意的提示必须常驻在对应控件旁，不能只放进 ⓘ：AI Key 与 S3 Key 明文保存、云端未端到端加密与「请只使用可信云端」、强制上传/下载的覆盖方向（确认框两个方向都写明，强制下载仅限一个来源）、JSON 备份不含日记/笔记/媒体/书籍原文件、Agent 全自动模式「逐项记录、可在安全时撤回」、取消数据源授权立即失效、缺失数据显示「—」不记为 0、自定义主题不加载 CSS/脚本。
+- `ui/components/InfoHint.kt`：ⓘ 图标按钮 + `AlertDialog`，读屏描述为「说明 · 标题」。`SettingsScreen.kt` 的 `SettingsSection` 新增可选 `info` 参数，在标题行右侧显示 ⓘ。
+- 应用数据页：原「备份内容」分区并入「备份与恢复」的 ⓘ；按钮顺序为导出 JSON → 导入 JSON →（「不包含原文件」一行）→ 导出 zip →（zip 一行说明），修正此前说明与按钮错位。存储占用说明压缩为一行。
+- 云同步：设置页与主页同步卡的强制上传/下载确认框共用同一套文案；同步内容的隐私提示每项一行；移除主页面重复的凭据存储说明（保留在服务详情页的凭据输入处）。
+- 修正 AI 配置详情页 API Key 提示：v34 手动备份导出时 `apiKey` 写为空串，提示改为「明文保存在本机，编辑时可见；不会写入 JSON 备份」。
+- 阅读：三种「没有目录」提示合并为两种；PDF 增强视图回退提示补充「兼容视图不支持搜索与目录」；移除 `ReaderChapterDrawer` 不再使用的 `pdfTextLayerAvailable` 参数。桌面小卡片：每张卡片与列表顶部重复的「长按重新配置」提示合并到顶部一处。热量估算进度页、首页教学中面向开发者的实现细节说明删除。
+- 翻译：所有改写和新增文案在 `AppTranslations.kt` 中补齐繁中/韩/日，并删除不再引用的旧键。`src/test/.../ui/theme/AppTranslationsCoverageTest.kt` 扫描 `src/main/java` 中首参数为字面量、且不含 `$` 模板的 `tr()` 调用，新出现的缺失翻译会失败；历史缺口记录在 `src/test/resources/translation-missing-baseline.txt`（补齐后可从基线删除）。
+- 版本：Android 0.24.2（versionCode 58）；无 Room、DataStore、备份格式变化。
 
 ### Android 0.24.1 吃历导出改为 PDF
 

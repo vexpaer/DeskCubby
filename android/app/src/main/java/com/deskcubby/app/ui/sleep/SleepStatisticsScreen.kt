@@ -161,8 +161,8 @@ private fun SleepStatisticsScreen(
                     MessageCard(
                         title = tr("睡眠估算未开启", "Sleep estimation is off"),
                         body = tr(
-                            "开启后，DeskCubby 会在这台设备上根据夜间手机使用间隔估算睡眠，并把结果长期保存在本机。",
-                            "When enabled, DeskCubby estimates sleep from nighttime phone-use gaps on this device and keeps the results locally.",
+                            "根据夜间手机的使用间隔估算睡眠，结果保存在本机。",
+                            "Estimates sleep from overnight gaps in phone use and keeps results on this device.",
                         ),
                         action = tr("开启", "Enable"),
                         onAction = onEnable,
@@ -173,8 +173,8 @@ private fun SleepStatisticsScreen(
                     MessageCard(
                         title = tr("需要“使用情况访问”权限", "Usage access is required"),
                         body = tr(
-                            "睡眠估算和手机使用时间共用 Android 的使用情况权限；不需要定位、麦克风或穿戴设备。",
-                            "Sleep estimation shares Android usage access with screen time; it does not need location, microphone, or wearable permissions.",
+                            "与手机使用时间共用使用情况权限，无需定位或穿戴设备。",
+                            "Shares the usage-access permission with screen time; no location or wearable needed.",
                         ),
                         action = tr("去授权", "Grant access"),
                         onAction = onRequestUsageAccess,

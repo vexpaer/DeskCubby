@@ -200,8 +200,8 @@ internal fun GoPage(
             }
             Text(
                 tr(
-                    "连续两次停着结束棋局；本页记录提子数，不自动判定地域胜负。",
-                    "Two consecutive passes end the game. Captures are tracked; territory is not scored automatically.",
+                    "连续两次停着结束棋局；只记录提子数，不判定胜负。",
+                    "Two passes in a row end the game; captures are counted but no winner is decided.",
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

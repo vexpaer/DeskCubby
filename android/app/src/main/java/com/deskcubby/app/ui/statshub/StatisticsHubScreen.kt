@@ -201,8 +201,8 @@ private fun StatisticsOverviewPage(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     tr(
-                        "点按卡片进入详情。缺少授权或尚无记录时，会保留已有历史，不把未知数据当作 0。",
-                        "Open a card for details. Missing access or records stay unknown instead of being counted as zero.",
+                        "点按卡片查看详情；未知数据显示为“—”。",
+                        "Tap a card for details; unknown data shows as “—”.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -251,8 +251,8 @@ private fun StatisticsOverviewPage(
                     title = tr("结构化记录", "Structured records"),
                     primaryValue = tr("字段与指标", "Fields & metrics"),
                     secondaryValue = tr(
-                        "强类型字段自动统计与自定义派生指标",
-                        "Typed-field auto stats and user-defined derived metrics",
+                        "字段统计与自定义指标",
+                        "Field statistics and custom metrics",
                     ),
                     chartValues = emptyList(),
                     chartDescription = tr("结构化记录统计", "Structured record statistics"),
@@ -301,8 +301,8 @@ private fun StatisticsOverviewPage(
                     title = tr("睡眠", "Sleep"),
                     primaryValue = tr("按设备查看", "By device"),
                     secondaryValue = tr(
-                        "独立估算每台 Android 设备的睡眠，不跨设备合并",
-                        "Sleep is estimated per Android device and never merged across devices",
+                        "按设备分别估算",
+                        "Estimated per device",
                     ),
                     chartValues = emptyList(),
                     chartDescription = tr("睡眠趋势与历史", "Sleep trends and history"),
@@ -372,8 +372,8 @@ private fun AgentStatisticsPage(state: StatisticsHubUiState, innerPadding: Paddi
             SectionHeading(
                 title = tr("Provider 报告的真实用量", "Provider-reported usage"),
                 description = tr(
-                    "只统计模型响应中的 usage 字段；未报告的调用单独列出，不按文本长度估算。",
-                    "Only provider usage fields are counted. Unreported calls stay separate and are never estimated from text length.",
+                    "只统计模型返回的用量，不做估算。",
+                    "Counts only usage reported by the model; nothing is estimated.",
                 ),
             )
         }
@@ -530,7 +530,7 @@ private fun DiaryStatisticsPage(
             item {
                 SectionHeading(
                     tr("年度像素", "Year in pixels"),
-                    tr("今年每一天一格，颜色越深写得越多；点按格子查看当天。", "One cell per day this year; deeper color means more words. Tap a cell to see that day."),
+                    tr("每天一格，颜色越深写得越多；点按查看当天。", "One cell per day; deeper means more words. Tap to see the day."),
                 )
             }
             item { YearInPixelsPanel(summary.yearPixels) }
@@ -605,7 +605,7 @@ private fun ReadingStatisticsPage(
             item {
                 StatisticsMessagePanel(
                     title = tr("还没有阅读时长", "No reading time yet"),
-                    message = tr("打开书籍并实际阅读后，前台阅读时长会显示在这里。", "Open a book and read it to build foreground reading time here."),
+                    message = tr("阅读书籍后，阅读时长会显示在这里。", "Reading time appears here after you read a book."),
                 )
             }
         } else {
@@ -613,8 +613,8 @@ private fun ReadingStatisticsPage(
                 SectionHeading(
                     tr("书籍对比", "Book comparison"),
                     tr(
-                        "按累计前台阅读时长排序。书籍移出书架后，已记录的书名和历史时长仍会保留。",
-                        "Ranked by foreground reading time. Recorded titles and history remain after books leave the shelf.",
+                        "按累计阅读时长排序；移出书架的书仍保留记录。",
+                        "Sorted by total reading time; removed books keep their records.",
                     ),
                 )
             }
@@ -655,7 +655,7 @@ private fun GameStatisticsPage(
         item {
             SectionHeading(
                 tr("时长对比", "Play-time comparison"),
-                tr("仅累计小游戏实际位于前台且正在游玩的时间。", "Counts only time spent actively playing a game in the foreground."),
+                tr("只统计实际游玩的时间。", "Counts only active play time."),
             )
         }
         val maximumDuration = state.games.maxOfOrNull(GameStatisticsHubItem::totalPlayMillis)
@@ -671,7 +671,7 @@ private fun GameStatisticsPage(
         item {
             SectionHeading(
                 tr("特色战绩", "Game-specific records"),
-                tr("战绩为终身累计；胜负只在明确结算时记录，普通离开页面不会算失败。", "Lifetime totals update only on explicit outcomes; simply leaving a game does not count as a loss."),
+                tr("终身累计；中途离开不算失败。", "Lifetime totals; leaving mid-game is not a loss."),
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
