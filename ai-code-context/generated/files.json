@@ -1215,13 +1215,13 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/Navigation.kt",
     "language": "kotlin",
     "nodeCount": 249,
-    "size": 78263
+    "size": 78073
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/ai/AgentReviewScreen.kt",
     "language": "kotlin",
     "nodeCount": 68,
-    "size": 14872
+    "size": 14790
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/ai/AgentReviewViewModel.kt",
@@ -1233,7 +1233,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/ai/AiChatScreen.kt",
     "language": "kotlin",
     "nodeCount": 136,
-    "size": 51791
+    "size": 51442
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/ai/AiChatViewModel.kt",
@@ -1302,6 +1302,12 @@
     "size": 6037
   },
   {
+    "path": "android/app/src/main/java/com/deskcubby/app/ui/components/InfoHint.kt",
+    "language": "kotlin",
+    "nodeCount": 20,
+    "size": 2027
+  },
+  {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/components/MarkdownPreview.kt",
     "language": "kotlin",
     "nodeCount": 78,
@@ -1341,7 +1347,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/daily/DailyRecordScreen.kt",
     "language": "kotlin",
     "nodeCount": 77,
-    "size": 18598
+    "size": 18547
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/daily/DailyRecordViewModel.kt",
@@ -1425,7 +1431,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/diary/CalorieEstimationProgressScreen.kt",
     "language": "kotlin",
     "nodeCount": 70,
-    "size": 25291
+    "size": 24815
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/diary/CalorieEstimationQueueModels.kt",
@@ -1437,7 +1443,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/diary/DiaryScreens.kt",
     "language": "kotlin",
     "nodeCount": 184,
-    "size": 106764
+    "size": 106395
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/diary/DiaryViewModel.kt",
@@ -1485,7 +1491,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/games/GoGameScreen.kt",
     "language": "kotlin",
     "nodeCount": 72,
-    "size": 23144
+    "size": 23112
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/home/HomeDeskIntro.kt",
@@ -1509,7 +1515,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/home/HomeScreen.kt",
     "language": "kotlin",
     "nodeCount": 150,
-    "size": 70253
+    "size": 70135
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/home/HomeViewModel.kt",
@@ -1527,7 +1533,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/notes/NotesScreens.kt",
     "language": "kotlin",
     "nodeCount": 92,
-    "size": 30232
+    "size": 30052
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/notes/NotesViewModel.kt",
@@ -1539,7 +1545,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/poetry/PoetryBookScreen.kt",
     "language": "kotlin",
     "nodeCount": 120,
-    "size": 55330
+    "size": 55239
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/poetry/PoetryBookViewModel.kt",
@@ -1587,7 +1593,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/reader/ReaderScreen.kt",
     "language": "kotlin",
     "nodeCount": 213,
-    "size": 108875
+    "size": 107128
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/reader/ReaderViewModel.kt",
@@ -1623,13 +1629,13 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/settings/ExportScreen.kt",
     "language": "kotlin",
     "nodeCount": 55,
-    "size": 19137
+    "size": 18827
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
     "language": "kotlin",
-    "nodeCount": 408,
-    "size": 392835
+    "nodeCount": 409,
+    "size": 383440
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsViewModel.kt",
@@ -1641,7 +1647,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/sleep/SleepStatisticsScreen.kt",
     "language": "kotlin",
     "nodeCount": 73,
-    "size": 21633
+    "size": 21467
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/sleep/SleepStatisticsViewModel.kt",
@@ -1659,7 +1665,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/statistics/StatisticsScreenComponents.kt",
     "language": "kotlin",
     "nodeCount": 27,
-    "size": 5682
+    "size": 5672
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/statshub/StatisticsHubModels.kt",
@@ -1671,7 +1677,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/statshub/StatisticsHubScreen.kt",
     "language": "kotlin",
     "nodeCount": 116,
-    "size": 42821
+    "size": 42170
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/statshub/StatisticsHubViewModel.kt",
@@ -1689,7 +1695,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/steps/StepStatisticsScreen.kt",
     "language": "kotlin",
     "nodeCount": 62,
-    "size": 19332
+    "size": 18288
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/steps/StepStatisticsViewModel.kt",
@@ -1701,7 +1707,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredrecords/StructuredRecordsScreen.kt",
     "language": "kotlin",
     "nodeCount": 95,
-    "size": 27311
+    "size": 27085
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredrecords/StructuredRecordsUiStore.kt",
@@ -1719,7 +1725,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredstats/StructuredStatisticsScreen.kt",
     "language": "kotlin",
     "nodeCount": 73,
-    "size": 24180
+    "size": 24152
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/structuredstats/StructuredStatisticsViewModel.kt",
@@ -1731,7 +1737,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/theme/AppTranslations.kt",
     "language": "kotlin",
     "nodeCount": 6,
-    "size": 275773
+    "size": 331421
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/theme/Motion.kt",
@@ -1779,7 +1785,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/usage/UsageStatisticsScreen.kt",
     "language": "kotlin",
     "nodeCount": 102,
-    "size": 32398
+    "size": 31904
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/usage/UsageStatisticsViewModel.kt",
@@ -1809,7 +1815,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/widgets/DesktopWidgetsScreen.kt",
     "language": "kotlin",
     "nodeCount": 126,
-    "size": 44454
+    "size": 43130
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/widgets/DesktopWidgetsViewModel.kt",
@@ -2578,6 +2584,12 @@
     "language": "kotlin",
     "nodeCount": 10,
     "size": 1848
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/ui/theme/AppTranslationsCoverageTest.kt",
+    "language": "kotlin",
+    "nodeCount": 9,
+    "size": 1923
   },
   {
     "path": "android/app/src/test/java/com/deskcubby/app/ui/theme/OrganicFutureThemeTest.kt",

@@ -16,9 +16,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728487
+      "updatedAt": 1792388767114
     },
-    "score": 104.1790881405216
+    "score": 104.18005116590855
   },
   {
     "node": {
@@ -37,9 +37,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071727376
+      "updatedAt": 1792388765779
     },
-    "score": 102.15336621482139
+    "score": 102.15433322182074
   },
   {
     "node": {
@@ -59,9 +59,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729881
+      "updatedAt": 1792388768819
     },
-    "score": 96.17497141909504
+    "score": 96.17592584638017
   },
   {
     "node": {
@@ -81,9 +81,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729893
+      "updatedAt": 1792388768844
     },
-    "score": 96.17497141909504
+    "score": 96.17592584638017
   },
   {
     "node": {
@@ -103,9 +103,9 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Map",
-      "updatedAt": 1792071728010
+      "updatedAt": 1792388766526
     },
-    "score": 96.11771320175652
+    "score": 96.1186856172107
   },
   {
     "node": {
@@ -125,9 +125,9 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "Map",
-      "updatedAt": 1792071729213
+      "updatedAt": 1792388768004
     },
-    "score": 96.10356418062447
+    "score": 96.10454096374374
   },
   {
     "node": {
@@ -146,9 +146,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728971
+      "updatedAt": 1792388767669
     },
-    "score": 89.13192797462126
+    "score": 89.13289597123689
   },
   {
     "node": {
@@ -167,9 +167,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071727896
+      "updatedAt": 1792388766401
     },
-    "score": 89.11771320175652
+    "score": 89.1186856172107
   },
   {
     "node": {
@@ -188,9 +188,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728205
+      "updatedAt": 1792388766773
     },
-    "score": 89.11771320175652
+    "score": 89.1186856172107
   },
   {
     "node": {
@@ -209,9 +209,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728215
+      "updatedAt": 1792388766790
     },
-    "score": 89.11771320175652
+    "score": 89.1186856172107
   },
   {
     "node": {
@@ -230,9 +230,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728248
+      "updatedAt": 1792388766842
     },
-    "score": 89.11771320175652
+    "score": 89.1186856172107
   },
   {
     "node": {
@@ -251,9 +251,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728257
+      "updatedAt": 1792388766850
     },
-    "score": 89.11771320175652
+    "score": 89.1186856172107
   },
   {
     "node": {
@@ -272,9 +272,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728275
+      "updatedAt": 1792388766851
     },
-    "score": 89.11771320175652
+    "score": 89.1186856172107
   },
   {
     "node": {
@@ -293,9 +293,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728401
+      "updatedAt": 1792388767003
     },
-    "score": 89.11771320175652
+    "score": 89.1186856172107
   },
   {
     "node": {
@@ -314,9 +314,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728867
+      "updatedAt": 1792388767514
     },
-    "score": 89.11771320175652
+    "score": 89.1186856172107
   },
   {
     "node": {
@@ -335,9 +335,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728873
+      "updatedAt": 1792388767542
     },
-    "score": 89.11771320175652
+    "score": 89.1186856172107
   },
   {
     "node": {
@@ -356,9 +356,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728889
+      "updatedAt": 1792388767576
     },
-    "score": 89.11771320175652
+    "score": 89.1186856172107
   },
   {
     "node": {
@@ -377,9 +377,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728928
+      "updatedAt": 1792388767637
     },
-    "score": 89.11771320175652
+    "score": 89.1186856172107
   },
   {
     "node": {
@@ -398,9 +398,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071727344
+      "updatedAt": 1792388765757
     },
-    "score": 89.10356418062447
+    "score": 89.10454096374374
   },
   {
     "node": {
@@ -419,9 +419,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729196
+      "updatedAt": 1792388767990
     },
-    "score": 89.08948045606687
+    "score": 89.09046155624408
   },
   {
     "node": {
@@ -441,9 +441,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071730043
+      "updatedAt": 1792388769068
     },
-    "score": 89.06150709695042
+    "score": 89.06249668165212
   },
   {
     "node": {
@@ -462,9 +462,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729145
+      "updatedAt": 1792388767909
     },
-    "score": 81.11771320175652
+    "score": 81.1186856172107
   },
   {
     "node": {
@@ -484,9 +484,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729876
+      "updatedAt": 1792388768816
     },
-    "score": 74.06150709695042
+    "score": 74.06249668165212
   },
   {
     "node": {
@@ -506,9 +506,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729903
+      "updatedAt": 1792388768868
     },
-    "score": 74.06150709695042
+    "score": 74.06249668165212
   },
   {
     "node": {
@@ -529,9 +529,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729540
+      "updatedAt": 1792388768392
     },
-    "score": 61.189453836023645
+    "score": 61.19040363396509
   },
   {
     "node": {
@@ -551,9 +551,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071730052
+      "updatedAt": 1792388769078
     },
-    "score": 61.115553400407215
+    "score": 61.116534721717755
   },
   {
     "node": {
@@ -574,9 +574,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729540
+      "updatedAt": 1792388768392
     },
-    "score": 61.01560980576559
+    "score": 61.01661657436509
   },
   {
     "node": {
@@ -596,20 +596,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729997
+      "updatedAt": 1792388769005
     },
-    "score": 59.20400434507936
+    "score": 59.20494945956035
   },
   {
     "node": {
-      "id": "function:c47ad6a509b59e0dbb977bb1261c1208",
+      "id": "function:800aef545550e97c794ec2b82dd42827",
       "kind": "function",
       "name": "SettingsScreen",
       "qualifiedName": "com.deskcubby.app.ui.settings::SettingsScreen",
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
       "language": "kotlin",
-      "startLine": 484,
-      "endLine": 1149,
+      "startLine": 485,
+      "endLine": 1150,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "public",
@@ -617,20 +617,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728678
+      "updatedAt": 1792388767309
     },
-    "score": 58.165345826066485
+    "score": 58.166309068023054
   },
   {
     "node": {
-      "id": "function:58d8f94d09edba9d201de7a1c8605144",
+      "id": "function:7865e397a8cd4b6fa7a6695aecec3bfb",
       "kind": "function",
       "name": "SettingsSection",
       "qualifiedName": "com.deskcubby.app.ui.settings::SettingsSection",
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
       "language": "kotlin",
-      "startLine": 7686,
-      "endLine": 7699,
+      "startLine": 7633,
+      "endLine": 7654,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "private",
@@ -638,9 +638,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728760
+      "updatedAt": 1792388767400
     },
-    "score": 57.165345826066485
+    "score": 57.166309068023054
   },
   {
     "node": {
@@ -659,20 +659,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729607
+      "updatedAt": 1792388768482
     },
-    "score": 56.20400434507936
+    "score": 56.20494945956035
   },
   {
     "node": {
-      "id": "enum:1c179ce18f2f12ccd3654d4a6363b7c1",
+      "id": "enum:c7dc55047f4c9723dd37f75e4350b9f4",
       "kind": "enum",
       "name": "SettingsPage",
       "qualifiedName": "com.deskcubby.app.ui.settings::SettingsPage",
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
       "language": "kotlin",
-      "startLine": 258,
-      "endLine": 286,
+      "startLine": 259,
+      "endLine": 287,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "private",
@@ -680,20 +680,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728675
+      "updatedAt": 1792388767306
     },
-    "score": 56.165345826066485
+    "score": 56.166309068023054
   },
   {
     "node": {
-      "id": "function:f44c3b598c41d27e612037d2058bba46",
+      "id": "function:5d1bb98ada4837ce105bf2cac4a36e42",
       "kind": "function",
       "name": "SettingsMainPage",
       "qualifiedName": "com.deskcubby.app.ui.settings::SettingsMainPage",
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
       "language": "kotlin",
-      "startLine": 1282,
-      "endLine": 1392,
+      "startLine": 1283,
+      "endLine": 1393,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "private",
@@ -701,20 +701,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728685
+      "updatedAt": 1792388767318
     },
-    "score": 56.165345826066485
+    "score": 56.166309068023054
   },
   {
     "node": {
-      "id": "function:7f8dc32ae3e6c8ebc63da829c4f5ffdb",
+      "id": "function:f24f40359ce7ffdfa3cfe0960b1e7195",
       "kind": "function",
       "name": "SettingsMenuItem",
       "qualifiedName": "com.deskcubby.app.ui.settings::SettingsMenuItem",
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
       "language": "kotlin",
-      "startLine": 1526,
-      "endLine": 1562,
+      "startLine": 1527,
+      "endLine": 1563,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "private",
@@ -722,9 +722,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728688
+      "updatedAt": 1792388767321
     },
-    "score": 56.165345826066485
+    "score": 56.166309068023054
   },
   {
     "node": {
@@ -744,9 +744,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729540
+      "updatedAt": 1792388768392
     },
-    "score": 56.103564180624474
+    "score": 56.10454096374374
   },
   {
     "node": {
@@ -766,9 +766,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071730052
+      "updatedAt": 1792388769078
     },
-    "score": 56.06779190366223
+    "score": 56.068786066744806
   },
   {
     "node": {
@@ -788,9 +788,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071730052
+      "updatedAt": 1792388769078
     },
-    "score": 56.02002564207322
+    "score": 56.021027587762056
   },
   {
     "node": {
@@ -809,20 +809,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071730056
+      "updatedAt": 1792388769082
     },
-    "score": 54.189453836023645
+    "score": 54.19040363396509
   },
   {
     "node": {
-      "id": "function:db99b3ff1d2f90844e6120393bfb79b5",
+      "id": "function:5903f8e53b38675a722dd050bfabe209",
       "kind": "function",
       "name": "settingsSearchIndex",
       "qualifiedName": "com.deskcubby.app.ui.settings::settingsSearchIndex",
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
       "language": "kotlin",
-      "startLine": 1158,
-      "endLine": 1280,
+      "startLine": 1159,
+      "endLine": 1281,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "private",
@@ -831,20 +831,20 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "List",
-      "updatedAt": 1792071728684
+      "updatedAt": 1792388767316
     },
-    "score": 54.165345826066485
+    "score": 54.166309068023054
   },
   {
     "node": {
-      "id": "function:0787aeeab55ad03c89eebed3ff852ec0",
+      "id": "function:1b048adad0626783451e34824cc034ad",
       "kind": "function",
       "name": "SettingsSubpageRow",
       "qualifiedName": "com.deskcubby.app.ui.settings::SettingsSubpageRow",
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
       "language": "kotlin",
-      "startLine": 4972,
-      "endLine": 4990,
+      "startLine": 4953,
+      "endLine": 4971,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "private",
@@ -852,9 +852,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728728
+      "updatedAt": 1792388767368
     },
-    "score": 54.165345826066485
+    "score": 54.166309068023054
   },
   {
     "node": {
@@ -873,9 +873,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071730056
+      "updatedAt": 1792388769082
     },
-    "score": 53.20400434507936
+    "score": 53.20494945956035
   },
   {
     "node": {
@@ -894,9 +894,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728487
+      "updatedAt": 1792388767114
     },
-    "score": 53.165345826066485
+    "score": 53.166309068023054
   },
   {
     "node": {
@@ -915,20 +915,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728490
+      "updatedAt": 1792388767119
     },
-    "score": 52.1790881405216
+    "score": 52.18005116590855
   },
   {
     "node": {
-      "id": "class:08fbac419f7ed5a93ced4a2c8019047c",
+      "id": "class:9510232f625996b40486aa1aeda876dd",
       "kind": "class",
       "name": "SettingsSearchEntry",
       "qualifiedName": "com.deskcubby.app.ui.settings::SettingsSearchEntry",
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
       "language": "kotlin",
-      "startLine": 1151,
-      "endLine": 1156,
+      "startLine": 1152,
+      "endLine": 1157,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "private",
@@ -936,9 +936,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728684
+      "updatedAt": 1792388767316
     },
-    "score": 52.165345826066485
+    "score": 52.166309068023054
   },
   {
     "node": {
@@ -958,9 +958,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729540
+      "updatedAt": 1792388768392
     },
-    "score": 52.07546157711675
+    "score": 52.07644694430405
   },
   {
     "node": {
@@ -980,9 +980,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071730059
+      "updatedAt": 1792388769095
     },
-    "score": 52.047616572839935
+    "score": 52.048610326105575
   },
   {
     "node": {
@@ -1002,9 +1002,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729354
+      "updatedAt": 1792388768185
     },
-    "score": 51.14673552063348
+    "score": 51.14770142385741
   },
   {
     "node": {
@@ -1023,9 +1023,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071727949
+      "updatedAt": 1792388766458
     },
-    "score": 51.13192797462126
+    "score": 51.13289597123689
   },
   {
     "node": {
@@ -1044,9 +1044,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729260
+      "updatedAt": 1792388768061
     },
-    "score": 51.047616572839935
+    "score": 51.048610326105575
   },
   {
     "node": {
@@ -1065,9 +1065,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729607
+      "updatedAt": 1792388768482
     },
-    "score": 51.047616572839935
+    "score": 51.048610326105575
   },
   {
     "node": {
@@ -1086,20 +1086,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071730056
+      "updatedAt": 1792388769082
     },
-    "score": 50.189453836023645
+    "score": 50.19040363396509
   },
   {
     "node": {
-      "id": "enum:02c9a67299f6ef9622c9fcc14fe1016a",
+      "id": "enum:04b603642f7720ac29d3d188dea40507",
       "kind": "enum",
       "name": "SettingsStartPage",
       "qualifiedName": "com.deskcubby.app.ui.settings::SettingsStartPage",
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
       "language": "kotlin",
-      "startLine": 288,
-      "endLine": 288,
+      "startLine": 289,
+      "endLine": 289,
       "startColumn": 0,
       "endColumn": 91,
       "visibility": "public",
@@ -1107,20 +1107,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728675
+      "updatedAt": 1792388767306
     },
-    "score": 50.165345826066485
+    "score": 50.166309068023054
   },
   {
     "node": {
-      "id": "function:d056a2f90673cef1902ef14962c35193",
+      "id": "function:c41aea09324d9a3b4164b122241a0e69",
       "kind": "function",
       "name": "settingsPageTutorialTarget",
       "qualifiedName": "com.deskcubby.app.ui.settings::settingsPageTutorialTarget",
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
       "language": "kotlin",
-      "startLine": 7858,
-      "endLine": 7994,
+      "startLine": 7813,
+      "endLine": 7949,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "private",
@@ -1129,9 +1129,9 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "PageTutorialTarget",
-      "updatedAt": 1792071728763
+      "updatedAt": 1792388767402
     },
-    "score": 50.165345826066485
+    "score": 50.166309068023054
   },
   {
     "node": {
@@ -1150,20 +1150,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071727376
+      "updatedAt": 1792388765779
     },
-    "score": 50.13192797462126
+    "score": 50.13289597123689
   },
   {
     "node": {
-      "id": "class:ad822d8e588fbe5beb9e4a0300599d16",
+      "id": "class:998f22190a76016ae777658e0a0d1942",
       "kind": "class",
       "name": "SettingsSaveCoordinator",
       "qualifiedName": "com.deskcubby.app.ui.settings::SettingsSaveCoordinator",
       "filePath": "android/app/src/main/java/com/deskcubby/app/ui/settings/SettingsScreen.kt",
       "language": "kotlin",
-      "startLine": 301,
-      "endLine": 343,
+      "startLine": 302,
+      "endLine": 344,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "private",
@@ -1171,9 +1171,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071728675
+      "updatedAt": 1792388767306
     },
-    "score": 49.165345826066485
+    "score": 49.166309068023054
   },
   {
     "node": {
@@ -1192,9 +1192,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071727949
+      "updatedAt": 1792388766458
     },
-    "score": 49.13192797462126
+    "score": 49.13289597123689
   },
   {
     "node": {
@@ -1213,9 +1213,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071727376
+      "updatedAt": 1792388765779
     },
-    "score": 46.13192797462126
+    "score": 46.13289597123689
   },
   {
     "node": {
@@ -1234,9 +1234,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071729540
+      "updatedAt": 1792388768392
     },
-    "score": 46.07079495940467
+    "score": 46.07178732081641
   },
   {
     "node": {
@@ -1255,9 +1255,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071730056
+      "updatedAt": 1792388769082
     },
-    "score": 45.09415975119033
+    "score": 45.09514504391598
   },
   {
     "node": {
@@ -1277,8 +1277,8 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792071730056
+      "updatedAt": 1792388769082
     },
-    "score": 45.06821436153004
+    "score": 45.0692044009048
   }
 ]
