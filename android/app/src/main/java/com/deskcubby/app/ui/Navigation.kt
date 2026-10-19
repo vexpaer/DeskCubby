@@ -1141,7 +1141,6 @@ private fun routeTutorialTarget(route: String?, settings: AppSettings): PageTuto
             val pageHints = when (id) {
                 NavItemId.HOME -> listOf(
                     tr("卡片内容与顺序可在“设置 → 子页面设置 → 主页”调整。", "Configure cards and order in Settings → Subpage settings → Home."),
-                    tr("快速输入、饮食图片和日常记录会在真正保存后再提示成功。", "Quick input, meal photos, and daily records report success only after saving."),
                 )
                 NavItemId.DIARY -> listOf(
                     tr("点日记进入编辑；顶部按钮可新建、打开今日日记或进入吃历。", "Tap a diary to edit it; top actions create, open today, or enter the meal calendar."),

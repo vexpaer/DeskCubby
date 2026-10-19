@@ -423,8 +423,8 @@ private fun DailyEventEditorDialog(
                 )
                 Text(
                     tr(
-                        "提示：xx 是可替换符号，记录时点击下划线处即可直接改写。",
-                        "Tip: xx is replaceable. Tap its underline when recording to edit it directly.",
+                        "xx 是可替换处，记录时点下划线即可改写。",
+                        "xx marks a blank; tap the underline to fill it in.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

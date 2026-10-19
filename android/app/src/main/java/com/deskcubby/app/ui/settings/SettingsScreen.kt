@@ -230,6 +230,7 @@ import com.deskcubby.app.data.sync.CloudSyncRunMode
 import com.deskcubby.app.ui.components.AppLoadingIndicator
 import com.deskcubby.app.ui.components.ColorPickerDialog
 import com.deskcubby.app.ui.components.FourDotDragHandle
+import com.deskcubby.app.ui.components.InfoHint
 import com.deskcubby.app.ui.components.MarkdownText
 import com.deskcubby.app.ui.components.OrganicSplitActionRow
 import com.deskcubby.app.ui.components.PageTutorialTarget
@@ -1061,8 +1062,8 @@ fun SettingsScreen(
             SettingsPage.USAGE -> DeviceTrackingSettingsPage(
                 title = tr("手机使用时间", "Screen time"),
                 explanation = tr(
-                    "读取系统提供的应用使用事件，按天写入本机 Room 数据库。统计明细不会进入 Android 系统备份；多设备历史只通过显式应用备份或云同步传递。",
-                    "Reads system app-usage events into the on-device Room database. Details are excluded from Android system backup; multi-device history moves only through explicit app backup or cloud sync.",
+                    "按天统计应用使用时长，数据保存在本机。",
+                    "Tracks daily app usage and keeps it on this device.",
                 ),
                 enabled = settings.usageTrackingEnabled,
                 contentPadding = inner,
@@ -1076,8 +1077,8 @@ fun SettingsScreen(
             SettingsPage.STEPS -> DeviceTrackingSettingsPage(
                 title = tr("健康", "Health"),
                 explanation = tr(
-                    "只从已授权的 Health Connect 读取步数、距离和活动热量，不再改用手机计步传感器。结果写入本机 Room 数据库，不进入应用备份、云同步或 Android 系统备份。",
-                    "Reads steps, distance, and active calories only from authorized Health Connect and no longer falls back to the phone's step counter. Results stay in the on-device Room database and are excluded from app backup, cloud sync, and Android system backup.",
+                    "从 Health Connect 读取步数、距离和活动热量，仅保存在本机。",
+                    "Reads steps, distance, and active calories from Health Connect and keeps them on this device only.",
                 ),
                 enabled = settings.stepTrackingEnabled,
                 contentPadding = inner,
@@ -1255,7 +1256,7 @@ private fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
     ),
     SettingsSearchEntry(
         tr("手机使用时间", "Screen time"),
-        tr("应用时长统计、系统授权与本机 JSON", "App usage, system access and on-device JSON"),
+        tr("应用时长统计与系统授权", "App usage and system access"),
         "usage screen time statistics 手机 使用 时间 时长 统计",
         SettingsPage.USAGE,
     ),
@@ -1498,9 +1499,9 @@ private fun SubpageSettingsPage(
             SettingsMenuItem(
                 title = tr("手机使用时间", "Screen time"),
                 description = if (settings.usageTrackingEnabled) {
-                    tr("已开启本机按日统计", "On-device daily tracking is enabled")
+                    tr("已开启", "On")
                 } else {
-                    tr("权限、开关与本机 JSON", "Permission, switch and on-device JSON")
+                    tr("未开启", "Off")
                 },
                 icon = { Icon(Icons.Outlined.AccessTime, contentDescription = null) },
                 accentColor = settings.menuAccentColor(9),
@@ -1511,9 +1512,9 @@ private fun SubpageSettingsPage(
             SettingsMenuItem(
                 title = tr("健康", "Health"),
                 description = if (settings.stepTrackingEnabled) {
-                    tr("已开启健康数据读取", "Health data reading is enabled")
+                    tr("已开启", "On")
                 } else {
-                    tr("健康数据权限与本机 JSON", "Health permission and on-device JSON")
+                    tr("未开启", "Off")
                 },
                 icon = { Icon(Icons.Outlined.MonitorHeart, contentDescription = null) },
                 accentColor = settings.menuAccentColor(10),
@@ -1665,14 +1666,6 @@ private fun CloudSyncSettingsPage(
                     }
                     Switch(checked = enabled, onCheckedChange = { enabled = it })
                 }
-                Text(
-                    tr(
-                        "WebDAV 密码经 Android Keystore 加密；S3 用户名和 Key 明文保存在应用私有存储中并可在编辑时回显。两者都不进入 JSON 备份或日志。",
-                        "WebDAV passwords use Android Keystore. S3 usernames and keys are stored as plaintext in app-private storage and shown when edited. Neither is included in JSON backups or logs.",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
         item {
@@ -1792,8 +1785,8 @@ private fun CloudSyncSettingsPage(
                 }
                 Text(
                     tr(
-                        "强制上传以本机为准，强制下载以云端为准；强制下载仅允许一个已启用来源。两者均不传播删除且仍执行条件校验。",
-                        "Force upload prefers local data and force download prefers remote data; force download allows only one enabled source. Neither propagates deletions, and conditional checks still apply.",
+                        "强制上传以本机为准，强制下载以云端为准（仅限一个已启用来源）；均不删除文件。",
+                        "Force upload keeps the device version; force download keeps the cloud version (one enabled source only). Neither deletes files.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1805,8 +1798,8 @@ private fun CloudSyncSettingsPage(
                 if (settings.cloudSyncConfigs.isEmpty()) {
                     Text(
                         tr(
-                            "尚未添加服务。可分别配置多个 WebDAV 或 S3 兼容端点。",
-                            "No services yet. Add multiple WebDAV or S3-compatible endpoints.",
+                            "尚未添加服务，可添加 WebDAV 或 S3。",
+                            "No services yet. Add WebDAV or S3.",
                         ),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1898,13 +1891,13 @@ private fun CloudSyncSettingsPage(
                 Text(
                     if (upload) {
                         tr(
-                            "本机新增项目会上传；同路径内容不同时，将以扫描到的远端版本为条件覆盖远端。远端独有项目不会删除，扫描后发生的远端修改会阻止覆盖。",
-                            "New local items are uploaded. Different items at the same path replace remote data only if its scanned version still matches. Remote-only items are not deleted, and later remote edits stop the overwrite.",
+                            "上传本机新增项目，并用本机版本覆盖云端的不同内容。不会删除云端独有项目；扫描后云端又有修改时会停止覆盖。",
+                            "Uploads new local items and replaces differing cloud items with the device version. Cloud-only items are kept, and cloud edits made after the scan stop the overwrite.",
                         )
                     } else {
                         tr(
-                            "强制下载仅使用当前唯一的已启用云端来源。云端新增项目会下载；同路径内容不同时，将仅在本机文件仍匹配扫描快照时采用云端版本。本机独有项目不会删除，并发本机修改会保留并产生冲突副本。",
-                            "Force download uses the single currently enabled cloud source. New remote items are downloaded. Different items at the same path use remote data only while the local file still matches its scanned snapshot. Local-only items are not deleted, and concurrent local edits are preserved with a conflict copy.",
+                            "从唯一已启用的云端来源下载新增项目，并用云端版本覆盖本机的不同内容。不会删除本机独有项目；本机同时发生的修改会保留为冲突副本。",
+                            "Downloads new items from the single enabled cloud source and replaces differing device items with the cloud version. Device-only items are kept, and concurrent device edits are saved as conflict copies.",
                         )
                     },
                 )
@@ -2075,8 +2068,8 @@ private fun CloudSyncConfigDetailPage(
                                 )
                             } else {
                                 tr(
-                                    "可只填接入点（如 s3.example.com），客户端会按 SSL/TLS 选项补全协议。",
-                                    "You may enter only the endpoint (such as s3.example.com); the client adds the protocol from the SSL/TLS setting.",
+                                    "可只填主机名，如 s3.example.com",
+                                    "A host name is enough, such as s3.example.com",
                                 )
                             },
                         )
@@ -2205,8 +2198,8 @@ private fun CloudSyncConfigDetailPage(
                 }
                 Text(
                     tr(
-                        "双向同步遇到双方都修改时会保留冲突副本；支持逐条安全合并的内容会按更新时间合并，不会无条件覆盖。",
-                        "Two-way sync preserves a conflict copy when both sides changed; content that supports safe record-level merging is merged by update time and is never overwritten unconditionally.",
+                        "双方都有修改时保留冲突副本，不会直接覆盖。",
+                        "When both sides changed, a conflict copy is kept instead of overwriting.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2214,8 +2207,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.USAGE_STATISTICS in selectedContents) {
                     Text(
                         tr(
-                            "使用时间会按设备 ID 自动上传并合并，包含应用包名、日期、时区与前台时长；请只使用可信云端。",
-                            "Screen time is uploaded and merged by device ID. It includes package names, dates, time zones, and foreground durations; use only a trusted cloud service.",
+                            "包含应用名称与使用时长，请只使用可信云端。",
+                            "Includes app names and usage durations; use only a trusted cloud service.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2224,8 +2217,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.SLEEP_STATISTICS in selectedContents) {
                     Text(
                         tr(
-                            "睡眠记录会按设备 ID 独立同步，包含估算/手动修正的入睡与起床时间；不同设备的同一晚不会合并。请只使用可信云端。",
-                            "Sleep history is synchronized independently by device ID, including estimated or manually corrected bed and wake times. The same night from different devices is never merged; use only a trusted cloud service.",
+                            "包含入睡与起床时间，请只使用可信云端。",
+                            "Includes bed and wake times; use only a trusted cloud service.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2234,8 +2227,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.READING_PROGRESS in selectedContents) {
                     Text(
                         tr(
-                            "阅读进度会按书籍文件的 SHA-256 指纹自动合并。云端不包含书名、文件地址、封面或正文，但文件指纹仍可能用于识别你持有的特定文件；请只使用可信云端。",
-                            "Reading progress is merged using each book file's SHA-256 fingerprint. The cloud object contains no title, file URI, cover, or book text, but a fingerprint can still identify a specific file you possess; use only a trusted cloud service.",
+                            "仅含文件指纹与进度，不含书名或正文；指纹仍可识别特定文件，请只使用可信云端。",
+                            "Contains only file fingerprints and progress, no titles or text; fingerprints can still identify a file, so use only a trusted cloud service.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2244,8 +2237,8 @@ private fun CloudSyncConfigDetailPage(
                 if (CloudSyncContent.AGENT_CHATS in selectedContents) {
                     Text(
                         tr(
-                            "Agent 会话会同步文字、冻结的文档文字、图片占位和 Provider 用量；不会上传本机 URI、图片字节、Review/Undo 载荷或秘密。远端没有端到端加密，请只使用可信云端。",
-                            "Agent chats synchronize text, frozen document text, image placeholders, and provider usage. Local URIs, image bytes, Review/Undo payloads, and secrets are excluded. The remote object is not end-to-end encrypted; use only a trusted cloud service.",
+                            "同步对话文字，不含图片与密钥；云端未端到端加密，请只使用可信云端。",
+                            "Syncs conversation text without images or secrets. The cloud copy is not end-to-end encrypted; use only a trusted cloud service.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
@@ -2300,8 +2293,8 @@ private fun CloudSyncConfigDetailPage(
                             Text(tr("路径寻址（Path-Style）", "Path-style addressing"))
                             Text(
                                 tr(
-                                    "启用后请求路径为 /Bucket/目录；若服务要求 Bucket 子域名（部分 CSTCloud 接入点），请关闭。",
-                                    "Uses /bucket/path. Disable when the service requires a bucket subdomain, as some CSTCloud endpoints do.",
+                                    "路径形如 /Bucket/目录；服务要求 Bucket 子域名时请关闭。",
+                                    "Uses /bucket/path; turn off if the service requires a bucket subdomain.",
                                 ),
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -2356,13 +2349,13 @@ private fun CloudSyncConfigDetailPage(
                 Text(
                     if (serviceType == CloudSyncServiceType.WEBDAV) {
                         tr(
-                            "密码使用 Android Keystore 加密，只在发起请求时读取，不进入日志或 JSON 备份。",
-                            "The password uses Android Keystore, is read only for requests, and is excluded from logs and JSON backups.",
+                            "密码加密保存在本机，不进入日志或备份。",
+                            "The password is encrypted on this device and never appears in logs or backups.",
                         )
                     } else {
                         tr(
-                            "S3 用户名和 Key 明文保存在应用私有存储中，编辑时完整显示；不会写入日志或 DeskCubby JSON 备份。",
-                            "S3 usernames and keys are plaintext in app-private storage and fully visible when edited; they are excluded from logs and DeskCubby JSON backups.",
+                            "S3 用户名和 Key 以明文保存在本机，编辑时可见；不进入日志或备份。",
+                            "The S3 user name and key are stored as plain text on this device and shown when editing; they never appear in logs or backups.",
                         )
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -2531,8 +2524,8 @@ private fun BackupSettingsPage(
                                 Text(backupSummaryLine(summary))
                                 Text(
                                     tr(
-                                        "导入前已通过格式、版本和完整性校验。日记、笔记、媒体和书籍原文件不会被替换；本地目录与 API Key 不会随备份恢复。",
-                                        "Format, version and integrity validation passed. Diary, note, media, and book files are not replaced; local folders and API keys are never restored from this backup.",
+                                        "日记、笔记、媒体与书籍原文件不会被替换；本地目录与 API Key 不会恢复。",
+                                        "Diary, note, media, and book files are not replaced; local folders and API keys are not restored.",
                                     ),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2596,8 +2589,8 @@ private fun BackupSettingsPage(
                     }
                     Text(
                         tr(
-                            "手机使用时间和健康历史已计入结构化数据库；旧统计文件仅显示尚待清理的迁移源。日记和媒体是用户选择目录中的真实文件，不计入应用私有数据合计；“≥”表示内容不可访问、过多或统计超时，只显示已读取部分。",
-                            "Screen-time and health histories are included in the structured database; legacy statistics files are migration sources awaiting cleanup. Diary and media are real files in user-selected folders and are excluded from the private-data total. “≥” means content was inaccessible, too large, or timed out, so only the measured portion is shown.",
+                            "日记与媒体位于你选择的目录，不计入合计；“≥”表示只统计到部分内容。",
+                            "Diary and media live in your chosen folders and are not counted in the total; “≥” means only part could be measured.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2631,31 +2624,13 @@ private fun BackupSettingsPage(
             )
         }
         item {
-            SettingsSection(tr("备份与恢复", "Backup & restore")) {
-                Text(
-                    tr(
-                        "导出结构化应用数据，用于迁移或恢复。日记、笔记、媒体及书籍原文件不包含在其中。",
-                        "Export structured app data for migration or recovery. Diary, note, media, and original book files are not included.",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Button(
-                    onClick = onOpenExport,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Outlined.Archive, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(tr("导出为 zip（勾选内容）", "Export as zip (select content)"))
-                }
-                Text(
-                    tr(
-                        "打包日记、媒体、笔记等真实文件，并在包内附带 README 说明目录结构；导出后可直接分享。",
-                        "Packages real diary, media, and note files with a README describing the folder structure; the zip can be shared right after export.",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            SettingsSection(
+                tr("备份与恢复", "Backup & restore"),
+                info = tr(
+                    "JSON 备份包含小巧思及分类、日期记录、诗词及分类、收藏夹加密数据、游戏存档与统计、阅读进度、RSS 订阅和可迁移的设置。不包含日记、笔记、媒体与书籍原文件，也不包含缓存、权限、本地目录、云凭据或 AI API Key。备份只在点击导出时生成，云同步不使用这个文件。",
+                    "The JSON backup includes thoughts and categories, date records, poems and categories, encrypted Vault data, game saves and statistics, reading progress, RSS subscriptions, and portable settings. It excludes diary, note, media, and book files, as well as cache, permissions, local folders, cloud credentials, and AI API keys. A backup is created only when you export; cloud sync never uses this file.",
+                ),
+            ) {
                 Button(
                     onClick = { exportPicker.launch(defaultBackupFileName(Clock.systemDefaultZone())) },
                     enabled = !busy,
@@ -2676,22 +2651,28 @@ private fun BackupSettingsPage(
                 }
                 Text(
                     tr(
-                        "手动备份仅在点击导出时生成 DC-YYYY-MM-DD.json；云同步使用独立的记录同步与文件同步协议，不使用这个 JSON。",
-                        "A manual backup is only created when you tap export, as DC-YYYY-MM-DD.json. Cloud sync uses separate record-sync and file-sync protocols and never uses this JSON.",
+                        "不包含日记、笔记、媒体与书籍原文件。",
+                        "Diary, note, media, and book files are not included.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-        }
-        item {
-            SettingsSection(tr("备份内容", "Backup contents")) {
+                Button(
+                    onClick = onOpenExport,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Outlined.Archive, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("导出为 zip（勾选内容）", "Export as zip (select content)"))
+                }
                 Text(
                     tr(
-                        "包含小巧思及分类、日期记录、诗词及分类、收藏、Vault 加密数据、游戏存档与统计、阅读进度、RSS 订阅，以及可跨设备迁移的设置。不包含日记/笔记/媒体/书籍原文件、缓存、权限、本地 SAF URI、云凭据或 AI API Key。",
-                        "Includes thoughts/categories, date records, poems/categories, favorites, encrypted Vault data, game saves and statistics, reading progress, RSS subscriptions, and portable settings. It excludes diary/note/media/book files, cache, permissions, local SAF URIs, cloud credentials, and AI API keys.",
+                        "打包日记、媒体、笔记等原文件，可直接分享。",
+                        "Packages diary, media, note, and other original files for sharing.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -3006,8 +2987,8 @@ private fun AppearanceSettingsPage(
                             "Organic Future · Forest tones, matte organic panels, and editorial type",
                         )
                         VisualStyle.CUSTOM -> tr(
-                            "自定义 · 使用受控颜色和视觉参数，不执行 CSS、脚本或任意选择器",
-                            "Custom · Controlled colors and visual parameters, without CSS, scripts, or arbitrary selectors",
+                            "自定义 · 自选颜色与视觉参数",
+                            "Custom · Your own colors and visual parameters",
                         )
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -3020,8 +3001,8 @@ private fun AppearanceSettingsPage(
                 SettingsSection(tr("自定义主题", "Custom theme")) {
                     Text(
                         tr(
-                            "设置只映射到 Compose 的受控主题角色；不会加载 CSS、脚本、网络资源或修改页面结构。",
-                            "Settings map only to controlled Compose theme roles; no CSS, scripts, network resources, or page-structure changes are loaded.",
+                            "只调整颜色与视觉参数，不加载 CSS、脚本或网络资源。",
+                            "Adjusts only colors and visual parameters; no CSS, scripts, or network resources are loaded.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -3143,8 +3124,8 @@ private fun AppearanceSettingsPage(
                     )
                     Text(
                         tr(
-                            "设为 0% 会关闭页面切换动效；系统“移除动画”设置仍具有更高优先级。",
-                            "0% disables page transitions; the system Remove animations setting still takes precedence.",
+                            "0% 关闭页面切换动效；系统“移除动画”优先。",
+                            "0% turns off page transitions; the system Remove animations setting takes precedence.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -3360,8 +3341,8 @@ private fun AppearanceSettingsPage(
             SettingsSection(tr("背景图片", "Background image")) {
                 Text(
                     tr(
-                        "图片只从你选择的位置读取，不会复制进应用备份。可调整可见度和模糊，让文字与卡片保持清晰。",
-                        "The image is read only from the location you choose and is not copied into app backups. Adjust visibility and blur to keep text and cards readable.",
+                        "图片不会复制进应用备份。",
+                        "The image is not copied into app backups.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -3912,8 +3893,8 @@ private fun HomeSettingsPage(
             SettingsSection(tr("小游戏快捷入口", "Mini-game shortcuts")) {
                 Text(
                     tr(
-                        "选择主页“小游戏”模块中显示的入口；全部关闭时模块会显示设置提示。",
-                        "Choose which entries appear in the Home mini-games widget. With all disabled, the widget shows a settings hint.",
+                        "选择主页“小游戏”模块中显示的入口。",
+                        "Choose which entries appear in the Home mini-games widget.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -4073,8 +4054,8 @@ private fun HomeGreetingSettingsPage(
                 )
                 Text(
                     text = tr(
-                        "每天按列表顺序轮换；全部删除后主页显示“今日概览”。单条最多 $MAX_HOME_GREETING_CODE_POINTS 个字符。",
-                        "Greetings rotate daily in list order. If all are deleted, Home shows “Today's overview”. Each field allows up to $MAX_HOME_GREETING_CODE_POINTS characters.",
+                        "每天按顺序轮换，单条最多 $MAX_HOME_GREETING_CODE_POINTS 个字符。",
+                        "Rotates daily in order; up to $MAX_HOME_GREETING_CODE_POINTS characters each.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -4646,8 +4627,8 @@ private fun DiarySettingsPage(
             SettingsSection(tr("Markdown 阅读预览", "Markdown reading preview")) {
                 Text(
                     tr(
-                        "标题、粗体、斜体、列表、引用、代码和链接会保留排版。下面可分别调整 H1–H6 标题字号；笔记预览也共用这些设置。",
-                        "Headings, emphasis, lists, quotes, code, and links retain their formatting. Adjust H1–H6 sizes individually below; Notes uses the same preview settings.",
+                        "笔记预览也使用以下 H1–H6 字号。",
+                        "Notes previews use the same H1–H6 sizes below.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -4765,8 +4746,8 @@ private fun DiarySettingsPage(
                         Text(tr("记录照片拍摄地点", "Record photo location"))
                         Text(
                             tr(
-                                "从照片 EXIF 读取拍摄地点，与热量一起记录到媒体目录的 dc-media.json；相册照片可能需要授予媒体位置权限。",
-                                "Reads the photo's EXIF location into dc-media.json in the media folder alongside calories; gallery photos may need the media-location permission.",
+                                "从照片读取拍摄地点，与热量一起记录；相册照片可能需要媒体位置权限。",
+                                "Reads where a photo was taken and records it with calories; gallery photos may need the media-location permission.",
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -5095,15 +5076,6 @@ private fun MealSettingsPage(
                         }
                     }
                 }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    tr(
-                        "热量估算、图片压缩与吃历滤镜仍保留在「日记与媒体」页面。",
-                        "Energy estimation, image compression, and meal photo filter stay on the Diary & media page.",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
     }
@@ -5142,8 +5114,8 @@ private fun StructuredRecordsSettingsPage(
             SettingsSection(tr("日界线", "Day boundary")) {
                 Text(
                     tr(
-                        "一天从此刻开始切换。默认 05:00；凌晨 5 点前「进入今日日记」仍会打开前一个日记日。",
-                        "A journal day starts at this time. Default 05:00; before it, “Open today's diary” still opens the previous journal day.",
+                        "默认 05:00；此前「进入今日日记」仍打开前一天。",
+                        "Default 05:00; before then, “Open today's diary” opens the previous day.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -5174,8 +5146,8 @@ private fun StructuredRecordsSettingsPage(
                         Text(tr("自动记录睡觉/起床时间", "Auto-record sleep & wake"))
                         Text(
                             tr(
-                                "根据手机每天第一次/最后一次使用、解锁与锁屏时间自动估算，不使用 Health Connect。",
-                                "Estimated from the phone's first/last use, unlock and lock times. Health Connect is not used.",
+                                "按手机每天首次与最后使用时间估算。",
+                                "Estimated from the phone's first and last use each day.",
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -5185,8 +5157,8 @@ private fun StructuredRecordsSettingsPage(
                 }
                 Text(
                     tr(
-                        "该开关是设备本地设置，只在本机启用；最终估算值会在当天结束后写入日记并随 Markdown 同步。关闭只停止后续采集，不删除历史记录。",
-                        "This switch is device-local. Final estimates are written to the diary after the day settles and travel with Markdown. Turning it off stops future collection without deleting history.",
+                        "仅本机生效；估算值在当天结束后写入日记。关闭不删除历史。",
+                        "Applies to this device only; estimates are written to the diary after the day ends. Turning it off keeps history.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -5244,8 +5216,8 @@ private fun StructuredFieldManagementSettingsPage(
         item {
             Text(
                 tr(
-                    "字段使用稳定的 ID 作为身份，重命名不会破坏历史统计；删除字段默认归档，旧记录仍可解释。",
-                    "Fields are identified by stable IDs; renaming never breaks history. Deleting a field archives it so old records stay interpretable.",
+                    "改名不影响历史统计；删除即归档，旧记录仍可读。",
+                    "Renaming keeps history intact; deleting archives the field so old records stay readable.",
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -5570,8 +5542,8 @@ private fun VaultSettingsPage(
                 }
                 Text(
                     tr(
-                        "控制收藏夹条目的最小高度；内容较多的条目仍会按内容自然增高。",
-                        "Controls the minimum height of vault entries; longer entries can still grow naturally.",
+                        "内容较多的条目仍会自然增高。",
+                        "Longer entries still grow to fit.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -5867,15 +5839,6 @@ private fun AiSettingsPage(
     ) {
         item {
             SettingsSection(tr("AI 配置", "AI configurations")) {
-                Text(
-                    tr(
-                        "文字/图片模型配置已移到独立子页；在 AI 聊天页选择模型，点右上角齿轮也会回到本页。",
-                        "Text/image model configurations now live in their own subpage; pick a model on the AI chat page, and its gear button returns here.",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(10.dp))
                 Surface(
                     modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenConfigs),
                     shape = MaterialTheme.shapes.large,
@@ -5956,8 +5919,8 @@ private fun AiSettingsPage(
             SettingsSection(tr("Agent 提示词", "Agent prompt")) {
                 Text(
                     tr(
-                        "作为风格与任务偏好附加在严格的内置规则之后，不能扩大权限；也可在“AI 配置 → 附加模型指令”按模型补充。",
-                        "Appended after the strict built-in rules as style and task preferences; it cannot expand permissions. You can still add per-model instructions under AI configurations.",
+                        "附加在内置规则之后，不能扩大 Agent 权限。",
+                        "Appended after the built-in rules; it cannot expand Agent permissions.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -6150,8 +6113,8 @@ private fun AiConfigurationDetailPage(
             OutlinedTextField(apiKey, { apiKey = it.take(8192) }, Modifier.fillMaxWidth(),
                 label = { Text("API Key") }, singleLine = true,
                 supportingText = { Text(tr(
-                    "明文显示并随配置保存，也会包含在设置备份中。",
-                    "Shown and stored as plain text, including in settings backups.",
+                    "明文保存在本机，编辑时可见；不会写入 JSON 备份。",
+                    "Stored as plain text on this device and shown when editing; not included in JSON backups.",
                 )) })
             if (type == AiModelType.TEXT) OutlinedTextField(
                 systemPrompt, { systemPrompt = it.take(20_000) }, Modifier.fillMaxWidth(),
@@ -6159,8 +6122,8 @@ private fun AiConfigurationDetailPage(
                 supportingText = {
                     Text(
                         tr(
-                            "DeskCubby 的严格 Agent system prompt 始终优先；这里仅补充风格和任务偏好。",
-                            "DeskCubby's strict Agent system prompt always takes precedence; use this only for style and task preferences.",
+                            "仅补充风格与任务偏好，内置规则始终优先。",
+                            "Adds style and task preferences only; built-in rules always come first.",
                         ),
                     )
                 },
@@ -6173,8 +6136,8 @@ private fun AiConfigurationDetailPage(
                     Text(tr("原生工具调用", "Native tool calling"))
                     Text(
                         tr(
-                            "仅当 Provider 支持 OpenAI-compatible tools/tool_calls 时开启；关闭后该配置不能运行 Agent。",
-                            "Enable only if the provider supports OpenAI-compatible tools/tool_calls. Disabled configurations cannot run Agent.",
+                            "模型支持工具调用时开启；关闭后不能运行 Agent。",
+                            "Turn on if the model supports tool calling; Agent cannot run without it.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -6209,8 +6172,8 @@ private fun AiConfigurationDetailPage(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
                         tr(
-                            "占位内容会在实际调用时替换。API Key 位于请求头，不属于 JSON，因此不会显示在这里。",
-                            "Placeholders are replaced for real calls. The API key is sent in a header, not in JSON, so it is not shown here.",
+                            "占位内容会在实际调用时替换；不包含 API Key。",
+                            "Placeholders are replaced in real calls; the API key is not shown.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -6270,8 +6233,8 @@ private fun LegacyAiConfigurationsSettingsPage(
     ) {
         item {
             SettingsSection(tr("AI 配置", "AI configurations")) {
-                Text(tr("可分别添加文字与图片识别模型；同类型可保留多套配置并单独启用。",
-                    "Add separate text and vision models; each configuration can be enabled independently."),
+                Text(tr("可添加多套文字与图片识别模型，分别启用。",
+                    "Add multiple text and vision models and enable each separately."),
                     style = MaterialTheme.typography.bodySmall)
                 configs.forEachIndexed { index, config ->
                     Surface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large,
@@ -6680,8 +6643,8 @@ private fun NavigationSettingsPage(
                         Text(tr("音乐可视化", "Music visualization"))
                         Text(
                             tr(
-                                "播放音乐时用实时频谱或波形让底栏跟随节奏；音频只在内存中绘制，不会保存。",
-                                "Animate the bottom bar from live spectrum or waveform data while music plays. Audio is drawn in memory and never stored.",
+                                "播放音乐时让底栏随节奏跳动；音频不会保存。",
+                                "The bottom bar moves with the music while it plays; audio is never stored.",
                             ),
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -6709,8 +6672,8 @@ private fun NavigationSettingsPage(
                 if (visualizerPermissionDenied || visualizerEnabled && !audioPermissionGranted) {
                     Text(
                         tr(
-                            "需要音频权限才能读取系统播放的实时波形；拒绝后底栏不会捕获声音。",
-                            "Audio permission is required for live system-playback data; no sound is captured after denial.",
+                            "需要音频权限才能读取播放波形。",
+                            "Audio permission is required to read the playback waveform.",
                         ),
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
@@ -6762,8 +6725,8 @@ private fun NavigationSettingsPage(
                                     if (mode == MusicVisualizerFrequencyMode.ADAPTIVE) {
                                         Text(
                                             tr(
-                                                "跟随当前音乐的有效频段并平滑调整，让能量铺满底栏。",
-                                                "Smoothly follows the useful band in the current audio so energy fills the bar.",
+                                                "自动跟随当前音乐的有效频段。",
+                                                "Automatically follows the useful band of the current music.",
                                             ),
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -6823,8 +6786,8 @@ private fun NavigationSettingsPage(
             SettingsSection(tr("导航项目", "Navigation items")) {
                 Text(
                     tr(
-                        "在这里选择底栏项目，并调整底栏顺序、名称和图标。导航页的收纳与排序请到“导航页设置”调整。",
-                        "Choose bottom-bar items here and adjust their order, labels and icons. Manage collection and order separately in Navigation page settings.",
+                        "选择底栏项目，调整顺序、名称和图标。",
+                        "Choose bottom-bar items and adjust their order, labels, and icons.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -7013,8 +6976,8 @@ private fun MorePageSettingsPage(
             SettingsSection(tr("导航页内容", "Navigation page content")) {
                 Text(
                     tr(
-                        "可按列数连续排列；单独设置每个模块的名称、按钮底色与整体底色，并修改描述。",
-                        "Modules flow by the selected column count; set each module's name, button background, card background, and description individually.",
+                        "设置每个模块的名称、描述与配色。",
+                        "Set each module's name, description, and colors.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -7223,8 +7186,8 @@ private fun DeviceTrackingSettingsPage(
                 }
                 Text(
                     tr(
-                        "开启后仍需在系统授权页面授予相应访问权限；拒绝或撤销权限不会写入零值，也不会把未完成日期标记为已统计。",
-                        "You must still grant the corresponding system access. Refusing or revoking access never writes a fake zero or finalizes an incomplete day.",
+                        "还需在系统中授权；未授权时不会记为 0。",
+                        "System access is still required; missing access is never recorded as 0.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
@@ -7354,8 +7317,8 @@ private fun AboutSettingsPage(
                         Text(tr("软件教学模式", "Tutorial mode"))
                         Text(
                             tr(
-                                "默认开启。第一次进入每个页面时显示一次蒙版说明；确认记录只保存在当前设备。",
-                                "On by default. A walkthrough overlay appears once the first time you open each page; confirmations stay on this device.",
+                                "首次进入页面时显示一次说明。",
+                                "Shows a one-time walkthrough the first time you open each page.",
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -7379,14 +7342,6 @@ private fun AboutSettingsPage(
         }
         item {
             SettingsSection(tr("检查更新", "Check for updates")) {
-                Text(
-                    tr(
-                        "从 GitHub Release 获取最新版本信息。",
-                        "Fetches the latest release information from GitHub.",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 Button(
                     onClick = viewModel::checkForUpdate,
                     enabled = !checking && !downloadState.isUpdateOperationInProgress(),
@@ -7524,8 +7479,8 @@ private fun AboutSettingsPage(
             SettingsSection(tr("应用显示名称", "App display name")) {
                 Text(
                     tr(
-                        "更改桌面图标下显示的应用名称。部分启动器需要片刻才会刷新。",
-                        "Changes the launcher label. Some launchers take a moment to refresh.",
+                        "名称和图标更改后，部分启动器需要片刻刷新。",
+                        "Some launchers take a moment to show name and icon changes.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -7548,14 +7503,6 @@ private fun AboutSettingsPage(
         }
         item {
             SettingsSection(tr("软件图标", "App icon")) {
-                Text(
-                    tr(
-                        "选择桌面启动图标。部分启动器可能需要片刻刷新缓存。",
-                        "Choose the launcher icon. Some launchers may take a moment to refresh their cache.",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 LauncherIcon.entries.forEach { icon ->
                     val selected = settings.launcherIcon == icon
                     val label = when (icon) {
@@ -7684,15 +7631,23 @@ private fun readPdfiumNotices(context: Context): String? = runCatching {
 }.getOrNull()
 
 @Composable
-private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+private fun SettingsSection(
+    title: String,
+    info: String? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     val organic = LocalVisualStyle.current == VisualStyle.ORGANIC_FUTURE
     GlassPanel(modifier = Modifier.fillMaxWidth(), padding = PaddingValues(16.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                color = if (organic) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (organic) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                )
+                if (info != null) InfoHint(title = title, text = info)
+            }
             content()
         }
     }
@@ -7883,20 +7838,20 @@ private fun settingsPageTutorialTarget(page: SettingsPage): PageTutorialTarget {
             "Manually export or restore structured DeskCubby data and inspect app storage use.",
         )
         SettingsPage.EXPORT -> tr(
-            "勾选日记、媒体、笔记等内容打包成 zip，附带 README 说明目录结构；导出后可分享。",
-            "Package diaries, media, notes, and more into a zip with a README describing the structure; share it after export.",
+            "勾选日记、媒体、笔记等内容打包成 zip，导出后可分享。",
+            "Package diaries, media, notes, and more into a zip to share.",
         )
         SettingsPage.SYNC -> tr(
-            "管理 WebDAV/S3 服务、同步内容与方向；结构化数据走记录同步，真实文件走文件同步。",
-            "Manage WebDAV/S3 services, content, and direction. Structured data uses record sync and real files use file sync.",
+            "管理 WebDAV/S3 服务、同步内容与方向。",
+            "Manage WebDAV/S3 services, content, and direction.",
         )
         SettingsPage.SYNC_DETAIL -> tr(
-            "填写单个云服务的非秘密元数据与凭据，保存前会执行边界校验。",
-            "Enter one cloud service's metadata and credentials; validation runs before saving.",
+            "填写单个云服务的地址与凭据。",
+            "Enter one cloud service's address and credentials.",
         )
         SettingsPage.DIARY -> tr(
-            "配置 SAF 日记/媒体目录、命名、图片、吃历和热量估算。",
-            "Configure SAF diary/media folders, naming, images, the meal calendar, and energy estimation.",
+            "配置日记/媒体目录、命名、图片、吃历和热量估算。",
+            "Configure diary/media folders, naming, images, the meal calendar, and energy estimation.",
         )
         SettingsPage.DIARY_MEAL -> tr(
             "调整吃历的图片高度、餐别文字、换行与每行数量。",
@@ -7907,8 +7862,8 @@ private fun settingsPageTutorialTarget(page: SettingsPage): PageTutorialTarget {
             "Set the day boundary, auto sleep/wake estimation, field management, and index rebuild.",
         )
         SettingsPage.STRUCTURED_FIELDS -> tr(
-            "新建或归档结构化字段；字段 ID 稳定，改名不影响历史。",
-            "Create or archive structured fields; IDs are stable and renames never break history.",
+            "新建或归档结构化字段；改名不影响历史。",
+            "Create or archive structured fields; renaming keeps history.",
         )
         SettingsPage.BLOG -> tr(
             "设置应用内浏览器主页、明暗主题和电脑网页模式。",
@@ -7931,16 +7886,16 @@ private fun settingsPageTutorialTarget(page: SettingsPage): PageTutorialTarget {
             "Adjust the item limit and summaries per feed. Feed URLs are managed on the RSS page.",
         )
         SettingsPage.AI -> tr(
-            "调整 AI 页面字体、回复框宽度与 Agent 提示词；模型配置在独立的“AI 配置”子页管理。",
-            "Adjust AI page font size, reply box width, and the Agent prompt; model configurations live in the separate AI configurations subpage.",
+            "调整 AI 页面字体、回复框宽度与 Agent 提示词。",
+            "Adjust AI page font size, reply width, and the Agent prompt.",
         )
         SettingsPage.AI_CONFIGS -> tr(
             "管理文字/图片模型配置；点按编辑，长按可复制或删除。",
             "Manage text/image model configurations; tap to edit, or long-press to copy or delete.",
         )
         SettingsPage.AI_DETAIL -> tr(
-            "编辑兼容接口、模型、提示词和完整 API Key；请求预览不会包含密钥。",
-            "Edit the compatible endpoint, model, prompt, and full API key; request previews omit the key.",
+            "编辑接口地址、模型、提示词和 API Key。",
+            "Edit the endpoint, model, prompt, and API key.",
         )
         SettingsPage.NAVIGATION -> tr(
             "选择底栏页面、默认页、名称图标和音乐可视化；拖动四点手柄排序。",
@@ -7951,16 +7906,16 @@ private fun settingsPageTutorialTarget(page: SettingsPage): PageTutorialTarget {
             "Choose entries, descriptions, and card order for the Navigation page.",
         )
         SettingsPage.USAGE -> tr(
-            "启用后仍需系统授予使用情况访问权限；关闭不会删除已有历史。",
-            "System usage access is still required after enabling; disabling does not delete history.",
+            "需要系统的使用情况访问权限；关闭不删除历史。",
+            "Requires system usage access; turning it off keeps history.",
         )
         SettingsPage.STEPS -> tr(
             "启用后从 Health Connect 只读步数、距离与活动热量。",
             "After enabling, read steps, distance, and active calories from Health Connect only.",
         )
         SettingsPage.ABOUT -> tr(
-            "查看版本、教学模式、更新、桌面名称与图标。页面教学可在这里关闭或重置。",
-            "View version, tutorials, updates, launcher name, and icon. Page tutorials can be disabled or reset here.",
+            "查看版本、更新、教学模式、桌面名称与图标。",
+            "View version, updates, tutorials, launcher name, and icon.",
         )
         SettingsPage.APP_GUIDE -> tr(
             "阅读应用使用指南。",

@@ -80,8 +80,8 @@ fun StatisticsOverviewPanel(
             if (overview.daysWithData != overview.recordedDays) {
                 Text(
                     tr(
-                        "${overview.recordedDays} 个日期中有 ${overview.daysWithData} 天含数据；“—”不会按 0 计入平均值。",
-                        "${overview.daysWithData} of ${overview.recordedDays} dates contain data; “—” is not averaged as zero.",
+                        "${overview.recordedDays} 个日期中有 ${overview.daysWithData} 天含数据；“—”不计入平均值。",
+                        "${overview.daysWithData} of ${overview.recordedDays} dates have data; “—” is excluded from averages.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

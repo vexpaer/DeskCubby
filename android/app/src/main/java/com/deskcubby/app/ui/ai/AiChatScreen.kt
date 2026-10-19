@@ -259,13 +259,13 @@ fun AiChatScreen(
                     else tr("先配置 Agent 模型", "Configure an Agent model first"),
                     description = if (configured) {
                         tr(
-                            "Agent 会先检索再读取，只能访问“管理上下文”中授权的数据源；任何写入都会遵守审批模式并留下可撤回 Review。",
-                            "The Agent searches before reading, can access only authorized sources, and records every mutation in Review with approval and Undo.",
+                            "Agent 只能访问你授权的数据源；每项修改都会记录，可在 Review 中撤回。",
+                            "The Agent can access only sources you authorize; every change is recorded and can be undone in Review.",
                         )
                     } else {
                         tr(
-                            "请选择支持 OpenAI-compatible 原生 tool calling 的文字模型配置。不会解析普通回复来偷偷执行工具。",
-                            "Choose a text model with native OpenAI-compatible tool calling. Ordinary prose is never parsed to execute tools.",
+                            "请选择支持工具调用的文字模型配置。",
+                            "Choose a text model configuration that supports tool calling.",
                         )
                     },
                     actionLabel = if (configured) null else tr("打开 AI 设置", "Open AI settings"),
@@ -756,8 +756,8 @@ private fun AgentContextDialog(
                 item {
                     Text(
                         tr(
-                            "勾选表示授予检索和按需读取权限，不会把全部正文塞入 Prompt。取消授权后，Agent 工具立即无法访问该数据源。",
-                            "A check grants search and on-demand read access; it does not inject all content into the prompt. Removing access blocks the source immediately.",
+                            "勾选即授权 Agent 按需检索和读取；取消后立即失效。",
+                            "Checked sources can be searched and read as needed; unchecking revokes access immediately.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -825,12 +825,12 @@ private fun AgentPermissionDialog(
                 PermissionModeCard(
                     selected == AgentPermissionMode.REQUIRE_APPROVAL,
                     tr("需要批准", "Require approval"),
-                    tr("读取无需确认；每一个创建、编辑、删除或设置修改都先显示预览。", "Reads run directly; every create, edit, delete, or setting change shows a preview first."),
+                    tr("读取无需确认；每项修改都会先显示预览。", "Reads run directly; every change shows a preview first."),
                 ) { onSelect(AgentPermissionMode.REQUIRE_APPROVAL) }
                 PermissionModeCard(
                     selected == AgentPermissionMode.FULL_AUTO,
                     tr("全自动", "Full auto"),
-                    tr("修改直接执行，但仍逐项写入 Review，并可在安全时 Undo。", "Mutations run directly but remain individually recorded in Review with Undo where safe."),
+                    tr("修改直接执行，但仍逐项记录在 Review 中，可在安全时撤回。", "Changes run directly but are still recorded one by one in Review and can be undone where safe."),
                 ) { onSelect(AgentPermissionMode.FULL_AUTO) }
             }
         },
@@ -1073,7 +1073,7 @@ private fun CapabilityNotice(onOpenSettings: () -> Unit) {
             Icon(Icons.Outlined.Lock, null)
             Spacer(Modifier.width(10.dp))
             Text(
-                tr("该 Provider 未启用原生工具调用，Agent 不会运行。", "Native tool calling is disabled for this provider; Agent will not run."),
+                tr("该配置未开启工具调用，Agent 无法运行。", "Tool calling is off for this configuration, so Agent can't run."),
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = onOpenSettings) { Text(tr("检查", "Review")) }

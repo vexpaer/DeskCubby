@@ -279,8 +279,8 @@ fun DesktopWidgetsScreen(
             text = {
                 Text(
                     tr(
-                        "已放到桌面的实例保留各自添加时的独立快照，不会被删除或改成其他卡片。",
-                        "Existing launcher instances keep their own placement snapshots; they are not removed or changed into another card.",
+                        "已放到桌面的小组件不受影响。",
+                        "Widgets already on the home screen are not affected.",
                     ),
                 )
             },
@@ -368,18 +368,11 @@ private fun WidgetCardList(
                 shape = MaterialTheme.shapes.large,
             ) {
                 Text(
-                    tr("先在这里设计可复用卡片，再添加到桌面。放置后长按桌面实例即可调整大小；内容会根据空间自动适配。", "Design reusable cards here, then add them to the home screen. Long-press a placed instance to resize it; content adapts to the available space automatically."),
+                    tr("先设计卡片，再添加到桌面；长按桌面上的小组件可调整大小，或选择“重新配置”换用其他设计。", "Design cards here, then add them to the home screen. Long-press a placed widget to resize it or choose Reconfigure to apply another design."),
                     modifier = Modifier.padding(16.dp),
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
-        }
-        item {
-            Text(
-                tr("每个已放置小组件保留独立快照；长按桌面实例并选择“重新配置”可换用其他设计。", "Each placed widget keeps an independent snapshot. Long-press it and choose Reconfigure to apply another saved design."),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
         if (configs.isEmpty()) {
             item {
@@ -417,14 +410,6 @@ private fun WidgetCardList(
                             Icon(Icons.Outlined.Delete, if (english) "Delete" else "删除")
                         }
                     }
-                    Text(
-                        tr(
-                            "长按已放置的桌面实例并选择“重新配置”，即可套用这张卡片的设计。",
-                            "Long-press a placed launcher instance and choose Reconfigure to apply this card design.",
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
         }
@@ -508,8 +493,8 @@ private fun WidgetCardEditor(
                     }
                     Text(
                         tr(
-                            "应用模块包含可直接在桌面游玩的小游戏（2048 三档棋盘、贪吃蛇、俄罗斯方块、扫雷、蜘蛛纸牌、围棋）、音乐可视化、阅读、使用时间图表和云端同步。",
-                            "App modules include mini games playable right on the home screen (2048 in three board sizes, snake, tetris, minesweeper, spider, go), music visualizer, reader, screen-time charts and cloud sync.",
+                            "包含小游戏、音乐可视化、阅读、使用时间图表和云端同步。",
+                            "Includes mini games, music visualizer, reader, screen-time charts, and cloud sync.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

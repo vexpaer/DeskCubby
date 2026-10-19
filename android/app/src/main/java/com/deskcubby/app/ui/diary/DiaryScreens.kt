@@ -375,7 +375,7 @@ fun DiaryListScreen(
         AlertDialog(
             onDismissRequest = { deleteItem = null },
             title = { Text(tr("删除 ${item.name.removeSuffix(".md")}？", "Delete ${item.name.removeSuffix(".md")}?")) },
-            text = { Text(tr("文件将安全复制到日记目录内的回收站，校验成功后才删除原文件。", "The file is copied and verified in the diary trash before the original is removed.")) },
+            text = { Text(tr("文件将移入日记目录内的回收站。", "The file will be moved to the recycle bin inside the diary folder.")) },
             confirmButton = { TextButton(onClick = { viewModel.delete(item.uri); deleteItem = null }) { Text(tr("移入回收站", "Move to trash")) } },
             dismissButton = { TextButton(onClick = { deleteItem = null }) { Text(tr("取消", "Cancel")) } },
         )
@@ -435,8 +435,8 @@ private fun EmptyDiary(
         icon = Icons.Outlined.CreateNewFolder,
         title = tr("设置日记目录", "Set up diary folders"),
         description = tr(
-            "确认本机 Documents（文档）目录后，会自动创建 deskcubby/diary 与 deskcubby/media。系统要求你确认一次目录访问。",
-            "Confirm the local Documents folder to create deskcubby/diary and deskcubby/media automatically. Android requires one folder-access confirmation.",
+            "确认 Documents（文档）目录后，将自动创建 deskcubby/diary 与 deskcubby/media。",
+            "After you confirm the Documents folder, deskcubby/diary and deskcubby/media are created automatically.",
         ),
         actionLabel = if (setupInProgress) {
             tr("正在创建…", "Creating…")
@@ -960,8 +960,8 @@ private fun MealCalendarExportRangeDialog(
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     tr(
-                        "选择按天计算的时间范围，首尾日期都会包含，范围长度不限。PDF 按日期分组、两列排版，沿用当前餐别筛选与照片滤镜；没有照片的日期会跳过。",
-                        "Choose an inclusive day range of any length. The PDF groups photos by day in two columns and uses the current meal-category filter and photo filter; days without photos are skipped.",
+                        "包含首尾日期，两列排版并沿用当前筛选与滤镜；没有照片的日期会跳过。",
+                        "Both end dates are included. Uses two columns and your current filters; days without photos are skipped.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -1359,8 +1359,8 @@ private fun MealEnergyDetailsDialog(
                     item(key = "recalculate-note") {
                         Text(
                             tr(
-                                "每张图片可单独重新计算并保留手动总量；底部重新计算会更新当天全部图片并清除手动总量。",
-                                "Each photo can be recalculated while preserving the manual total; the action below refreshes every photo and clears the manual total.",
+                                "单张重新计算会保留手动总量；底部重新计算会更新全部图片并清除手动总量。",
+                                "Recalculating one photo keeps the manual total; recalculating at the bottom updates every photo and clears it.",
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

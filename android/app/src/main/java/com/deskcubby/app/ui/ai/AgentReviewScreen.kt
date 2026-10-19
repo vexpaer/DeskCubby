@@ -99,8 +99,8 @@ fun AgentReviewScreen(
                 icon = Icons.Outlined.Restore,
                 title = tr("还没有 Agent 运行记录", "No Agent runs yet"),
                 description = tr(
-                    "读取与网络工具会出现在详细记录中；真正改变数据的操作会显示修改前后内容和 Undo 状态。",
-                    "Reads and web tools appear in details. Data-changing operations show before/after content and Undo status.",
+                    "修改数据的操作会显示前后内容，并可在此撤回。",
+                    "Data changes show before/after content and can be undone here.",
                 ),
                 modifier = Modifier.fillMaxSize().padding(inner),
             )

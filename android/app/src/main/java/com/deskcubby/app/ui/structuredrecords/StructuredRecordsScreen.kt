@@ -235,7 +235,7 @@ private fun EmptyStructuredRecords(onAdd: () -> Unit) {
             Icon(Icons.Outlined.EventNote, contentDescription = null, modifier = Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
             Text(tr("还没有结构化记录", "No structured records yet"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
-                tr("模板正文里可以放任意多个类型字段；记录时所有字段都在同一个输入框中原地填写。", "A template can contain any number of typed fields; fill them inline in one editor."),
+                tr("模板中可放多个字段，记录时在同一个输入框里填写。", "A template can hold several fields, all filled in one input box."),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -258,8 +258,8 @@ private fun SystemSleepWakeCard(
             }
             Text(
                 tr(
-                    "根据手机首次/最后一次使用与解锁/锁屏时间估算，不使用 Health Connect；归属起床时间的自然日期。",
-                    "Estimated from first/last phone use and unlock/lock events, not Health Connect; assigned to the wake timestamp's calendar date.",
+                    "按手机首次与最后使用时间估算，计入起床当天。",
+                    "Estimated from the phone's first and last use; counted on the wake-up day.",
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -473,7 +473,7 @@ private fun TemplateEditorDialog(
                     }
                 }
                 Text(
-                    tr("字段在正文中以下划线显示；可以插入多个字段、重复字段和多行文字。", "Fields stay underlined inline; multiple, repeated and multiline fields are supported."),
+                    tr("字段以下划线显示，可插入多个字段和多行文字。", "Fields appear underlined; insert several fields and multiple lines."),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

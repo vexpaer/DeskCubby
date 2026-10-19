@@ -200,8 +200,8 @@ fun StepStatisticsScreen(
                     StatisticsMessagePanel(
                         title = tr("还没有健康记录", "No health records yet"),
                         message = tr(
-                            "Health Connect 没有返回步数、距离或热量聚合值时会显示“—”，不会伪造为 0。",
-                            "Missing Health Connect aggregates for steps, distance, or calories are shown as “—”, never fabricated as zero.",
+                            "没有数据时显示“—”，不会记为 0。",
+                            "Missing data shows as “—” and is never recorded as 0.",
                         ),
                     )
                 }
@@ -238,8 +238,8 @@ private fun StepCollectionMessage(
         !state.enabled -> StatisticsMessagePanel(
             title = tr("统计已关闭", "Tracking is off"),
             message = tr(
-                "开启后，步数、距离和活动热量只保存在应用私有数据库中；关闭不会删除已有历史。",
-                "When enabled, steps, distance, and active calories stay in the app-private database. Turning it off keeps existing history.",
+                "开启后数据仅保存在本机；关闭不删除历史。",
+                "Data stays on this device; turning it off keeps history.",
             ),
             actionLabel = tr("打开健康设置", "Open health settings"),
             onAction = onOpenTrackingSettings,
@@ -260,16 +260,16 @@ private fun StepCollectionMessage(
                 },
                 message = when (state.healthConnectAction) {
                     StepHealthConnectAction.UPDATE_PROVIDER_IN_PLAY_STORE -> tr(
-                        "请从 Google Play 安装或更新 Health Connect。若 Play 商店无法打开，会改用安全的 HTTPS 页面。",
-                        "Install or update Health Connect from Google Play. If the Play Store cannot open, a secure HTTPS page is used.",
+                        "请从 Google Play 安装或更新 Health Connect。",
+                        "Install or update Health Connect from Google Play.",
                     )
                     StepHealthConnectAction.OPEN_SYSTEM_UPDATE -> tr(
                         "Android 14 及以上由系统提供 Health Connect，请先安装可用的系统更新。",
                         "On Android 14 and newer, Health Connect is provided by the system. Install an available system update first.",
                     )
                     else -> tr(
-                        "此设备没有可用的 Health Connect；DeskCubby 不会改用其他计步来源或写入伪造数据。",
-                        "Health Connect is unavailable on this device. DeskCubby does not switch to another step source or fabricate data.",
+                        "此设备没有可用的 Health Connect。",
+                        "Health Connect is not available on this device.",
                     )
                 },
                 actionLabel = when (state.healthConnectAction) {
@@ -292,8 +292,8 @@ private fun StepCollectionMessage(
             StatisticsMessagePanel(
                 title = tr("需要健康数据读取权限", "Health permissions required"),
                 message = tr(
-                    "请求 Health Connect 的步数、距离和活动热量读取权限；设备支持时也会请求后台读取，以便每 6 小时补充日结。拒绝后不会改用其他数据源。",
-                    "Health Connect read access is requested for steps, distance, and active calories. Background reading is also requested when supported for six-hour catch-up. Denial does not switch to another source.",
+                    "需要读取步数、距离和活动热量；设备支持时还会请求后台读取。",
+                    "Grants read access to steps, distance, and active calories, plus background reads where supported.",
                 ),
                 actionLabel = tr("授权读取健康数据", "Grant health access"),
                 onAction = onRequestPermissions,
@@ -314,13 +314,13 @@ private fun StepCollectionMessage(
                     StepStatisticsRepository.DETAIL_OPEN_HEALTH_CONNECT_FAILED
                 ) {
                     tr(
-                        "系统没有可处理此操作的页面。请确认 Health Connect 或 Google Play 可用后重试。",
-                        "No system page could handle this action. Check that Health Connect or Google Play is available, then retry.",
+                        "无法打开系统页面，请确认 Health Connect 或 Google Play 可用。",
+                        "Couldn't open the system page; check that Health Connect or Google Play is available.",
                     )
                 } else {
                     tr(
-                        "失败日期不会被标记为已日结，稍后可以安全重试。",
-                        "The failed date was not finalized and can be retried safely.",
+                        "失败的日期稍后可重试。",
+                        "Failed days can be retried later.",
                     )
                 },
                 actionLabel = if (
@@ -355,8 +355,8 @@ private fun StepCollectionMessage(
         else -> StatisticsMessagePanel(
             title = tr("Health Connect 数据源", "Health Connect source"),
             message = tr(
-                "每次打开或手动刷新都会重新核对最近 30 天，以接收 Health Connect 延迟补写的历史数据；后台同步会核对最近 7 天。健康数据和权限不会进入应用备份或云同步。",
-                "Opening or manually refreshing rechecks the last 30 days so delayed Health Connect backfills can be imported; background refresh rechecks the last 7 days. Health data and permissions are excluded from backups and cloud sync.",
+                "打开或刷新时会核对最近 30 天的数据；健康数据不进入备份或云同步。",
+                "Opening or refreshing rechecks the last 30 days; health data is never backed up or synced.",
             ),
             actionLabel = if (
                 state.healthConnectAction == StepHealthConnectAction.MANAGE_OR_PERMISSIONS

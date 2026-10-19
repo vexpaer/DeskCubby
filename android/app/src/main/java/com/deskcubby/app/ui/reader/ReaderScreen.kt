@@ -311,8 +311,8 @@ private fun ReaderLibrary(
                 icon = Icons.Outlined.WarningAmber,
                 title = tr("书架状态需要修复", "Library state needs repair"),
                 description = tr(
-                    "书架 JSON 损坏、超限或无法安全提交。为保护已有记录，应用已停止修改该文件；TXT/PDF 原文件没有被更改。",
-                    "The library JSON is damaged, too large, or could not be committed safely. Changes are blocked to preserve it; the original TXT/PDF files were not modified.",
+                    "书架记录无法读取，已停止写入以保护数据；原书文件未改动。",
+                    "The library record can't be read, so writing has stopped to protect your data; book files are untouched.",
                 ),
                 modifier = Modifier.fillMaxSize().padding(inner),
             )
@@ -321,8 +321,8 @@ private fun ReaderLibrary(
                 icon = Icons.AutoMirrored.Outlined.MenuBook,
                 title = tr("书架还是空的", "Your library is empty"),
                 description = tr(
-                    "导入 TXT 或 PDF 小说；文件保留在原位置，DeskCubby 只保存读取授权、进度与设置。",
-                    "Import a TXT or PDF book. The file stays in place; DeskCubby stores only access, progress, and settings.",
+                    "导入 TXT 或 PDF 开始阅读，原文件保留在原位置。",
+                    "Import a TXT or PDF to start reading; the file stays where it is.",
                 ),
                 actionLabel = tr("导入小说", "Import a book"),
                 onAction = onImport,
@@ -473,8 +473,8 @@ private fun ReaderLibrary(
                     Text(
                         if (book.type == ReaderBookType.PDF) {
                             tr(
-                                "PDF 默认使用文档缩略图，缺失时安全渲染第一页；也可以选择图片覆盖。",
-                                "PDFs use a document thumbnail or a safely rendered first page; you can also override it with an image.",
+                                "默认使用 PDF 首页作为封面，也可选择图片。",
+                                "The first PDF page is the default cover; you can choose an image instead.",
                             )
                         } else {
                             tr(
@@ -696,8 +696,8 @@ private fun ReaderBookPage(
     val scope = rememberCoroutineScope()
     val bookSnackbar = remember { SnackbarHostState() }
     val pdfFallbackMessage = tr(
-        "增强 PDF 视图未能加载，已自动切换到兼容视图。",
-        "The enhanced PDF view could not load. Switched to the compatibility view.",
+        "增强视图未能加载，已切换到兼容视图（不支持搜索与目录）。",
+        "The enhanced view could not load, so the compatibility view is used (no search or contents).",
     )
     val pdfRetryLabel = tr("重试增强视图", "Retry enhanced view")
     val activity = LocalContext.current.findActivity()
@@ -756,7 +756,6 @@ private fun ReaderBookPage(
                 totalPages = totalPages,
                 scanning = pdfChapterScanRunning,
                 isPdf = content is ReaderContent.PdfBook,
-                pdfTextLayerAvailable = textLayerAvailable,
                 foreground = foreground,
                 background = background,
                 onChapterSelected = { chapter ->
@@ -1165,8 +1164,8 @@ private fun ReaderShelfSettingsDialog(
                             Text(tr("显示封面下方书名", "Show titles below covers"))
                             Text(
                                 tr(
-                                    "关闭后隐藏封面下方的书名；无图片的 TXT 默认封面仍会显示书名。",
-                                    "Hide titles below covers. TXT books without an image still show their title on the default cover.",
+                                    "无图片的默认封面仍会显示书名。",
+                                    "Default covers without an image still show the title.",
                                 ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1433,7 +1432,6 @@ private fun ReaderChapterDrawer(
     totalPages: Int,
     scanning: Boolean,
     isPdf: Boolean,
-    pdfTextLayerAvailable: Boolean,
     foreground: Color,
     background: Color,
     onChapterSelected: (ReaderChapter) -> Unit,
@@ -1481,20 +1479,12 @@ private fun ReaderChapterDrawer(
         }
         if (chapters.isEmpty()) {
             Text(
-                if (isPdf && !pdfTextLayerAvailable) {
-                    tr(
-                        "当前 PDF 兼容视图或系统 PDF 扩展不提供文本目录；仍可按页数跳转。",
-                        "The current compatibility view or system PDF extension has no text contents; page jumping remains available.",
-                    )
-                } else if (isPdf) {
-                    tr(
-                        "暂未从 PDF 文本层识别到章节；扫描版 PDF 没有可搜索文字时仍可按页数跳转。",
-                        "No chapters have been found in the PDF text layer yet. Image-only PDFs can still be navigated by page.",
-                    )
+                if (isPdf) {
+                    tr("未识别到章节，可按页跳转。", "No chapters found; jump by page instead.")
                 } else {
                     tr(
-                        "当前智能/自定义规则没有识别到章节标题；仍可使用逻辑页跳转，并可在阅读设置中调整规则。",
-                        "The current smart/custom rules found no chapter headings. Logical-page jumping remains available, and the rules can be changed in Reading settings.",
+                        "未识别到章节，可按页跳转或在阅读设置中调整规则。",
+                        "No chapters found; jump by page or adjust the rules in Reading settings.",
                     )
                 },
                 modifier = Modifier.padding(20.dp),
@@ -1776,8 +1766,8 @@ private fun ReaderJumpDialog(
                 if (isText) {
                     Text(
                         tr(
-                            "TXT 每约 1,800 个字符划为一个逻辑页，页数不受设备尺寸或字体变化影响。",
-                            "TXT uses one stable logical page per roughly 1,800 characters, independent of screen size or font changes.",
+                            "每约 1,800 字为一页，页数不随字号或屏幕变化。",
+                            "About 1,800 characters per page; page count doesn't change with type size or screen.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1907,8 +1897,8 @@ private fun ReaderSettingsDialog(
                         }
                         Text(
                             tr(
-                                "双指缩放可临时调整；此比例用于重新打开和设置保存后的基准缩放。",
-                                "Pinch to zoom temporarily; this percentage is the saved baseline used after reopening.",
+                                "打开书籍时的默认缩放，双指可临时调整。",
+                                "Default zoom when opening a book; pinch to adjust temporarily.",
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2004,8 +1994,8 @@ private fun ReaderSettingsDialog(
                     if (isPdf) {
                         Text(
                             tr(
-                                "PDF 会把页面映射为当前背景与前景双色；选择夜间背景和浅色前景即可获得黑底白字效果，原文件不会修改。",
-                                "PDF pages are mapped to the selected background and foreground. Use a dark background with a light foreground for dark mode; the original file is unchanged.",
+                                "PDF 页面按背景与文字两种颜色显示，原文件不会修改。",
+                                "PDF pages are shown in the background and text colors; the file itself is not changed.",
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2022,8 +2012,8 @@ private fun ReaderSettingsDialog(
                             Text(tr("全屏纯净模式", "Immersive reading"), fontWeight = FontWeight.SemiBold)
                             Text(
                                 tr(
-                                    "隐藏书名、工具栏、页码和系统栏；点屏幕中央可显示或再次隐藏。",
-                                    "Hide the title, toolbar, page indicator, and system bars. Tap the center to show or hide them.",
+                                    "隐藏工具栏和系统栏，点屏幕中央切换。",
+                                    "Hides toolbars and system bars; tap the center to toggle.",
                                 ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2086,8 +2076,8 @@ private fun ReaderSettingsDialog(
                     }
                     Text(
                         tr(
-                            "智能规则支持中文章节/卷/回/幕、英文 Chapter/Part/Book/Section/Episode、Markdown 标题、序章/尾声及多种编号格式。",
-                            "Smart rules cover Chinese chapters/volumes, Chapter/Part/Book/Section/Episode, Markdown headings, prologues/epilogues, and several numbering styles.",
+                            "智能规则可识别常见的中英文章节标题。",
+                            "Smart rules recognize common Chinese and English chapter headings.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2370,12 +2360,12 @@ private fun readerTutorialTarget(content: ReaderContentState): PageTutorialTarge
             pageId = "reader/pdf",
             title = tr("PDF 阅读", "PDF reader"),
             description = tr(
-                "PDFium 增强视图以连续页面阅读；加载超时或不可用时会自动切换到系统兼容视图。",
-                "The PDFium enhanced view forms one continuous reader; if it times out or is unavailable, the app switches to the system compatibility view.",
+                "增强视图连续阅读；不可用时会自动切换到兼容视图。",
+                "The enhanced view reads continuously and falls back to the compatibility view when unavailable.",
             ),
             hints = listOf(
                 tr("增强视图支持双指即时缩放；齿轮中可保存 50%–300% 的基准比例。", "The enhanced view supports pinch zoom; save a 50%–300% baseline from the gear."),
-                tr("增强视图可搜索内嵌文字并自动派生目录；纯图片扫描件没有可搜索文字，DeskCubby 不进行 OCR。", "The enhanced view can search embedded text and derive contents automatically. Image-only scans have no searchable text; DeskCubby does not perform OCR."),
+                tr("增强视图可搜索文字并生成目录；纯图片扫描件不支持搜索。", "The enhanced view can search text and build contents; image-only scans can't be searched."),
                 tr("兼容视图不提供搜索或自动目录，但仍可连续阅读并按真实页码保存进度。", "The compatibility view has no search or automatic contents, but still reads continuously and saves the physical page."),
                 tr("离开书籍时会保存当前位置。", "Your current position is saved when you leave the book."),
             ),

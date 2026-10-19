@@ -116,15 +116,15 @@ fun ExportScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
                         tr(
-                            "勾选要打包进 zip 的内容，然后点击「导出」。未配置目录的类型会自动跳过。",
-                            "Select the content to package into the zip, then tap Export. Types without a configured folder are skipped automatically.",
+                            "勾选要打包的内容；未配置目录的类型会自动跳过。",
+                            "Choose what to package; types without a folder are skipped.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
                         tr(
-                            "文件名：<用户名>.zip，保存到下载文件夹后可直接分享。",
-                            "Filename: <username>.zip, saved to the Downloads folder and ready to share.",
+                            "保存为下载文件夹中的 <用户名>.zip。",
+                            "Saved as <user name>.zip in Downloads.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -203,8 +203,8 @@ fun ExportScreen(
                     )
                     Text(
                         tr(
-                            "从 DeskCubby 导出的 zip 恢复 diaries/ 下的 Markdown 与 .deskcubby 四个元数据文件。不会覆盖媒体、笔记或 data/data.json；请先在设置中选好日记目录。",
-                            "Restore Markdown plus the four .deskcubby metadata files under diaries/ from a DeskCubby export zip. Media, notes, and data/data.json are not overwritten; choose a diary folder first.",
+                            "从导出的 zip 恢复日记与元数据，不会覆盖媒体或笔记；请先选好日记目录。",
+                            "Restores diaries and their metadata from an exported zip without touching media or notes; choose a diary folder first.",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

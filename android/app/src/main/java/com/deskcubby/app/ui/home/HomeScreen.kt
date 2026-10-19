@@ -788,13 +788,13 @@ private fun CloudSyncHomeWidget(
         Text(
             if (forceActions) {
                 tr(
-                    "仅在明确需要以本机或云端为准时使用；不会传播删除，仍会保护并发修改。",
-                    "Use only when explicitly choosing local or cloud data; deletions are not propagated and concurrent edits remain protected.",
+                    "以本机或云端为准覆盖内容，不会删除文件。",
+                    "Overwrites using the device or cloud version; never deletes files.",
                 )
             } else {
                 tr(
-                    "按已保存的同步方向安全合并所有已启用来源。",
-                    "Safely merge every enabled source using its saved sync direction.",
+                    "按设定的方向同步所有已启用来源。",
+                    "Syncs every enabled source in its saved direction.",
                 )
             },
             style = MaterialTheme.typography.bodySmall,
@@ -930,13 +930,13 @@ private fun CloudSyncHomeWidget(
                 Text(
                     if (upload) {
                         tr(
-                            "同路径内容不同时将以本机版本覆盖远端，但不会删除远端独有项目；并发远端修改仍会阻止覆盖。",
-                            "Different items at the same path use the local version. Remote-only items are kept, and concurrent remote edits still stop the overwrite.",
+                            "上传本机新增项目，并用本机版本覆盖云端的不同内容。不会删除云端独有项目；扫描后云端又有修改时会停止覆盖。",
+                            "Uploads new local items and replaces differing cloud items with the device version. Cloud-only items are kept, and cloud edits made after the scan stop the overwrite.",
                         )
                     } else {
                         tr(
-                            "同路径内容不同时将采用唯一云端来源的版本，但不会删除本机独有项目；并发本机修改仍会保留。",
-                            "Different items at the same path use the single cloud source. Local-only items are kept, and concurrent local edits are still preserved.",
+                            "从唯一已启用的云端来源下载新增项目，并用云端版本覆盖本机的不同内容。不会删除本机独有项目；本机同时发生的修改会保留为冲突副本。",
+                            "Downloads new items from the single enabled cloud source and replaces differing device items with the cloud version. Device-only items are kept, and concurrent device edits are saved as conflict copies.",
                         )
                     },
                 )
@@ -1003,8 +1003,8 @@ private fun CloudSyncHomeWidget(
                     if (status.lastRuns.isEmpty()) {
                         Text(
                             tr(
-                                "本机重启后只保留上次同步的时间和汇总数量；下一次同步完成后，这里会显示各来源和逐项结果。",
-                                "After an app restart only the last time and totals are persisted. The next completed sync will show per-source and per-item results here.",
+                                "下次同步完成后会显示各来源的详细结果。",
+                                "Per-source details appear after the next sync.",
                             ),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
