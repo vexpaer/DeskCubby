@@ -2,7 +2,6 @@ package com.deskcubby.app.ui.diary.filter
 
 import java.time.LocalDate
 import java.util.Locale
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -289,7 +288,7 @@ internal fun isDateInMealExportRange(
     return !date.isBefore(startInclusive) && !date.isAfter(endInclusive)
 }
 
-internal const val DEFAULT_MEAL_PDF_BACKGROUND: Int = 0xFFF5F2EA.toInt()
+internal val DEFAULT_MEAL_PDF_BACKGROUND: Int = 0xFFF5F2EA.toInt()
 private const val DEFAULT_PHOTO_ASPECT = 0.75
 private const val MAX_PHOTOS_PER_PAGE = 9
 private const val BEAM_WIDTH = 14
