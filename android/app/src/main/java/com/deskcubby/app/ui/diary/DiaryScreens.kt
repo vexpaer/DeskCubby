@@ -2,6 +2,8 @@
 
 package com.deskcubby.app.ui.diary
 
+import android.graphics.BitmapFactory
+import android.media.ExifInterface
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
@@ -102,6 +104,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -115,6 +118,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -128,6 +132,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
@@ -159,11 +164,16 @@ import com.deskcubby.app.ui.theme.PanelRole
 import com.deskcubby.app.ui.theme.deskCubbyVisuals
 import com.deskcubby.app.ui.theme.organicFutureAccentColors
 import com.deskcubby.app.ui.theme.tr
+import com.deskcubby.app.ui.diary.filter.MealPdfDayInput
+import com.deskcubby.app.ui.diary.filter.MealPdfLayout
+import com.deskcubby.app.ui.diary.filter.mealCalendarPdfLayout
 import com.deskcubby.app.ui.diary.filter.asComposeColorFilter
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -485,6 +495,7 @@ fun MealCalendarScreen(
     var pendingExportStartIso by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingExportEndIso by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingExportCategories by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingExportBackgroundHex by rememberSaveable { mutableStateOf("#F5F2EA") }
     var visibleMealCategories by remember { mutableStateOf(MealCategory.entries.toSet()) }
     val categoryFilterActive = visibleMealCategories.size < MealCategory.entries.size
     val filteredItems = remember(state.items, visibleMealCategories) {
@@ -515,12 +526,15 @@ fun MealCalendarScreen(
         pendingExportStartIso = null
         pendingExportEndIso = null
         pendingExportCategories = null
+        val backgroundArgb = pendingExportBackgroundHex.drop(1).toIntOrNull(16)
+            ?.let { it or 0xFF000000.toInt() } ?: 0xFFF5F2EA.toInt()
         if (uri != null && start != null && end != null && categories.isNotEmpty()) {
             viewModel.exportMealCalendar(
                 destinationUri = uri,
                 startInclusive = start,
                 endInclusive = end,
                 categories = categories,
+                backgroundArgb = backgroundArgb,
             )
         }
     }
@@ -824,9 +838,11 @@ fun MealCalendarScreen(
                 initialStart = defaultStart,
                 initialEnd = defaultEnd,
                 selectedCategoryCount = visibleMealCategories.size,
+                days = filteredItems,
+                photoFilter = mealPhotoColorFilter,
                 actionsEnabled = mealOperationsEnabled,
                 onDismiss = { showExportRange = false },
-                onConfirm = { start, end ->
+                onConfirm = { start, end, backgroundHex ->
                     val selectedDays = filteredItems.filter { day ->
                         val date = runCatching { LocalDate.parse(day.dateIso) }.getOrNull()
                         date != null && !date.isBefore(start) && !date.isAfter(end)
@@ -836,6 +852,7 @@ fun MealCalendarScreen(
                         showExportRange = false
                         pendingExportStartIso = start.toString()
                         pendingExportEndIso = end.toString()
+                        pendingExportBackgroundHex = backgroundHex
                         pendingExportCategories = visibleMealCategories
                             .sortedBy(MealCategory::sortOrder)
                             .joinToString(",") { it.name }
@@ -939,16 +956,22 @@ private fun MealCalendarExportRangeDialog(
     initialStart: LocalDate,
     initialEnd: LocalDate,
     selectedCategoryCount: Int,
+    days: List<MealCalendarDay>,
+    photoFilter: ColorFilter?,
     actionsEnabled: Boolean,
     onDismiss: () -> Unit,
     /** Returns a user-facing validation error, or null after launching CreateDocument. */
-    onConfirm: (LocalDate, LocalDate) -> String?,
+    onConfirm: (LocalDate, LocalDate, String) -> String?,
 ) {
     var startIso by rememberSaveable { mutableStateOf(initialStart.toString()) }
     var endIso by rememberSaveable { mutableStateOf(initialEnd.toString()) }
     var pickingStart by rememberSaveable { mutableStateOf(false) }
     var pickingEnd by rememberSaveable { mutableStateOf(false) }
     var selectionError by rememberSaveable { mutableStateOf<String?>(null) }
+    var backgroundHex by rememberSaveable { mutableStateOf("#F5F2EA") }
+    val validBackground = remember(backgroundHex) {
+        Regex("^#[a-fA-F0-9]{6}$").matches(backgroundHex)
+    }
     val start = remember(startIso) { LocalDate.parse(startIso) }
     val end = remember(endIso) { LocalDate.parse(endIso) }
     val reversed = start.isAfter(end)
@@ -957,11 +980,14 @@ private fun MealCalendarExportRangeDialog(
         onDismissRequest = onDismiss,
         title = { Text(tr("导出吃历 PDF", "Export meal-calendar PDF")) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Text(
                     tr(
-                        "包含首尾日期，两列排版并沿用当前筛选与滤镜；没有照片的日期会跳过。",
-                        "Both end dates are included. Uses two columns and your current filters; days without photos are skipped.",
+                        "每天自动拼图、保留照片比例；照片过多时续页。沿用当前餐别和滤镜。",
+                        "An uncropped collage per day, with continuation pages if needed. Current meal filters are applied.",
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -987,6 +1013,46 @@ private fun MealCalendarExportRangeDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Text(tr("PDF 背景颜色", "PDF background"), style = MaterialTheme.typography.labelMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("#F5F2EA", "#F4F4F2", "#252525", "#DCE5E8").forEach { hex ->
+                        OutlinedButton(
+                            onClick = { backgroundHex = hex },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(4.dp),
+                            border = BorderStroke(
+                                if (backgroundHex.equals(hex, ignoreCase = true)) 2.dp else 1.dp,
+                                if (backgroundHex.equals(hex, ignoreCase = true))
+                                    MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.outlineVariant,
+                            ),
+                        ) {
+                            Box(Modifier.size(24.dp).background(Color(hex.drop(1).toInt(16) or
+                                0xFF000000.toInt()), CircleShape))
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = backgroundHex,
+                    onValueChange = { backgroundHex = it.take(7) },
+                    label = { Text(tr("自定义十六进制颜色", "Custom hex color")) },
+                    isError = !validBackground,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                val previewDays = remember(days, start, end) {
+                    days.filter { day ->
+                        val date = runCatching { LocalDate.parse(day.dateIso) }.getOrNull()
+                        date != null && !date.isBefore(start) && !date.isAfter(end)
+                    }
+                }
+                if (validBackground && previewDays.isNotEmpty()) {
+                    MealCalendarPdfPreview(
+                        days = previewDays,
+                        backgroundArgb = backgroundHex.drop(1).toInt(16) or 0xFF000000.toInt(),
+                        photoFilter = photoFilter,
+                    )
+                }
                 if (reversed) {
                     Text(
                         tr("开始日期不能晚于结束日期", "The start date cannot be after the end date"),
@@ -1006,8 +1072,8 @@ private fun MealCalendarExportRangeDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = actionsEnabled && !reversed,
-                onClick = { selectionError = onConfirm(start, end) },
+                enabled = actionsEnabled && !reversed && validBackground,
+                onClick = { selectionError = onConfirm(start, end, backgroundHex) },
             ) { Text(tr("选择保存位置", "Choose destination")) }
         },
         dismissButton = {
@@ -1036,6 +1102,118 @@ private fun MealCalendarExportRangeDialog(
                 pickingEnd = false
             },
         )
+    }
+}
+
+/** Lightweight, live preview using the exact PDF layout and EXIF-oriented image bounds. */
+@Composable
+private fun MealCalendarPdfPreview(
+    days: List<MealCalendarDay>,
+    backgroundArgb: Int,
+    photoFilter: ColorFilter?,
+) {
+    val context = LocalContext.current
+    var dayIndex by remember(days) { mutableStateOf(0) }
+    var pageInDay by remember(dayIndex) { mutableStateOf(0) }
+    val currentDay = days[dayIndex.coerceIn(0, days.lastIndex)]
+    val aspects by produceState<List<Float?>?>(null, currentDay) {
+        value = withContext(Dispatchers.IO) {
+            currentDay.photos.map { photo ->
+                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                runCatching {
+                    context.contentResolver.openInputStream(photo.uri).use { input ->
+                        requireNotNull(input)
+                        BitmapFactory.decodeStream(input, null, options)
+                    }
+                    if (options.outWidth <= 0 || options.outHeight <= 0) return@runCatching null
+                    val orientation = context.contentResolver.openInputStream(photo.uri).use { input ->
+                        requireNotNull(input)
+                        ExifInterface(input).getAttributeInt(
+                            ExifInterface.TAG_ORIENTATION,
+                            ExifInterface.ORIENTATION_NORMAL,
+                        )
+                    }
+                    val swap = orientation == ExifInterface.ORIENTATION_ROTATE_90 ||
+                        orientation == ExifInterface.ORIENTATION_ROTATE_270 ||
+                        orientation == ExifInterface.ORIENTATION_TRANSPOSE ||
+                        orientation == ExifInterface.ORIENTATION_TRANSVERSE
+                    if (swap) options.outWidth.toFloat() / options.outHeight
+                    else options.outHeight.toFloat() / options.outWidth
+                }.getOrNull()
+            }
+        }
+    }
+    val layout: MealPdfLayout? = remember(currentDay, aspects) {
+        aspects?.let { mealCalendarPdfLayout(listOf(MealPdfDayInput(currentDay.dateIso, it))) }
+    }
+    Text(tr("拼图预览", "Collage preview"), style = MaterialTheme.typography.labelMedium)
+    if (layout == null) {
+        Box(Modifier.fillMaxWidth().height(230.dp), contentAlignment = Alignment.Center) {
+            AppLoadingIndicator()
+        }
+        return
+    }
+
+    val selectedPage = pageInDay.coerceIn(0, layout.pageCount - 1)
+    val background = Color(backgroundArgb)
+    val lightText = ((backgroundArgb ushr 16 and 255) * 0.2126 +
+        (backgroundArgb ushr 8 and 255) * 0.7152 +
+        (backgroundArgb and 255) * 0.0722) < 114.0
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxWidth().height(260.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        val scale = minOf(maxWidth.value / layout.spec.width, maxHeight.value / layout.spec.height)
+        Box(
+            Modifier
+                .width((layout.spec.width * scale).dp)
+                .height((layout.spec.height * scale).dp)
+                .background(background),
+        ) {
+            layout.photos.filter { it.page == selectedPage }.forEach { placement ->
+                AsyncImage(
+                    model = currentDay.photos[placement.photoIndex].uri,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    colorFilter = photoFilter,
+                    modifier = Modifier
+                        .offset(x = (placement.x * scale).dp, y = (placement.y * scale).dp)
+                        .width((placement.width * scale).dp)
+                        .height((placement.height * scale).dp),
+                )
+            }
+            Text(
+                currentDay.dateIso.replace('-', '.'),
+                modifier = Modifier.align(Alignment.BottomEnd)
+                    .padding(end = (14f * scale).dp, bottom = (8f * scale).dp),
+                fontSize = (9f * scale).coerceAtLeast(5f).sp,
+                color = if (lightText) Color.LightGray else Color.DarkGray,
+            )
+        }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        TextButton(
+            enabled = dayIndex > 0 || selectedPage > 0,
+            onClick = {
+                if (pageInDay > 0) pageInDay--
+                else if (dayIndex > 0) dayIndex--
+            },
+        ) { Text(tr("上一页", "Previous")) }
+        Text(
+            "${dayIndex + 1}/${days.size} · ${selectedPage + 1}/${layout.pageCount}",
+            style = MaterialTheme.typography.labelSmall,
+        )
+        TextButton(
+            enabled = dayIndex < days.lastIndex || selectedPage < layout.pageCount - 1,
+            onClick = {
+                if (pageInDay < layout.pageCount - 1) pageInDay++
+                else if (dayIndex < days.lastIndex) dayIndex++
+            },
+        ) { Text(tr("下一页", "Next")) }
     }
 }
 
