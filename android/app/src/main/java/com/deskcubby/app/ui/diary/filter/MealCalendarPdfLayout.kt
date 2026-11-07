@@ -88,17 +88,21 @@ private fun joinTiles(first: Tile, second: Tile, sideBySide: Boolean): Tile.Join
  * Favor page coverage, but penalize tiny leaf tiles. A compact beam keeps the search bounded
  * for large date ranges while considering both split axes and multiple tree shapes.
  */
+private fun minimumPhotoShare(count: Int): Double = when (count) {
+    1 -> 0.0
+    2 -> 0.28
+    in 3..4 -> 0.12
+    in 5..6 -> 0.07
+    else -> 0.035
+}
+
+private fun pageCoverage(tile: Tile, targetAspect: Double): Double =
+    min(tile.aspect / targetAspect, targetAspect / tile.aspect)
+
 private fun tileScore(tile: Tile, targetAspect: Double): Double {
-    val fill = min(tile.aspect / targetAspect, targetAspect / tile.aspect)
-    val minimum = when (tile.shares.size) {
-        1 -> 0.0
-        2 -> 0.28
-        in 3..4 -> 0.12
-        in 5..6 -> 0.07
-        else -> 0.035
-    }
+    val minimum = minimumPhotoShare(tile.shares.size)
     val shortfall = tile.shares.sumOf { max(0.0, minimum - it) }
-    return fill - shortfall * 3.0
+    return pageCoverage(tile, targetAspect) - shortfall * 3.0
 }
 
 private fun bestTile(aspects: List<Float?>, targetAspect: Double): Tile {
@@ -134,8 +138,16 @@ private fun bestTile(aspects: List<Float?>, targetAspect: Double): Tile {
             memo[start][end] = selected
         }
     }
-    return requireNotNull(memo[0][count - 1])
-        .maxBy { tileScore(it, targetAspect) }
+    val choices = requireNotNull(memo[0][count - 1])
+    val floor = minimumPhotoShare(count)
+    // A hard visibility floor is preferable to a slightly fuller page with a microscopic photo.
+    // If the actual photo aspects make the floor geometrically impossible, use the soft fallback.
+    val fair = choices.filter { tile -> tile.shares.all { it + 1e-6 >= floor } }
+    return if (fair.isNotEmpty()) {
+        fair.maxBy { pageCoverage(it, targetAspect) }
+    } else {
+        choices.maxBy { tileScore(it, targetAspect) }
+    }
 }
 
 internal fun mealCalendarPdfLayout(
