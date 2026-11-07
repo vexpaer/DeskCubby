@@ -1116,8 +1116,10 @@ private fun MealCalendarPdfPreview(
     var dayIndex by remember(days) { mutableStateOf(0) }
     var pageInDay by remember(dayIndex) { mutableStateOf(0) }
     val currentDay = days[dayIndex.coerceIn(0, days.lastIndex)]
-    val aspects by produceState<List<Float?>?>(null, currentDay) {
-        value = withContext(Dispatchers.IO) {
+    // Tag asynchronous results with the day: a rapid page change must not show the
+    // previous day's aspect list for one frame (or index photos with the wrong count).
+    val previewData by produceState<Pair<MealCalendarDay, List<Float?>>?>(null, currentDay) {
+        val loadedAspects = withContext(Dispatchers.IO) {
             currentDay.photos.map { photo ->
                 val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 runCatching {
@@ -1142,9 +1144,12 @@ private fun MealCalendarPdfPreview(
                 }.getOrNull()
             }
         }
+        value = currentDay to loadedAspects
     }
-    val layout: MealPdfLayout? = remember(currentDay, aspects) {
-        aspects?.let { mealCalendarPdfLayout(listOf(MealPdfDayInput(currentDay.dateIso, it))) }
+    val layout: MealPdfLayout? = remember(currentDay, previewData) {
+        previewData?.takeIf { it.first === currentDay }?.second?.let {
+            mealCalendarPdfLayout(listOf(MealPdfDayInput(currentDay.dateIso, it)))
+        }
     }
     Text(tr("拼图预览", "Collage preview"), style = MaterialTheme.typography.labelMedium)
     if (layout == null) {
