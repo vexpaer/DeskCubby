@@ -142,13 +142,51 @@ private fun bestTile(aspects: List<Float?>, targetAspect: Double): Tile {
     val floor = minimumPhotoShare(count)
     // A hard visibility floor is preferable to a slightly fuller page with a microscopic photo.
     // If the actual photo aspects make the floor geometrically impossible, use the soft fallback.
-    val fair = choices.filter { tile -> tile.shares.all { it + 1e-6 >= floor } }
-    return if (fair.isNotEmpty()) {
-        fair.maxBy { pageCoverage(it, targetAspect) }
-    } else {
-        choices.maxBy { tileScore(it, targetAspect) }
-    }
+    val bestFair = choices
+        .filter { tile -> tile.shares.all { it + 1e-6 >= floor } }
+        .maxByOrNull { pageCoverage(it, targetAspect) }
+    val bestCoverage = choices.maxOf { pageCoverage(it, targetAspect) }
+
+    // A strict visibility floor must not collapse the entire collage to a tiny centered strip.
+    // Keep the fair candidate only when it preserves at least 80% of the best available coverage.
+    return bestFair?.takeIf {
+        pageCoverage(it, targetAspect) >= bestCoverage * MIN_FAIR_COVERAGE_RATIO
+    } ?: choices.maxBy { tileScore(it, targetAspect) }
 }
+
+/**
+ * Chooses a restrained gray date color when it meets WCAG AA contrast, otherwise falls back
+ * to the higher-contrast black or white. The same helper is used by the Compose preview.
+ */
+internal fun mealPdfDateColorArgb(backgroundArgb: Int): Int {
+    val red = (backgroundArgb ushr 16 and 255) / 255.0
+    val green = (backgroundArgb ushr 8 and 255) / 255.0
+    val blue = (backgroundArgb and 255) / 255.0
+    val backgroundLuminance = 0.2126 * srgbChannelToLinear(red) +
+        0.7152 * srgbChannelToLinear(green) +
+        0.0722 * srgbChannelToLinear(blue)
+
+    val preferredBrightness = red * 0.2126 + green * 0.7152 + blue * 0.0722
+    val preferredGray = if (preferredBrightness < 0.45) 0.76 else 0.42
+    val preferredChannel = Math.round(preferredGray * 255.0) / 255.0
+    val preferredLuminance = srgbChannelToLinear(preferredChannel)
+    val preferredContrast = (maxOf(backgroundLuminance, preferredLuminance) + 0.05) /
+        (minOf(backgroundLuminance, preferredLuminance) + 0.05)
+
+    val selectedGray = if (preferredContrast >= 4.5) {
+        preferredChannel
+    } else {
+        val blackContrast = (backgroundLuminance + 0.05) / 0.05
+        val whiteContrast = 1.05 / (backgroundLuminance + 0.05)
+        if (blackContrast >= whiteContrast) 0.0 else 1.0
+    }
+    val component = Math.round(selectedGray * 255.0).toInt().coerceIn(0, 255)
+    return 0xFF000000.toInt() or (component shl 16) or (component shl 8) or component
+}
+
+private fun srgbChannelToLinear(channel: Double): Double =
+    if (channel <= 0.04045) channel / 12.92
+    else Math.pow((channel + 0.055) / 1.055, 2.4)
 
 internal fun mealCalendarPdfLayout(
     days: List<MealPdfDayInput>,
@@ -256,11 +294,11 @@ internal fun mealPdfPageContent(
     val date = pdfAsciiText(layout.dates[page].dateIso.replace('-', '.'))
     val fontSize = 9f
     val x = max(0f, spec.width - 14f - helveticaTextWidth(date, fontSize))
-    val gray = if (red * 0.2126f + green * 0.7152f + blue * 0.0722f < 0.45f) 0.76f else 0.42f
+    val dateGray = ((mealPdfDateColorArgb(backgroundArgb) ushr 16) and 255) / 255f
     out.append("BT /").append(fontResourceName).append(' ')
         .append(pdfNumber(fontSize)).append(" Tf ")
-        .append(pdfNumber(gray)).append(' ').append(pdfNumber(gray)).append(' ')
-        .append(pdfNumber(gray)).append(" rg ")
+        .append(pdfNumber(dateGray)).append(' ').append(pdfNumber(dateGray)).append(' ')
+        .append(pdfNumber(dateGray)).append(" rg ")
         .append(pdfNumber(x)).append(" 11 Td (").append(date).append(") Tj ET\n")
     return out.toString()
 }
@@ -304,3 +342,4 @@ internal val DEFAULT_MEAL_PDF_BACKGROUND: Int = 0xFFF5F2EA.toInt()
 private const val DEFAULT_PHOTO_ASPECT = 0.75
 private const val MAX_PHOTOS_PER_PAGE = 9
 private const val BEAM_WIDTH = 14
+private const val MIN_FAIR_COVERAGE_RATIO = 0.8
