@@ -1086,6 +1086,34 @@ class DiaryFileRepository @Inject constructor(
         }
         renderer.use {
             check(it.pageCount == expectedPageCount) { "PDF 页数校验失败" }
+            // Opening a document only validates its page tree. Render every page sequentially
+            // at a bounded resolution so malformed content streams or image XObjects are caught
+            // before the PDF is copied to the user's destination.
+            for (pageIndex in 0 until it.pageCount) {
+                it.openPage(pageIndex).use { page ->
+                    val sourceWidth = page.width.coerceAtLeast(1)
+                    val sourceHeight = page.height.coerceAtLeast(1)
+                    val renderWidth = sourceWidth.coerceAtMost(512)
+                    val renderHeight = (
+                        renderWidth.toDouble() * sourceHeight / sourceWidth
+                    ).roundToInt().coerceAtLeast(1)
+                    val bitmap = Bitmap.createBitmap(
+                        renderWidth,
+                        renderHeight,
+                        Bitmap.Config.ARGB_8888,
+                    )
+                    try {
+                        page.render(
+                            bitmap,
+                            null,
+                            null,
+                            PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY,
+                        )
+                    } finally {
+                        bitmap.recycle()
+                    }
+                }
+            }
         }
     }
 
