@@ -1076,7 +1076,7 @@ class DiaryFileRepository @Inject constructor(
         }
     }
 
-    private fun validateMealPdfCache(file: File, expectedPageCount: Int) {
+    private suspend fun validateMealPdfCache(file: File, expectedPageCount: Int) {
         val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         val renderer = try {
             PdfRenderer(descriptor)
@@ -1090,6 +1090,7 @@ class DiaryFileRepository @Inject constructor(
             // at a bounded resolution so malformed content streams or image XObjects are caught
             // before the PDF is copied to the user's destination.
             for (pageIndex in 0 until it.pageCount) {
+                currentCoroutineContext().ensureActive()
                 it.openPage(pageIndex).use { page ->
                     val sourceWidth = page.width.coerceAtLeast(1)
                     val sourceHeight = page.height.coerceAtLeast(1)
