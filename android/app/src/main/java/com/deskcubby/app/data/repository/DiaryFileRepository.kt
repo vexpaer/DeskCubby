@@ -839,9 +839,9 @@ class DiaryFileRepository @Inject constructor(
     /**
      * Renders an inclusive day range of the current meal-category selection to a multi-page PDF.
      *
-     * Photos keep their aspect ratio in two masonry columns separated per day by stepped dashed
-     * lines (see [mealCalendarPdfLayout]); days without a selected photo are skipped and a corrupt
-     * individual image becomes a placeholder. The PDF is streamed into app cache one JPEG at a
+     * Each day is an edge-to-edge, aspect-preserving photo collage with a dated footer;
+     * exceptionally photo-heavy days use continuation pages. Days without selected photos are
+     * skipped and an unreadable photo becomes a neutral placeholder. The PDF is streamed into app cache one JPEG at a
      * time, so the range length is not limited by memory. The cache is validated with
      * [PdfRenderer], then copied to the CreateDocument URI and read back for an exact byte-count
      * and SHA-256 check.
@@ -852,6 +852,7 @@ class DiaryFileRepository @Inject constructor(
         startInclusive: LocalDate,
         endInclusive: LocalDate,
         categories: Set<MealCategory>,
+        backgroundArgb: Int = 0xFFF5F2EA.toInt(),
     ): MealCalendarExportResult = withContext(Dispatchers.IO) {
         var committed = false
         var cachedPdf: File? = null
@@ -882,7 +883,7 @@ class DiaryFileRepository @Inject constructor(
                 },
             )
             currentCoroutineContext().ensureActive()
-            val file = writeMealCalendarPdfCache(layout, selectedDays, settings)
+            val file = writeMealCalendarPdfCache(layout, selectedDays, settings, backgroundArgb)
             cachedPdf = file
             validateMealPdfCache(file, layout.pageCount)
             copyMealExportToDocumentAndVerify(file, destinationUri)
@@ -940,6 +941,7 @@ class DiaryFileRepository @Inject constructor(
         layout: MealPdfLayout,
         days: List<MealCalendarDay>,
         settings: AppSettings,
+        backgroundArgb: Int,
     ): File {
         val directory = File(context.cacheDir, "meal-calendar-exports").apply {
             check(exists() || mkdirs()) { "无法创建吃历导出缓存" }
@@ -976,7 +978,7 @@ class DiaryFileRepository @Inject constructor(
                         .coerceAtLeast(1)
                     val heightPx = (placement.height * MEAL_PDF_IMAGE_SCALE).roundToInt()
                         .coerceAtLeast(1)
-                    renderMealPdfPhotoJpeg(photo.uri, widthPx, heightPx, photoPaint)
+                    renderMealPdfPhotoJpeg(photo.uri, widthPx, heightPx, photoPaint, backgroundArgb)
                         ?.let { jpeg ->
                             val number = writer.reserveObject()
                             writer.writeStreamObject(
@@ -998,7 +1000,7 @@ class DiaryFileRepository @Inject constructor(
                     writer.writeStreamObject(
                         contentObject,
                         "",
-                        mealPdfPageContent(layout, page, imageNames, MEAL_PDF_FONT_NAME)
+                        mealPdfPageContent(layout, page, imageNames, MEAL_PDF_FONT_NAME, backgroundArgb)
                             .toByteArray(Charsets.ISO_8859_1),
                     )
                     val xObjects = imagesByPage[page].orEmpty()
@@ -1030,12 +1032,13 @@ class DiaryFileRepository @Inject constructor(
         }
     }
 
-    /** Draws one photo center-cropped into its placement size and encodes it as a JPEG. */
+    /** Fits the entire EXIF-oriented image inside its tile without cropping or stretching. */
     private suspend fun renderMealPdfPhotoJpeg(
         uri: Uri,
         widthPx: Int,
         heightPx: Int,
         photoPaint: Paint,
+        backgroundArgb: Int,
     ): ByteArray? {
         val source = decodeMealExportBitmap(uri, widthPx, heightPx) ?: return null
         try {
@@ -1045,15 +1048,20 @@ class DiaryFileRepository @Inject constructor(
                 return null
             }
             try {
-                val destination = RectF(0f, 0f, widthPx.toFloat(), heightPx.toFloat())
+                val sourceRatio = source.width.toFloat() / source.height
+                val targetRatio = widthPx.toFloat() / heightPx
+                val destination = if (sourceRatio > targetRatio) {
+                    val drawnHeight = widthPx / sourceRatio
+                    RectF(0f, (heightPx - drawnHeight) / 2f, widthPx.toFloat(),
+                        (heightPx + drawnHeight) / 2f)
+                } else {
+                    val drawnWidth = heightPx * sourceRatio
+                    RectF((widthPx - drawnWidth) / 2f, 0f,
+                        (widthPx + drawnWidth) / 2f, heightPx.toFloat())
+                }
                 Canvas(target).apply {
-                    drawColor(Color.WHITE)
-                    drawBitmap(
-                        source,
-                        centerCropSourceRect(source.width, source.height, destination),
-                        destination,
-                        photoPaint,
-                    )
+                    drawColor(backgroundArgb or 0xFF000000.toInt())
+                    drawBitmap(source, null, destination, photoPaint)
                 }
                 val bytes = ByteArrayOutputStream()
                 check(target.compress(Bitmap.CompressFormat.JPEG, MEAL_PDF_JPEG_QUALITY, bytes)) {
@@ -1068,7 +1076,7 @@ class DiaryFileRepository @Inject constructor(
         }
     }
 
-    private fun validateMealPdfCache(file: File, expectedPageCount: Int) {
+    private suspend fun validateMealPdfCache(file: File, expectedPageCount: Int) {
         val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         val renderer = try {
             PdfRenderer(descriptor)
@@ -1078,6 +1086,35 @@ class DiaryFileRepository @Inject constructor(
         }
         renderer.use {
             check(it.pageCount == expectedPageCount) { "PDF 页数校验失败" }
+            // Opening a document only validates its page tree. Render every page sequentially
+            // at a bounded resolution so malformed content streams or image XObjects are caught
+            // before the PDF is copied to the user's destination.
+            for (pageIndex in 0 until it.pageCount) {
+                currentCoroutineContext().ensureActive()
+                it.openPage(pageIndex).use { page ->
+                    val sourceWidth = page.width.coerceAtLeast(1)
+                    val sourceHeight = page.height.coerceAtLeast(1)
+                    val renderWidth = sourceWidth.coerceAtMost(512)
+                    val renderHeight = (
+                        renderWidth.toDouble() * sourceHeight / sourceWidth
+                    ).roundToInt().coerceAtLeast(1)
+                    val bitmap = Bitmap.createBitmap(
+                        renderWidth,
+                        renderHeight,
+                        Bitmap.Config.ARGB_8888,
+                    )
+                    try {
+                        page.render(
+                            bitmap,
+                            null,
+                            null,
+                            PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY,
+                        )
+                    } finally {
+                        bitmap.recycle()
+                    }
+                }
+            }
         }
     }
 
@@ -1135,24 +1172,6 @@ class DiaryFileRepository @Inject constructor(
             null
         } finally {
             decoded?.recycle()
-        }
-    }
-
-    private fun centerCropSourceRect(
-        bitmapWidth: Int,
-        bitmapHeight: Int,
-        destination: RectF,
-    ): Rect {
-        val sourceAspect = bitmapWidth.toFloat() / bitmapHeight.toFloat()
-        val destinationAspect = destination.width() / destination.height()
-        return if (sourceAspect > destinationAspect) {
-            val cropWidth = (bitmapHeight * destinationAspect).roundToInt().coerceAtLeast(1)
-            val left = ((bitmapWidth - cropWidth) / 2).coerceAtLeast(0)
-            Rect(left, 0, (left + cropWidth).coerceAtMost(bitmapWidth), bitmapHeight)
-        } else {
-            val cropHeight = (bitmapWidth / destinationAspect).roundToInt().coerceAtLeast(1)
-            val top = ((bitmapHeight - cropHeight) / 2).coerceAtLeast(0)
-            Rect(0, top, bitmapWidth, (top + cropHeight).coerceAtMost(bitmapHeight))
         }
     }
 

@@ -525,6 +525,7 @@ class DiaryViewModel @Inject constructor(
         startInclusive: LocalDate,
         endInclusive: LocalDate,
         categories: Set<MealCategory>,
+        backgroundArgb: Int = 0xFFF5F2EA.toInt(),
     ) {
         if (_mealCalendarExporting.value) return
         _mealCalendarExporting.value = true
@@ -537,6 +538,7 @@ class DiaryViewModel @Inject constructor(
                     startInclusive = startInclusive,
                     endInclusive = endInclusive,
                     categories = selectedCategories,
+                    backgroundArgb = backgroundArgb,
                 )
                 _message.value = localized(
                     "已导出 PDF：${result.dayCount} 天、${result.photoCount} 张照片，共 ${result.pageCount} 页",

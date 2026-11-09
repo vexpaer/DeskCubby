@@ -25,6 +25,8 @@ Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room
 | 网络 | `HttpURLConnection`（普通请求）、OkHttp（仅 WebDAV `PROPFIND`）、`org.json`、XmlPullParser |
 | 构建 | Gradle Kotlin DSL、JDK 17、compile/target SDK 36、min SDK 26 |
 
+开发中：吃历 PDF 排版升级为按日独立的原比例拼图，按照片实际宽高比自动优化并控制最小可见份额；过多照片使用带同一天日期的续页。新增可选完整页面背景色、导出前翻页预览、底部右侧灰色日期，删除白页边与虚线；保留 Android SAF 流式生成与回读校验，不改变 Room/备份格式。
+
 Android 0.24.2 精简全应用的界面说明文字：常驻说明压缩为一行、去掉实现术语，次要说明收进 `ui/components/InfoHint.kt` 的 ⓘ 弹窗；`AppTranslationsCoverageTest` 守护繁中/韩/日翻译覆盖；无 Room 与备份格式变化。
 
 Android 0.24.1 把吃历「导出长图」改为不限日期范围的两列 PDF 导出（`ui/diary/filter/MealCalendarPdfLayout.kt` 纯布局 + `data/repository/MealPdfWriter.kt` 流式写入）；无 Room 与备份格式变化。
