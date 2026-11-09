@@ -140,8 +140,8 @@ private fun bestTile(aspects: List<Float?>, targetAspect: Double): Tile {
     }
     val choices = requireNotNull(memo[0][count - 1])
     val floor = minimumPhotoShare(count)
-    // A hard visibility floor is preferable to a slightly fuller page with a microscopic photo.
-    // If the actual photo aspects make the floor geometrically impossible, use the soft fallback.
+    // Enforce the visibility floor when it does not sacrifice too much page coverage.
+    // Otherwise, the soft score balances the best available fill against undersized photo tiles.
     val bestFair = choices
         .filter { tile -> tile.shares.all { it + 1e-6 >= floor } }
         .maxByOrNull { pageCoverage(it, targetAspect) }
