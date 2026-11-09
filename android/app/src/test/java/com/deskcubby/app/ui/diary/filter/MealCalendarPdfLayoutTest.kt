@@ -66,6 +66,20 @@ class MealCalendarPdfLayoutTest {
     }
 
     @Test
+    fun fairnessFloorCannotCollapsePageCoverage() {
+        val aspects = listOf(0.41f, 1.37f, 0.66f, 1.10f)
+        val layout = mealCalendarPdfLayout(
+            listOf(MealPdfDayInput("2026-10-16", aspects)),
+        )
+        val areas = layout.photos.map { it.width * it.height }
+        val pageCoverage = areas.sum() / (spec.width * spec.contentHeight)
+        val minimumPhotoShare = areas.min() / areas.sum()
+
+        assertTrue("Collage should use at least 80% of the photo area", pageCoverage >= 0.80f)
+        assertTrue("No photo should become a tiny sliver", minimumPhotoShare >= 0.08f)
+    }
+
+    @Test
     fun twoPhotosRemainVisuallyBalanced() {
         val layout = mealCalendarPdfLayout(
             listOf(MealPdfDayInput("2026-10-16", listOf(0.75f, 1.2f))),
@@ -84,6 +98,35 @@ class MealCalendarPdfLayoutTest {
         })
         assertTrue(layout.dates.all { it.dateIso == "2026-10-16" })
         assertEquals((0..21).toList(), layout.photos.map { it.photoIndex }.sorted())
+    }
+
+    @Test
+    fun continuationPagesStayBalancedAtNinePhotoBoundaries() {
+        val cases = listOf(
+            9 to listOf(9),
+            10 to listOf(5, 5),
+            18 to listOf(9, 9),
+            19 to listOf(7, 6, 6),
+            27 to listOf(9, 9, 9),
+            28 to listOf(7, 7, 7, 7),
+        )
+        cases.forEach { (photoCount, expectedPageSizes) ->
+            val aspects = List(photoCount) { index -> listOf(0.75f, 1.4f, 0.6f)[index % 3] }
+            val layout = mealCalendarPdfLayout(
+                listOf(MealPdfDayInput("2026-10-16", aspects)),
+            )
+            assertEquals("Page count for $photoCount photos", expectedPageSizes.size, layout.pageCount)
+            assertEquals(
+                "Page sizes for $photoCount photos",
+                expectedPageSizes,
+                (0 until layout.pageCount).map { page ->
+                    layout.photos.count { it.page == page }
+                },
+            )
+            assertEquals((0 until photoCount).toList(), layout.photos.map { it.photoIndex }.sorted())
+            assertEquals(photoCount, layout.photos.map { it.photoIndex }.distinct().size)
+            assertTrue(layout.dates.all { it.dateIso == "2026-10-16" })
+        }
     }
 
     @Test
@@ -131,6 +174,20 @@ class MealCalendarPdfLayoutTest {
         assertTrue(content.contains("(2026.10.16) Tj"))
         assertFalse(content.contains("[3 2]"))
         assertEquals("", mealPdfPageContent(layout, 1, listOf("Im4", null), "F1"))
+    }
+
+    @Test
+    fun dateColorMaintainsReadableContrastForCustomBackgrounds() {
+        assertEquals(0xFF6B6B6B.toInt(), mealPdfDateColorArgb(0xFFF5F2EA.toInt()))
+        assertEquals(0xFFC2C2C2.toInt(), mealPdfDateColorArgb(0xFF252525.toInt()))
+        assertEquals(0xFFFFFFFF.toInt(), mealPdfDateColorArgb(0xFF707070.toInt()))
+        assertEquals(0xFF000000.toInt(), mealPdfDateColorArgb(0xFF777777.toInt()))
+
+        val layout = mealCalendarPdfLayout(
+            listOf(MealPdfDayInput("2026-10-16", listOf(1f))),
+        )
+        val content = mealPdfPageContent(layout, 0, listOf("Im1"), "F1", 0xFF707070.toInt())
+        assertTrue("PDF date should use the same high-contrast color as the preview", content.contains("1 1 1 rg "))
     }
 
     @Test
