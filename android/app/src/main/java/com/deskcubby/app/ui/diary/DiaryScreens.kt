@@ -167,6 +167,7 @@ import com.deskcubby.app.ui.theme.tr
 import com.deskcubby.app.ui.diary.filter.MealPdfDayInput
 import com.deskcubby.app.ui.diary.filter.MealPdfLayout
 import com.deskcubby.app.ui.diary.filter.mealCalendarPdfLayout
+import com.deskcubby.app.ui.diary.filter.mealPdfDateColorArgb
 import com.deskcubby.app.ui.diary.filter.asComposeColorFilter
 import java.time.Instant
 import java.time.LocalDate
@@ -1161,9 +1162,7 @@ private fun MealCalendarPdfPreview(
 
     val selectedPage = pageInDay.coerceIn(0, layout.pageCount - 1)
     val background = Color(backgroundArgb)
-    val lightText = ((backgroundArgb ushr 16 and 255) * 0.2126 +
-        (backgroundArgb ushr 8 and 255) * 0.7152 +
-        (backgroundArgb and 255) * 0.0722) < 114.0
+    val dateTextColor = Color(mealPdfDateColorArgb(backgroundArgb))
     BoxWithConstraints(
         modifier = Modifier.fillMaxWidth().height(260.dp),
         contentAlignment = Alignment.Center,
@@ -1192,7 +1191,7 @@ private fun MealCalendarPdfPreview(
                 modifier = Modifier.align(Alignment.BottomEnd)
                     .padding(end = (14f * scale).dp, bottom = (8f * scale).dp),
                 fontSize = (9f * scale).coerceAtLeast(5f).sp,
-                color = if (lightText) Color.LightGray else Color.DarkGray,
+                color = dateTextColor,
             )
         }
     }
