@@ -49,7 +49,7 @@ Found 4 symbols across 2 files.
 - categoryLabel → ThoughtCategoryFilter
 - ThoughtScreen → ThoughtCategoryFilter
 - move → ThoughtCategoryFilter
-- ... and 12 more
+- ... and 13 more
 
 **imports:**
 - com.deskcubby.app.ui.poetry → PoetryCategoryEntity
@@ -75,7 +75,7 @@ Found 4 symbols across 2 files.
 - testPluginCanBeRegisteredLoadedAndUnloaded → register
 - duplicatePluginIdIsRejectedBeforeLifecycleStarts → register
 - failedLoadCleansOwnerContextAndDoesNotBlockOtherPlugins → register
-- ... and 138 more
+- ... and 135 more
 
 **Source Code**
 

@@ -126,6 +126,12 @@
     "size": 8090
   },
   {
+    "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/MealPhotoCompressionAndroidTest.kt",
+    "language": "kotlin",
+    "nodeCount": 30,
+    "size": 6109
+  },
+  {
     "path": "android/app/src/androidTest/java/com/deskcubby/app/data/repository/PoetryPresetCatalogTest.kt",
     "language": "kotlin",
     "nodeCount": 12,
@@ -488,8 +494,8 @@
   {
     "path": "android/app/src/main/java/com/deskcubby/app/data/media/GalleryOriginalCopy.kt",
     "language": "kotlin",
-    "nodeCount": 34,
-    "size": 6813
+    "nodeCount": 38,
+    "size": 8729
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/data/model/AppModels.kt",
@@ -602,8 +608,8 @@
   {
     "path": "android/app/src/main/java/com/deskcubby/app/data/repository/DiaryFileRepository.kt",
     "language": "kotlin",
-    "nodeCount": 270,
-    "size": 135760
+    "nodeCount": 273,
+    "size": 141866
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/data/repository/DiaryTextUtils.kt",
@@ -1377,7 +1383,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/desk/DeskViewModel.kt",
     "language": "kotlin",
     "nodeCount": 67,
-    "size": 15846
+    "size": 15780
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/desk/components/DeskAiOverlay.kt",
@@ -1515,13 +1521,13 @@
     "path": "android/app/src/main/java/com/deskcubby/app/ui/home/HomeScreen.kt",
     "language": "kotlin",
     "nodeCount": 150,
-    "size": 70135
+    "size": 70358
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/home/HomeViewModel.kt",
     "language": "kotlin",
-    "nodeCount": 80,
-    "size": 17050
+    "nodeCount": 81,
+    "size": 18442
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/ui/more/MoreHubScreen.kt",
@@ -1881,7 +1887,7 @@
     "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetInteractionActivity.kt",
     "language": "kotlin",
     "nodeCount": 107,
-    "size": 46979
+    "size": 47945
   },
   {
     "path": "android/app/src/main/java/com/deskcubby/app/widget/DesktopWidgetInteractionPolicy.kt",
@@ -2008,6 +2014,12 @@
     "language": "kotlin",
     "nodeCount": 7,
     "size": 838
+  },
+  {
+    "path": "android/app/src/test/java/com/deskcubby/app/data/media/GalleryOriginalStagerTest.kt",
+    "language": "kotlin",
+    "nodeCount": 16,
+    "size": 3684
   },
   {
     "path": "android/app/src/test/java/com/deskcubby/app/data/model/CloudSyncContentDefaultsTest.kt",

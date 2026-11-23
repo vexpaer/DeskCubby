@@ -1,14 +1,14 @@
 [
   {
     "node": {
-      "id": "enum_member:8d75b68bd81d2b8981ae8d5de3ac62e5",
+      "id": "enum_member:85d8c529e58f0565a3adca0682a2afdf",
       "kind": "enum_member",
       "name": "DIARY",
       "qualifiedName": "com.deskcubby.app.data.repository::DiaryCloudSyncArea::DIARY",
       "filePath": "android/app/src/main/java/com/deskcubby/app/data/repository/DiaryFileRepository.kt",
       "language": "kotlin",
-      "startLine": 145,
-      "endLine": 145,
+      "startLine": 146,
+      "endLine": 146,
       "startColumn": 4,
       "endColumn": 9,
       "visibility": null,
@@ -16,9 +16,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765890
+      "updatedAt": 1795456314103
     },
-    "score": 102.43880131582762
+    "score": 102.43969989418969
   },
   {
     "node": {
@@ -37,9 +37,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768535
+      "updatedAt": 1795456315613
     },
-    "score": 89.4739409425512
+    "score": 89.47484021062698
   },
   {
     "node": {
@@ -58,9 +58,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388766597
+      "updatedAt": 1795456314516
     },
-    "score": 89.41393862510135
+    "score": 89.41483479248072
   },
   {
     "node": {
@@ -79,9 +79,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765752
+      "updatedAt": 1795456314004
     },
-    "score": 89.39911143101325
+    "score": 89.40000681709037
   },
   {
     "node": {
@@ -100,9 +100,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765757
+      "updatedAt": 1795456314006
     },
-    "score": 89.39911143101325
+    "score": 89.40000681709037
   },
   {
     "node": {
@@ -121,9 +121,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765817
+      "updatedAt": 1795456314036
     },
-    "score": 89.39911143101325
+    "score": 89.40000681709037
   },
   {
     "node": {
@@ -142,9 +142,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388766813
+      "updatedAt": 1795456314629
     },
-    "score": 89.39911143101325
+    "score": 89.40000681709037
   },
   {
     "node": {
@@ -163,9 +163,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388767306
+      "updatedAt": 1795456314952
     },
-    "score": 89.39911143101325
+    "score": 89.40000681709037
   },
   {
     "node": {
@@ -184,9 +184,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388767493
+      "updatedAt": 1795456315068
     },
-    "score": 89.39911143101325
+    "score": 89.40000681709037
   },
   {
     "node": {
@@ -205,9 +205,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765680
+      "updatedAt": 1795456313972
     },
-    "score": 89.38435263129219
+    "score": 89.38524723373305
   },
   {
     "node": {
@@ -226,9 +226,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388766860
+      "updatedAt": 1795456314654
     },
-    "score": 89.38435263129219
+    "score": 89.38524723373305
   },
   {
     "node": {
@@ -248,9 +248,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388769049
+      "updatedAt": 1795456315882
     },
-    "score": 81.4722578962754
+    "score": 81.47315757911215
   },
   {
     "node": {
@@ -270,9 +270,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388769081
+      "updatedAt": 1795456315908
     },
-    "score": 81.44435456973926
+    "score": 81.44525281723372
   },
   {
     "node": {
@@ -292,9 +292,9 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "DiaryIndexEntity",
-      "updatedAt": 1792388767977
+      "updatedAt": 1795456315323
     },
-    "score": 81.41393862510135
+    "score": 81.41483479248072
   },
   {
     "node": {
@@ -313,9 +313,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768008
+      "updatedAt": 1795456315336
     },
-    "score": 57.41393862510135
+    "score": 57.41483479248072
   },
   {
     "node": {
@@ -335,9 +335,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768933
+      "updatedAt": 1795456315817
     },
-    "score": 56.50436507042153
+    "score": 56.50526587329073
   },
   {
     "node": {
@@ -358,9 +358,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768131
+      "updatedAt": 1795456315398
     },
-    "score": 54.41393862510135
+    "score": 54.41483479248072
   },
   {
     "node": {
@@ -381,9 +381,9 @@
       "isStatic": false,
       "isAbstract": false,
       "returnType": "NaiveDate",
-      "updatedAt": 1792388768740
+      "updatedAt": 1795456315722
     },
-    "score": 54.311568173942675
+    "score": 54.31245882515608
   },
   {
     "node": {
@@ -403,9 +403,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768271
+      "updatedAt": 1795456315477
     },
-    "score": 53.50436507042153
+    "score": 53.50526587329073
   },
   {
     "node": {
@@ -425,9 +425,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768293
+      "updatedAt": 1795456315487
     },
-    "score": 53.50436507042153
+    "score": 53.50526587329073
   },
   {
     "node": {
@@ -447,9 +447,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768131
+      "updatedAt": 1795456315398
     },
-    "score": 53.41393862510135
+    "score": 53.41483479248072
   },
   {
     "node": {
@@ -468,9 +468,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768293
+      "updatedAt": 1795456315487
     },
-    "score": 52.50436507042153
+    "score": 52.50526587329073
   },
   {
     "node": {
@@ -490,9 +490,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768289
+      "updatedAt": 1795456315485
     },
-    "score": 52.50436507042153
+    "score": 52.50526587329073
   },
   {
     "node": {
@@ -511,9 +511,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768740
+      "updatedAt": 1795456315722
     },
-    "score": 52.50436507042153
+    "score": 52.50526587329073
   },
   {
     "node": {
@@ -533,9 +533,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768452
+      "updatedAt": 1795456315566
     },
-    "score": 52.428834690084415
+    "score": 52.429731636374086
   },
   {
     "node": {
@@ -554,9 +554,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768008
+      "updatedAt": 1795456315336
     },
-    "score": 52.41393862510135
+    "score": 52.41483479248072
   },
   {
     "node": {
@@ -575,9 +575,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768293
+      "updatedAt": 1795456315487
     },
-    "score": 51.50436507042153
+    "score": 51.50526587329073
   },
   {
     "node": {
@@ -596,9 +596,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768289
+      "updatedAt": 1795456315485
     },
-    "score": 51.50436507042153
+    "score": 51.50526587329073
   },
   {
     "node": {
@@ -617,9 +617,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388766865
+      "updatedAt": 1795456314660
     },
-    "score": 51.46386011310308
+    "score": 51.46475999006271
   },
   {
     "node": {
@@ -638,9 +638,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768740
+      "updatedAt": 1795456315722
     },
-    "score": 50.50436507042153
+    "score": 50.50526587329073
   },
   {
     "node": {
@@ -659,9 +659,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388766865
+      "updatedAt": 1795456314660
     },
-    "score": 50.46386011310308
+    "score": 50.46475999006271
   },
   {
     "node": {
@@ -680,9 +680,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388766849
+      "updatedAt": 1795456314664
     },
-    "score": 50.46386011310308
+    "score": 50.46475999006271
   },
   {
     "node": {
@@ -701,9 +701,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388766851
+      "updatedAt": 1795456314665
     },
-    "score": 50.46386011310308
+    "score": 50.46475999006271
   },
   {
     "node": {
@@ -722,20 +722,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388766865
+      "updatedAt": 1795456314660
     },
-    "score": 49.46386011310308
+    "score": 49.46475999006271
   },
   {
     "node": {
-      "id": "class:e81b624e7e6535c75c53cbc257865257",
+      "id": "class:c7c420f79bfc489cec20549a6556348a",
       "kind": "class",
       "name": "DiaryFileMeta",
       "qualifiedName": "com.deskcubby.app.data.repository::DiaryFileMeta",
       "filePath": "android/app/src/main/java/com/deskcubby/app/data/repository/DiaryFileRepository.kt",
       "language": "kotlin",
-      "startLine": 174,
-      "endLine": 179,
+      "startLine": 175,
+      "endLine": 180,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "public",
@@ -743,9 +743,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765891
+      "updatedAt": 1795456314103
     },
-    "score": 49.428834690084415
+    "score": 49.429731636374086
   },
   {
     "node": {
@@ -764,9 +764,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768008
+      "updatedAt": 1795456315336
     },
-    "score": 49.41393862510135
+    "score": 49.41483479248072
   },
   {
     "node": {
@@ -785,9 +785,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768271
+      "updatedAt": 1795456315477
     },
-    "score": 48.50436507042153
+    "score": 48.50526587329073
   },
   {
     "node": {
@@ -806,9 +806,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768293
+      "updatedAt": 1795456315487
     },
-    "score": 48.50436507042153
+    "score": 48.50526587329073
   },
   {
     "node": {
@@ -827,9 +827,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388766043
+      "updatedAt": 1795456314188
     },
-    "score": 48.428834690084415
+    "score": 48.429731636374086
   },
   {
     "node": {
@@ -848,9 +848,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768050
+      "updatedAt": 1795456315355
     },
-    "score": 48.34048189854227
+    "score": 48.34137413663585
   },
   {
     "node": {
@@ -869,9 +869,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768740
+      "updatedAt": 1795456315722
     },
-    "score": 48.34048189854227
+    "score": 48.34137413663585
   },
   {
     "node": {
@@ -890,9 +890,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768740
+      "updatedAt": 1795456315722
     },
-    "score": 47.50436507042153
+    "score": 47.50526587329073
   },
   {
     "node": {
@@ -911,9 +911,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388766626
+      "updatedAt": 1795456314535
     },
-    "score": 47.428834690084415
+    "score": 47.429731636374086
   },
   {
     "node": {
@@ -932,9 +932,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768740
+      "updatedAt": 1795456315722
     },
-    "score": 46.50436507042153
+    "score": 46.50526587329073
   },
   {
     "node": {
@@ -953,9 +953,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388766851
+      "updatedAt": 1795456314665
     },
-    "score": 46.47826532656425
+    "score": 46.47916674802338
   },
   {
     "node": {
@@ -974,20 +974,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765678
+      "updatedAt": 1795456313971
     },
-    "score": 46.428834690084415
+    "score": 46.429731636374086
   },
   {
     "node": {
-      "id": "class:ea706b3a8fe0ec92821d169ab161ddac",
+      "id": "class:800257997b521083ceaab9ab373d5e3d",
       "kind": "class",
       "name": "DiaryPreviewMedia",
       "qualifiedName": "com.deskcubby.app.data.repository::DiaryPreviewMedia",
       "filePath": "android/app/src/main/java/com/deskcubby/app/data/repository/DiaryFileRepository.kt",
       "language": "kotlin",
-      "startLine": 128,
-      "endLine": 131,
+      "startLine": 129,
+      "endLine": 132,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "public",
@@ -995,20 +995,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765888
+      "updatedAt": 1795456314103
     },
-    "score": 46.428834690084415
+    "score": 46.429731636374086
   },
   {
     "node": {
-      "id": "class:b52769ce6375f61f10f8aad6b12466ca",
+      "id": "class:827ba166dec321eec228bef4efafc723",
       "kind": "class",
       "name": "DiaryCloudSyncFile",
       "qualifiedName": "com.deskcubby.app.data.repository::DiaryCloudSyncFile",
       "filePath": "android/app/src/main/java/com/deskcubby/app/data/repository/DiaryFileRepository.kt",
       "language": "kotlin",
-      "startLine": 149,
-      "endLine": 157,
+      "startLine": 150,
+      "endLine": 158,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "public",
@@ -1016,20 +1016,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765890
+      "updatedAt": 1795456314103
     },
-    "score": 45.428834690084415
+    "score": 45.429731636374086
   },
   {
     "node": {
-      "id": "class:aca804ae2a45bf761cf0e5906e2151d5",
+      "id": "class:270e6c6b4f4bfbbd10d43012a8dbf9cb",
       "kind": "class",
       "name": "DiaryFileRepository",
       "qualifiedName": "com.deskcubby.app.data.repository::DiaryFileRepository",
       "filePath": "android/app/src/main/java/com/deskcubby/app/data/repository/DiaryFileRepository.kt",
       "language": "kotlin",
-      "startLine": 218,
-      "endLine": 2945,
+      "startLine": 219,
+      "endLine": 3081,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "public",
@@ -1037,9 +1037,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765891
+      "updatedAt": 1795456314104
     },
-    "score": 45.428834690084415
+    "score": 45.429731636374086
   },
   {
     "node": {
@@ -1058,9 +1058,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388767086
+      "updatedAt": 1795456314798
     },
-    "score": 45.428834690084415
+    "score": 45.429731636374086
   },
   {
     "node": {
@@ -1079,9 +1079,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768008
+      "updatedAt": 1795456315336
     },
-    "score": 45.41393862510135
+    "score": 45.41483479248072
   },
   {
     "node": {
@@ -1100,9 +1100,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765678
+      "updatedAt": 1795456313971
     },
-    "score": 44.428834690084415
+    "score": 44.429731636374086
   },
   {
     "node": {
@@ -1121,20 +1121,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765678
+      "updatedAt": 1795456313971
     },
-    "score": 44.428834690084415
+    "score": 44.429731636374086
   },
   {
     "node": {
-      "id": "class:23b681271d01a9f2ec7930f9210fe46e",
+      "id": "class:f50c48a70ea6aba54ee1beb68cfe5251",
       "kind": "class",
       "name": "DiaryMediaDeleteResult",
       "qualifiedName": "com.deskcubby.app.data.repository::DiaryMediaDeleteResult",
       "filePath": "android/app/src/main/java/com/deskcubby/app/data/repository/DiaryFileRepository.kt",
       "language": "kotlin",
-      "startLine": 133,
-      "endLine": 136,
+      "startLine": 134,
+      "endLine": 137,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": "public",
@@ -1142,20 +1142,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765889
+      "updatedAt": 1795456314103
     },
-    "score": 44.428834690084415
+    "score": 44.429731636374086
   },
   {
     "node": {
-      "id": "interface:46737b7dfab6547de13d60d95a781d42",
+      "id": "interface:23b39f54fc69c0652ad3fab29271498b",
       "kind": "interface",
       "name": "DiaryCloudSyncWriteResult",
       "qualifiedName": "com.deskcubby.app.data.repository::DiaryCloudSyncWriteResult",
       "filePath": "android/app/src/main/java/com/deskcubby/app/data/repository/DiaryFileRepository.kt",
       "language": "kotlin",
-      "startLine": 159,
-      "endLine": 165,
+      "startLine": 160,
+      "endLine": 166,
       "startColumn": 0,
       "endColumn": 1,
       "visibility": null,
@@ -1163,9 +1163,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765890
+      "updatedAt": 1795456314103
     },
-    "score": 44.428834690084415
+    "score": 44.429731636374086
   },
   {
     "node": {
@@ -1184,9 +1184,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768008
+      "updatedAt": 1795456315336
     },
-    "score": 44.41393862510135
+    "score": 44.41483479248072
   },
   {
     "node": {
@@ -1205,9 +1205,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388768740
+      "updatedAt": 1795456315722
     },
-    "score": 43.50436507042153
+    "score": 43.50526587329073
   },
   {
     "node": {
@@ -1226,9 +1226,9 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388766406
+      "updatedAt": 1795456314410
     },
-    "score": 43.428834690084415
+    "score": 43.429731636374086
   },
   {
     "node": {
@@ -1247,20 +1247,20 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388767086
+      "updatedAt": 1795456314798
     },
-    "score": 43.428834690084415
+    "score": 43.429731636374086
   },
   {
     "node": {
-      "id": "class:cd965f294ce0bf82401111f3294483aa",
+      "id": "class:2ac1b415af858875b5c6e3e2af8d1360",
       "kind": "class",
       "name": "DiaryTextLimitExceededException",
       "qualifiedName": "com.deskcubby.app.data.repository::DiaryTextLimitExceededException",
       "filePath": "android/app/src/main/java/com/deskcubby/app/data/repository/DiaryFileRepository.kt",
       "language": "kotlin",
-      "startLine": 88,
-      "endLine": 90,
+      "startLine": 89,
+      "endLine": 91,
       "startColumn": 0,
       "endColumn": 67,
       "visibility": "internal",
@@ -1268,8 +1268,8 @@
       "isAsync": false,
       "isStatic": false,
       "isAbstract": false,
-      "updatedAt": 1792388765888
+      "updatedAt": 1795456314101
     },
-    "score": 42.428834690084415
+    "score": 42.429731636374086
   }
 ]
