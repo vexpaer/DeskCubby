@@ -6,7 +6,7 @@ DeskCubby 是一个本地优先、可高度定制的个人记录应用，仓库�
 
 Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room 保存小巧思、分类、浏览记录、日期记录、诗词、AI 对话等数据。Windows 通过受限 Tauri IPC 让 Rust 后端访问用户选择的普通目录，并用 SQLite 保存核心结构化数据；React 前端不获得任意文件系统权限。Web 端以 FastAPI + SQLite 复刻 Android 的数据与业务语义：所有文件、AI 调用与敏感配置都留在服务端，浏览器只通过 `/api` 访问，API Key 与云凭据永不下发前端。
 
-两个客户端都提供 Material、Liquid Glass 和 Organic Future 三套预设视觉风格；Android 另有只映射到 Compose 主题角色的受控 Custom 风格。两端均支持简体中文/繁体中文/英文/韩语/日语、深浅色模式和字号缩放（Android 0.16.0 起支持五种语言；首次启动会先让用户选择语言）。当前版本为 Android **0.24.2**、Windows **0.8.0**。Android 当前应用备份格式为 v34（0.20.0 起：手动备份不再包含 AI API Key、SAF URI 与云凭据，新增 URI-free Agent 对话载荷）；Windows **0.8.0** 追赶 Android 数据类型进度：支持导入 Android v1–v33 并统一导出 v33（补齐 v30 Agent 来源授权/权限模式/模型工具能力、v31 AI 页面字号/回复框宽度/Agent 提示词/导航页列数与模块颜色、v32 桌面小卡片使用时间范围、v33 应用模块内容类型与云同步归一映射），Reader 内部状态 schema 升至 v5 并携带与 Android 一致的 0/5/…/95 页内偏移。注意：Windows 0.8.0 尚不支持导入 Android v34 JSON（需等待 Windows 侧跟进）。
+两个客户端都提供 Material、Liquid Glass 和 Organic Future 三套预设视觉风格；Android 另有只映射到 Compose 主题角色的受控 Custom 风格。两端均支持简体中文/繁体中文/英文/韩语/日语、深浅色模式和字号缩放（Android 0.16.0 起支持五种语言；首次启动会先让用户选择语言）。当前版本为 Android **0.24.3**、Windows **0.8.0**。Android 当前应用备份格式为 v34（0.20.0 起：手动备份不再包含 AI API Key、SAF URI 与云凭据，新增 URI-free Agent 对话载荷）；Windows **0.8.0** 追赶 Android 数据类型进度：支持导入 Android v1–v33 并统一导出 v33（补齐 v30 Agent 来源授权/权限模式/模型工具能力、v31 AI 页面字号/回复框宽度/Agent 提示词/导航页列数与模块颜色、v32 桌面小卡片使用时间范围、v33 应用模块内容类型与云同步归一映射），Reader 内部状态 schema 升至 v5 并携带与 Android 一致的 0/5/…/95 页内偏移。注意：Windows 0.8.0 尚不支持导入 Android v34 JSON（需等待 Windows 侧跟进）。
 
 ## 2. Android 技术栈
 
@@ -24,6 +24,8 @@ Android 通过 Storage Access Framework（SAF）访问用户目录，并用 Room
 | Markdown | CommonMark |
 | 网络 | `HttpURLConnection`（普通请求）、OkHttp（仅 WebDAV `PROPFIND`）、`org.json`、XmlPullParser |
 | 构建 | Gradle Kotlin DSL、JDK 17、compile/target SDK 36、min SDK 26 |
+
+Android 0.24.3 优化饮食拍照与照片添加延迟：SAF 列目录统一改用单次 `snapshotDirectChildren` 游标快照、API 28+ 饮食照片压缩改用 `ImageDecoder` 单遍原生处理并内存缓冲直写 SAF、相机原图暂存改为同分区零拷贝 `renameTo`、逆地理编码释放 `mediaMutex` 且照片写入今日日记后直接增量更新当日 Room 索引；无 Room 与备份格式变化。
 
 Android 0.24.2 精简全应用的界面说明文字：常驻说明压缩为一行、去掉实现术语，次要说明收进 `ui/components/InfoHint.kt` 的 ⓘ 弹窗；`AppTranslationsCoverageTest` 守护繁中/韩/日翻译覆盖；无 Room 与备份格式变化。
 
@@ -378,6 +380,15 @@ Windows 使用独立的左侧竖栏，不复用 Android 的底部导航配置。
 Windows 设置采用接近 Android 的层级：设置主页为「外观与语言」「子页面设置」「应用数据」「桌面导航」「关于」；子页面设置覆盖主页、日记/媒体/标题字号、小巧思、诗词/吃历、收藏夹、AI、手机使用时间与健康的桌面边界说明；应用数据进入 v29/自动备份与 WebDAV/S3；关于进入检查更新。「桌面导航」允许全部 18 页逐项显隐、同类排序或移动分类，并支持分类中英文名、新建、排序和删除；删除分类时页面迁移到相邻分类，最后一个分类禁止删除。隐藏当前页会回退到首个可见页，全部隐藏仍可进入设置；隐藏页仍能从导航聚合页或相关业务入口打开。搜索结果可直接到目标子页，任一可编辑子页仍遵守本地草稿、右上角保存、恢复本页默认值和 dirty 离开确认。
 
 ## 8. 最近完成的功能
+
+### Android 0.24.3 饮食拍照与照片添加加速
+
+- SAF 目录查询：`DiaryFileRepository` 的 `importImage`、`enterTodayUnlocked`、`writeMediaMetaRawUnlocked`、`removeMediaMetaEntryUnlocked`、`setMealEnergyResults`、`listDiaryFileMeta` 与 `scan` 统一改为复用单次 `DocumentsContract` 游标查询的 `snapshotDirectChildren`（及 `load(SafDocumentSnapshot)`），消除 `DocumentFile.listFiles()` 逐项读取 `.name`/`.isFile` 导致的 O(N) 跨进程 Binder IPC。
+- 饮食图片压缩：`compressMealImageToBytes` 在 API 28+ 通过 `ImageDecoder` 单次原生完成尺寸探测、按 2560px 上限缩放与 EXIF 方向修正，并直接压缩到内存缓冲再写入 SAF，消除重复打开输入流、二次全图旋转拷贝与临时缓存文件读写往返；API 26–27 与异常流继续安全回退 `BitmapFactory`。
+- 原图相册暂存：`GalleryOriginalStager.stageOwnedFile` 对主页与桌面小组件拍摄的自有临时相机文件采用同分区 `renameTo`（失败再回退拷贝），去掉多 MB 同步复制与 `fd.sync()` 刷盘；过期暂存清理移至 `GalleryOriginalCopyWorker`。
+- 并发与增量索引：`enrichPlaceName` 在调用阻塞式 `Geocoder.getFromLocation()` 前释放 `mediaMutex`，拿到地名后再短时持锁写回，避免阻塞连拍与预览；`appendImageToToday` 写入校验成功后直接增量调用 `indexDocument` 更新当日 Room 索引，首页/小组件/桌面页不再全量 `scan()`；`DeskViewModel.addMealPhoto` 落盘即显示完成提示，`MealPhotosWidget` 保存期间以柔和透明度反馈忙碌状态。
+- 测试：新增 `GalleryOriginalStagerTest`（零拷贝暂存与过期清理）与 `MealPhotoCompressionAndroidTest`（EXIF 旋转与透明 PNG 压白）。
+- 版本：Android 0.24.3（versionCode 59）；无 Room、DataStore、备份格式变化。
 
 ### Android 0.24.2 界面文案精简
 

@@ -622,7 +622,7 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
             var durableWriteSucceeded = false
             var followUpWarning: String? = null
             try {
-                if (settings.saveOriginalToGallery) {
+                if (settings.saveOriginalToGallery && sourceFile == null) {
                     galleryStaging = withContext(Dispatchers.IO) {
                         GalleryOriginalStager.stage(
                             this@DesktopWidgetInteractionActivity,
@@ -665,6 +665,26 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                     }
                 }
 
+                if (settings.saveOriginalToGallery && sourceFile != null) {
+                    try {
+                        galleryStaging = withContext(Dispatchers.IO) {
+                            GalleryOriginalStager.stageOwnedFile(
+                                this@DesktopWidgetInteractionActivity,
+                                sourceFile,
+                                "${category.key}-original",
+                            )
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        followUpWarning = translate(
+                            "照片已保存，但原图暂存失败：${error.message.orEmpty()}",
+                            "Photo saved, but the original could not be staged: ${error.message.orEmpty()}",
+                            language(english),
+                        )
+                    }
+                }
+
                 galleryStaging?.let { staged ->
                     try {
                         GalleryOriginalStager.enqueue(this@DesktopWidgetInteractionActivity, staged)
@@ -692,8 +712,8 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                 ).show()
                 returnToLauncherAfterWidgetMealCapture()
 
-                // Only best-effort work remains here. It references durable app-owned media, never
-                // the temporary camera file that is deleted in finally.
+                // Only best-effort work remains here. Today's diary index was already updated
+                // incrementally inside appendImageToToday, so no full-directory scan is needed.
                 kotlinx.coroutines.CoroutineScope(
                     kotlinx.coroutines.SupervisorJob() + Dispatchers.IO,
                 ).launch {
@@ -703,7 +723,6 @@ class DesktopWidgetInteractionActivity : ComponentActivity() {
                             media = media,
                             settings = settings.copy(saveOriginalToGallery = false),
                         )
-                        runCatching { diaryFileRepository.scan(settings) }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {

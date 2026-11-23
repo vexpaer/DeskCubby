@@ -28,6 +28,7 @@ import com.deskcubby.app.data.taskqueue.AiTaskQueue
 import com.deskcubby.app.data.taskqueue.CalorieSingleTaskPayload
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharingStarted
@@ -191,6 +192,7 @@ class HomeViewModel @Inject constructor(
         uri: Uri,
         category: String,
         settings: AppSettings,
+        sourceFile: File? = null,
         onDone: () -> Unit = {},
     ) {
         viewModelScope.launch {
@@ -203,7 +205,7 @@ class HomeViewModel @Inject constructor(
                 }
             }
             try {
-                if (settings.saveOriginalToGallery) {
+                if (settings.saveOriginalToGallery && sourceFile == null) {
                     galleryStaging = try {
                         GalleryOriginalStager.stage(context, uri, "$category-original")
                     } catch (cancelled: CancellationException) {
@@ -239,19 +241,49 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
 
+                var galleryWarning: String? = null
+                if (settings.saveOriginalToGallery && sourceFile != null) {
+                    try {
+                        galleryStaging = GalleryOriginalStager.stageOwnedFile(
+                            context = context,
+                            sourceFile = sourceFile,
+                            displayNameHint = "$category-original",
+                        )
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        galleryWarning = if (settings.appLanguage == AppLanguage.ENGLISH) {
+                            " · original photo could not be staged"
+                        } else {
+                            " · 原图暂存失败：${error.message.orEmpty()}"
+                        }
+                    }
+                }
+
                 galleryStaging?.let { staged ->
-                    GalleryOriginalStager.enqueue(context, staged)
-                    galleryStaging = null
+                    try {
+                        GalleryOriginalStager.enqueue(context, staged)
+                        galleryStaging = null
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        galleryWarning = if (settings.appLanguage == AppLanguage.ENGLISH) {
+                            " · original gallery save could not be queued"
+                        } else {
+                            " · 原图保存入队失败：${error.message.orEmpty()}"
+                        }
+                    }
                 }
 
                 // Source can be released only after the original (when requested), media file,
                 // Markdown and durable gallery worker input all live in app-owned storage.
                 releaseSource()
-                _message.value = if (settings.appLanguage == AppLanguage.ENGLISH) {
+                val baseMessage = if (settings.appLanguage == AppLanguage.ENGLISH) {
                     "$category photo added to today's diary"
                 } else {
                     "$category 图片已加入今日日记"
                 }
+                _message.value = baseMessage + galleryWarning.orEmpty()
                 if (settings.calorieEstimationEnabled) {
                     try {
                         aiTaskQueue.enqueueTask(
@@ -269,13 +301,7 @@ class HomeViewModel @Inject constructor(
                         _message.value = "${_message.value} · 热量估算入队失败：${error.message.orEmpty()}"
                     }
                 }
-                try {
-                    diaryFileRepository.scan(settings)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    // The next normal scan will refresh the index.
-                }
+                // Today's diary index was already updated incrementally in appendImageToToday.
                 // Gallery copy is handled by the durable worker. Place-name enrichment no longer
                 // receives a temporary camera URI and therefore remains safe after source release.
                 try {

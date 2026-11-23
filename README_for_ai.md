@@ -7,7 +7,9 @@
 > **For AI**: when the Agent grants the "App guide" source, only the `##` heading index (ids `section-N`, in document order) enters the context; it reads one `section-N` body on demand. Each `##` heading plus its `###` subheadings and prose is one section.
 
 
-本文对应 DeskCubby Android **0.24.2** 与 Windows **0.8.0**。平台专属操作会明确标出；未标注的既有编号章节描述 Android。
+本文对应 DeskCubby Android **0.24.3** 与 Windows **0.8.0**。平台专属操作会明确标出；未标注的既有编号章节描述 Android。
+
+Android 0.24.3 优化了饮食拍照与添加照片的速度：减少大量照片/日记目录上的重复扫描开销，图片压缩在 Android 9+ 改为单遍原生处理，开启「保存原图到系统相册」时拍照原图直接移动暂存而不再整图复制，地名回填不再阻塞后续拍照，写入今日日记后只增量更新当日索引；首页饮食按钮保存期间会柔和变暗提示处理中。
 
 Android 0.24.2 精简了界面上的说明文字：各页面常驻说明大多压缩为一行，去掉 Room、SAF、SHA-256 等实现术语；次要的补充说明收进分区标题旁的 ⓘ 按钮，点按后弹出完整说明。涉及隐私与数据安全的提示（AI Key 明文保存、云端凭据与未端到端加密、强制同步的覆盖方向、备份不含原文件、Agent 全自动模式的撤回范围、没有数据时显示「—」而非 0）仍常驻显示。同时修正了 AI 配置页「API Key 会包含在设置备份中」的错误提示（v34 起手动备份并不包含 API Key）。
 

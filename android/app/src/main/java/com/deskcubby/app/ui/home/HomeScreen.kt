@@ -272,6 +272,7 @@ fun HomeScreen(
                     cameraUri,
                     action.label(settings.appLanguage),
                     settings,
+                    sourceFile = cameraFile,
                     onDone = {
                         cameraFile.delete()
                         pendingMealKey = null
@@ -1369,8 +1370,12 @@ private fun MealPhotosWidget(
                             onLongClick = { onChoosePhoto(action) },
                         ),
                     shape = if (organic) visuals.badgeShape else MaterialTheme.shapes.medium,
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(
+                        alpha = if (uploading) 0.6f else 1f,
+                    ),
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(
+                        alpha = if (uploading) 0.6f else 1f,
+                    ),
                 ) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(

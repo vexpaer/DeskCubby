@@ -11,6 +11,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
+import android.graphics.ImageDecoder
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
@@ -466,15 +467,15 @@ class DiaryFileRepository @Inject constructor(
     suspend fun listDiaryFileMeta(settings: AppSettings): List<DiaryFileMeta> =
         withContext(Dispatchers.IO) {
             val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext emptyList()
-            root.listFiles()
+            snapshotDirectChildren(root)
                 .asSequence()
-                .filter { it.isFile && it.name?.endsWith(".md", ignoreCase = true) == true }
+                .filter { it.isFile && it.name.endsWith(".md", ignoreCase = true) }
                 .map { document ->
                     DiaryFileMeta(
                         uri = document.uri.toString(),
-                        name = document.name.orEmpty(),
-                        lastModified = document.lastModified(),
-                        size = document.length(),
+                        name = document.name,
+                        lastModified = document.lastModified,
+                        size = document.size,
                     )
                 }
                 .toList()
@@ -482,25 +483,25 @@ class DiaryFileRepository @Inject constructor(
 
     suspend fun scan(settings: AppSettings): List<DiaryDocument> = withContext(Dispatchers.IO) {
         val root = settings.diaryTreeUri?.let(::tree) ?: return@withContext emptyList()
-        val documents = root.listFiles()
+        val documents = snapshotDirectChildren(root)
             .asSequence()
-            .filter { it.isFile && it.name?.endsWith(".md", ignoreCase = true) == true }
+            .filter { it.isFile && it.name.endsWith(".md", ignoreCase = true) }
             .map { document ->
                 val content = readText(document.uri)
                 val date = extractDate(
-                    name = document.name.orEmpty(),
-                    modified = document.lastModified(),
+                    name = document.name,
+                    modified = document.lastModified,
                     fileNamePattern = settings.fileNamePattern,
                 )
-                val title = markdownStem(document.name.orEmpty())
+                val title = markdownStem(document.name)
                 DiaryDocument(
                     uri = document.uri.toString(),
-                    name = document.name.orEmpty(),
+                    name = document.name,
                     title = title,
                     dateIso = date.toString(),
                     monthKey = "%04d.%02d".format(Locale.ROOT, date.year, date.monthValue),
-                    lastModified = document.lastModified(),
-                    size = document.length(),
+                    lastModified = document.lastModified,
+                    size = document.size,
                     wordCount = DiaryTextUtils.wordCount(content),
                 ) to DiaryTextUtils.sha256(content.toByteArray())
             }
@@ -1322,7 +1323,8 @@ class DiaryFileRepository @Inject constructor(
                 require(details.note.length <= MAX_MEAL_NOTE_CHARS) { "备注过长" }
             }
             val root = settings.mediaTreeUri?.let(::tree) ?: error("请先在设置中选择媒体目录")
-            val original = readMediaMetaRawUnlocked(root)
+            val filesByName = snapshotFileUrisByName(root)
+            val original = readMediaMetaRawUnlocked(root, filesByName)
             var encoded = original
             estimatesByFileName.toSortedMap(String.CASE_INSENSITIVE_ORDER).forEach {
                     (fileName, estimate) ->
@@ -1333,16 +1335,21 @@ class DiaryFileRepository @Inject constructor(
             dayDetailsByDate.toSortedMap().forEach { (dateIso, details) ->
                 encoded = MediaMetaJsonCodec.updateMealDay(encoded, dateIso, details)
             }
-            writeMediaMetaRawUnlocked(root, encoded, expectedOriginal = original)
+            writeMediaMetaRawUnlocked(
+                root = root,
+                encoded = encoded,
+                expectedOriginal = original,
+                knownFilesByName = filesByName,
+            )
             recordMealCalendarContentChange()
         }
     }
 
-    private fun currentMediaMetaFile(root: DocumentFile): DocumentFile? = root.listFiles()
-        .firstOrNull { it.isFile && it.name.equals(MEDIA_META_FILE_NAME, ignoreCase = true) }
-
-    private fun namedMediaMetaFile(root: DocumentFile, name: String): DocumentFile? = root.listFiles()
-        .firstOrNull { it.isFile && it.name.equals(name, ignoreCase = true) }
+    private fun snapshotFileUrisByName(root: DocumentFile): MutableMap<String, Uri> =
+        snapshotDirectChildren(root)
+            .asSequence()
+            .filter(SafDocumentSnapshot::isFile)
+            .associateTo(LinkedHashMap()) { file -> file.name.lowercase(Locale.ROOT) to file.uri }
 
     private data class MediaDirectorySnapshot(
         val byName: Map<String, Uri> = emptyMap(),
@@ -1377,10 +1384,7 @@ class DiaryFileRepository @Inject constructor(
         root: DocumentFile,
         knownFilesByName: Map<String, Uri>? = null,
     ): String {
-        val filesByName = knownFilesByName ?: snapshotDirectChildren(root)
-            .asSequence()
-            .filter(SafDocumentSnapshot::isFile)
-            .associate { file -> file.name.lowercase(Locale.ROOT) to file.uri }
+        val filesByName = knownFilesByName ?: snapshotFileUrisByName(root)
         val candidates = listOf(
             MEDIA_META_FILE_NAME,
             MEDIA_META_PREVIOUS_FILE_NAME,
@@ -1412,15 +1416,22 @@ class DiaryFileRepository @Inject constructor(
     private suspend fun updateMediaMetaEntryUnlocked(
         root: DocumentFile,
         key: String,
+        knownFilesByName: Map<String, Uri>? = null,
         transform: (MediaMetaEntry) -> MediaMetaEntry,
     ) {
-        val original = readMediaMetaRawUnlocked(root)
+        val filesByName = knownFilesByName?.toMutableMap() ?: snapshotFileUrisByName(root)
+        val original = readMediaMetaRawUnlocked(root, filesByName)
         val encoded = MediaMetaJsonCodec.updateEntry(
             raw = original,
             key = key,
             transform = transform,
         )
-        writeMediaMetaRawUnlocked(root, encoded, expectedOriginal = original)
+        writeMediaMetaRawUnlocked(
+            root = root,
+            encoded = encoded,
+            expectedOriginal = original,
+            knownFilesByName = filesByName,
+        )
     }
 
     /** Caller must hold [mediaMutex]. */
@@ -1428,44 +1439,62 @@ class DiaryFileRepository @Inject constructor(
         root: DocumentFile,
         encoded: String,
         expectedOriginal: String,
+        knownFilesByName: Map<String, Uri>? = null,
     ) {
         require(encoded.toByteArray(Charsets.UTF_8).size <= MEDIA_META_MAX_BYTES) {
             "媒体信息 JSON 超过 2 MiB 上限"
         }
         MediaMetaJsonCodec.decode(encoded)
-        val original = readMediaMetaRawUnlocked(root)
+        // When no sidecar existed before, refresh the directory snapshot once so a newly created
+        // external file cannot be missed. Otherwise reuse the caller's snapshot and re-read the
+        // file contents directly to detect external edits without O(N) SAF listing.
+        val filesByName = if (knownFilesByName != null && expectedOriginal != "{}") {
+            knownFilesByName.toMutableMap()
+        } else {
+            snapshotFileUrisByName(root)
+        }
+        val original = readMediaMetaRawUnlocked(root, filesByName)
         check(original == expectedOriginal) {
             "媒体信息 JSON 已被其他应用修改，请刷新后重试"
         }
         if (original != "{}") {
-            val previous = namedMediaMetaFile(root, MEDIA_META_PREVIOUS_FILE_NAME)
-                ?: root.createFile("application/json", MEDIA_META_PREVIOUS_FILE_NAME)
+            val previousKey = MEDIA_META_PREVIOUS_FILE_NAME.lowercase(Locale.ROOT)
+            val previousUri = filesByName[previousKey]
+                ?: root.createFile("application/json", MEDIA_META_PREVIOUS_FILE_NAME)?.uri?.also {
+                    filesByName[previousKey] = it
+                }
                 ?: error("无法在媒体目录创建 $MEDIA_META_PREVIOUS_FILE_NAME")
-            writeText(previous.uri, original)
-            check(readMediaMetaTextBounded(previous.uri) == original) {
+            writeText(previousUri, original)
+            check(readMediaMetaTextBounded(previousUri) == original) {
                 "媒体信息恢复副本写入后的校验失败"
             }
         }
 
-        val pending = namedMediaMetaFile(root, MEDIA_META_PENDING_FILE_NAME)
-            ?: root.createFile("application/json", MEDIA_META_PENDING_FILE_NAME)
+        val pendingKey = MEDIA_META_PENDING_FILE_NAME.lowercase(Locale.ROOT)
+        val pendingUri = filesByName[pendingKey]
+            ?: root.createFile("application/json", MEDIA_META_PENDING_FILE_NAME)?.uri?.also {
+                filesByName[pendingKey] = it
+            }
             ?: error("无法在媒体目录创建 $MEDIA_META_PENDING_FILE_NAME")
-        writeText(pending.uri, encoded)
-        check(readMediaMetaTextBounded(pending.uri) == encoded) {
+        writeText(pendingUri, encoded)
+        check(readMediaMetaTextBounded(pendingUri) == encoded) {
             "媒体信息 pending JSON 写入后的校验失败"
         }
 
         // Read the legacy long filename when present, but always commit future updates to
         // the shorter name. The legacy file and verified previous copy remain recoverable.
-        val target = currentMediaMetaFile(root)
-            ?: root.createFile("application/json", MEDIA_META_FILE_NAME)
+        val targetKey = MEDIA_META_FILE_NAME.lowercase(Locale.ROOT)
+        val targetUri = filesByName[targetKey]
+            ?: root.createFile("application/json", MEDIA_META_FILE_NAME)?.uri?.also {
+                filesByName[targetKey] = it
+            }
             ?: error("无法在媒体目录创建 $MEDIA_META_FILE_NAME")
         try {
-            writeText(target.uri, encoded)
-            check(readMediaMetaTextBounded(target.uri) == encoded) {
+            writeText(targetUri, encoded)
+            check(readMediaMetaTextBounded(targetUri) == encoded) {
                 "媒体信息 JSON 写入后的校验失败"
             }
-            runCatching { pending.delete() }
+            runCatching { DocumentFile.fromSingleUri(context, pendingUri)?.delete() }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
@@ -1473,8 +1502,8 @@ class DiaryFileRepository @Inject constructor(
             // verified previous/pending file remains available to the bounded read fallback.
             if (original != "{}") {
                 runCatching {
-                    writeText(target.uri, original)
-                    check(readMediaMetaTextBounded(target.uri) == original)
+                    writeText(targetUri, original)
+                    check(readMediaMetaTextBounded(targetUri) == original)
                 }
             }
             throw error
@@ -1483,12 +1512,18 @@ class DiaryFileRepository @Inject constructor(
 
     /** Caller must hold [mediaMutex]. Removes a stale sidecar entry with read-back verification. */
     private suspend fun removeMediaMetaEntryUnlocked(root: DocumentFile, key: String) {
-        val original = readMediaMetaRawUnlocked(root)
+        val filesByName = snapshotFileUrisByName(root)
+        val original = readMediaMetaRawUnlocked(root, filesByName)
         val encoded = MediaMetaJsonCodec.removeEntry(
             raw = original,
             key = key,
         ) ?: return
-        writeMediaMetaRawUnlocked(root, encoded, expectedOriginal = original)
+        writeMediaMetaRawUnlocked(
+            root = root,
+            encoded = encoded,
+            expectedOriginal = original,
+            knownFilesByName = filesByName,
+        )
     }
 
     private fun readPhotoLatLong(sourceUri: Uri): DoubleArray? {
@@ -1547,8 +1582,9 @@ class DiaryFileRepository @Inject constructor(
                 ?: error("请先在设置中选择日记目录")
             val baseName = formatDate(today, settings.fileNamePattern, "yyyy-MM-dd '日记'")
             val fileName = DiaryTextUtils.sanitizeFileName(baseName.removeSuffix(".md")) + ".md"
-            val existing = root.listFiles().firstOrNull { it.name.equals(fileName, ignoreCase = true) }
-            if (existing != null) return@withContext load(existing.uri)
+            val existing = snapshotDirectChildren(root)
+                .firstOrNull { it.isFile && it.name.equals(fileName, ignoreCase = true) }
+            if (existing != null) return@withContext load(existing)
 
             val title = baseName.removeSuffix(".md")
             val dateText = today.toString()
@@ -1870,39 +1906,48 @@ class DiaryFileRepository @Inject constructor(
         date: LocalDate = LocalDate.now(),
     ): ImportedMedia = mediaMutex.withLock {
         var created: DocumentFile? = null
-        var compressedFile: File? = null
         try {
             withContext(Dispatchers.IO) {
                 val root = settings.mediaTreeUri?.let(::tree) ?: error("请先在设置中选择媒体目录")
                 val sourceMime = resolver.getType(sourceUri) ?: "image/jpeg"
                 val sourceExtension = inferExtension(sourceUri, sourceMime)
                 val shouldCompress = settings.mealImageCompressionEnabled && !category.isNullOrBlank()
-                compressedFile = if (shouldCompress && isCompressibleImage(sourceMime, sourceExtension)) {
-                    compressMealImageToCache(sourceUri, settings.mealImageCompressionQuality)
+                val compressedBytes = if (shouldCompress && isCompressibleImage(sourceMime, sourceExtension)) {
+                    compressMealImageToBytes(sourceUri, settings.mealImageCompressionQuality)
                 } else {
                     null
                 }
-                val mime = if (compressedFile != null) "image/jpeg" else sourceMime
-                val extension = if (compressedFile != null) "jpg" else sourceExtension
+                val mime = if (compressedBytes != null) "image/jpeg" else sourceMime
+                val extension = if (compressedBytes != null) "jpg" else sourceExtension
                 val categoryText = category?.takeIf(String::isNotBlank) ?: "图片"
                 val dateText = date.toString()
+                // One DocumentsContract query supplies both collision checks and sidecar lookup,
+                // avoiding O(N) per-file DocumentFile.name Binder IPCs as the media folder grows.
+                val mediaChildren = snapshotDirectChildren(root)
                 val fileName = DiaryTextUtils.nextMediaFileName(
                     pattern = settings.imageNamePattern,
                     dateText = dateText,
                     category = categoryText,
                     extension = extension,
-                    existingNames = root.listFiles().mapNotNull { it.name },
+                    existingNames = mediaChildren.map(SafDocumentSnapshot::name),
                 )
 
                 val destination = root.createFile(mime, fileName) ?: error("无法创建媒体文件")
                 created = destination
-                val inputStream = compressedFile?.inputStream() ?: resolver.openInputStream(sourceUri)
-                inputStream.use { input ->
-                    requireNotNull(input) { "无法读取所选图片" }
+                if (compressedBytes != null) {
                     resolver.openOutputStream(destination.uri, "w").use { output ->
                         requireNotNull(output) { "无法写入媒体目录" }
-                        input.copyTo(output)
+                        output.write(compressedBytes)
                         output.flush()
+                    }
+                } else {
+                    resolver.openInputStream(sourceUri).use { input ->
+                        requireNotNull(input) { "无法读取所选图片" }
+                        resolver.openOutputStream(destination.uri, "w").use { output ->
+                            requireNotNull(output) { "无法写入媒体目录" }
+                            input.copyTo(output)
+                            output.flush()
+                        }
                     }
                 }
 
@@ -1914,7 +1959,17 @@ class DiaryFileRepository @Inject constructor(
                     // mediaMutex is already held here.
                     runCatching {
                         readPhotoLatLong(sourceUri)?.let { latLong ->
-                            updateMediaMetaEntryUnlocked(root, actualName) { entry ->
+                            val filesByName = mediaChildren.asSequence()
+                                .filter(SafDocumentSnapshot::isFile)
+                                .associateTo(LinkedHashMap()) { file ->
+                                    file.name.lowercase(Locale.ROOT) to file.uri
+                                }
+                            filesByName[actualName.lowercase(Locale.ROOT)] = destination.uri
+                            updateMediaMetaEntryUnlocked(
+                                root = root,
+                                key = actualName,
+                                knownFilesByName = filesByName,
+                            ) { entry ->
                                 entry.copy(
                                     latitude = latLong[0],
                                     longitude = latLong[1],
@@ -1934,10 +1989,6 @@ class DiaryFileRepository @Inject constructor(
                 runCatching { created?.delete() }
             }
             throw error
-        } finally {
-            withContext(NonCancellable + Dispatchers.IO) {
-                runCatching { compressedFile?.delete() }
-            }
         }
     }
 
@@ -2012,24 +2063,47 @@ class DiaryFileRepository @Inject constructor(
             if (settings.photoLocationEnabled && settings.mediaTreeUri != null) {
                 runCatching {
                     val root = tree(settings.mediaTreeUri!!)
-                    mediaMutex.withLock { enrichPlaceNameUnlocked(root, media.fileName) }
+                    enrichPlaceName(root, media.fileName)
                 }
             }
         }
     }
 
-    /** Caller must hold [mediaMutex]. Backfills a stored sidecar entry's place name via Geocoder. */
-    private suspend fun enrichPlaceNameUnlocked(root: DocumentFile, fileName: String) {
-        val decoded = MediaMetaJsonCodec.decode(readMediaMetaRawUnlocked(root))
-        val entry = decoded.entries[fileName.lowercase(Locale.ROOT)] ?: return
-        val latLong = if (entry.latitude != null && entry.longitude != null) {
-            doubleArrayOf(entry.latitude, entry.longitude)
-        } else {
-            return
-        }
-        if (!entry.place.isNullOrBlank()) return
+    /**
+     * Backfills a stored sidecar entry's place name via Geocoder. Releases [mediaMutex] across the
+     * network reverse-geocode call so subsequent photo captures or previews are never blocked.
+     */
+    private suspend fun enrichPlaceName(root: DocumentFile, fileName: String) {
+        val latLong = mediaMutex.withLock {
+            val decoded = MediaMetaJsonCodec.decode(readMediaMetaRawUnlocked(root))
+            val entry = decoded.entries[fileName.lowercase(Locale.ROOT)] ?: return@withLock null
+            if (!entry.place.isNullOrBlank()) return@withLock null
+            if (entry.latitude != null && entry.longitude != null) {
+                doubleArrayOf(entry.latitude, entry.longitude)
+            } else {
+                null
+            }
+        } ?: return
+
         val place = geocodePlaceName(latLong[0], latLong[1]) ?: return
-        updateMediaMetaEntryUnlocked(root, fileName) { it.copy(place = place) }
+
+        mediaMutex.withLock {
+            val filesByName = snapshotFileUrisByName(root)
+            val original = readMediaMetaRawUnlocked(root, filesByName)
+            val existing = MediaMetaJsonCodec.decode(original).entries[fileName.lowercase(Locale.ROOT)]
+                ?: return@withLock
+            if (!existing.place.isNullOrBlank()) return@withLock
+            val encoded = MediaMetaJsonCodec.updateEntry(original, fileName) { entry ->
+                if (entry.place.isNullOrBlank()) entry.copy(place = place) else entry
+            }
+            writeMediaMetaRawUnlocked(
+                root = root,
+                encoded = encoded,
+                expectedOriginal = original,
+                knownFilesByName = filesByName,
+            )
+            recordMealCalendarContentChange()
+        }
     }
 
     suspend fun appendImageToToday(
@@ -2040,6 +2114,7 @@ class DiaryFileRepository @Inject constructor(
     ): ImportedMedia {
         val media = importImage(sourceUri, category, settings, date)
         var diaryUri: Uri? = null
+        var diaryName: String? = null
         var originalContent: String? = null
         var updatedContent: String? = null
         val appended = try {
@@ -2047,6 +2122,7 @@ class DiaryFileRepository @Inject constructor(
                 withContext(Dispatchers.IO) {
                     val document = enterTodayUnlocked(settings, date)
                     diaryUri = Uri.parse(document.uri)
+                    diaryName = document.name
                     originalContent = document.content
                     val lineBreak = if (
                         document.content.isEmpty() ||
@@ -2092,6 +2168,29 @@ class DiaryFileRepository @Inject constructor(
                 }
             }
             if (committed && error !is CancellationException) media else throw error
+        }
+        val committedUri = diaryUri
+        val committedName = diaryName
+        val committedContent = updatedContent
+        if (committedUri != null && committedName != null && committedContent != null) {
+            withContext(NonCancellable + Dispatchers.IO) {
+                runCatching {
+                    val bytes = committedContent.toByteArray(Charsets.UTF_8)
+                    val version = queryDocumentVersion(committedUri)
+                    indexDocument(
+                        settings = settings,
+                        document = DiaryEditorDocument(
+                            uri = committedUri.toString(),
+                            name = committedName,
+                            content = committedContent,
+                            lastModified = version?.lastModified?.takeIf { it > 0L }
+                                ?: System.currentTimeMillis(),
+                            size = version?.size?.takeIf { it > 0L } ?: bytes.size.toLong(),
+                            sha256 = DiaryTextUtils.sha256(bytes),
+                        ),
+                    )
+                }
+            }
         }
         recordMealCalendarContentChange(diaryUri)
         return appended
@@ -2488,6 +2587,18 @@ class DiaryFileRepository @Inject constructor(
     private fun tree(raw: String): DocumentFile =
         DocumentFile.fromTreeUri(context, Uri.parse(raw)) ?: error("目录授权已失效，请重新选择")
 
+    private fun load(snapshot: SafDocumentSnapshot): DiaryEditorDocument {
+        val bytes = readBytes(snapshot.uri)
+        return DiaryEditorDocument(
+            uri = snapshot.uri.toString(),
+            name = snapshot.name,
+            content = bytes.toString(Charsets.UTF_8),
+            lastModified = snapshot.lastModified,
+            size = bytes.size.toLong(),
+            sha256 = DiaryTextUtils.sha256(bytes),
+        )
+    }
+
     private fun load(uri: Uri): DiaryEditorDocument {
         val document = DocumentFile.fromSingleUri(context, uri) ?: error("日记文件不存在")
         val bytes = readBytes(uri)
@@ -2677,7 +2788,65 @@ class DiaryFileRepository @Inject constructor(
             normalizedExtension in COMPRESSIBLE_IMAGE_EXTENSIONS
     }
 
-    private fun compressMealImageToCache(sourceUri: Uri, quality: Int): File? {
+    internal fun compressMealImageToBytes(sourceUri: Uri, quality: Int): ByteArray? {
+        var bitmap = decodeMealImageForCompression(sourceUri) ?: return null
+        return try {
+            if (bitmap.hasAlpha()) {
+                val flattened = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+                Canvas(flattened).apply {
+                    drawColor(Color.WHITE)
+                    drawBitmap(bitmap, 0f, 0f, null)
+                }
+                bitmap.recycle()
+                bitmap = flattened
+            }
+
+            val output = ByteArrayOutputStream(256 * 1024)
+            check(bitmap.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(30, 95), output)) {
+                "无法压缩饮食图片"
+            }
+            val compressed = output.toByteArray()
+            val sourceSize = sourceByteSize(sourceUri)
+            if (compressed.isEmpty() || (sourceSize > 0L && compressed.size.toLong() >= sourceSize)) {
+                null
+            } else {
+                compressed
+            }
+        } catch (_: OutOfMemoryError) {
+            null
+        } catch (_: Exception) {
+            null
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    private fun decodeMealImageForCompression(sourceUri: Uri): Bitmap? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                val source = ImageDecoder.createSource(resolver, sourceUri)
+                return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    decoder.isMutableRequired = false
+                    val width = info.size.width
+                    val height = info.size.height
+                    if (width > 0 && height > 0) {
+                        val target = compressedImageSize(width, height, COMPRESSED_IMAGE_MAX_EDGE_PX)
+                        if (target.width != width || target.height != height) {
+                            decoder.setTargetSize(target.width, target.height)
+                        }
+                    }
+                }
+            } catch (_: OutOfMemoryError) {
+                return null
+            } catch (_: Exception) {
+                // Fall back to BitmapFactory for non-standard streams or providers.
+            }
+        }
+        return decodeMealImageWithBitmapFactory(sourceUri)
+    }
+
+    private fun decodeMealImageWithBitmapFactory(sourceUri: Uri): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         runCatching {
             resolver.openInputStream(sourceUri).use { input ->
@@ -2692,15 +2861,13 @@ class DiaryFileRepository @Inject constructor(
             inSampleSize = imageSampleSize(bounds.outWidth, bounds.outHeight, target)
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
-        val decoded = runCatching {
+        var bitmap = runCatching {
             resolver.openInputStream(sourceUri).use { input ->
                 requireNotNull(input) { "无法读取所选图片" }
                 BitmapFactory.decodeStream(input, null, options)
             }
         }.getOrNull() ?: return null
 
-        var bitmap = decoded
-        var tempFile: File? = null
         return try {
             // Scale before applying EXIF rotation so a large source and a same-sized rotated copy
             // are never held at the same time. This keeps peak memory bounded on camera photos.
@@ -2723,44 +2890,13 @@ class DiaryFileRepository @Inject constructor(
                 bitmap.recycle()
                 bitmap = oriented
             }
-
-            if (bitmap.hasAlpha()) {
-                val flattened = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
-                Canvas(flattened).apply {
-                    drawColor(Color.WHITE)
-                    drawBitmap(bitmap, 0f, 0f, null)
-                }
-                bitmap.recycle()
-                bitmap = flattened
-            }
-
-            val directory = File(context.cacheDir, "meal-image-compression").apply {
-                check(exists() || mkdirs()) { "无法创建图片压缩缓存" }
-            }
-            val compressed = File.createTempFile("meal-", ".jpg", directory)
-            tempFile = compressed
-            compressed.outputStream().buffered().use { output ->
-                check(bitmap.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(30, 95), output)) {
-                    "无法压缩饮食图片"
-                }
-                output.flush()
-            }
-
-            val sourceSize = sourceByteSize(sourceUri)
-            if (compressed.length() <= 0L || (sourceSize > 0L && compressed.length() >= sourceSize)) {
-                compressed.delete()
-                null
-            } else {
-                compressed
-            }
+            bitmap
         } catch (_: OutOfMemoryError) {
-            tempFile?.delete()
+            bitmap.recycle()
             null
         } catch (_: Exception) {
-            tempFile?.delete()
-            null
-        } finally {
             bitmap.recycle()
+            null
         }
     }
 

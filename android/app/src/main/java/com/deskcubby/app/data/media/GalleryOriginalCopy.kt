@@ -35,23 +35,11 @@ object GalleryOriginalStager {
         sourceUri: Uri,
         displayNameHint: String,
     ): GalleryOriginalStaging = withContext(Dispatchers.IO) {
-        cleanupOrphans(context)
         val resolver = context.contentResolver
         val mime = resolver.getType(sourceUri)?.takeIf(String::isNotBlank) ?: "image/jpeg"
-        val extension = mime.substringAfterLast('/', "jpg")
-            .lowercase()
-            .filter(Char::isLetterOrDigit)
-            .take(8)
-            .ifBlank { "jpg" }
-        val displayBase = displayNameHint.substringBeforeLast('.').trim()
-            .replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001F]"), "_")
-            .trim('.', ' ')
-            .take(100)
-            .ifBlank { "image" }
-        val displayName = "$displayBase.$extension"
-        val directory = File(context.filesDir, DIRECTORY).apply {
-            check(exists() || mkdirs()) { "无法创建原图暂存目录" }
-        }
+        val extension = sanitizeExtension(mime)
+        val displayName = sanitizeDisplayName(displayNameHint, extension)
+        val directory = stagingDirectory(context)
         val target = File(directory, "${UUID.randomUUID()}.$extension")
         try {
             resolver.openInputStream(sourceUri).use { input ->
@@ -59,7 +47,6 @@ object GalleryOriginalStager {
                 FileOutputStream(target, false).use { output ->
                     input.copyTo(output)
                     output.flush()
-                    output.fd.sync()
                 }
             }
             check(target.isFile && target.length() > 0L) { "原图暂存失败" }
@@ -68,6 +55,61 @@ object GalleryOriginalStager {
             runCatching { target.delete() }
             throw error
         }
+    }
+
+    /**
+     * Moves an app-owned temporary capture file into durable staging storage. Because `cacheDir`
+     * and `filesDir` share internal storage, `renameTo` completes in O(1) without copying or
+     * fsyncing multi-megabyte camera JPEGs; falls back to copying if rename fails across mounts.
+     */
+    suspend fun stageOwnedFile(
+        context: Context,
+        sourceFile: File,
+        displayNameHint: String,
+        mimeType: String = "image/jpeg",
+    ): GalleryOriginalStaging = withContext(Dispatchers.IO) {
+        require(sourceFile.isFile && sourceFile.length() > 0L) { "无法读取相机原图" }
+        val mime = mimeType.takeIf(String::isNotBlank) ?: "image/jpeg"
+        val extension = sanitizeExtension(mime)
+        val displayName = sanitizeDisplayName(displayNameHint, extension)
+        val target = File(stagingDirectory(context), "${UUID.randomUUID()}.$extension")
+        try {
+            if (!sourceFile.renameTo(target)) {
+                FileInputStream(sourceFile).use { input ->
+                    FileOutputStream(target, false).use { output ->
+                        input.copyTo(output)
+                        output.flush()
+                    }
+                }
+                runCatching { sourceFile.delete() }
+            }
+            check(target.isFile && target.length() > 0L) { "原图暂存失败" }
+            GalleryOriginalStaging(target.absolutePath, mime, displayName)
+        } catch (error: Exception) {
+            runCatching { target.delete() }
+            throw error
+        }
+    }
+
+    private fun stagingDirectory(context: Context): File =
+        File(context.filesDir, DIRECTORY).apply {
+            check(exists() || mkdirs()) { "无法创建原图暂存目录" }
+        }
+
+    private fun sanitizeExtension(mime: String): String =
+        mime.substringAfterLast('/', "jpg")
+            .lowercase()
+            .filter(Char::isLetterOrDigit)
+            .take(8)
+            .ifBlank { "jpg" }
+
+    private fun sanitizeDisplayName(displayNameHint: String, extension: String): String {
+        val displayBase = displayNameHint.substringBeforeLast('.').trim()
+            .replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001F]"), "_")
+            .trim('.', ' ')
+            .take(100)
+            .ifBlank { "image" }
+        return "$displayBase.$extension"
     }
 
     /**
@@ -109,6 +151,7 @@ class GalleryOriginalCopyWorker(
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        runCatching { GalleryOriginalStager.cleanupOrphans(applicationContext) }
         val path = inputData.getString(KEY_PATH) ?: return@withContext Result.failure()
         val mime = inputData.getString(KEY_MIME)?.takeIf(String::isNotBlank) ?: "image/jpeg"
         val displayName = inputData.getString(KEY_DISPLAY_NAME)?.takeIf(String::isNotBlank)

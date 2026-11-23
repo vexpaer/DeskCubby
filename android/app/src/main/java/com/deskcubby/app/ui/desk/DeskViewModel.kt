@@ -269,6 +269,13 @@ class DeskViewModel @Inject constructor(
                 val media = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     diaryRepository.appendImageToToday(uri, category, current)
                 }
+                _state.value = _state.value.copy(
+                    photoNotice = if (language == AppLanguage.ENGLISH) {
+                        "$category photo added to today's diary"
+                    } else {
+                        "$category 图片已加入今日日记"
+                    },
+                )
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     if (current.calorieEstimationEnabled) {
                         runCatching {
@@ -283,15 +290,7 @@ class DeskViewModel @Inject constructor(
                         }
                     }
                     runCatching { diaryRepository.enrichImportedMedia(uri, media, current) }
-                    runCatching { diaryRepository.scan(current) }
                 }
-                _state.value = _state.value.copy(
-                    photoNotice = if (language == AppLanguage.ENGLISH) {
-                        "$category photo added to today's diary"
-                    } else {
-                        "$category 图片已加入今日日记"
-                    },
-                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
